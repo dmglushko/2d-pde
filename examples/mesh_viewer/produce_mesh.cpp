@@ -15,11 +15,10 @@ int main(int argc, char** argv) {
     geometry.setRotation(0.12);
     discretization::DelaunayEdgeFlipMeshGenerator generator;
     generator.setMaxElementSize(0.42);
-    generator.setOrder(2); // Change to 1 for a three-node P1 example.
     auto mesh = generator.createMesh(geometry);
     discretization::export_mesh(mesh, argv[1]);
     auto restored = discretization::import_mesh(argv[1]);
-    std::cout << "Saved P" << restored.order << " mesh: " << restored.nodes.size()
+    std::cout << "Saved P1 mesh: " << restored.nodes.size()
               << " nodes, " << restored.elements.size() << " triangles, "
               << restored.boundary_edges.size() << " boundary edges\n";
   } catch (const std::exception& error) {

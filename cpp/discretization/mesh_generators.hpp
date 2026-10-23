@@ -17,12 +17,10 @@ public:
     return Triangulator2d::generate(geometry.createBoundary(),configured);
   }
   void setMaxElementSize(double h){options_.max_element_size=h;}
-  void setOrder(int order){options_.order=order;}
   void setOptimizationIterations(int n){options_.optimization_iterations=n;}
   void setMaxRefinementPasses(int n){options_.max_refinement_passes=n;}
   void setSizeField(std::function<double(double,double)> field){options_.size_field=std::move(field);}
   double maxElementSize()const{return options_.max_element_size;}
-  int order()const{return options_.order;}
 protected:
   MeshOptions options_;
 };

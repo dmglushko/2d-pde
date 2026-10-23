@@ -2,7 +2,7 @@
   const {parseMesh, analyse, format} = window.MeshTools;
   const $ = id => document.getElementById(id);
   const canvas = $('canvas'), wrap=$('dropzone'), ctx=canvas.getContext('2d');
-  const checks=['wire','boundary','nodes','triangles','p2nodes'];
+  const checks=['wire','boundary','nodes','triangles'];
   let mesh=null, analysis=null, selected=-1, view={x:0,y:0,s:1};
   let pointer=null, moved=false;
   const safe = value => String(value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -53,10 +53,6 @@
     if(flags.boundary){ctx.strokeStyle='#e89b13';ctx.lineWidth=3;ctx.lineCap='round';for(const [a,b] of mesh.boundaryEdges){const p=screen(mesh.nodes[a]),q=screen(mesh.nodes[b]);ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();}}
     ctx.strokeStyle='#a036ac';ctx.lineWidth=3;
     for(const k of analysis.problemEdges){const edge=analysis.edges.get(k);const ends=edge?edge.nodes:k.split(',').map(Number);const p=screen(mesh.nodes[ends[0]]),q=screen(mesh.nodes[ends[1]]);ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();}
-    if(flags.p2nodes&&mesh.order===2){
-      const mids=new Set(mesh.elements.flatMap(e=>e.slice(3)));
-      ctx.fillStyle='#2862c9';for(const id of mids){const [x,y]=screen(mesh.nodes[id]);ctx.beginPath();ctx.arc(x,y,2.8,0,2*Math.PI);ctx.fill();}
-    }
     if(flags.nodes){
       ctx.font='10px ui-monospace, monospace';
       for(let id=0;id<mesh.nodes.length;id++){const [x,y]=screen(mesh.nodes[id]);
@@ -69,7 +65,7 @@
   function displaySummary() {
     const s=analysis.summary;
     const stat=(label,value,wide=false)=>`<div class="stat${wide?' wide':''}"><strong>${safe(value)}</strong><span>${safe(label)}</span></div>`;
-    $('mesh-title').textContent=`P${mesh.order} triangular mesh`;
+    $('mesh-title').textContent='P1 triangular mesh';
     $('overview').innerHTML=stat('Nodes',s.nodes)+stat('Triangles',s.elements)+stat('Recorded boundary edges',s.boundaryEdges)+stat('Degenerate / inverted triangles',s.degenerate+s.inverted)+stat('Mean-ratio quality: min / mean / max',s.quality?`${number(s.quality.min)} / ${number(s.quality.mean)} / ${number(s.quality.max)}`:'—',true)+stat('Minimum angle: min / mean / max',s.minAngle?`${number(s.minAngle.min)}° / ${number(s.minAngle.mean)}° / ${number(s.minAngle.max)}°`:'—',true)+'<p class="muted" style="grid-column:span 2">Quality summaries exclude degenerate and inverted triangles. Connectivity warnings are listed below.</p>';
     $('diagnostics').innerHTML=analysis.issues.length?`<div class="row"><span>Issues found</span><b>${analysis.issues.length}</b></div><div class="issue-list">${analysis.issues.slice(0,100).map(x=>`<div class="issue-item">${safe(x)}</div>`).join('')}${analysis.issues.length>100?`<p class="muted">First 100 shown.</p>`:''}</div>`:'<p class="ok">No structural issues detected.</p>';
   }
@@ -80,8 +76,7 @@
     const label=analysis.problemTriangles.has(t.id)?`${t.status} geometry; connectivity issue`:t.status;
     let html=`<h2>Triangle ${t.id} <span class="chip ${t.status==='valid'&&!analysis.problemTriangles.has(t.id)?'':'bad'}">${label}</span></h2>`;
     html+=row('Corner indices',t.nodes.slice(0,3).join(', '));
-    if(mesh.order===2) html+=row('Mid-edge indices (01, 12, 20)',t.nodes.slice(3).join(', '));
-    html+='<div class="subtitle">Coordinates</div><div class="code-list">'+t.nodes.map((id,i)=>`${i<3?'corner':'mid-edge'} ${i}: node ${id} = (${number(mesh.nodes[id][0])}, ${number(mesh.nodes[id][1])})`).join('<br>')+'</div>';
+    html+='<div class="subtitle">Coordinates</div><div class="code-list">'+t.nodes.map((id,i)=>`corner ${i}: node ${id} = (${number(mesh.nodes[id][0])}, ${number(mesh.nodes[id][1])})`).join('<br>')+'</div>';
     html+='<div class="subtitle">Edges and neighbours</div>';
     t.edgeKeys.forEach((k,i)=>{
       const edge=analysis.edges.get(k), other=edge.owners.filter(id=>id!==t.id);
@@ -138,6 +133,6 @@
   wrap.addEventListener('drop',async e=>{e.preventDefault();const file=e.dataTransfer.files[0];if(file)load(await file.text(),file.name);});
   new ResizeObserver(resize).observe(wrap);
   resize();
-  if(window.exampleMesh)load(window.exampleMesh,'Example: rectangle P2');
+  if(window.exampleMesh)load(window.exampleMesh,'Example: rectangle P1');
   else showError('Example mesh is missing. Open a .pde2d file to start.');
 })();

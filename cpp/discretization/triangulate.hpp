@@ -25,7 +25,6 @@ struct MeshOptions {
   double max_element_size = 1.0;
   // Optional local target size h(x,y), used by local refinement.
   std::function<double(double,double)> size_field;
-  int order = 1;                    // 1: P1 (3 nodes); 2: P2 (6 nodes)
   int optimization_iterations = 5; // interior Laplacian smoothing passes
   int max_refinement_passes = 12;
 };
@@ -36,7 +35,6 @@ public:
     if (boundary.points.size()<3) throw std::runtime_error("A closed boundary needs at least 3 points");
     if (options.max_element_size<=0 || !std::isfinite(options.max_element_size))
       throw std::runtime_error("max_element_size must be finite and positive");
-    if (options.order!=1 && options.order!=2) throw std::runtime_error("Mesh order must be 1 or 2");
     if (options.max_refinement_passes<0 || options.max_refinement_passes>20)
       throw std::runtime_error("max_refinement_passes must be between 0 and 20");
     validate_boundary(boundary);
@@ -53,8 +51,6 @@ public:
           options.algorithm==MeshAlgorithm::LocalSizeRefinement) flip_edges(mesh,options);
     }
     smooth(mesh,options);
-    if (options.order==2) add_quadratic_nodes(mesh);
-    mesh.order=options.order;
     return mesh;
   }
 
@@ -100,12 +96,12 @@ private:
     constexpr double e=1e-13;
     return cross(a,b,p)>=-e && cross(b,c,p)>=-e && cross(c,a,p)>=-e;
   }
-  static std::vector<std::vector<std::size_t>> ear_clip(const std::vector<Point2>& pts,bool quality) {
+  static std::vector<std::array<std::size_t,3>> ear_clip(const std::vector<Point2>& pts,bool quality) {
     std::vector<std::size_t> ring(pts.size());
     for(std::size_t i=0;i<ring.size();++i) ring[i]=i;
     // If original loop was clockwise, use its reversed index order.
     if(signed_area(pts)<0) std::reverse(ring.begin(),ring.end());
-    std::vector<std::vector<std::size_t>> tris;
+    std::vector<std::array<std::size_t,3>> tris;
     std::size_t guard=0;
     while(ring.size()>3) {
       double best=quality ? -1.0 : -1e300; std::size_t chosen=ring.size();
@@ -142,7 +138,7 @@ private:
     if(!(h>0) || !std::isfinite(h)) throw std::runtime_error("Size field must return finite positive sizes");
     return std::min(h,o.max_element_size);
   }
-  static bool within_size(const std::vector<Point2>& nodes,const std::vector<std::size_t>& t,const MeshOptions& o) {
+  static bool within_size(const std::vector<Point2>& nodes,const std::array<std::size_t,3>& t,const MeshOptions& o) {
     if(o.algorithm==MeshAlgorithm::EarClipping) return true;
     const auto a=nodes[t[0]],b=nodes[t[1]],c=nodes[t[2]];
     const Point2 centroid{a.x+(b.x-a.x)/3.0+(c.x-a.x)/3.0,
@@ -169,7 +165,7 @@ private:
         auto key=key_of(a,b); auto it=mids.find(key); if(it!=mids.end())return it->second;
         const auto k=m.nodes.size(); m.nodes.push_back({(m.nodes[a].x+m.nodes[b].x)/2,(m.nodes[a].y+m.nodes[b].y)/2});mids[key]=k;return k;
       };
-      std::vector<std::vector<std::size_t>> next; next.reserve(m.elements.size()*4);
+      std::vector<std::array<std::size_t,3>> next; next.reserve(m.elements.size()*4);
       for(const auto& t:m.elements) {
         const bool s0=marked.count(key_of(t[0],t[1])),s1=marked.count(key_of(t[1],t[2])),s2=marked.count(key_of(t[2],t[0]));
         const int mask=(s0?1:0)|(s1?2:0)|(s2?4:0);
@@ -223,7 +219,7 @@ private:
           return den==0.0?0.0:std::acos(std::max(-1.0,std::min(1.0,(ux*vx+uy*vy)/den)));
         };
         if(angle(a,b,pc)+angle(a,b,pd)<=3.14159265358979323846+1e-12) continue;
-        std::vector<std::size_t> next1{c,d,edge.first},next2{d,c,edge.second};
+        std::array<std::size_t,3> next1{{c,d,edge.first}},next2{{d,c,edge.second}};
         if(cross(m.nodes[next1[0]],m.nodes[next1[1]],m.nodes[next1[2]])<0)std::swap(next1[0],next1[1]);
         if(cross(m.nodes[next2[0]],m.nodes[next2[1]],m.nodes[next2[2]])<0)std::swap(next2[0],next2[1]);
         if(!within_size(m.nodes,next1,o)||!within_size(m.nodes,next2,o)) continue;
@@ -250,15 +246,6 @@ private:
       if(!valid) break;
       m.nodes.swap(next);
     }
-  }
-  static void add_quadratic_nodes(TriangleMesh& m) {
-    std::map<std::pair<std::size_t,std::size_t>,std::size_t> mids;
-    auto midpoint=[&](std::size_t a,std::size_t b) {
-      auto key=std::minmax(a,b); auto it=mids.find(key); if(it!=mids.end())return it->second;
-      const auto i=m.nodes.size();m.nodes.push_back({(m.nodes[a].x+m.nodes[b].x)/2,(m.nodes[a].y+m.nodes[b].y)/2});mids[key]=i;return i;
-    };
-    for(auto& t:m.elements) {const auto a=t[0],b=t[1],c=t[2];t={a,b,c,midpoint(a,b),midpoint(b,c),midpoint(c,a)};}
-    for(const auto& e:m.boundary_edges) midpoint(e.first,e.second);
   }
 };
 

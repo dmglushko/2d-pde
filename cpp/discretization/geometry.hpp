@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
@@ -17,11 +18,10 @@ struct Boundary {
 
 struct TriangleMesh {
   std::vector<Point2> nodes;
-  // P1: three corner indices; P2: corners followed by edge midpoints 01,12,20.
-  std::vector<std::vector<std::size_t>> elements;
-  // Corner endpoints of boundary edges, even for P2 meshes.
+  // Every P1 triangle contains exactly three vertex indices.
+  std::vector<std::array<std::size_t,3>> elements;
+  // Vertex endpoints of exterior edges.
   std::vector<std::pair<std::size_t,std::size_t>> boundary_edges;
-  int order=1;
 };
 
 class Geometry2D {

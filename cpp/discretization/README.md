@@ -23,7 +23,6 @@ mesher.setMaxElementSize(0.8);
 mesher.setSizeField([](double x, double y) {
     return (x*x + y*y < 4.0) ? 0.25 : 0.8;
 });
-mesher.setOrder(1);                    // P1; set 2 for P2 triangles
 
 TriangleMesh mesh = mesher.createMesh(shape);
 export_mesh(mesh, "shape.pde2d");
@@ -68,8 +67,8 @@ disconnected outlines are not represented in this first shape-only interface.
 ## The five mesh generator classes
 
 Each class has the same `createMesh(const Geometry2D&)` interface and supports
-the common setters `setMaxElementSize`, `setOrder`,
-`setOptimizationIterations`, and `setMaxRefinementPasses`.
+the common setters `setMaxElementSize`, `setOptimizationIterations`, and
+`setMaxRefinementPasses`. All return three-node P1 triangles.
 
 1. **`EarClippingMeshGenerator`** triangulates the boundary polygon directly.
    It is the simplest baseline and performs no interior refinement. Element
@@ -97,16 +96,17 @@ that cap. A smaller size usually means better geometric resolution and more
 PDE unknowns. `setMaxRefinementPasses` limits work; if the requested size is
 not reached, mesh creation reports an error rather than silently accepting it.
 
-`setOrder(1)` creates three-node P1 triangles. `setOrder(2)` adds shared
-mid-edge nodes and creates six-node P2 triangles, suitable only once the later
-PDE assembly also supports P2 elements. Circle and ellipse boundaries are
+Each element stores exactly three vertex indices in a `std::array`. There is
+no element-order option. Refinement adds new vertices and divides triangles;
+each resulting triangle still has three vertices. Circle and ellipse boundaries are
 polygonal approximations; control their boundary resolution with
 `setBoundarySegments` on those geometry classes.
 
 `export_mesh` saves the result in the project's own versioned `.pde2d` text
 format. `import_mesh` reads that format and checks the topology before returning
 a `TriangleMesh`. Nodes and connectivity use zero-based indices. Boundary-edge
-records retain corner endpoints and are available for later boundary-condition
-assignment. The file preserves mesh coordinates, element connectivity, order,
-and boundary edges; it does not preserve the original shape parameters or mesh
-generator settings.
+records retain vertex endpoints and are available for later boundary-condition
+assignment. The file preserves mesh coordinates, element connectivity,
+and boundary edges. Its version-1 `ORDER 1` record is fixed; other orders are
+rejected. It does not preserve the original shape parameters or mesh generator
+settings.

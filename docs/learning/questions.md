@@ -7,7 +7,7 @@ Keep [first_mesh.cpp](../../examples/learning/first_mesh.cpp) and the [walkthrou
 3. If `RectangleGeometry(2, 1)` is rotated by π/2, do its stored `width()` and `height()` change? Which function creates the final coordinates?
 4. Why can `EarClippingMeshGenerator` produce long edges even after `setMaxElementSize(0.25)`?
 5. If `setSizeField` receives a lambda that captures another object by reference, how long must that object live?
-6. In a six-node P2 element, what do entries 3, 4, and 5 mean? Do `boundary_edges` store those midpoint indices?
+6. What do the three indices in an element mean? How is one exterior edge represented in `boundary_edges`?
 7. What does `elements.size()` count? How would you find a triangle's coordinates?
 8. Which parts of the original geometry and mesher can `import_mesh` recover from a `.pde2d` file? What must you save separately to remesh later?
 9. A saved file passes `import_mesh`. Does that establish a good minimum angle, no global overlap, or a working PDE discretization?
@@ -46,9 +46,9 @@ The mesher stores the callable. Any object captured by reference must remain ali
 </details>
 
 <details>
-<summary>6. P2 indices</summary>
+<summary>6. Triangle and edge indices</summary>
 
-Entries 3, 4, and 5 refer to shared midpoints of corner edges 0–1, 1–2, and 2–0. `boundary_edges` contain only corner endpoint pairs. Read [TriangleMesh](../../cpp/discretization/geometry.hpp) and [P2 construction](../../cpp/discretization/triangulate.hpp).
+Each element contains exactly three indices into `nodes`, one for each triangle vertex. A boundary edge is a pair of vertex indices, such as `{2, 5}`. Read [TriangleMesh](../../cpp/discretization/geometry.hpp).
 </details>
 
 <details>
@@ -60,7 +60,7 @@ Entries 3, 4, and 5 refer to shared midpoints of corner edges 0–1, 1–2, and 
 <details>
 <summary>8. What survives the file</summary>
 
-The file saves order, mesh nodes, element connectivity, and boundary edge connectivity. It does not save the shape type, dimensions, center, rotation, chosen generator, size field, or other mesher settings. Save those separately if you want to regenerate a different mesh. Read [writer](../../cpp/discretization/mesh_io.hpp).
+The file saves mesh nodes, element connectivity, and boundary edge connectivity. It does not save the shape type, dimensions, center, rotation, chosen generator, size field, or other mesher settings. Save those separately if you want to regenerate a different mesh. Read [writer](../../cpp/discretization/mesh_io.hpp).
 </details>
 
 <details>

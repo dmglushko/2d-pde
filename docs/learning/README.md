@@ -16,14 +16,12 @@ int main(int argc, char* argv[]) {
     discretization::RectangleGeometry geometry(2.0, 1.0);
     discretization::UniformRefinementMeshGenerator mesher;
     mesher.setMaxElementSize(0.5);
-    mesher.setOrder(1);
 
     const discretization::TriangleMesh mesh = mesher.createMesh(geometry);
     discretization::export_mesh(mesh, path);
     const discretization::TriangleMesh restored = discretization::import_mesh(path);
 
-    std::cout << "order=" << restored.order
-              << " nodes=" << restored.nodes.size()
+    std::cout << "nodes=" << restored.nodes.size()
               << " triangles=" << restored.elements.size()
               << " boundary_edges=" << restored.boundary_edges.size() << '\n';
 }
@@ -54,7 +52,7 @@ mesher configuration -> createMesh(geometry) -> TriangleMesh
 TriangleMesh -> export_mesh(path) -> .pde2d file -> import_mesh(path) -> TriangleMesh
 ```
 
-**Pause:** What part of the program describes the region, and what part chooses how to fill it? Try changing only `setMaxElementSize(0.5)` to `0.25`, rebuilding, and comparing the counts. Then try `setOrder(2)`. [Check your reasoning](questions.md#answers).
+**Pause:** What part of the program describes the region, and what part chooses how to fill it? Try changing only `setMaxElementSize(0.5)` to `0.25`, rebuilding, and comparing the counts. Every resulting triangle still has three vertices. [Check your reasoning](questions.md#answers).
 
 ## 2. Geometry becomes one boundary loop
 
@@ -68,7 +66,7 @@ Other shapes in the same header are `CircleGeometry` (radius), `EllipseGeometry`
 
 [MeshGenerator](../../cpp/discretization/mesh_generators.hpp) owns a `MeshOptions` value. Setters change that value. Its `createMesh(const Geometry2D&) const` asks the geometry for a boundary, copies the options, chooses its subclass's algorithm, and passes both to [Triangulator2d::generate](../../cpp/discretization/triangulate.hpp). The geometry is passed by **const reference**: the call reads the existing object rather than taking ownership of it. The returned `TriangleMesh` is a value with its own vectors; it remains usable after the geometry and mesher go out of scope. An optional `setSizeField` stores a callable in the mesher; if that callable captures references, those referenced objects must still exist when `createMesh` calls it.
 
-`generate` [validates the boundary](../../cpp/discretization/triangulate.hpp), takes its points as initial mesh nodes, ear clips the loop into triangles, records boundary edges, optionally refines and flips, smooths interior nodes, and optionally adds P2 edge nodes. The call can throw for invalid input or when the refinement pass limit is reached; it does not return a partly built mesh in that case.
+`generate` [validates the boundary](../../cpp/discretization/triangulate.hpp), takes its points as initial mesh nodes, ear clips the loop into triangles, records boundary edges, optionally refines and flips, and smooths interior nodes. The call can throw for invalid input or when the refinement pass limit is reached; it does not return a partly built mesh in that case.
 
 The five public mesher classes and their actual steps are compared in [meshing methods](reference.md#meshing-methods). Choose one as an experiment, not as a guaranteed best method.
 
@@ -76,24 +74,23 @@ The five public mesher classes and their actual steps are compared in [meshing m
 
 ## 4. Read the mesh as data
 
-[TriangleMesh](../../cpp/discretization/geometry.hpp) is four fields, with zero-based indices:
+[TriangleMesh](../../cpp/discretization/geometry.hpp) has three fields, with zero-based indices:
 
 | Field | Meaning |
 | --- | --- |
-| `nodes` | `Point2{x,y}` coordinates. Initial boundary points and any later split or P2 midpoint nodes live here. |
-| `elements` | Each entry gives indices into `nodes`. P1 has three corner indices. P2 has those corners followed by edge midpoint indices for edges 01, 12, 20. |
-| `boundary_edges` | Pairs of **corner endpoint** indices on the exterior, including for P2. Refinement may split these into more edges. |
-| `order` | `1` for P1 or `2` for P2. This describes mesh connectivity, not an implemented PDE solver. |
+| `nodes` | `Point2{x,y}` coordinates. Initial boundary points and any vertices added by refinement live here. |
+| `elements` | Each `std::array<std::size_t,3>` gives the three vertex indices into `nodes`. |
+| `boundary_edges` | Pairs of **vertex endpoint** indices on the exterior. Refinement may split these into more edges. |
 
-For example, a P1 element `{2, 5, 7}` uses `nodes[2]`, `nodes[5]`, and `nodes[7]`. A P2 element `{2, 5, 7, 9, 10, 11}` adds the 2–5, 5–7, and 7–2 midpoints. The P2 midpoint indices are shared for a common edge by [add_quadratic_nodes](../../cpp/discretization/triangulate.hpp).
+For example, the element `{2, 5, 7}` uses `nodes[2]`, `nodes[5]`, and `nodes[7]`. These three vertices define the triangle. Later P1 FEM interpolation will use the values at those vertices. Refining a triangle creates smaller three-vertex triangles.
 
-**Pause:** Does `boundary_edges` contain P2 midpoint indices? What does `elements.size()` count? [Answers](questions.md#answers).
+**Pause:** How many indices does one boundary edge contain? What does `elements.size()` count? [Answers](questions.md#answers).
 
 ## 5. Export, then import
 
 [export_mesh](../../cpp/discretization/mesh_io.hpp) validates a mesh and writes the text format `PDE2D_MESH 1`, with `ORDER`, `NODES`, `ELEMENTS`, and `BOUNDARY_EDGES` sections. [import_mesh](../../cpp/discretization/mesh_io.hpp) parses those sections and validates the result. The file records the **resulting mesh**, not the original geometry object or mesher options. Changing a geometry after export cannot reconstruct the old settings from the file.
 
-The I/O validator checks counts and indices, triangle orientation and nondegeneracy, edge ownership and exterior edge records, and shared P2 midpoint **indices**. It does not establish that every mesh is globally overlap-free, high quality, or suitable for a PDE. It also does not check that a P2 midpoint coordinate is geometrically halfway along its edge. See [format and limits](reference.md#format-and-limits).
+The I/O validator checks counts and indices, triangle orientation and nondegeneracy, edge ownership and exterior edge records, and consistent shared-edge directions. It does not establish that every mesh is globally overlap-free, high quality, or suitable for a PDE. See [format and limits](reference.md#format-and-limits).
 
 **Pause:** What would you need to save separately if you wanted to regenerate a mesh with different `maxElementSize`? [Answers](questions.md#answers).
 
@@ -113,4 +110,4 @@ When the public API changes: (1) update the example to use the new call, (2) reb
 
 ## Validation
 
-Checked under WSL Ubuntu on 2026-10-02 against this checkout: `g++ -std=c++17 -Wall -Wextra -Werror -Icpp` compiled the example; running it and importing the exported file printed `order=1 nodes=81 triangles=128 boundary_edges=32`. The file began with `PDE2D_MESH 1`, `ORDER 1`, and `NODES 81`. All 77 local Markdown links resolved to existing files, and source links resolved.
+Checked under WSL Ubuntu on 2026-10-23 after the P1-only change: `g++ -std=c++17 -Wall -Wextra -Werror -Icpp` compiled the example; running it and importing the exported file printed `nodes=81 triangles=128 boundary_edges=32`. The file began with `PDE2D_MESH 1`, `ORDER 1`, and `NODES 81`. The P1 regression suite and viewer checks pass with `./tools/test.sh`.

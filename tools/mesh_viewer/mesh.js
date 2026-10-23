@@ -27,7 +27,7 @@ function parseMesh(source) {
   if (integer('version') !== 1) throw new Error('Only PDE2D_MESH version 1 is supported');
   expect('ORDER');
   const order = integer('order');
-  if (order !== 1 && order !== 2) throw new Error('Order must be 1 or 2');
+  if (order !== 1) throw new Error('Only order 1 is supported');
   expect('NODES');
   const nodeCount = integer('node count');
   if (!nodeCount) throw new Error('Mesh has no nodes');
@@ -36,10 +36,10 @@ function parseMesh(source) {
   expect('ELEMENTS');
   const elementCount = integer('element count');
   if (!elementCount) throw new Error('Mesh has no elements');
-  remaining((order===1?4:7)*elementCount, 'ELEMENTS');
+  remaining(4*elementCount, 'ELEMENTS');
   const elements = Array.from({length: elementCount}, (_, id) => {
-    const length = integer('element node count', 6);
-    if (length !== (order === 1 ? 3 : 6)) throw new Error(`Element ${id}: expected ${order === 1 ? 3 : 6} nodes`);
+    const length = integer('element node count', 3);
+    if (length !== 3) throw new Error(`Element ${id}: expected 3 nodes`);
     return Array.from({length}, () => {
       const index = integer('node index');
       if (index >= nodeCount) throw new Error(`Element ${id}: node ${index} is outside NODES`);
@@ -55,7 +55,7 @@ function parseMesh(source) {
     return [a, b];
   });
   if (at !== tokens.length) throw new Error(`Unexpected trailing token: ${tokens[at]}`);
-  return {order, nodes, elements, boundaryEdges};
+  return {nodes, elements, boundaryEdges};
 }
 
 const key = (a, b) => a < b ? `${a},${b}` : `${b},${a}`;
@@ -63,7 +63,7 @@ const distance = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1]);
 const format = n => Number.isFinite(n) ? Number(n.toPrecision(6)).toString() : 'undefined';
 
 function analyse(mesh) {
-  const {nodes, elements, boundaryEdges, order} = mesh;
+  const {nodes, elements, boundaryEdges} = mesh;
   const bounds = [Infinity, Infinity, -Infinity, -Infinity];
   for (const [x,y] of nodes) {
     bounds[0]=Math.min(bounds[0],x);bounds[1]=Math.min(bounds[1],y);
@@ -103,10 +103,9 @@ function analyse(mesh) {
     } else triangleKeys.set(triangleKey,id);
     const edgeKeys = [key(e[0],e[1]),key(e[1],e[2]),key(e[2],e[0])];
     edgeKeys.forEach((k, local) => {
-      if (!edges.has(k)) edges.set(k,{nodes: [e[local],e[(local+1)%3]], owners: [], mids: [], directions: []});
+      if (!edges.has(k)) edges.set(k,{nodes: [e[local],e[(local+1)%3]], owners: [], directions: []});
       const record = edges.get(k); record.owners.push(id);
       record.directions.push(e[local] < e[(local+1)%3] ? 1 : -1);
-      if (order === 2) record.mids.push(e[3+local]);
     });
     return {id, nodes:e, area, lengths, quality, aspect, angles, status, edgeKeys};
   });
@@ -121,15 +120,6 @@ function analyse(mesh) {
     if ((edge.owners.length===1)!==recorded.has(k)) {issues.push(`Edge ${k}: recorded boundary disagrees with triangle ownership`);problemEdges.add(k);}
     if (edge.owners.length===2 && edge.directions[0]===edge.directions[1]) {
       issues.push(`Edge ${k}: adjacent triangles traverse the shared edge in the same direction`);problemEdges.add(k);
-    }
-    if (order===2 && new Set(edge.mids).size>1) {issues.push(`Edge ${k}: P2 midpoint indices disagree`);problemEdges.add(k);}
-    if (order===2 && edge.mids.length) {
-      const [u,v]=edge.nodes;
-      for (const m of new Set(edge.mids)) {
-        const p=nodes[m];
-        const expected=[(nodes[u][0]+nodes[v][0])/2,(nodes[u][1]+nodes[v][1])/2];
-        if (distance(p,expected)>1e-10*Math.max(1,span)) {issues.push(`Edge ${k}: P2 node ${m} is away from straight midpoint`);problemEdges.add(k);}
-      }
     }
   }
   for (const [k] of recorded) if (!edges.has(k)) {issues.push(`Recorded boundary edge ${k} has no triangle`);problemEdges.add(k);}
