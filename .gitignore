@@ -1,0 +1,17 @@
+# Local builds and scratch programs
+/build/
+*.tmp
+*.tmp.*
+a.out
+
+# LaTeX build intermediates; retain the readable PDF and its source
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.fls
+*.fdb_latexmk
+
+# Default output of the learning example
+/rectangle.pde2d
