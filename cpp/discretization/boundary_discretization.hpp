@@ -9,24 +9,10 @@ struct DiscretizedBoundary {
 };
 namespace mesh_detail {
 inline void nonnegative(double value, const char *name) {
-  if (!std::isfinite(value) || value < 0)
-    throw std::invalid_argument(
-        std::string(name) +
-        " must be finite and nonnegative; zero disables it");
+  validateNonnegative(value, name);
 }
 inline void validate_options(const MeshOptions &o) {
-  nonnegative(o.boundary.max_edge_length, "Boundary edge length");
-  nonnegative(o.boundary.max_curve_deviation, "Curve deviation");
-  nonnegative(o.refinement.max_edge_length, "Refinement edge length");
-  if (o.algorithm != InteriorAlgorithm::EarClipping &&
-      o.algorithm != InteriorAlgorithm::ConstrainedDelaunay)
-    throw std::invalid_argument("Unknown interior algorithm");
-  if (o.boundary_treatment != BoundaryTreatment::Fixed &&
-      o.boundary_treatment != BoundaryTreatment::SplitPolygonEdges &&
-      o.boundary_treatment != BoundaryTreatment::RefineOnCurves)
-    throw std::invalid_argument("Unknown boundary treatment");
-  if (o.refinement.max_steps < 0)
-    throw std::invalid_argument("Refinement step budget must be nonnegative");
+  validateMeshOptionValues(o);
   if (o.algorithm == InteriorAlgorithm::EarClipping &&
       o.refinement.max_edge_length > 0)
     throw std::invalid_argument(
@@ -35,48 +21,13 @@ inline void validate_options(const MeshOptions &o) {
 }
 inline CurveSegment world_curve(const CurveSegment &segment,
                                 const Geometry2D &geometry) {
-  auto transform = [&](Point2 p) {
-    double c = std::cos(geometry.rotation()), s = std::sin(geometry.rotation());
-    auto center = geometry.center();
-    return Point2{center.x + c * p.x - s * p.y, center.y + s * p.x + c * p.y};
-  };
-  return std::visit(
-      [&](auto c) -> CurveSegment {
-        using T = std::decay_t<decltype(c)>;
-        if constexpr (std::is_same_v<T, EllipticalArc>) {
-          c.center = transform(c.center);
-          c.rotation += geometry.rotation();
-        } else {
-          c.start = transform(c.start);
-          c.end = transform(c.end);
-          if constexpr (std::is_same_v<T, QuadraticBezier>)
-            c.control = transform(c.control);
-          if constexpr (std::is_same_v<T, CubicBezier>) {
-            c.control1 = transform(c.control1);
-            c.control2 = transform(c.control2);
-          }
-        }
-        return c;
-      },
-      segment);
+  return transformCurve(segment, {1, geometry.rotation(), geometry.center()});
 }
+
 inline CurveSegment subcurve(CurveSegment c, double a, double b) {
   if (a > b) {
     c = subcurve(std::move(c), b, a);
-    return std::visit(
-        [](auto piece) -> CurveSegment {
-          using T = std::decay_t<decltype(piece)>;
-          if constexpr (std::is_same_v<T, EllipticalArc>) {
-            piece.start_angle += piece.sweep_angle;
-            piece.sweep_angle = -piece.sweep_angle;
-          } else {
-            std::swap(piece.start, piece.end);
-            if constexpr (std::is_same_v<T, CubicBezier>)
-              std::swap(piece.control1, piece.control2);
-          }
-          return piece;
-        },
-        c);
+    return reverseCurve(c);
   }
   if (b < 1)
     c = splitCurve(c, b).first;
@@ -85,58 +36,11 @@ inline CurveSegment subcurve(CurveSegment c, double a, double b) {
   return c;
 }
 inline std::pair<double, double> curve_bounds(const CurveSegment &piece) {
-  return std::visit(
-      [](const auto &c) -> std::pair<double, double> {
-        using T = std::decay_t<decltype(c)>;
-        if constexpr (std::is_same_v<T, LineCurve>)
-          return {distance(c.start, c.end), 0};
-        else if constexpr (std::is_same_v<T, QuadraticBezier>)
-          return {2 * std::max(distance(c.start, c.control),
-                               distance(c.control, c.end)),
-                  2 * std::hypot(c.start.x - 2 * c.control.x + c.end.x,
-                                 c.start.y - 2 * c.control.y + c.end.y)};
-        else if constexpr (std::is_same_v<T, CubicBezier>)
-          return {
-              3 * std::max({distance(c.start, c.control1),
-                            distance(c.control1, c.control2),
-                            distance(c.control2, c.end)}),
-              6 * std::max(
-                      std::hypot(c.start.x - 2 * c.control1.x + c.control2.x,
-                                 c.start.y - 2 * c.control1.y + c.control2.y),
-                      std::hypot(c.control1.x - 2 * c.control2.x + c.end.x,
-                                 c.control1.y - 2 * c.control2.y + c.end.y))};
-        else {
-          double r = std::max(c.radius_x, c.radius_y),
-                 w = std::abs(c.sweep_angle);
-          return {r * w, r * w * w};
-        }
-      },
-      piece);
+  auto b = curveDerivativeBounds(piece);
+  return {b.first, b.second};
 }
 inline Point2 tangent(const CurveSegment &piece, bool end) {
-  return std::visit(
-      [&](const auto &c) -> Point2 {
-        using T = std::decay_t<decltype(c)>;
-        if constexpr (std::is_same_v<T, EllipticalArc>) {
-          double a = c.start_angle + (end ? c.sweep_angle : 0),
-                 x = -c.radius_x * std::sin(a) * c.sweep_angle,
-                 y = c.radius_y * std::cos(a) * c.sweep_angle;
-          return {std::cos(c.rotation) * x - std::sin(c.rotation) * y,
-                  std::sin(c.rotation) * x + std::cos(c.rotation) * y};
-        } else {
-          Point2 a = c.start, b = c.end;
-          if constexpr (std::is_same_v<T, QuadraticBezier>) {
-            a = end ? c.control : c.start;
-            b = end ? c.end : c.control;
-          }
-          if constexpr (std::is_same_v<T, CubicBezier>) {
-            a = end ? c.control2 : c.start;
-            b = end ? c.end : c.control1;
-          }
-          return {b.x - a.x, b.y - a.y};
-        }
-      },
-      piece);
+  return curveDerivative(piece, end ? 1 : 0);
 }
 inline double point_segment_distance(Point2 p, Point2 a, Point2 b) {
   double dx = b.x - a.x, dy = b.y - a.y, len = std::hypot(dx, dy);
@@ -176,7 +80,7 @@ discretize_boundary(const CurveGeometry &geometry,
         1e-12 * std::max(1.0, scale))
       throw std::invalid_argument("Disconnected analytical boundary");
     if (options.max_edge_length == 0 && options.max_curve_deviation == 0 &&
-        !std::holds_alternative<LineCurve>(c.segment))
+        !curveIsLinear(c.segment))
       throw std::invalid_argument(
           "Curved boundary needs an enabled length or deviation constraint");
     auto u = tangent(prev.segment, true), v = tangent(c.segment, false);

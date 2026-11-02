@@ -1,6 +1,7 @@
 #pragma once
 
 #include "boundary_context.hpp"
+#include "curve_io.hpp"
 #include "mesh_types.hpp"
 #include "mesh_validation.hpp"
 #include "triangulate.hpp"
@@ -97,18 +98,11 @@ inline void validate_region(const std::string &tag) {
 }
 inline void validate_result(const MeshResult &r) {
   const auto &o = r.options;
-  if ((o.algorithm != InteriorAlgorithm::EarClipping &&
-       o.algorithm != InteriorAlgorithm::ConstrainedDelaunay) ||
-      (o.boundary_treatment != BoundaryTreatment::Fixed &&
-       o.boundary_treatment != BoundaryTreatment::SplitPolygonEdges &&
-       o.boundary_treatment != BoundaryTreatment::RefineOnCurves) ||
-      !std::isfinite(o.boundary.max_edge_length) ||
-      o.boundary.max_edge_length < 0 ||
-      !std::isfinite(o.boundary.max_curve_deviation) ||
-      o.boundary.max_curve_deviation < 0 ||
-      !std::isfinite(o.refinement.max_edge_length) ||
-      o.refinement.max_edge_length < 0 || o.refinement.max_steps < 0)
+  try {
+    validateMeshOptionValues(o);
+  } catch (const std::invalid_argument &) {
     throw std::runtime_error("Invalid mesh result options");
+  }
   if (r.report.delaunay_verified && !is_constrained_delaunay(r.mesh))
     throw std::runtime_error("Recorded CDT guarantee does not hold");
   if (r.report.size_satisfied && o.refinement.max_edge_length > 0) {
@@ -123,7 +117,8 @@ inline void validate_result(const MeshResult &r) {
     return;
   const auto &c = *r.boundary_context;
   validate_boundary_context(r.mesh, c, o.preserve_regions);
-  for (const auto &curve : c.curves) validate_region(curve.region);
+  for (const auto &curve : c.curves)
+    validate_region(curve.region);
   // Unlike refinement, serialization cannot restore omitted region tags.
   if (o.preserve_regions && r.mesh.boundary_tags.empty() &&
       std::any_of(c.curves.begin(), c.curves.end(),
@@ -182,30 +177,10 @@ inline void write_result(std::ostream &out, const MeshResult &r) {
     for (auto p : c.polygon_snapshot)
       out << p.x << ' ' << p.y << '\n';
     out << "SOURCE_CURVES " << c.curves.size() << '\n';
-    auto point = [&](Point2 p) { out << ' ' << p.x << ' ' << p.y; };
     for (const auto &curve : c.curves) {
       out << curve.id.value << ' '
-          << (curve.region.empty() ? "-" : curve.region) << ' '
-          << curve.segment.index();
-      std::visit(
-          [&](const auto &s) {
-            using T = std::decay_t<decltype(s)>;
-            if constexpr (std::is_same_v<T, EllipticalArc>) {
-              point(s.center);
-              out << ' ' << s.radius_x << ' ' << s.radius_y << ' ' << s.rotation
-                  << ' ' << s.start_angle << ' ' << s.sweep_angle;
-            } else {
-              point(s.start);
-              if constexpr (std::is_same_v<T, QuadraticBezier>)
-                point(s.control);
-              if constexpr (std::is_same_v<T, CubicBezier>) {
-                point(s.control1);
-                point(s.control2);
-              }
-              point(s.end);
-            }
-          },
-          curve.segment);
+          << (curve.region.empty() ? "-" : curve.region) << ' ';
+      curve_io::write(out, curve.segment);
       out << '\n';
     }
     out << "EDGE_SOURCES " << c.edge_sources.size() << '\n';
@@ -237,8 +212,10 @@ inline std::uint64_t read_curve_id(std::istream &in) {
 inline void read_result(std::istream &in, MeshResult &r) {
   expect(in, "OPTIONS");
   auto &o = r.options;
-  o.algorithm = static_cast<InteriorAlgorithm>(read_unsigned(in, 1));
-  o.boundary_treatment = static_cast<BoundaryTreatment>(read_unsigned(in, 2));
+  o.algorithm = static_cast<InteriorAlgorithm>(
+      read_unsigned(in, std::numeric_limits<int>::max()));
+  o.boundary_treatment = static_cast<BoundaryTreatment>(
+      read_unsigned(in, std::numeric_limits<int>::max()));
   o.preserve_regions = read_unsigned(in, 1) != 0;
   o.boundary.max_edge_length = read_real(in);
   o.boundary.max_curve_deviation = read_real(in);
@@ -272,10 +249,6 @@ inline void read_result(std::istream &in, MeshResult &r) {
     }
     n = read_count(in, "SOURCE_CURVES");
     c.curves.reserve(n);
-    auto point = [&]() {
-      double x = read_real(in), y = read_real(in);
-      return Point2{x, y};
-    };
     for (std::size_t i = 0; i < n; ++i) {
       BoundaryCurve curve;
       curve.id.value = read_curve_id(in);
@@ -283,22 +256,8 @@ inline void read_result(std::istream &in, MeshResult &r) {
         throw std::runtime_error("Missing source region");
       if (curve.region == "-")
         curve.region.clear();
-      auto kind = read_unsigned(in, 3);
-      if (kind == 0) {
-        auto a = point(), b = point();
-        curve.segment = LineCurve{a, b};
-      } else if (kind == 1) {
-        auto a = point(), b = point(), d = point();
-        curve.segment = QuadraticBezier{a, b, d};
-      } else if (kind == 2) {
-        auto a = point(), b = point(), d = point(), e = point();
-        curve.segment = CubicBezier{a, b, d, e};
-      } else {
-        auto a = point();
-        double rx = read_real(in), ry = read_real(in), rot = read_real(in),
-               start = read_real(in), sweep = read_real(in);
-        curve.segment = EllipticalArc{a, rx, ry, rot, start, sweep};
-      }
+      auto kind = read_unsigned(in, std::numeric_limits<unsigned>::max());
+      curve.segment = curve_io::read(in, static_cast<unsigned>(kind));
       c.curves.push_back(std::move(curve));
     }
     n = read_count(in, "EDGE_SOURCES");

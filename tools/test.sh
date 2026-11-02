@@ -5,6 +5,9 @@ test_dir=$(mktemp -d "${TMPDIR:-/tmp}/2d-pde-tests.XXXXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
 
 "${CXX:-g++}" -std=c++23 -O2 -Wall -Wextra -Werror -Icpp \
+  tests/curve_operations.cpp -o "$test_dir/curve_operations_test"
+"$test_dir/curve_operations_test"
+"${CXX:-g++}" -std=c++23 -O2 -Wall -Wextra -Werror -Icpp \
   tests/discretization.cpp -o "$test_dir/discretization_test"
 "$test_dir/discretization_test" "$test_dir"
 "${CXX:-g++}" -std=c++23 -O2 -Wall -Wextra -Werror -Icpp \

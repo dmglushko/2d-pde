@@ -7,42 +7,10 @@ namespace discretization {
 namespace curve_detail {
 
 inline void validateCurve(const CurveSegment& segment) {
-  auto point=[](Point2 p) {
-    if(!std::isfinite(p.x)||!std::isfinite(p.y)) throw std::invalid_argument("Non-finite curve coordinate");
-  };
-  std::visit([&](const auto& c) {
-    using T=std::decay_t<decltype(c)>;
-    if constexpr(std::is_same_v<T,EllipticalArc>) {
-      point(c.center);
-      if(!(c.radius_x>0 && c.radius_y>0) || !std::isfinite(c.radius_x) || !std::isfinite(c.radius_y) ||
-         !std::isfinite(c.rotation) || !std::isfinite(c.start_angle) || !std::isfinite(c.sweep_angle) ||
-         c.sweep_angle==0 || std::abs(c.sweep_angle)>2*std::numbers::pi)
-        throw std::invalid_argument("Invalid elliptical arc");
-    } else {
-      point(c.start); point(c.end);
-      if constexpr(std::is_same_v<T,QuadraticBezier>) point(c.control);
-      if constexpr(std::is_same_v<T,CubicBezier>) { point(c.control1); point(c.control2); }
-    }
-  },segment);
+  std::visit([](const auto& c) { c.validate(); },segment);
 }
-
 inline double speed(const CurveSegment& segment,double t) {
-  return std::visit([t](const auto& c) {
-    using T=std::decay_t<decltype(c)>;
-    if constexpr(std::is_same_v<T,EllipticalArc>) {
-      double a=c.start_angle+t*c.sweep_angle;
-      return std::abs(c.sweep_angle)*std::hypot(c.radius_x*std::sin(a),c.radius_y*std::cos(a));
-    } else if constexpr(std::is_same_v<T,LineCurve>) {
-      return std::hypot(c.end.x-c.start.x,c.end.y-c.start.y);
-    } else if constexpr(std::is_same_v<T,QuadraticBezier>) {
-      return 2*std::hypot((1-t)*(c.control.x-c.start.x)+t*(c.end.x-c.control.x),
-                          (1-t)*(c.control.y-c.start.y)+t*(c.end.y-c.control.y));
-    } else {
-      double u=1-t;
-      return 3*std::hypot(u*u*(c.control1.x-c.start.x)+2*u*t*(c.control2.x-c.control1.x)+t*t*(c.end.x-c.control2.x),
-                          u*u*(c.control1.y-c.start.y)+2*u*t*(c.control2.y-c.control1.y)+t*t*(c.end.y-c.control2.y));
-    }
-  },segment);
+  return std::visit([t](const auto& c) { return curve_detail::norm(c.derivative(t)); },segment);
 }
 
 // Adaptive Simpson integration of speed. Tolerances scale with the curve,
@@ -81,9 +49,8 @@ inline double curveLength(const CurveSegment& segment,double end=1) {
   curve_detail::validateCurve(segment);
   if(end==0) return 0;
   double result;
-  if(const auto* line=std::get_if<LineCurve>(&segment)) result=end*std::hypot(line->end.x-line->start.x,line->end.y-line->start.y);
-  else if(const auto* arc=std::get_if<EllipticalArc>(&segment); arc && arc->radius_x==arc->radius_y)
-    result=end*std::abs(arc->sweep_angle)*arc->radius_x;
+  auto exact=std::visit([end](const auto& c){return c.exactLength(end);},segment);
+  if(exact) result=*exact;
   else result=curve_detail::integrate(segment,end);
   if(!std::isfinite(result)) throw std::invalid_argument("Curve length exceeds supported numeric scale");
   return result;
@@ -93,8 +60,8 @@ inline double curveParameterAtLengthFraction(const CurveSegment& segment,double 
   if(!(fraction>0 && fraction<1)||!std::isfinite(fraction)) throw std::invalid_argument("Length fraction must be strictly between 0 and 1");
   double length=curveLength(segment);
   if(!(length>0)) throw std::invalid_argument("Cannot split a zero-length curve");
-  if(std::holds_alternative<LineCurve>(segment)) return fraction;
-  if(const auto* arc=std::get_if<EllipticalArc>(&segment); arc && arc->radius_x==arc->radius_y) return fraction;
+  auto exact=std::visit([fraction](const auto& c){return c.exactLengthParameter(fraction);},segment);
+  if(exact) return *exact;
   double low=0,high=1;
   const bool fromEnd=fraction>.5;
   const double target=fromEnd?1-fraction:fraction;

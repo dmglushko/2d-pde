@@ -57,6 +57,7 @@ for(const mutate of [
   r=>r.options.refinement.maxEdgeLength=-1,r=>r.options.refinement.maxSteps=-1,
   r=>r.boundaryContext.protectedVertices=[0,0],r=>r.boundaryContext.protectedVertices=[3],
   r=>r.boundaryContext.curves[1].id=r.boundaryContext.curves[0].id,r=>r.boundaryContext.curves[0].id='18446744073709551616',
+  r=>r.boundaryContext.curves[0].kind=4,r=>r.boundaryContext.curves[0].kind=99,
   r=>r.boundaryContext.curves[0].values[0]=NaN,r=>r.boundaryContext.curves[0].region='bad/tag',
   r=>r.boundaryContext.edgeSources.pop(),r=>r.boundaryContext.edgeSources[0]=[],r=>r.boundaryContext.edgeSources[0][0].curve=3,
   r=>r.boundaryContext.edgeSources[0][0].begin=-0.1,r=>r.boundaryContext.edgeSources[0][0].end=1.1,

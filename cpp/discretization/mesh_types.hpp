@@ -5,8 +5,13 @@
 
 namespace discretization {
 
-enum class InteriorAlgorithm { EarClipping, ConstrainedDelaunay };
-enum class BoundaryTreatment { Fixed, SplitPolygonEdges, RefineOnCurves };
+// Explicit values are stable PDE2D_MESH wire IDs. Never renumber.
+enum class InteriorAlgorithm { EarClipping = 0, ConstrainedDelaunay = 1 };
+enum class BoundaryTreatment {
+  Fixed = 0,
+  SplitPolygonEdges = 1,
+  RefineOnCurves = 2
+};
 
 struct BoundaryOptions {
   double max_edge_length = 1.0;
@@ -23,6 +28,42 @@ struct MeshOptions {
   BoundaryOptions boundary{};
   RefinementOptions refinement{};
 };
+// Shared value validation. Execution-specific compatibility (for example,
+// ear clipping versus refinement) belongs to the requested operation.
+inline bool validInteriorAlgorithm(InteriorAlgorithm value) {
+  switch (value) {
+  case InteriorAlgorithm::EarClipping:
+  case InteriorAlgorithm::ConstrainedDelaunay:
+    return true;
+  }
+  return false;
+}
+inline bool validBoundaryTreatment(BoundaryTreatment value) {
+  switch (value) {
+  case BoundaryTreatment::Fixed:
+  case BoundaryTreatment::SplitPolygonEdges:
+  case BoundaryTreatment::RefineOnCurves:
+    return true;
+  }
+  return false;
+}
+inline void validateNonnegative(double value, const char *name) {
+  if (!std::isfinite(value) || value < 0)
+    throw std::invalid_argument(
+        std::string(name) +
+        " must be finite and nonnegative; zero disables it");
+}
+inline void validateMeshOptionValues(const MeshOptions &o) {
+  if (!validInteriorAlgorithm(o.algorithm))
+    throw std::invalid_argument("Unknown interior algorithm");
+  if (!validBoundaryTreatment(o.boundary_treatment))
+    throw std::invalid_argument("Unknown boundary treatment");
+  validateNonnegative(o.boundary.max_edge_length, "Boundary edge length");
+  validateNonnegative(o.boundary.max_curve_deviation, "Curve deviation");
+  validateNonnegative(o.refinement.max_edge_length, "Refinement edge length");
+  if (o.refinement.max_steps < 0)
+    throw std::invalid_argument("Refinement step budget must be nonnegative");
+}
 struct CurveInterval {
   std::size_t curve;
   double begin, end;

@@ -1,3 +1,16 @@
+// Explicit PDE2D_MESH wire IDs; independent of C++ variant ordering.
+const sourceCurveFormats = new Map([
+  [0, {count:4, point:bezierSourcePoint}],
+  [1, {count:6, point:bezierSourcePoint}],
+  [2, {count:8, point:bezierSourcePoint}],
+  [3, {count:7, validate:v=>v[2]>0 && v[3]>0 && v[6]!==0 && Math.abs(v[6])<=2*Math.PI,
+    point:(v,t)=>{
+      const angle=v[5]+t*v[6], x=v[2]*Math.cos(angle), y=v[3]*Math.sin(angle);
+      return [v[0]+Math.cos(v[4])*x-Math.sin(v[4])*y,v[1]+Math.sin(v[4])*x+Math.cos(v[4])*y];
+    }}],
+]);
+const interiorAlgorithmIds = new Set([0,1]); // EarClipping, ConstrainedDelaunay
+const boundaryTreatmentIds = new Set([0,1,2]); // Fixed, SplitPolygonEdges, RefineOnCurves
 // PDE2D_MESH 1, 2 and 3 reader and corner-triangle diagnostics. No external packages.
 function parseMesh(source) {
   const tokens = source.trim().split(/\s+/);
@@ -15,6 +28,11 @@ function parseMesh(source) {
     if (!/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > max)
       throw new Error(`Invalid ${name}: ${value}`);
     return Number(value);
+  };
+  const registered = (name,registry) => {
+    const id=integer(name);
+    if(!registry.has(id)) throw new Error(`Unknown ${name}: ${id}`);
+    return id;
   };
   const finite = name => {
     const value = take();
@@ -61,7 +79,7 @@ function parseMesh(source) {
   const result = {nodes, elements, boundaryEdges};
   if (version === 3) {
     expect('OPTIONS');
-    const options = {algorithm: integer('algorithm',1), boundaryTreatment: integer('boundary treatment',2), preserveRegions: !!integer('preserve regions',1),
+    const options = {algorithm: registered('algorithm',interiorAlgorithmIds), boundaryTreatment: registered('boundary treatment',boundaryTreatmentIds), preserveRegions: !!integer('preserve regions',1),
       boundary: {maxEdgeLength: finite('boundary length'), maxCurveDeviation: finite('curve deviation')},
       refinement: {maxEdgeLength: finite('refinement length'), maxSteps: integer('max steps',2147483647)}};
     if (options.boundary.maxEdgeLength<0 || options.boundary.maxCurveDeviation<0 || options.refinement.maxEdgeLength<0) throw new Error('Invalid meshing tolerances');
@@ -93,8 +111,9 @@ function parseMesh(source) {
         if(!/^(0|[1-9]\d*)$/.test(id)||BigInt(id)>18446744073709551615n||ids.has(id))throw new Error('Invalid or duplicate source curve ID');
         ids.add(id); const tag=take();
         if(!/^[A-Za-z0-9_.-]+$/.test(tag))throw new Error('Invalid source curve region');
-        const kind=integer('curve kind',3), values=Array.from({length:[4,6,8,7][kind]},()=>finite('source curve coordinate'));
-        if(kind===3 && (values[2]<=0||values[3]<=0||values[6]===0||Math.abs(values[6])>2*Math.PI))throw new Error('Invalid elliptical arc');
+        const kind=registered('curve kind',sourceCurveFormats), format=sourceCurveFormats.get(kind);
+        const values=Array.from({length:format.count},()=>finite('source curve coordinate'));
+        if(format.validate && !format.validate(values)) throw new Error('Invalid source curve parameters');
         return {id,region:tag==='-'?null:tag,kind,values};
       });
       expect('EDGE_SOURCES'); const edgeCount=integer('edge source count');
@@ -130,11 +149,12 @@ function parseMesh(source) {
   return result;
 }
 
-function sourcePoint({kind,values:v},t) {
-  if(kind===3) {
-    const angle=v[5]+t*v[6], x=v[2]*Math.cos(angle),y=v[3]*Math.sin(angle);
-    return [v[0]+Math.cos(v[4])*x-Math.sin(v[4])*y,v[1]+Math.sin(v[4])*x+Math.cos(v[4])*y];
-  }
+function sourcePoint({kind,values},t) {
+  const format=sourceCurveFormats.get(kind);
+  if(!format) throw new Error('Unknown source curve kind');
+  return format.point(values,t);
+}
+function bezierSourcePoint(v,t) {
   const points=[];for(let i=0;i<v.length;i+=2)points.push(v.slice(i,i+2));
   while(points.length>1) {for(let i=0;i<points.length-1;i++)points[i]=points[i].map((x,j)=>(1-t)*x+t*points[i+1][j]);points.pop();}
   return points[0];

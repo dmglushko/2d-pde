@@ -24,6 +24,9 @@ options.boundary_treatment = BoundaryTreatment::RefineOnCurves;
 auto finer = refine_mesh(restored, options);
 ```
 
+See [Extending analytical geometry](EXTENDING.md) for curve contracts, proven
+interval bounds, format adapters, and stable serialization IDs.
+
 ## Free functions and options
 
 `generate_mesh(CurveGeometry | Boundary | DiscretizedBoundary, MeshOptions = {})`
