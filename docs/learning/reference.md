@@ -32,7 +32,8 @@ straight chords. `RefineOnCurves` adds points on source curves and needs retaine
 context. Boundary sampling tolerances and triangle-edge targets are independent.
 A fixed boundary should be sampled finely enough for the later target.
 
-`generate_mesh` accepts geometry, raw boundary, or discretized boundary.
+`generate_mesh` accepts `CurveGeometry` (including built-in shapes and SVG
+imports), raw boundary, or discretized boundary.
 `refine_mesh(result, options)` retains context; the raw-mesh overload accepts an
 optional context. `subdivide_mesh(mesh, options, context)` subdivides straight
 polygons without legalization and rejects curve mode. All return `MeshResult`.
@@ -46,7 +47,8 @@ usable topology, not evidence that the target succeeded. Invalid input throws.
 Rectangle dimensions are full local lengths; ellipse A/B are semi-axis lengths.
 Positive finite dimensions are required. Rotation is counterclockwise in radians,
 translation defaults to `(0,0)`, and transforms leave stored dimensions intact.
-Legacy segment counts do not control sampling. Stable curve IDs, named regions,
+Set sampling bounds through `BoundaryOptions` or `MeshOptions::boundary`.
+Stable curve IDs, named regions,
 arc-length cuts, and edit replay on resizing remain unchanged; consult the
 [full region-editing contract](../../cpp/discretization/README.md#geometry-and-boundary-regions).
 

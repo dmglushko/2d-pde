@@ -33,8 +33,7 @@ struct RegionInfo {
 class CurveGeometry : public Geometry2D {
 public:
   CurveGeometry() = default;
-  explicit CurveGeometry(std::vector<CurveRegion> regions,std::size_t samples_per_curve=32) {
-    if(samples_per_curve==0) throw std::invalid_argument("Curve geometry requires a positive sample count");
+  explicit CurveGeometry(std::vector<CurveRegion> regions) {
     setRegions(std::move(regions));
   }
 
@@ -162,47 +161,6 @@ public:
     std::vector<CurveId> ids;
     for(std::size_t i=first;i<first+count;++i) ids.insert(ids.end(),runs[i].begin(),runs[i].end());
     relabel(ids,name);
-  }
-  Boundary createBoundary() const override { return discretizeBoundary(1.0, 0.02); }
-  Boundary discretizeBoundary(double maxEdge, double deviation) const override {
-    if(!(maxEdge>0) || !std::isfinite(maxEdge) || !(deviation>0) || !std::isfinite(deviation)) throw std::invalid_argument("Boundary tolerances must be finite and positive");
-    if(curves_.empty()) throw std::invalid_argument("Curve geometry requires regions");
-    Boundary b;
-    Point2 first{}, previous{}; bool have=false;
-    auto close=[](Point2 a,Point2 c) { return std::hypot(a.x-c.x,a.y-c.y)<=1e-10*std::max({1.0,std::hypot(a.x,a.y),std::hypot(c.x,c.y)}); };
-    for(const auto& record:curves_) {
-      const auto& segment=record.segment;
-      curve_detail::validateCurve(segment);
-      const Point2 start=curvePoint(segment,0), end=curvePoint(segment,1);
-      if(!std::isfinite(start.x)||!std::isfinite(start.y)||!std::isfinite(end.x)||!std::isfinite(end.y)) throw std::invalid_argument("Non-finite curve");
-      if(!have) { first=start; have=true; } else if(!close(previous,start)) throw std::invalid_argument("Curve segments are disconnected");
-      auto emit = [&](auto&& self, const CurveSegment& piece, int depth) -> void {
-        // The interpolation error is bounded by max |p''| / 8. The
-        // derivative bound also bounds arc length and hence chord length.
-        auto bounds=std::visit([](const auto& c)->std::pair<double,double> {
-          auto dist=[](Point2 a,Point2 b){return std::hypot(a.x-b.x,a.y-b.y);};
-          using T=std::decay_t<decltype(c)>;
-          if constexpr(std::is_same_v<T,LineCurve>) return {dist(c.start,c.end),0};
-          else if constexpr(std::is_same_v<T,QuadraticBezier>) {
-            Point2 d{c.start.x-2*c.control.x+c.end.x,c.start.y-2*c.control.y+c.end.y};
-            return {2*std::max(dist(c.start,c.control),dist(c.control,c.end)),2*std::hypot(d.x,d.y)};
-          } else if constexpr(std::is_same_v<T,CubicBezier>) {
-            Point2 d{c.start.x-2*c.control1.x+c.control2.x,c.start.y-2*c.control1.y+c.control2.y};
-            Point2 e{c.control1.x-2*c.control2.x+c.end.x,c.control1.y-2*c.control2.y+c.end.y};
-            return {3*std::max({dist(c.start,c.control1),dist(c.control1,c.control2),dist(c.control2,c.end)}),6*std::max(std::hypot(d.x,d.y),std::hypot(e.x,e.y))};
-          } else { double r=std::max(c.radius_x,c.radius_y), w=std::abs(c.sweep_angle); return {r*w,r*w*w}; }
-        },piece);
-        if(!std::isfinite(bounds.first) || !std::isfinite(bounds.second)) throw std::invalid_argument("Non-finite curve");
-        if(bounds.first>maxEdge || bounds.second/8>deviation) {
-          if(depth>=30) throw std::runtime_error("Curve discretization limit exceeded");
-          auto halves=discretization::splitCurve(piece,0.5); self(self,halves.first,depth+1); self(self,halves.second,depth+1);
-        } else { b.points.push_back(transform(curvePoint(piece,0))); b.edge_tags.push_back(record.region); }
-      };
-      emit(emit,segment,0);
-      previous=end;
-    }
-    if(!close(previous,first)) throw std::invalid_argument("Curve boundary is not closed");
-    return b;
   }
 protected:
   // Built-in shape definitions provide the same source curves in the same

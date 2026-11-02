@@ -26,10 +26,9 @@ auto finer = refine_mesh(restored, options);
 
 ## Free functions and options
 
-`generate_mesh(Geometry2D | Boundary | DiscretizedBoundary, MeshOptions = {})`
+`generate_mesh(CurveGeometry | Boundary | DiscretizedBoundary, MeshOptions = {})`
 returns `MeshResult`: `.mesh`, optional `.boundary_context`, `.options`, and
-`.report`. `mesh_generators.hpp` forwards to `triangulate.hpp`; the old five
-mesh-generator classes and their setters have been removed.
+`.report`. Include `triangulate.hpp` for the meshing entry points.
 
 `discretize_boundary(geometry, BoundaryOptions = {}, bool preserve_regions = true)`
 returns `DiscretizedBoundary { boundary, context }`. Analytical source curves and
@@ -86,10 +85,11 @@ edge is implicit. Translation uses `setCenter`, and `setRotation` takes
 counterclockwise radians about that center. The cap diameter is the rectangle
 height; total capped length is width + height/2.
 
-Legacy segment-count arguments remain accepted but do not control meshing.
-Use `BoundaryOptions` with `discretize_boundary` or `MeshOptions::boundary`.
-Standalone `createBoundary()` and `discretizeBoundary(maxEdge, deviation)` remain
-geometry conveniences. Regions can contain disconnected pieces on the same
+Control sampling with `BoundaryOptions` passed to `discretize_boundary` or
+`MeshOptions::boundary` passed to `generate_mesh`. Geometry overloads accept
+`CurveGeometry`, including every built-in shape and SVG imports; supply a raw
+`Boundary` for polygon-only input. `Geometry2D` holds transforms and has no
+sampling interface. Regions can contain disconnected pieces on the same
 outline. Empty tag vectors mean untagged edges; individual empty strings are
 also untagged. Rectangle tags are `bottom`, `right`, `top`, `left` in local
 coordinates. Disabling `preserve_regions` clears mesh tags and permits redundant
@@ -198,13 +198,14 @@ and [rendered showcase](../../docs/showcase/README.md).
 
 ### SVG import
 
-Include `discretization/svg_geometry.hpp` and compile and link with
+Include `discretization/svg_geometry.hpp` and
+`discretization/boundary_discretization.hpp`, and compile and link with
 `pkg-config --cflags --libs libxml-2.0`. For example:
 
 ```cpp
 auto geometry = discretization::importSvg("boundary.svg",
     {2.0, discretization::SvgScaleMode::Farthest, 64});
-auto boundary = geometry.createBoundary();
+auto boundary = discretization::discretize_boundary(geometry).boundary;
 ```
 
 Each `<path id="region" d="..."/>` supplies one tagged region. Paths may
@@ -218,7 +219,9 @@ it is (0, 0). The marker radius is ignored.
 `Factor` multiplies coordinates after subtracting the origin. `Nearest` and
 `Farthest` make the corresponding distance from the origin equal to `scale`.
 Distances are measured on the sampled polyline, with nearest measured to edges,
-so increasing `samples_per_curve` improves curved-distance approximation.
+so increasing `SvgOptions::samples_per_curve` improves curved-distance
+approximation. This option affects import scaling only; boundary sampling for
+meshing uses `BoundaryOptions`.
 The importer rejects zero distances, invalid or disconnected paths, transforms,
 groups, other shapes, multiple subpaths, and unsupported attributes and
 commands. It does not apply viewBox, CSS, or units; use plain numeric coordinates

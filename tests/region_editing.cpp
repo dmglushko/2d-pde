@@ -1,4 +1,5 @@
-#include "discretization/mesh_generators.hpp"
+#include "discretization/geometry.hpp"
+#include "discretization/triangulate.hpp"
 #include "discretization/mesh_io.hpp"
 #include <iostream>
 #include <limits>
@@ -18,6 +19,25 @@ void unique(const CurveGeometry& g) { auto all=ids(g); std::set<CurveId> keys(al
 int main(int argc,char** argv) {
   try {
     check(argc==2,"Missing temp directory");
+    // Public replacement remains available on every built-in shape, and the
+    // current mesher consumes the replacement rather than the original shape.
+    auto replaceShape=[&](auto shape) {
+      auto old=ids(shape);
+      shape.setRegions({{"replacement",{LineCurve{{0,0},{1,0}},
+        LineCurve{{1,0},{0,1}},LineCurve{{0,1},{0,0}}}}});
+      for(auto id:old) rejects([&]{(void)shape.curve(id);});
+      auto result=generate_mesh(shape);
+      check(!result.mesh.boundary_tags.empty(),"Replacement tags missing");
+      for(const auto& tag:result.mesh.boundary_tags)
+        check(tag=="replacement","Mesher ignored replacement regions");
+    };
+    replaceShape(CircleGeometry{});
+    replaceShape(EllipseGeometry{});
+    replaceShape(RectangleGeometry{});
+    replaceShape(RectangleWithSemicircleGeometry{});
+    replaceShape(RegularPolygonGeometry{});
+    replaceShape(PolygonGeometry({{0,0},{2,0},{0,2}}));
+
     RectangleGeometry rectangle(4,2);
     auto bottom=rectangle.curveIdAt("bottom",0),right=rectangle.curveIdAt("right",0);
     auto original=ids(rectangle);

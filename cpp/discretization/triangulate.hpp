@@ -493,7 +493,7 @@ inline MeshResult generate_mesh(const Boundary &boundary,
                                 const MeshOptions &options = {}) {
   return generate_mesh(DiscretizedBoundary{boundary, std::nullopt}, options);
 }
-inline MeshResult generate_mesh(const Geometry2D &geometry,
+inline MeshResult generate_mesh(const CurveGeometry &geometry,
                                 const MeshOptions &options = {}) {
   mesh_detail::validate_options(options);
   return generate_mesh(

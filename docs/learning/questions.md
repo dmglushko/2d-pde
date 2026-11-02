@@ -4,7 +4,7 @@ Use [first_mesh.cpp](../../examples/learning/first_mesh.cpp) and the
 [walkthrough](README.md). Predict an answer before opening the source.
 
 1. What describes the shape, what configures triangulation, and what does `generate_mesh` return?
-2. What does passing `const Geometry2D&` mean for copying and ownership?
+2. What does passing `const CurveGeometry&` mean for copying and ownership?
 3. Does rotating a rectangle exchange its stored width and height?
 4. Why does ear clipping reject a positive interior target?
 5. How do the boundary length and refinement length differ?

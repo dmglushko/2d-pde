@@ -1,4 +1,5 @@
-#include "discretization/mesh_generators.hpp"
+#include "discretization/geometry.hpp"
+#include "discretization/triangulate.hpp"
 #include "discretization/mesh_io.hpp"
 #include <filesystem>
 #include <iostream>
@@ -97,7 +98,7 @@ int main(int argc, char **argv) {
     exact_predicates();
     const auto path =
         (std::filesystem::path(argv[1]) / "roundtrip.pde2d").string();
-    std::vector<std::unique_ptr<Geometry2D>> shapes;
+    std::vector<std::unique_ptr<CurveGeometry>> shapes;
     shapes.push_back(std::make_unique<CircleGeometry>());
     shapes.push_back(std::make_unique<EllipseGeometry>());
     shapes.push_back(std::make_unique<RectangleGeometry>());
