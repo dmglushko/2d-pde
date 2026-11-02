@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
     std::ofstream manifest(output / "manifest.tsv");
     manifest << "file\ttitle\tnodes\ttriangles\tsize_satisfied\tmessage\n";
     auto save = [&](const std::string& name, const std::string& title,
-                    const Geometry2D& geometry, const MeshOptions& options,
+                    const CurveGeometry& geometry, const MeshOptions& options,
                     bool expect_size = true) {
       auto result = generate_mesh(geometry, options);
       if (result.mesh.nodes.size() >= 500)
@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
                << (result.report.message.empty() ? "-" : result.report.message) << '\n';
       std::cout << name << ": " << result.mesh.nodes.size() << " vertices\n";
     };
-    std::vector<std::pair<std::string, std::unique_ptr<Geometry2D>>> shapes;
+    std::vector<std::pair<std::string, std::unique_ptr<CurveGeometry>>> shapes;
     shapes.emplace_back("circle", std::make_unique<CircleGeometry>());
     shapes.emplace_back("ellipse", std::make_unique<EllipseGeometry>());
     shapes.emplace_back("rectangle", std::make_unique<RectangleGeometry>());

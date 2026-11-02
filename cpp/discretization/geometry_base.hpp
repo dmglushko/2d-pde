@@ -33,8 +33,6 @@ struct TriangleMesh {
 class Geometry2D {
 public:
   virtual ~Geometry2D()=default;
-  virtual Boundary createBoundary() const=0;
-  virtual Boundary discretizeBoundary(double, double) const { return createBoundary(); }
   void setCenter(double x,double y) { setCenter(Point2{x,y}); }
   void setCenter(Point2 c) {
     if(!std::isfinite(c.x)||!std::isfinite(c.y)) throw std::invalid_argument("Center must be finite");
@@ -47,12 +45,6 @@ public:
     rotation_=radians;
   }
   double rotation() const { return rotation_; }
-
-protected:
-  Point2 transform(Point2 p) const {
-    const double c=std::cos(rotation_),s=std::sin(rotation_);
-    return {center_.x+c*p.x-s*p.y,center_.y+s*p.x+c*p.y};
-  }
 
 private:
   Point2 center_{};

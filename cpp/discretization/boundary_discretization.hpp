@@ -149,22 +149,14 @@ inline double point_segment_distance(Point2 p, Point2 a, Point2 b) {
 } // namespace mesh_detail
 
 inline DiscretizedBoundary
-discretize_boundary(const Geometry2D &geometry,
+discretize_boundary(const CurveGeometry &geometry,
                     const BoundaryOptions &options = {},
                     bool preserve_regions = true) {
   using namespace mesh_detail;
   nonnegative(options.max_edge_length, "Boundary edge length");
   nonnegative(options.max_curve_deviation, "Curve deviation");
-  const auto *analytical = dynamic_cast<const CurveGeometry *>(&geometry);
-  if (!analytical) {
-    Boundary b = geometry.createBoundary();
-    if (!preserve_regions)
-      b.edge_tags.clear();
-    validate_polygon(b);
-    return {std::move(b), std::nullopt};
-  }
   BoundaryContext ctx;
-  for (const auto &c : analytical->curves())
+  for (const auto &c : geometry.curves())
     ctx.curves.push_back({c.id, world_curve(c.segment, geometry), c.region});
   if (ctx.curves.empty())
     throw std::invalid_argument("Empty analytical boundary");

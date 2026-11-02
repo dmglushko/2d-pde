@@ -9,6 +9,7 @@
 
 namespace discretization {
 enum class SvgScaleMode { Factor, Nearest, Farthest };
+// samples_per_curve controls distance scaling only; meshing uses BoundaryOptions.
 struct SvgOptions { double scale=1; SvgScaleMode mode=SvgScaleMode::Factor; std::size_t samples_per_curve=32; };
 namespace svg_detail {
 inline bool near(Point2 a,Point2 b) { return std::hypot(a.x-b.x,a.y-b.y)<=1e-9*std::max({1.,std::hypot(a.x,a.y),std::hypot(b.x,b.y)}); }
@@ -87,6 +88,6 @@ inline CurveGeometry importSvg(const std::string& filename,SvgOptions options={}
  double factor=options.mode==SvgScaleMode::Factor?options.scale:options.scale/distance; if(!std::isfinite(factor)||factor<=0) throw std::invalid_argument("Invalid SVG distance scale");
  auto adjust=[&](Point2& p){p={(p.x-origin.x)*factor,(p.y-origin.y)*factor};};
  for(auto& region:regions) for(auto& segment:region.segments) std::visit([&](auto& c){ using T=std::decay_t<decltype(c)>; if constexpr(std::is_same_v<T,EllipticalArc>) { adjust(c.center); c.radius_x*=factor; c.radius_y*=factor; } else { adjust(c.start); adjust(c.end); if constexpr(std::is_same_v<T,QuadraticBezier>) adjust(c.control); if constexpr(std::is_same_v<T,CubicBezier>) { adjust(c.control1); adjust(c.control2); } } },segment);
- return CurveGeometry(std::move(regions),options.samples_per_curve);
+ return CurveGeometry(std::move(regions));
 }
 }
