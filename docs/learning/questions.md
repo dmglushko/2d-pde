@@ -26,7 +26,7 @@ Use [first_mesh.cpp](../../examples/learning/first_mesh.cpp) and the
 6. The result has `size_satisfied=false` and an explanatory message. Sample the initial boundary more finely or allow splitting.
 7. A partial mesh returns with an explicit unmet report. Inspect `size_satisfied` and `message`; `refinement_steps` counts work.
 8. Chord midpoints remain on the original sampled polygon. Curve mode uses source intervals to put new boundary points on the analytical circle.
-9. It omits tags and lets redundant smooth region junctions disappear during sampling. Corners remain; stable curve-ID editing is unchanged.
+9. It omits tags and lets region junctions disappear during sampling. Corners are separately controlled by `boundary.preserve_corners`; stable curve-ID editing is unchanged.
 10. `export_mesh(result, path)` writes v3; `import_mesh_result(path)` retains context for `refine_mesh(result, options)`. Raw mesh export is v2; topology-only import drops context.
 11. No. Longest-edge midpoint insertion and full legalization enforce size where feasible, without a classical circumcenter quality guarantee. There is no minimum-angle setting.
 12. Each triangle has three indices into `mesh.nodes`; a boundary edge has two vertex endpoints. `elements.size()` counts triangles, not unknowns or nodes.

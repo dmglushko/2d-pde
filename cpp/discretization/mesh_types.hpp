@@ -16,6 +16,7 @@ enum class BoundaryTreatment {
 struct BoundaryOptions {
   double max_edge_length = 1.0;
   double max_curve_deviation = 0.02;
+  bool preserve_corners = false;
 };
 struct RefinementOptions {
   double max_edge_length = 0.0; // Zero disables size refinement.

@@ -79,6 +79,7 @@
       row('Interior algorithm',['Ear clipping','Constrained Delaunay'][mesh.options.algorithm])+
       row('Boundary treatment',['Fixed','Split polygon edges','Refine on curves'][mesh.options.boundaryTreatment])+
       row('Preserve regions',mesh.options.preserveRegions?'yes':'no')+
+      row('Preserve corners',mesh.options.boundary.preserveCorners?'yes':'no')+
       row('Boundary maximum edge',mesh.options.boundary.maxEdgeLength ? number(mesh.options.boundary.maxEdgeLength) : 'disabled')+
       row('Maximum curve deviation',mesh.options.boundary.maxCurveDeviation ? number(mesh.options.boundary.maxCurveDeviation) : 'disabled')+
       row('Refinement maximum edge',mesh.options.refinement.maxEdgeLength ? number(mesh.options.refinement.maxEdgeLength) : 'disabled')+

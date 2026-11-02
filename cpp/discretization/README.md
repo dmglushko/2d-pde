@@ -43,6 +43,7 @@ A raw `Boundary` has no analytical context.
 | `algorithm` | `InteriorAlgorithm::ConstrainedDelaunay` | Or `EarClipping`. |
 | `boundary_treatment` | `BoundaryTreatment::Fixed` | Or `SplitPolygonEdges`, `RefineOnCurves`. |
 | `preserve_regions` | `true` | Keep tags and protect region junctions during sampling. |
+| `boundary.preserve_corners` | `false` | Protect geometric corners during sampling. Region junctions remain protected when regions are preserved. |
 | `boundary.max_edge_length` | `1.0` | Initial analytical boundary length bound. |
 | `boundary.max_curve_deviation` | `0.02` | Initial absolute curve-to-chord deviation bound. |
 | `refinement.max_edge_length` | `0.0` | Maximum triangle-edge length target; zero disables refinement. |
@@ -95,8 +96,9 @@ Control sampling with `BoundaryOptions` passed to `discretize_boundary` or
 sampling interface. Regions can contain disconnected pieces on the same
 outline. Empty tag vectors mean untagged edges; individual empty strings are
 also untagged. Rectangle tags are `bottom`, `right`, `top`, `left` in local
-coordinates. Disabling `preserve_regions` clears mesh tags and permits redundant
-smooth region junctions to disappear; geometric corners remain protected.
+coordinates. Disabling `preserve_regions` clears mesh tags and permits region
+junctions to disappear. Set `boundary.preserve_corners` to retain geometric corners
+independently; otherwise the enabled boundary bounds determine whether they can be removed.
 
 Use names for whole-region operations and stable IDs for individual curves:
 
@@ -129,7 +131,7 @@ new child IDs and returns them in traversal order; the old ID fails lookup.
 Region splitting preserves IDs of curves it only relabels and returns all
 resulting selected curve IDs. Unselected curves retain their IDs. IDs are never
 recycled for unrelated fragments. Copies inherit IDs and then evolve
-independently; do not use an ID from another geometry. Version-3 mesh results serialize source IDs in a boundary-context snapshot for
+independently; do not use an ID from another geometry. Mesh results serialize source IDs in a boundary-context snapshot for
 continued refinement; they do not serialize editable geometry or its edit history.
 Independent geometry imports assign their own IDs.
 
@@ -182,12 +184,12 @@ wraparound. Use name-based merging for arbitrary groups and wraparound.
 
 ## Export and resume
 
-`export_mesh(MeshResult, path)` writes version 3, including options, report, and
+`export_mesh(MeshResult, path)` writes version 4, including options, report, and
 optional world-coordinate source-curve context for resumed curve refinement.
 `import_mesh_result(path)` restores it. This snapshot is not an editable geometry
 archive. `export_mesh(TriangleMesh, path)` writes version 2 with boundary tags.
 `import_mesh(path)` reads topology only, dropping refinement context. Readers
-accept versions 1, 2, and 3; v1 edges are untagged. All use zero-based indices and
+accept versions 1 through 4; v1 edges are untagged. All use zero-based indices and
 fixed `ORDER 1`. Nonempty tags use ASCII letters, digits, `_`, `.`, or `-`, with
 the standalone `-` token reserved for untagged edges.
 

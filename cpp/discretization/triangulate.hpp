@@ -356,7 +356,7 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
   validate_mesh_geometry(result.mesh);
   if (result.boundary_context)
     validate_boundary_context(result.mesh, *result.boundary_context,
-                              options.preserve_regions);
+                              options.preserve_regions, options.boundary.preserve_corners);
   result.options = options;
   result.report = {};
   if (!options.preserve_regions)
@@ -492,7 +492,7 @@ inline MeshResult generate_mesh(const DiscretizedBoundary &boundary,
   validate_mesh_geometry(result.mesh);
   if (result.boundary_context)
     validate_boundary_context(result.mesh, *result.boundary_context,
-                              options.preserve_regions);
+                              options.preserve_regions, options.boundary.preserve_corners);
   return result;
 }
 inline MeshResult generate_mesh(const Boundary &boundary,

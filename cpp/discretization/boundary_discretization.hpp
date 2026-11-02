@@ -42,6 +42,14 @@ inline std::pair<double, double> curve_bounds(const CurveSegment &piece) {
 inline Point2 tangent(const CurveSegment &piece, bool end) {
   return curveDerivative(piece, end ? 1 : 0);
 }
+inline bool is_corner(const CurveSegment &left, const CurveSegment &right) {
+  auto u = tangent(left, true), v = tangent(right, false);
+  double ul = std::hypot(u.x, u.y), vl = std::hypot(v.x, v.y);
+  if (ul == 0 || vl == 0) return true;
+  u = {u.x / ul, u.y / ul}; v = {v.x / vl, v.y / vl};
+  return std::abs(u.x * v.y - u.y * v.x) > 1e-10 ||
+         u.x * v.x + u.y * v.y <= 0;
+}
 inline double point_segment_distance(Point2 p, Point2 a, Point2 b) {
   double dx = b.x - a.x, dy = b.y - a.y, len = std::hypot(dx, dy);
   if (len == 0)
@@ -83,16 +91,8 @@ discretize_boundary(const CurveGeometry &geometry,
         !curveIsLinear(c.segment))
       throw std::invalid_argument(
           "Curved boundary needs an enabled length or deviation constraint");
-    auto u = tangent(prev.segment, true), v = tangent(c.segment, false);
-    double ul = std::hypot(u.x, u.y), vl = std::hypot(v.x, v.y);
-    bool corner = ul == 0 || vl == 0;
-    if (!corner) {
-      u = {u.x / ul, u.y / ul};
-      v = {v.x / vl, v.y / vl};
-      corner =
-          std::abs(u.x * v.y - u.y * v.x) > 1e-10 || u.x * v.x + u.y * v.y <= 0;
-    }
-    bool anchor = corner || (preserve_regions && prev.region != c.region);
+    bool anchor = (options.preserve_corners && is_corner(prev.segment, c.segment)) ||
+                  (preserve_regions && prev.region != c.region);
     auto emit = [&](auto &&self, const CurveSegment &piece, double a, double z,
                     int depth) -> void {
       auto [length, second] = curve_bounds(piece);

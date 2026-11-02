@@ -9,7 +9,8 @@ namespace discretization {
 // it must not lose, duplicate, or reorder any source interval.
 inline void validate_boundary_context(const TriangleMesh &mesh,
                                       const BoundaryContext &context,
-                                      bool preserve_regions) {
+                                      bool preserve_regions,
+                                      bool preserve_corners = false) {
   using namespace mesh_detail;
   if (context.curves.empty() ||
       context.edge_sources.size() != mesh.boundary_edges.size())
@@ -50,18 +51,25 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
     if (spans.empty())
       throw std::invalid_argument("Missing boundary source interval");
     std::optional<Point2> previous;
+    std::optional<CurveInterval> previous_span;
     for (auto s : spans) {
       if (s.curve >= context.curves.size() || !std::isfinite(s.begin) ||
           !std::isfinite(s.end) || s.begin < 0 || s.begin > 1 || s.end < 0 ||
           s.end > 1 || s.begin == s.end)
         throw std::invalid_argument("Invalid boundary source interval");
       const auto &c = context.curves[s.curve];
+      if (preserve_corners && previous_span && previous_span->curve != s.curve &&
+          is_corner(subcurve(context.curves[previous_span->curve].segment,
+                             previous_span->begin, previous_span->end),
+                    subcurve(c.segment, s.begin, s.end)))
+        throw std::invalid_argument("Corner protection requires regenerating boundary discretization");
       auto start = curvePoint(c.segment, s.begin);
       source_anchors.push_back(start);
       source_anchors.push_back(curvePoint(c.segment, s.end));
       if (previous && !close(*previous, start))
         throw std::invalid_argument("Disconnected source intervals");
       previous = curvePoint(c.segment, s.end);
+      previous_span = s;
       coverage[s.curve].push_back(std::minmax(s.begin, s.end));
       if (preserve_regions && !mesh.boundary_tags.empty() &&
           mesh.boundary_tags[i] != c.region)
@@ -124,21 +132,10 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
             context.curves[right.curve].region &&
         !protected_vertices.contains(b))
       throw std::invalid_argument("Region junction is not protected");
-    auto u = tangent(
-        subcurve(context.curves[left.curve].segment, left.begin, left.end),
-        true);
-    auto v = tangent(
-        subcurve(context.curves[right.curve].segment, right.begin, right.end),
-        false);
-    double ul = std::hypot(u.x, u.y), vl = std::hypot(v.x, v.y);
-    bool corner = ul == 0 || vl == 0;
-    if (!corner) {
-      u = {u.x / ul, u.y / ul};
-      v = {v.x / vl, v.y / vl};
-      corner =
-          std::abs(u.x * v.y - u.y * v.x) > 1e-10 || u.x * v.x + u.y * v.y <= 0;
-    }
-    if (corner && left.curve != right.curve && !protected_vertices.contains(b))
+    if (preserve_corners && left.curve != right.curve &&
+        is_corner(subcurve(context.curves[left.curve].segment, left.begin, left.end),
+                  subcurve(context.curves[right.curve].segment, right.begin, right.end)) &&
+        !protected_vertices.contains(b))
       throw std::invalid_argument("Geometric corner is not protected");
   }
   for (auto &intervals : coverage) {

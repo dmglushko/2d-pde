@@ -116,7 +116,7 @@ inline void validate_result(const MeshResult &r) {
   if (!r.boundary_context)
     return;
   const auto &c = *r.boundary_context;
-  validate_boundary_context(r.mesh, c, o.preserve_regions);
+  validate_boundary_context(r.mesh, c, o.preserve_regions, o.boundary.preserve_corners);
   for (const auto &curve : c.curves)
     validate_region(curve.region);
   // Unlike refinement, serialization cannot restore omitted region tags.
@@ -163,7 +163,7 @@ inline void write_result(std::ostream &out, const MeshResult &r) {
       << static_cast<int>(o.boundary_treatment) << ' ' << o.preserve_regions
       << ' ' << o.boundary.max_edge_length << ' '
       << o.boundary.max_curve_deviation << ' ' << o.refinement.max_edge_length
-      << ' ' << o.refinement.max_steps << '\n';
+      << ' ' << o.refinement.max_steps << ' ' << o.boundary.preserve_corners << '\n';
   out << "REPORT " << r.report.size_satisfied << ' '
       << r.report.delaunay_verified << ' ' << r.report.refinement_steps << ' '
       << encode_message(r.report.message) << '\n';
@@ -209,7 +209,7 @@ inline std::uint64_t read_curve_id(std::istream &in) {
     throw std::runtime_error("Invalid curve ID");
   return id;
 }
-inline void read_result(std::istream &in, MeshResult &r) {
+inline void read_result(std::istream &in, MeshResult &r, int version) {
   expect(in, "OPTIONS");
   auto &o = r.options;
   o.algorithm = static_cast<InteriorAlgorithm>(
@@ -222,6 +222,7 @@ inline void read_result(std::istream &in, MeshResult &r) {
   o.refinement.max_edge_length = read_real(in);
   o.refinement.max_steps =
       static_cast<int>(read_unsigned(in, std::numeric_limits<int>::max()));
+  o.boundary.preserve_corners = version >= 4 ? read_unsigned(in, 1) != 0 : true;
   expect(in, "REPORT");
   r.report.size_satisfied = read_unsigned(in, 1) != 0;
   r.report.delaunay_verified = read_unsigned(in, 1) != 0;
@@ -289,7 +290,7 @@ inline void export_mesh(const MeshResult &result, const std::string &path) {
   std::ofstream out(path);
   if (!out)
     throw std::runtime_error("Cannot create mesh file: " + path);
-  detail::write_mesh(out, result.mesh, 3);
+  detail::write_mesh(out, result.mesh, 4);
   detail::write_result(out, result);
   out.close();
   if (!out)
@@ -317,7 +318,7 @@ inline MeshResult import_mesh_result(const std::string &path) {
   std::string magic;
   int version = 0;
   if (!(in >> magic >> version) || magic != "PDE2D_MESH" ||
-      (version != 1 && version != 2 && version != 3))
+      (version != 1 && version != 2 && version != 3 && version != 4))
     throw std::runtime_error("Unsupported or invalid PDE2D mesh-file header");
   MeshResult result;
   if (version < 3) {
@@ -361,14 +362,14 @@ inline MeshResult import_mesh_result(const std::string &path) {
         mesh.boundary_tags[i].clear();
     }
   }
-  if (version == 3)
-    detail::read_result(in, result);
+  if (version >= 3)
+    detail::read_result(in, result, version);
   std::string extra;
   if (in >> extra)
     throw std::runtime_error("Unexpected content after final mesh section");
   validate_mesh_geometry(mesh);
   detail::validate_mesh_format(mesh);
-  if (version == 3)
+  if (version >= 3)
     detail::validate_result(result);
   return result;
 }

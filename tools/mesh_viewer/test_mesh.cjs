@@ -22,7 +22,7 @@ assert.notEqual(c.window.MeshTools.regionColor('inlet.1'),c.window.MeshTools.reg
 
 // v3 fixtures serialize every persisted field and parse it back; no mesher assumptions.
 const plain=value=>JSON.parse(JSON.stringify(value));
-const result3={...plain(tagged),options:{algorithm:1,boundaryTreatment:2,preserveRegions:true,boundary:{maxEdgeLength:0.5,maxCurveDeviation:0.02},refinement:{maxEdgeLength:0.25,maxSteps:7}},
+const result3={...plain(tagged),options:{algorithm:1,boundaryTreatment:2,preserveRegions:true,boundary:{maxEdgeLength:0.5,maxCurveDeviation:0.02,preserveCorners:true},refinement:{maxEdgeLength:0.25,maxSteps:7}},
   report:{sizeSatisfied:false,delaunayVerified:true,refinementSteps:7,message:'Limit reached\nRésumé <&>'},
   boundaryContext:{protectedVertices:[0,1,2],polygonSnapshot:[[0,0],[1,0],[0,1]],curves:[
     {id:'18446744073709551615',region:'inlet.1',kind:0,values:[0,0,1,0]},
@@ -40,6 +40,8 @@ function writeV3(r) {
       ...c.edgeSources.map(spans=>`${spans.length} ${spans.map(s=>`${s.curve} ${s.begin} ${s.end}`).join(' ')}`)]:[]),'END_RESULT'].join('\n');
 }
 const v3=writeV3(result3);
+const v4=v3.replace('PDE2D_MESH 3','PDE2D_MESH 4').replace(/(OPTIONS [^\n]+)\n/,'$1 0\n');
+assert.equal(parseMesh(v4).options.boundary.preserveCorners,false);
 assert.deepEqual(plain(parseMesh(v3)),result3);
 assert.equal(analyse(parseMesh(v3)).issues.length,0);
 assert.deepEqual(plain(parseMesh(writeV3(parseMesh(v3)))),result3);

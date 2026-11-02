@@ -263,6 +263,7 @@ int main(int argc, char **argv) {
     options = {};
     options.preserve_regions = false;
     options.boundary.max_edge_length = 0;
+    options.boundary.preserve_corners = true;
     auto untagged = generate_mesh(regions, options);
     require(untagged.mesh.boundary_tags.empty(),
             "Regions disabled retained tags");
@@ -286,6 +287,34 @@ int main(int argc, char **argv) {
     options.preserve_regions = true;
     rejects([&] { refine_mesh(untagged, options); },
             "Region preservation enabled without junctions");
+    options = {};
+    options.preserve_regions = false;
+    options.boundary.max_edge_length = 0;
+    options.boundary.max_curve_deviation = 2;
+    auto simplified = generate_mesh(RectangleGeometry(2, 1), options);
+    require(simplified.mesh.boundary_edges.size() == 3,
+            "Unprotected corner was not removed");
+    require(simplified.boundary_context->protected_vertices.empty(),
+            "Default corner protection enabled");
+    export_mesh(simplified, path);
+    auto restored = import_mesh_result(path);
+    require(!restored.options.boundary.preserve_corners &&
+                restored.mesh.boundary_edges.size() == 3,
+            "Unprotected corner roundtrip failed");
+    options.boundary.preserve_corners = true;
+    rejects([&] { refine_mesh(restored, options); },
+            "Enabling protection after corner removal accepted");
+    auto protected_mesh = generate_mesh(RectangleGeometry(2, 1), options);
+    require(protected_mesh.mesh.boundary_edges.size() == 4,
+            "Corner protection did not retain corners");
+    export_mesh(protected_mesh, path);
+    require(import_mesh_result(path).options.boundary.preserve_corners,
+            "Corner option not persisted");
+    options.boundary.preserve_corners = false;
+    options.preserve_regions = true;
+    auto region_protected = generate_mesh(RectangleGeometry(2, 1), options);
+    require(region_protected.mesh.boundary_edges.size() == 4,
+            "Region junctions should remain protected");
     MeshOptions partial{.boundary = {.max_curve_deviation = .001}};
     require(partial.boundary.max_edge_length == 1,
             "Nested default initialization");

@@ -11,7 +11,7 @@ const sourceCurveFormats = new Map([
 ]);
 const interiorAlgorithmIds = new Set([0,1]); // EarClipping, ConstrainedDelaunay
 const boundaryTreatmentIds = new Set([0,1,2]); // Fixed, SplitPolygonEdges, RefineOnCurves
-// PDE2D_MESH 1, 2 and 3 reader and corner-triangle diagnostics. No external packages.
+// PDE2D_MESH 1 through 4 reader and corner-triangle diagnostics. No external packages.
 function parseMesh(source) {
   const tokens = source.trim().split(/\s+/);
   let at = 0;
@@ -43,7 +43,7 @@ function parseMesh(source) {
   };
   expect('PDE2D_MESH');
   const version = integer('version');
-  if (version !== 1 && version !== 2 && version !== 3) throw new Error('Only PDE2D_MESH versions 1, 2 and 3 are supported');
+  if (version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new Error('Only PDE2D_MESH versions 1 through 4 are supported');
   expect('ORDER');
   const order = integer('order');
   if (order !== 1) throw new Error('Only order 1 is supported');
@@ -77,11 +77,12 @@ function parseMesh(source) {
     return [a, b, region === '-' ? null : region];
   });
   const result = {nodes, elements, boundaryEdges};
-  if (version === 3) {
+  if (version >= 3) {
     expect('OPTIONS');
     const options = {algorithm: registered('algorithm',interiorAlgorithmIds), boundaryTreatment: registered('boundary treatment',boundaryTreatmentIds), preserveRegions: !!integer('preserve regions',1),
       boundary: {maxEdgeLength: finite('boundary length'), maxCurveDeviation: finite('curve deviation')},
       refinement: {maxEdgeLength: finite('refinement length'), maxSteps: integer('max steps',2147483647)}};
+    options.boundary.preserveCorners = version >= 4 ? !!integer('preserve corners',1) : true;
     if (options.boundary.maxEdgeLength<0 || options.boundary.maxCurveDeviation<0 || options.refinement.maxEdgeLength<0) throw new Error('Invalid meshing tolerances');
     expect('REPORT');
     const report = {sizeSatisfied: !!integer('size satisfied',1), delaunayVerified: !!integer('Delaunay verified',1), refinementSteps: integer('refinement steps',Number.MAX_SAFE_INTEGER)};

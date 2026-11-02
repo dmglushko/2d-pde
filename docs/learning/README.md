@@ -61,7 +61,7 @@ Boundary treatment is independent: `Fixed` keeps the sampled boundary,
 boundary points on source curves. A fixed boundary needs sufficiently fine
 initial sampling for the interior target. Curve mode requires retained context.
 `preserve_regions=false` drops tags and allows redundant smooth region junctions
-to disappear during initial sampling; corners remain.
+to disappear during initial sampling. Set `boundary.preserve_corners=true` to retain geometric corners.
 
 Always inspect `result.report.size_satisfied` and `.message`. A conflicting fixed
 boundary or exhausted step budget returns a mesh with an explicit unmet report;

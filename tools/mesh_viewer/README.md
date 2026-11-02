@@ -21,7 +21,7 @@ node -e 'const fs=require("fs"); fs.writeFileSync("examples/mesh_viewer/example_
 
 ## File format
 
-The viewer accepts `PDE2D_MESH` versions 1, 2, and 3 with order 1 triangles. Version 2 uses the same sections as version 1, but each `BOUNDARY_EDGES` record is `node_a node_b region`. Region names contain only ASCII letters, digits, `_`, `.`, and `-`; the single token `-` denotes an untagged edge. Version 1 edges are untagged.
+The viewer accepts `PDE2D_MESH` versions 1 through 4 with order 1 triangles. Version 2 uses the same sections as version 1, but each `BOUNDARY_EDGES` record is `node_a node_b region`. Region names contain only ASCII letters, digits, `_`, `.`, and `-`; the single token `-` denotes an untagged edge. Version 1 edges are untagged.
 
 Boundary colors are assigned deterministically by region name, with orange for untagged edges; the legend lists the regions present. Colors may coincide for different names. Purple diagnostic edges are drawn over boundary colors, even when the boundary toggle is off.
 
@@ -44,12 +44,12 @@ This is a visual diagnostic, not the C++ importer's full validity check. It acce
 
 ## Full mesh results (v3)
 
-`export_mesh(const MeshResult&, path)` writes version 3. `export_mesh(const TriangleMesh&, path)` continues to write version 2. Both `import_mesh(path)` and `import_mesh_result(path)` accept versions 1–3; the former returns only the mesh. Legacy files have no saved settings or guarantees: the result API supplies default options and no boundary context. Those defaults do not describe the original meshing process.
+`export_mesh(const MeshResult&, path)` writes version 4. `export_mesh(const TriangleMesh&, path)` continues to write version 2. Both import functions accept versions 1–4; the former returns only the mesh. Versions 1–2 have no saved settings or guarantees. Version 3 implies corner protection, matching its original behavior.
 
-Version 3 starts with the exact v2 `ORDER`, `NODES`, `ELEMENTS`, and tagged `BOUNDARY_EDGES` sections, then requires the following extension in this order. Whitespace separates tokens; line breaks are cosmetic. All indices are zero based. Booleans are `0` or `1`.
+Version 4 starts with the exact v2 `ORDER`, `NODES`, `ELEMENTS`, and tagged `BOUNDARY_EDGES` sections, then requires the following extension in this order. Version 3 has the same extension but omits the final `preserve_corners` option. Whitespace separates tokens; line breaks are cosmetic. All indices are zero based. Booleans are `0` or `1`.
 
 ```text
-OPTIONS algorithm treatment preserve_regions boundary_max_edge boundary_max_deviation refinement_max_edge max_steps
+OPTIONS algorithm treatment preserve_regions boundary_max_edge boundary_max_deviation refinement_max_edge max_steps preserve_corners
 REPORT size_satisfied delaunay_verified refinement_steps message_hex
 CONTEXT present
 [only when present = 1:]
