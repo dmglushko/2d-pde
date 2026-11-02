@@ -1,7 +1,7 @@
 # 2D PDE project
 
 This project implements geometry and triangle meshing for a future 2D finite
-element PDE engine. The C++23 library is header-only; SVG import additionally
+element PDE engine. The C++23 library is header-only; SVG I/O additionally
 uses libxml2. Native meshing uses the Boost.Multiprecision headers for exact
 predicate fallbacks. An offline browser viewer inspects exported meshes.
 
@@ -14,7 +14,7 @@ Implemented:
 - Three-node P1 connectivity, optional maximum-edge-length refinement, explicit
   completion reports, and v3 result export/import for resumed curve refinement.
 - Named boundary regions, stable curve IDs, arc-length editing preserved on
-  resize, and import of a documented subset of SVG paths.
+  resize, and analytical SVG geometry import/export with region membership.
 - An offline mesh viewer and reproducible [graphical mesh gallery](docs/showcase/README.md).
 
 ## P1-only design

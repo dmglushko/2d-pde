@@ -196,7 +196,7 @@ development headers for exact binary64 predicate fallbacks. No PDE assembly, sol
 or error estimator is implemented. See the [reference](../../docs/learning/reference.md)
 and [rendered showcase](../../docs/showcase/README.md).
 
-### SVG import
+### SVG geometry import and export
 
 Include `discretization/svg_geometry.hpp` and compile and link with
 `pkg-config --cflags --libs libxml-2.0`. For example:
@@ -204,10 +204,14 @@ Include `discretization/svg_geometry.hpp` and compile and link with
 ```cpp
 auto geometry = discretization::importSvg("boundary.svg",
     {2.0, discretization::SvgScaleMode::Farthest, 64});
-auto boundary = geometry.createBoundary();
+auto boundary = discretization::discretize_boundary(geometry).boundary;
+discretization::exportSvg(geometry, "edited-boundary.svg");
 ```
 
-Each `<path id="region" d="..."/>` supplies one tagged region. Paths may
+Each `<path id="region" d="..."/>` supplies one tagged run. An optional
+`data-region="name"` overrides the region name without changing the unique XML
+ID. Several paths may carry the same region name, preserving disconnected
+membership and runs crossing the stored boundary seam. Paths may
 be unordered and reversed; their endpoints must join unambiguously into one
 closed loop. A single path may close with `Z`. Supported path commands are
 absolute and relative `M`, `L`, `Q`, `C`, `A`, and `Z`, including repeated
@@ -224,4 +228,48 @@ groups, other shapes, multiple subpaths, and unsupported attributes and
 commands. It does not apply viewBox, CSS, or units; use plain numeric coordinates
 and export paths without presentation attributes. The triangulator validates
 loop simplicity. libxml2 development headers and pkg-config are required for
-the SVG importer and its tests.
+SVG I/O and its tests. Include `discretization/boundary_discretization.hpp` for
+the free sampling API in the example.
+
+`exportSvg(const CurveGeometry&, const std::string& filename)` exports the
+**current edited analytical geometry**, independently of mesh export (`.pde2d`).
+An overload accepts `std::ostream&`. Both return `void`. Curves remain in stored
+boundary order, with one path per consecutive named run. Lines and quadratic
+and cubic Beziers use `L`, `Q`, and `C`; elliptical arcs use `A`, split into
+pieces of at most a quarter turn. Full ellipses/circles therefore use four
+analytical arcs, never a polygon approximation. Segment subdivision changes
+neither the curve locus nor its region membership. Coincident-end Beziers are
+also subdivided analytically by de Casteljau until their endpoints are distinct.
+
+Translation and rotation are baked into endpoints, control points, and ellipse
+axes using the same world-coordinate convention as meshing. There is no Y-axis
+flip, origin subtraction, origin marker, transform attribute, group, viewBox,
+or presentation attribute. Default `importSvg` thus recovers world coordinates;
+its resulting center and rotation are zero. Export uses locale-independent
+decimal output with binary64 roundtrip precision; SVG endpoint-to-center arc
+conversion is subject to floating-point roundoff. SVG viewing styles and canvas
+layout are left to consumers.
+
+For a unique region name starting with an ASCII letter or `_` (except reserved
+`origin`), the path ID is the name, compatible with the original importer.
+Otherwise export assigns collision-free `pde2d_run_N` IDs and writes the exact
+name in `data-region`. This covers repeated names, digit/dot/hyphen-leading
+names, and a region named `origin`. The importer now accepts this attribute;
+older versions reject it. IDs always remain unique, including when a user has
+named a region `pde2d_run_N`. Names retain CurveGeometry's ASCII validation.
+
+SVG preserves shape, direction, order, and current region membership. It does
+not archive geometry-local CurveIds, source-shape parameters, edit replay
+history, or separate center/rotation settings. Import assigns fresh IDs, and
+arc segmentation can increase the number of curves. Use imported IDs for
+subsequent editing rather than retaining IDs from the exported object.
+
+Export rejects empty, open, or disconnected boundaries, invalid/non-finite
+curves, and numeric scales or degenerate curves the importer cannot resolve
+(Bezier subdivision is limited to twelve levels). It checks continuity/closure using
+the importer's tolerance; as with import, loop simplicity is validated by the
+triangulator, not SVG I/O. Invalid geometry throws `std::invalid_argument`
+before opening the destination or writing to a stream. Open/write/close failures
+throw `std::runtime_error` (or a stream's configured I/O exception). A write
+failure may leave partial output; file replacement is not atomic. Streams are
+not flushed or closed by the stream overload; the caller owns those operations.
