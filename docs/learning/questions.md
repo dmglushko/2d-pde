@@ -1,76 +1,32 @@
 # Questions for a first reading
 
-Keep [first_mesh.cpp](../../examples/learning/first_mesh.cpp) and the [walkthrough](README.md) open. Try answering each question by finding the named symbol in source. Expand an answer only after you have a prediction.
+Use [first_mesh.cpp](../../examples/learning/first_mesh.cpp) and the
+[walkthrough](README.md). Predict an answer before opening the source.
 
-1. In `main`, which object describes the region and which object decides the mesh method? What does `createMesh` return?
-2. What does the `const Geometry2D&` parameter of `MeshGenerator::createMesh` mean for copying, mutation, and ownership during this call?
-3. If `RectangleGeometry(2, 1)` is rotated by π/2, do its stored `width()` and `height()` change? Which function creates the final coordinates?
-4. Why can `EarClippingMeshGenerator` produce long edges even after `setMaxElementSize(0.25)`?
-5. If `setSizeField` receives a lambda that captures another object by reference, how long must that object live?
-6. What do the three indices in an element mean? How is one exterior edge represented in `boundary_edges`?
-7. What does `elements.size()` count? How would you find a triangle's coordinates?
-8. Which parts of the original geometry and mesher can `import_mesh` recover from a `.pde2d` file? What must you save separately to remesh later?
-9. A saved file passes `import_mesh`. Does that establish a good minimum angle, no global overlap, or a working PDE discretization?
-10. If a local size field asks for `0.1` in one region and `1.0` elsewhere while `maxElementSize` is `0.5`, what targets are used at sampled centroids? What can happen at the pass limit?
+1. What describes the shape, what configures triangulation, and what does `generate_mesh` return?
+2. What does passing `const Geometry2D&` mean for copying and ownership?
+3. Does rotating a rectangle exchange its stored width and height?
+4. Why does ear clipping reject a positive interior target?
+5. How do the boundary length and refinement length differ?
+6. What happens when an initial fixed boundary edge exceeds the refinement target?
+7. What happens at `max_steps`, and which report fields must a caller inspect?
+8. Why do chord splitting and curve refinement produce different circle outlines?
+9. What does `preserve_regions=false` change? Does it change stable curve-ID editing?
+10. Which export/import calls let you resume refinement on curves?
+11. Does constrained Delaunay size refinement guarantee a minimum angle?
+12. What do triangle and boundary-edge indices refer to?
 
 ## Answers
 
-<details>
-<summary>1. Geometry versus mesher</summary>
-
-`RectangleGeometry` describes the boundary. `UniformRefinementMeshGenerator` chooses a method and holds its settings. `createMesh(geometry)` returns a `TriangleMesh` by value. Read [MeshGenerator](../../cpp/discretization/mesh_generators.hpp).
-</details>
-
-<details>
-<summary>2. The const reference</summary>
-
-`&` passes a reference rather than copying the geometry; `const` means the method reads it. The mesher does not own it. It asks for a new `Boundary`, then returns a mesh with its own vectors. Read [createMesh](../../cpp/discretization/mesh_generators.hpp).
-</details>
-
-<details>
-<summary>3. Rotation</summary>
-
-The stored lengths stay 2 and 1. `RectangleGeometry::createBoundary` makes local corners and calls `Geometry2D::transform`, which rotates and translates the coordinates. Read [rectangle](../../cpp/discretization/geometry.hpp) and [transform](../../cpp/discretization/geometry.hpp).
-</details>
-
-<details>
-<summary>4. Plain ear clipping</summary>
-
-The `EarClipping` algorithm skips `refine`, so the size setting is not enforced. Read the [pipeline condition](../../cpp/discretization/triangulate.hpp).
-</details>
-
-<details>
-<summary>5. Size-field lifetime</summary>
-
-The mesher stores the callable. Any object captured by reference must remain alive through every `createMesh` call that invokes the callable. Capturing a local value by value is often simpler. Read [setSizeField](../../cpp/discretization/mesh_generators.hpp) and [target](../../cpp/discretization/triangulate.hpp).
-</details>
-
-<details>
-<summary>6. Triangle and edge indices</summary>
-
-Each element contains exactly three indices into `nodes`, one for each triangle vertex. A boundary edge is a pair of vertex indices, such as `{2, 5}`. Read [TriangleMesh](../../cpp/discretization/geometry.hpp).
-</details>
-
-<details>
-<summary>7. Elements and coordinates</summary>
-
-`elements.size()` counts triangle records, not nodes or PDE unknowns. For an element `e`, look up `nodes[e[0]]`, `nodes[e[1]]`, and `nodes[e[2]]` for its corner coordinates. Read [TriangleMesh](../../cpp/discretization/geometry.hpp).
-</details>
-
-<details>
-<summary>8. What survives the file</summary>
-
-The file saves mesh nodes, element connectivity, and boundary edge connectivity. It does not save the shape type, dimensions, center, rotation, chosen generator, size field, or other mesher settings. Save those separately if you want to regenerate a different mesh. Read [writer](../../cpp/discretization/mesh_io.hpp).
-</details>
-
-<details>
-<summary>9. Validation scope</summary>
-
-No. Import performs structural checks, not a global overlap or angle-quality proof. These headers do not implement PDE assembly or solving. Read [validate_mesh](../../cpp/discretization/mesh_io.hpp).
-</details>
-
-<details>
-<summary>10. Local target and pass limit</summary>
-
-At triangle centroids where the callable returns `0.1`, the target is `0.1`; where it returns `1.0`, the global cap makes it `0.5`. If the longest-edge criterion still fails after the allowed passes, `createMesh` throws. Read [target and refine](../../cpp/discretization/triangulate.hpp).
-</details>
+1. A geometry describes the outline; `MeshOptions` chooses behavior. The free function returns `MeshResult` with mesh, context, options, and report.
+2. The function reads the geometry through a reference without taking ownership. The result owns its data and boundary snapshot.
+3. No. Rotation changes world coordinates, leaving local dimensions intact.
+4. Ear clipping has no interior-refinement stage. Use CDT or explicit straight polygon subdivision.
+5. The boundary length controls initial analytical sampling; the refinement target tests every triangle edge. Both default and disable rules are listed in the [reference](reference.md).
+6. The result has `size_satisfied=false` and an explanatory message. Sample the initial boundary more finely or allow splitting.
+7. A partial mesh returns with an explicit unmet report. Inspect `size_satisfied` and `message`; `refinement_steps` counts work.
+8. Chord midpoints remain on the original sampled polygon. Curve mode uses source intervals to put new boundary points on the analytical circle.
+9. It omits tags and lets redundant smooth region junctions disappear during sampling. Corners remain; stable curve-ID editing is unchanged.
+10. `export_mesh(result, path)` writes v3; `import_mesh_result(path)` retains context for `refine_mesh(result, options)`. Raw mesh export is v2; topology-only import drops context.
+11. No. Longest-edge midpoint insertion and full legalization enforce size where feasible, without a classical circumcenter quality guarantee. There is no minimum-angle setting.
+12. Each triangle has three indices into `mesh.nodes`; a boundary edge has two vertex endpoints. `elements.size()` counts triangles, not unknowns or nodes.

@@ -15,3 +15,7 @@ a.out
 
 # Default output of the learning example
 /rectangle.pde2d
+
+# Local Python visualization environment
+/.venv/
+__pycache__/

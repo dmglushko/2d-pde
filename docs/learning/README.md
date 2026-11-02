@@ -1,113 +1,104 @@
 # Read the 2D mesh code, one step at a time
 
-This guide follows the **implemented geometry and mesh path** in this checkout. Start with the complete [consumer program](../../examples/learning/first_mesh.cpp), then read the numbered stops below. You can run the program without a build system or external meshing library.
+Start with [first_mesh.cpp](../../examples/learning/first_mesh.cpp), a complete
+C++23 program that constructs a rectangle, meshes it, exports a v3 result, and
+imports that result. No external meshing library is needed.
+
+```sh
+g++ -std=c++23 -Wall -Wextra -Werror -Icpp examples/learning/first_mesh.cpp -o /tmp/first_mesh
+/tmp/first_mesh /tmp/rectangle.pde2d
+```
+
+The optional argument selects the output path; otherwise it writes
+`rectangle.pde2d` in the working directory.
+
+## 1. Geometry describes the domain
+
+`RectangleGeometry(2.0, 1.0)` stores full width and height in local coordinates.
+`setCenter` translates the shape; `setRotation` rotates it counterclockwise in
+radians about its center. Stored dimensions remain unchanged. Other built-ins
+are circles, ellipses, capped rectangles, regular polygons, and general simple
+polygons. The shape API supports one outline, including concavities, without
+holes. See [geometry.hpp](../../cpp/discretization/geometry.hpp).
+
+Named regions and stable curve IDs describe boundary pieces independently of
+mesh resolution. The [region-editing API](../../cpp/discretization/README.md#geometry-and-boundary-regions)
+still supports rename, move, merge, arc-length split, and edit replay on resize.
+Changing meshing options does not change that editing contract.
+
+## 2. Options choose sampling and triangulation
 
 ```cpp
-#include "discretization/geometry.hpp"
-#include "discretization/mesh_generators.hpp"
-#include "discretization/mesh_io.hpp"
-
-#include <iostream>
-#include <string>
-
-int main(int argc, char* argv[]) {
-    const std::string path = argc > 1 ? argv[1] : "rectangle.pde2d";
-
-    discretization::RectangleGeometry geometry(2.0, 1.0);
-    discretization::UniformRefinementMeshGenerator mesher;
-    mesher.setMaxElementSize(0.5);
-
-    const discretization::TriangleMesh mesh = mesher.createMesh(geometry);
-    discretization::export_mesh(mesh, path);
-    const discretization::TriangleMesh restored = discretization::import_mesh(path);
-
-    std::cout << "nodes=" << restored.nodes.size()
-              << " triangles=" << restored.elements.size()
-              << " boundary_edges=" << restored.boundary_edges.size() << '\n';
-}
+discretization::MeshOptions options;
+options.boundary.max_edge_length = 0.4;
+options.refinement.max_edge_length = 0.5;
+auto result = discretization::generate_mesh(geometry, options);
 ```
 
-Compile and run it under WSL Ubuntu:
+`MeshOptions{}` defaults to CDT with fixed boundary and region preservation.
+Initial boundary length/deviation defaults are `1.0` and `0.02`; the interior
+length target defaults to zero (disabled), with `max_steps=10000`. Zero disables
+a positive length/deviation constraint, but a curved boundary needs at least one
+enabled sampling bound. There is no minimum-angle control, smoothing, or local
+size field. Read [mesh_types.hpp](../../cpp/discretization/mesh_types.hpp).
 
-```bash
-cd /home/gldima/2d-pde
-mkdir -p /tmp/2d-pde-learning
-g++ -std=c++17 -Wall -Wextra -Werror -Icpp \
-  examples/learning/first_mesh.cpp -o /tmp/2d-pde-learning/first_mesh
-/tmp/2d-pde-learning/first_mesh /tmp/2d-pde-learning/rectangle.pde2d
-head -n 8 /tmp/2d-pde-learning/rectangle.pde2d
-```
+`discretize_boundary(geometry, boundary_options, preserve_regions)` samples the
+analytical outline and retains source context. `generate_mesh` accepts geometry,
+a raw `Boundary`, or that `DiscretizedBoundary`, returning a `MeshResult` by value.
+A raw boundary has no analytical context. Read
+[boundary_discretization.hpp](../../cpp/discretization/boundary_discretization.hpp).
 
-The command line argument is the output mesh path. With no argument, the program writes `rectangle.pde2d` in your current directory. The build above was run under WSL; its result is recorded in [Validation](#validation). There is no root CMake target in this checkout.
+## 3. Triangulation and refinement
 
-## 1. Read the consumer program
+`InteriorAlgorithm::EarClipping` triangulates the boundary polygon; a positive
+interior target is rejected. `ConstrainedDelaunay` legalizes interior diagonals
+and optionally inserts longest-edge midpoints followed by full legalization.
+This is size refinement, without a classical circumcenter quality guarantee.
+Read [triangulate.hpp](../../cpp/discretization/triangulate.hpp).
 
-The first three `#include` lines bring in the declarations and inline implementations for [geometry](../../cpp/discretization/geometry.hpp), [mesh generators](../../cpp/discretization/mesh_generators.hpp), and [mesh I/O](../../cpp/discretization/mesh_io.hpp). `main` is the entry point. The `discretization::` prefix selects names in this project's namespace, like a module qualifier in Python. `const` on `mesh` and `restored` means this program does not change them after construction.
+Boundary treatment is independent: `Fixed` keeps the sampled boundary,
+`SplitPolygonEdges` splits its straight chords, and `RefineOnCurves` places new
+boundary points on source curves. A fixed boundary needs sufficiently fine
+initial sampling for the interior target. Curve mode requires retained context.
+`preserve_regions=false` drops tags and allows redundant smooth region junctions
+to disappear during initial sampling; corners remain.
 
-Follow one call at a time:
+Always inspect `result.report.size_satisfied` and `.message`. A conflicting fixed
+boundary or exhausted step budget returns a mesh with an explicit unmet report;
+invalid inputs throw. `refine_mesh(result, options)` resumes CDT refinement.
+`subdivide_mesh(mesh, options, optional_context)` instead performs straight
+polygon subdivision without legalization; it does not support curve mode.
 
-```text
-RectangleGeometry -> createBoundary() -> Boundary
-mesher configuration -> createMesh(geometry) -> TriangleMesh
-TriangleMesh -> export_mesh(path) -> .pde2d file -> import_mesh(path) -> TriangleMesh
-```
+## 4. Read the returned mesh
 
-**Pause:** What part of the program describes the region, and what part chooses how to fill it? Try changing only `setMaxElementSize(0.5)` to `0.25`, rebuilding, and comparing the counts. Every resulting triangle still has three vertices. [Check your reasoning](questions.md#answers).
+`result.mesh.nodes` holds coordinates. Each entry in `.elements` has three
+zero-based indices into nodes. `.boundary_edges` contains exterior endpoint
+pairs; `.boundary_tags` is an optional parallel vector of names. The first
+outline point is not repeated at the end. Each triangle remains P1 after
+refinement; PDE basis evaluation, assembly, and solving are future work.
 
-## 2. Geometry becomes one boundary loop
+## 5. Save and resume
 
-[Geometry2D](../../cpp/discretization/geometry.hpp) is an abstract base class: it declares `createBoundary()` but cannot itself describe a shape. The concrete shape classes implement that method. [RectangleGeometry](../../cpp/discretization/geometry.hpp) stores a positive width and height; its boundary has four points in local coordinates around its center. The base class [transform](../../cpp/discretization/geometry.hpp) rotates those local coordinates counterclockwise in radians, then shifts them by the center. `Boundary` is a `std::vector<Point2>` forming one closed loop; the first point is **not** repeated at the end. The final edge closes the loop implicitly.
+`export_mesh(result, path)` writes v3 with options, report, and optional analytical
+context. `import_mesh_result(path)` restores these for resumed curve refinement.
+A raw `TriangleMesh` exports as v2, with topology and tags. `import_mesh(path)`
+accepts v1/v2/v3 and returns topology only, dropping context. V1 has untagged
+edges. All use fixed `ORDER 1`. A v3 boundary snapshot does not restore an
+editable original geometry or its history.
 
-Other shapes in the same header are `CircleGeometry` (radius), `EllipseGeometry` (semi-axes `A` and `B`), `RegularPolygonGeometry` (side count and side length), `PolygonGeometry` (your ordered local vertices), and `RectangleWithSemicircleGeometry` (rectangle width and height, capped end, polygonal cap segments). Circle and ellipse use polygonal boundaries with configurable segment counts. The cap diameter equals the rectangle height; `SemicircleEnd::PositiveX` is the default. These classes describe a single outline; holes and disconnected regions have no representation here.
+The [I/O validator](../../cpp/discretization/mesh_io.hpp) checks local topology,
+indices, positive areas, edge ownership and exterior records. Import success
+does not prove global absence of overlap or good angles.
 
-**Pause:** If you rotate a `RectangleGeometry(2, 1)` by 90 degrees, do `width()` and `height()` exchange values? Where does the transformed boundary actually get created? [Answers](questions.md#answers).
+## Experiments and validation
 
-## 3. A configured mesher creates a mesh
+Run the example, halve both size settings, rebuild, and compare counts. Then try
+a coarse fixed boundary, chord splitting, and curve mode, reading the report each
+time. Use the [questions](questions.md), [source map](reference.md),
+[offline viewer](../../tools/mesh_viewer/README.md), and
+[reproducible graphical showcase](../showcase/README.md).
 
-[MeshGenerator](../../cpp/discretization/mesh_generators.hpp) owns a `MeshOptions` value. Setters change that value. Its `createMesh(const Geometry2D&) const` asks the geometry for a boundary, copies the options, chooses its subclass's algorithm, and passes both to [Triangulator2d::generate](../../cpp/discretization/triangulate.hpp). The geometry is passed by **const reference**: the call reads the existing object rather than taking ownership of it. The returned `TriangleMesh` is a value with its own vectors; it remains usable after the geometry and mesher go out of scope. An optional `setSizeField` stores a callable in the mesher; if that callable captures references, those referenced objects must still exist when `createMesh` calls it.
-
-`generate` [validates the boundary](../../cpp/discretization/triangulate.hpp), takes its points as initial mesh nodes, ear clips the loop into triangles, records boundary edges, optionally refines and flips, and smooths interior nodes. The call can throw for invalid input or when the refinement pass limit is reached; it does not return a partly built mesh in that case.
-
-The five public mesher classes and their actual steps are compared in [meshing methods](reference.md#meshing-methods). Choose one as an experiment, not as a guaranteed best method.
-
-**Pause:** Why can the plain ear clipping class ignore a small `maxElementSize`? Why should a caller keep any objects referenced by a size field alive? [Answers](questions.md#answers).
-
-## 4. Read the mesh as data
-
-[TriangleMesh](../../cpp/discretization/geometry.hpp) has three fields, with zero-based indices:
-
-| Field | Meaning |
-| --- | --- |
-| `nodes` | `Point2{x,y}` coordinates. Initial boundary points and any vertices added by refinement live here. |
-| `elements` | Each `std::array<std::size_t,3>` gives the three vertex indices into `nodes`. |
-| `boundary_edges` | Pairs of **vertex endpoint** indices on the exterior. Refinement may split these into more edges. |
-
-For example, the element `{2, 5, 7}` uses `nodes[2]`, `nodes[5]`, and `nodes[7]`. These three vertices define the triangle. Later P1 FEM interpolation will use the values at those vertices. Refining a triangle creates smaller three-vertex triangles.
-
-**Pause:** How many indices does one boundary edge contain? What does `elements.size()` count? [Answers](questions.md#answers).
-
-## 5. Export, then import
-
-[export_mesh](../../cpp/discretization/mesh_io.hpp) validates a mesh and writes the text format `PDE2D_MESH 1`, with `ORDER`, `NODES`, `ELEMENTS`, and `BOUNDARY_EDGES` sections. [import_mesh](../../cpp/discretization/mesh_io.hpp) parses those sections and validates the result. The file records the **resulting mesh**, not the original geometry object or mesher options. Changing a geometry after export cannot reconstruct the old settings from the file.
-
-The I/O validator checks counts and indices, triangle orientation and nondegeneracy, edge ownership and exterior edge records, and consistent shared-edge directions. It does not establish that every mesh is globally overlap-free, high quality, or suitable for a PDE. See [format and limits](reference.md#format-and-limits).
-
-**Pause:** What would you need to save separately if you wanted to regenerate a mesh with different `maxElementSize`? [Answers](questions.md#answers).
-
-## Where to read next
-
-1. Run and edit [first_mesh.cpp](../../examples/learning/first_mesh.cpp).
-2. Follow the five steps above with [geometry.hpp](../../cpp/discretization/geometry.hpp) and [mesh_generators.hpp](../../cpp/discretization/mesh_generators.hpp) open.
-3. Use the [reference map](reference.md) to choose a method and understand its parameters.
-4. Answer the [reading questions](questions.md) before expanding their answers.
-5. Only then read [triangulate.hpp](../../cpp/discretization/triangulate.hpp) and [mesh_io.hpp](../../cpp/discretization/mesh_io.hpp) in detail.
-
-## Scope and maintenance
-
-The code here implements geometry construction, triangle meshing, and mesh export/import. There is no PDE equation setup, element assembly, boundary-condition application, linear solve, or solution validation in these headers. Any later PDE integration is a plan, not a behavior of this example. The project also has a [discretization overview](../../cpp/discretization/README.md) and an [offline mesh viewer](../../tools/mesh_viewer/README.md).
-
-When the public API changes: (1) update the example to use the new call, (2) rebuild and run it with the command above, (3) compare its generated file and [reference map](reference.md) with the changed headers, (4) check every local source link, and (5) update the validation note below. Keep behavioral claims tied to implementation, especially for meshing limits.
-
-## Validation
-
-Checked under WSL Ubuntu on 2026-10-23 after the P1-only change: `g++ -std=c++17 -Wall -Wextra -Werror -Icpp` compiled the example; running it and importing the exported file printed `nodes=81 triangles=128 boundary_edges=32`. The file began with `PDE2D_MESH 1`, `ORDER 1`, and `NODES 81`. The P1 regression suite and viewer checks pass with `./tools/test.sh`.
+The examples are compiled with C++23 and warnings as errors. The showcase README
+records reproduction commands and dependency setup; the parent regression suite
+is `./tools/test.sh`. Keep behavioral claims aligned with current headers when
+changing this walkthrough.

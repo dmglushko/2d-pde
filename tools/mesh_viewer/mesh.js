@@ -1,4 +1,4 @@
-// PDE2D_MESH 1 reader and corner-triangle diagnostics. No external packages.
+// PDE2D_MESH 1, 2 and 3 reader and corner-triangle diagnostics. No external packages.
 function parseMesh(source) {
   const tokens = source.trim().split(/\s+/);
   let at = 0;
@@ -24,7 +24,8 @@ function parseMesh(source) {
     return Number(value);
   };
   expect('PDE2D_MESH');
-  if (integer('version') !== 1) throw new Error('Only PDE2D_MESH version 1 is supported');
+  const version = integer('version');
+  if (version !== 1 && version !== 2 && version !== 3) throw new Error('Only PDE2D_MESH versions 1, 2 and 3 are supported');
   expect('ORDER');
   const order = integer('order');
   if (order !== 1) throw new Error('Only order 1 is supported');
@@ -48,14 +49,95 @@ function parseMesh(source) {
   });
   expect('BOUNDARY_EDGES');
   const boundaryCount = integer('boundary edge count');
-  remaining(2*boundaryCount, 'BOUNDARY_EDGES');
+  remaining((version >= 2 ? 3 : 2)*boundaryCount, 'BOUNDARY_EDGES');
   const boundaryEdges = Array.from({length: boundaryCount}, (_, id) => {
     const a = integer('boundary endpoint'), b = integer('boundary endpoint');
     if (a >= nodeCount || b >= nodeCount) throw new Error(`Boundary edge ${id}: endpoint outside NODES`);
-    return [a, b];
+    if (version === 1) return [a, b];
+    const region = take();
+    if (!/^[A-Za-z0-9_.-]+$/.test(region)) throw new Error(`Boundary edge ${id}: invalid region ${region}`);
+    return [a, b, region === '-' ? null : region];
   });
+  const result = {nodes, elements, boundaryEdges};
+  if (version === 3) {
+    expect('OPTIONS');
+    const options = {algorithm: integer('algorithm',1), boundaryTreatment: integer('boundary treatment',2), preserveRegions: !!integer('preserve regions',1),
+      boundary: {maxEdgeLength: finite('boundary length'), maxCurveDeviation: finite('curve deviation')},
+      refinement: {maxEdgeLength: finite('refinement length'), maxSteps: integer('max steps',2147483647)}};
+    if (options.boundary.maxEdgeLength<0 || options.boundary.maxCurveDeviation<0 || options.refinement.maxEdgeLength<0) throw new Error('Invalid meshing tolerances');
+    expect('REPORT');
+    const report = {sizeSatisfied: !!integer('size satisfied',1), delaunayVerified: !!integer('Delaunay verified',1), refinementSteps: integer('refinement steps',Number.MAX_SAFE_INTEGER)};
+    const hex = take();
+    if (hex !== '-' && !/^(?:[0-9a-f]{2})+$/.test(hex)) throw new Error('Invalid report message encoding');
+    // Decode UTF-8 without a dependency or relying on TextDecoder in older browsers.
+    report.message = hex === '-' ? '' : decodeURIComponent(hex.replace(/../g,byte=>`%${byte}`));
+    result.options=options; result.report=report;
+    expect('CONTEXT');
+    if (integer('context',1)) {
+      expect('PROTECTED_VERTICES'); const count=integer('protected vertex count',nodeCount);
+      remaining(count,'PROTECTED_VERTICES');
+      const protectedVertices=Array.from({length:count},()=>integer('protected vertex',nodeCount-1));
+      const boundaryNodes=new Set(boundaryEdges.flatMap(e=>e.slice(0,2)));
+      if (new Set(protectedVertices).size!==count || protectedVertices.some(v=>!boundaryNodes.has(v))) throw new Error('Invalid protected boundary vertices');
+      expect('POLYGON_SNAPSHOT');const polygonCount=integer('polygon snapshot count');
+      if(polygonCount<3)throw new Error('Polygon snapshot needs three vertices');
+      remaining(2*polygonCount,'POLYGON_SNAPSHOT');
+      const polygonSnapshot=Array.from({length:polygonCount},()=>[finite('polygon x'),finite('polygon y')]);
+      expect('SOURCE_CURVES'); const curveCount=integer('source curve count');
+      if(!curveCount) throw new Error('Missing source curves');
+      remaining(7*curveCount,'SOURCE_CURVES');
+      const ids=new Set();
+      const curves=Array.from({length:curveCount},()=>{
+        // Keep IDs as decimal strings so the full uint64 range survives parsing.
+        const id=take();
+        if(!/^(0|[1-9]\d*)$/.test(id)||BigInt(id)>18446744073709551615n||ids.has(id))throw new Error('Invalid or duplicate source curve ID');
+        ids.add(id); const tag=take();
+        if(!/^[A-Za-z0-9_.-]+$/.test(tag))throw new Error('Invalid source curve region');
+        const kind=integer('curve kind',3), values=Array.from({length:[4,6,8,7][kind]},()=>finite('source curve coordinate'));
+        if(kind===3 && (values[2]<=0||values[3]<=0||values[6]===0||Math.abs(values[6])>2*Math.PI))throw new Error('Invalid elliptical arc');
+        return {id,region:tag==='-'?null:tag,kind,values};
+      });
+      expect('EDGE_SOURCES'); const edgeCount=integer('edge source count');
+      if(edgeCount!==boundaryCount)throw new Error('Invalid edge source count');
+      let total=0;
+      const close=(a,b)=>a.every(Number.isFinite)&&b.every(Number.isFinite)&&distance(a,b)<=1e-9*Math.max(1,Math.hypot(...a),Math.hypot(...b));
+      const edgeSources=boundaryEdges.map(([a,b,tag])=>{
+        const count=integer('span count');total+=count;
+        if(!count||total>50_000_000)throw new Error('Invalid source span count');
+        remaining(3*count,'EDGE_SOURCES'); let previous=null;
+        const spans=Array.from({length:count},()=>{
+          const curve=integer('source curve index',curveCount-1), begin=finite('span begin'),end=finite('span end');
+          if(begin<0||begin>1||end<0||end>1||begin===end)throw new Error('Invalid source interval');
+          const source=curves[curve];
+          if(previous && !close(previous,sourcePoint(source,begin)))throw new Error('Disconnected source spans');
+          previous=sourcePoint(source,end);
+          if(options.preserveRegions && tag!==source.region)throw new Error('Source region mismatch');
+          return {curve,begin,end};
+        });
+        return spans;
+      });
+      const outgoing=new Map(boundaryEdges.map(([a],i)=>[a,i]));
+      for(let i=0;i<boundaryEdges.length;i++) {
+        const next=outgoing.get(boundaryEdges[i][1]);if(next===undefined)throw new Error('Disconnected source boundary');
+        const left=edgeSources[i].at(-1),right=edgeSources[next][0];
+        if(!close(sourcePoint(curves[left.curve],left.end),sourcePoint(curves[right.curve],right.begin)))throw new Error('Source boundary intervals do not join');
+      }
+      result.boundaryContext={protectedVertices,polygonSnapshot,curves,edgeSources};
+    } else result.boundaryContext=null;
+    expect('END_RESULT');
+  }
   if (at !== tokens.length) throw new Error(`Unexpected trailing token: ${tokens[at]}`);
-  return {nodes, elements, boundaryEdges};
+  return result;
+}
+
+function sourcePoint({kind,values:v},t) {
+  if(kind===3) {
+    const angle=v[5]+t*v[6], x=v[2]*Math.cos(angle),y=v[3]*Math.sin(angle);
+    return [v[0]+Math.cos(v[4])*x-Math.sin(v[4])*y,v[1]+Math.sin(v[4])*x+Math.cos(v[4])*y];
+  }
+  const points=[];for(let i=0;i<v.length;i+=2)points.push(v.slice(i,i+2));
+  while(points.length>1) {for(let i=0;i<points.length-1;i++)points[i]=points[i].map((x,j)=>(1-t)*x+t*points[i+1][j]);points.pop();}
+  return points[0];
 }
 
 const key = (a, b) => a < b ? `${a},${b}` : `${b},${a}`;
@@ -145,4 +227,11 @@ function analyse(mesh) {
       degenerate:triangles.filter(t=>t.status==='degenerate').length,
       quality:stats(valid.map(t=>t.quality)), minAngle:stats(valid.map(t=>Math.min(...t.angles)))}};
 }
-window.MeshTools = {parseMesh, analyse, format};
+// Stable across file order and reloads; untagged edges retain the v1 color.
+function regionColor(region) {
+  if (region == null) return '#e89b13';
+  let hash = 2166136261;
+  for (const ch of region) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619);
+  return `hsl(${(hash >>> 0) % 360}, 72%, 40%)`;
+}
+window.MeshTools = {parseMesh, analyse, format, regionColor};

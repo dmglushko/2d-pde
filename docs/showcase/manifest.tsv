@@ -1,0 +1,20 @@
+file	title	nodes	triangles	size_satisfied	message
+circle_ear.pde2d	circle | ear clipping	16	14	1	-
+circle_cdt.pde2d	circle | CDT	16	14	1	-
+ellipse_ear.pde2d	ellipse | ear clipping	32	30	1	-
+ellipse_cdt.pde2d	ellipse | CDT	32	30	1	-
+rectangle_ear.pde2d	rectangle | ear clipping	6	4	1	-
+rectangle_cdt.pde2d	rectangle | CDT	6	4	1	-
+capped_rectangle_ear.pde2d	capped_rectangle | ear clipping	13	11	1	-
+capped_rectangle_cdt.pde2d	capped_rectangle | CDT	13	11	1	-
+regular_polygon_ear.pde2d	regular_polygon | ear clipping	6	4	1	-
+regular_polygon_cdt.pde2d	regular_polygon | CDT	6	4	1	-
+concave_polygon_ear.pde2d	concave_polygon | ear clipping	8	6	1	-
+concave_polygon_cdt.pde2d	concave_polygon | CDT	8	6	1	-
+circle_fixed_fine.pde2d	Fixed | fine initial boundary	67	100	1	-
+circle_coarse.pde2d	Coarse boundary | no interior target	8	6	1	-
+circle_fixed_conflict.pde2d	Fixed | size target unmet	8	6	0	Fixed boundary edge exceeds requested maximum triangle-edge length
+circle_chords.pde2d	Chord splits | original polygon retained	48	78	1	-
+circle_curves.pde2d	Curve splits | new points on circle	49	80	1	-
+regions_on.pde2d	Regions preserved | inlet endpoints retained	6	4	1	-
+regions_off.pde2d	Regions disabled | redundant junctions removable	4	2	1	-
