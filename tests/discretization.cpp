@@ -348,12 +348,25 @@ int main(int argc, char **argv) {
     auto bad = square();
     bad.nodes.push_back({2, 2});
     rejects([&] { refine_mesh(bad); }, "Unused node accepted");
+    rejects([&] { export_mesh(bad, path); }, "Unused node exported");
     bad = square();
     bad.elements.push_back(bad.elements[0]);
     rejects([&] { refine_mesh(bad); }, "Duplicate triangle accepted");
+    rejects([&] { export_mesh(bad, path); }, "Duplicate triangle exported");
     bad = square();
     bad.boundary_edges.pop_back();
     rejects([&] { refine_mesh(bad); }, "Open boundary accepted");
+    rejects([&] { export_mesh(bad, path); }, "Open boundary exported");
+    auto serializationResult = generate_mesh(RectangleGeometry{});
+    serializationResult.mesh.boundary_tags.clear();
+    rejects([&] { export_mesh(serializationResult, path); }, "Missing source tags exported");
+    serializationResult = generate_mesh(RectangleGeometry{});
+    serializationResult.boundary_context->curves.front().region = "invalid tag";
+    serializationResult.options.preserve_regions = false;
+    rejects([&] { export_mesh(serializationResult, path); }, "Invalid source name exported");
+    bad = square();
+    bad.boundary_tags.assign(bad.boundary_edges.size(), "-");
+    rejects([&] { export_mesh(bad, path); }, "Reserved boundary tag exported");
     {
       std::ofstream f(path);
       f << "PDE2D_MESH 1 ORDER 1 NODES 3 0 0";

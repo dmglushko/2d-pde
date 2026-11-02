@@ -12,8 +12,6 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <map>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -22,33 +20,11 @@
 namespace discretization {
 namespace detail {
 
-inline std::pair<std::size_t, std::size_t> edge_key(std::size_t a,
-                                                    std::size_t b) {
-  if (a > b)
-    std::swap(a, b);
-  return {a, b};
-}
-
-inline void validate_mesh(const TriangleMesh &mesh) {
-  if (!mesh.boundary_tags.empty() &&
-      mesh.boundary_tags.size() != mesh.boundary_edges.size())
-    throw std::runtime_error("Boundary tag count must match edge count");
+inline void validate_mesh_format(const TriangleMesh &mesh) {
   for (const auto &tag : mesh.boundary_tags) {
-    if (tag == "-" ||
-        (!tag.empty() && !std::ranges::all_of(tag, [](unsigned char c) {
-          return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                 (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
-        })))
+    if (!boundary_detail::valid_tag(tag))
       throw std::runtime_error("Invalid boundary tag");
   }
-  if (mesh.nodes.empty() || mesh.elements.empty())
-    throw std::runtime_error("Mesh must contain nodes and triangles");
-  if (mesh.boundary_edges.empty())
-    throw std::runtime_error("Mesh must contain boundary edges");
-  for (const auto &p : mesh.nodes)
-    if (!std::isfinite(p.x) || !std::isfinite(p.y))
-      throw std::runtime_error("Mesh contains a non-finite node coordinate");
-
   double xmin = mesh.nodes[0].x, xmax = xmin, ymin = mesh.nodes[0].y,
          ymax = ymin;
   for (const auto &p : mesh.nodes) {
@@ -60,62 +36,6 @@ inline void validate_mesh(const TriangleMesh &mesh) {
   const double span = std::max(xmax - xmin, ymax - ymin);
   if (!std::isfinite(span) || !std::isfinite(span * span))
     throw std::runtime_error("Mesh exceeds supported numeric scale");
-  using Edge = std::pair<std::size_t, std::size_t>;
-  std::map<Edge, std::size_t> edge_owners;
-  std::map<Edge, int> edge_directions;
-  std::set<std::array<std::size_t, 3>> triangle_keys;
-  for (const auto &e : mesh.elements) {
-    for (auto i : e)
-      if (i >= mesh.nodes.size())
-        throw std::runtime_error(
-            "Triangle references a node outside the node array");
-    if (e[0] == e[1] || e[1] == e[2] || e[2] == e[0])
-      throw std::runtime_error("Triangle repeats a node index");
-    auto sorted = e;
-    std::ranges::sort(sorted);
-    if (!triangle_keys.insert(sorted).second)
-      throw std::runtime_error("Mesh contains a duplicate triangle");
-    const auto a = mesh.nodes[e[0]], b = mesh.nodes[e[1]], c = mesh.nodes[e[2]];
-    if (predicates::orient(a, b, c) <= 0)
-      throw std::runtime_error("Triangle is degenerate or clockwise");
-    const std::array<Edge, 3> edges{
-        {edge_key(e[0], e[1]), edge_key(e[1], e[2]), edge_key(e[2], e[0])}};
-    for (std::size_t k = 0; k < 3; ++k) {
-      if (++edge_owners[edges[k]] > 2)
-        throw std::runtime_error(
-            "Mesh has a non-manifold edge shared by more than two triangles");
-      const int direction = e[k] < e[(k + 1) % 3] ? 1 : -1;
-      if (edge_owners[edges[k]] == 2 && edge_directions[edges[k]] == direction)
-        throw std::runtime_error(
-            "Adjacent triangles traverse a shared edge in the same direction");
-      edge_directions[edges[k]] = direction;
-    }
-  }
-
-  std::set<Edge> boundary;
-  std::map<std::size_t, std::size_t> degree;
-  for (const auto &edge : mesh.boundary_edges) {
-    const auto key = edge_key(edge.first, edge.second);
-    if (edge.first >= mesh.nodes.size() || edge.second >= mesh.nodes.size() ||
-        edge.first == edge.second)
-      throw std::runtime_error("Boundary edge has an invalid endpoint");
-    if (!boundary.insert(key).second)
-      throw std::runtime_error("Mesh contains a duplicate boundary edge");
-    ++degree[edge.first];
-    ++degree[edge.second];
-  }
-  for (const auto &d : degree)
-    if (d.second != 2)
-      throw std::runtime_error("Boundary edges do not form closed loops");
-  for (const auto &e : edge_owners) {
-    const bool is_boundary = boundary.contains(e.first);
-    if ((e.second == 1) != is_boundary)
-      throw std::runtime_error(
-          "Boundary-edge records do not match the exterior triangle edges");
-  }
-  for (const auto &e : boundary)
-    if (!edge_owners.contains(e))
-      throw std::runtime_error("Boundary edge is not used by any triangle");
 }
 
 inline std::size_t read_unsigned(std::istream &in,
@@ -172,10 +92,7 @@ inline void write_mesh(std::ostream &out, const TriangleMesh &mesh,
 
 namespace detail {
 inline void validate_region(const std::string &tag) {
-  if (tag == "-" || !std::ranges::all_of(tag, [](unsigned char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-               (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
-      }))
+  if (!boundary_detail::valid_tag(tag))
     throw std::runtime_error("Invalid source curve region");
 }
 inline void validate_result(const MeshResult &r) {
@@ -206,52 +123,12 @@ inline void validate_result(const MeshResult &r) {
     return;
   const auto &c = *r.boundary_context;
   validate_boundary_context(r.mesh, c, o.preserve_regions);
-  if (c.curves.empty() || c.edge_sources.size() != r.mesh.boundary_edges.size())
-    throw std::runtime_error("Invalid edge source count");
-  std::set<std::uint64_t> ids;
-  for (const auto &curve : c.curves) {
-    if (!ids.insert(curve.id.value).second)
-      throw std::runtime_error("Duplicate source curve ID");
-    validate_region(curve.region);
-    curve_detail::validateCurve(curve.segment);
-  }
-  auto close = [](Point2 a, Point2 b) {
-    if (!std::isfinite(a.x) || !std::isfinite(a.y) || !std::isfinite(b.x) ||
-        !std::isfinite(b.y))
-      return false;
-    return std::hypot(a.x - b.x, a.y - b.y) <=
-           1e-9 * std::max({1.0, std::hypot(a.x, a.y), std::hypot(b.x, b.y)});
-  };
-  std::set<std::size_t> boundary, protected_set;
-  for (std::size_t i = 0; i < c.edge_sources.size(); ++i) {
-    auto edge = r.mesh.boundary_edges[i];
-    boundary.insert(edge.first);
-    boundary.insert(edge.second);
-    if (c.edge_sources[i].empty())
-      throw std::runtime_error("Boundary edge has no source spans");
-    Point2 previous{};
-    bool have_previous = false;
-    for (const auto &span : c.edge_sources[i]) {
-      if (span.curve >= c.curves.size() || !std::isfinite(span.begin) ||
-          !std::isfinite(span.end) || span.begin < 0 || span.begin > 1 ||
-          span.end < 0 || span.end > 1 || span.begin == span.end)
-        throw std::runtime_error("Invalid source curve interval");
-      const auto &curve = c.curves[span.curve];
-      if (have_previous &&
-          !close(previous, curvePoint(curve.segment, span.begin)))
-        throw std::runtime_error("Disconnected source spans");
-      previous = curvePoint(curve.segment, span.end);
-      have_previous = true;
-      if (o.preserve_regions && (r.mesh.boundary_tags.empty()
-                                     ? std::string{}
-                                     : r.mesh.boundary_tags[i]) != curve.region)
-        throw std::runtime_error("Boundary region disagrees with source curve");
-    }
-  }
-  for (auto v : c.protected_vertices)
-    if (!boundary.contains(v) || !protected_set.insert(v).second)
-      throw std::runtime_error(
-          "Invalid or duplicate protected boundary vertex");
+  for (const auto &curve : c.curves) validate_region(curve.region);
+  // Unlike refinement, serialization cannot restore omitted region tags.
+  if (o.preserve_regions && r.mesh.boundary_tags.empty() &&
+      std::any_of(c.curves.begin(), c.curves.end(),
+                  [](const auto &curve) { return !curve.region.empty(); }))
+    throw std::runtime_error("Boundary region disagrees with source curve");
 }
 inline std::string encode_message(const std::string &message) {
   if (message.empty())
@@ -447,8 +324,8 @@ inline void read_result(std::istream &in, MeshResult &r) {
 } // namespace detail
 
 inline void export_mesh(const MeshResult &result, const std::string &path) {
-  detail::validate_mesh(result.mesh);
   validate_mesh_geometry(result.mesh);
+  detail::validate_mesh_format(result.mesh);
   detail::validate_result(result);
   std::ofstream out(path);
   if (!out)
@@ -461,8 +338,8 @@ inline void export_mesh(const MeshResult &result, const std::string &path) {
 }
 
 inline void export_mesh(const TriangleMesh &mesh, const std::string &path) {
-  detail::validate_mesh(mesh);
   validate_mesh_geometry(mesh);
+  detail::validate_mesh_format(mesh);
   std::ofstream out(path);
   if (!out)
     throw std::runtime_error("Cannot create mesh file: " + path);
@@ -530,8 +407,8 @@ inline MeshResult import_mesh_result(const std::string &path) {
   std::string extra;
   if (in >> extra)
     throw std::runtime_error("Unexpected content after final mesh section");
-  detail::validate_mesh(mesh);
   validate_mesh_geometry(mesh);
+  detail::validate_mesh_format(mesh);
   if (version == 3)
     detail::validate_result(result);
   return result;

@@ -167,9 +167,9 @@ assigns fresh IDs. It is not used by dimension setters. Region names are
 validated immediately using the mesh format's ASCII token rules. All failed
 editing operations leave the geometry unchanged.
 
-For compatibility, `regions()` returns a snapshot of consecutive tagged runs
-in boundary order; one disconnected name can occur multiple times, and matching
-end/start runs remain separate in this positional view. The old
+Inspect boundary order through `curves()` and named groups through
+`regionGroups()`. Positional operations count consecutive tagged runs; matching
+end/start runs remain separate for these operations.
 `splitRegion(regionIndex, segmentIndex, t, first, second)` still splits an entire
 run at a curve's mathematical parameter, not an arc-length fraction.
 `curveIdAt(regionIndex, segmentIndex)` resolves those positions to an ID.

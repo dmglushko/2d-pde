@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <numbers>
@@ -10,6 +11,15 @@
 #include <vector>
 
 namespace discretization {
+
+namespace boundary_detail {
+// Empty tags represent untagged mesh edges; '-' is the file-format sentinel.
+inline bool valid_tag(const std::string& name) {
+  return name!="-" && std::all_of(name.begin(),name.end(),[](unsigned char c) {
+    return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='-';
+  });
+}
+}
 
 struct Point2 { double x=0.0, y=0.0; };
 

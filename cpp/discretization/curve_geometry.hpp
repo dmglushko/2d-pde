@@ -9,8 +9,7 @@
 
 namespace discretization {
 
-// Input/compatibility view: consecutive boundary curves with one tag.
-// A disconnected named region can appear in several entries of regions().
+// Construction input: consecutive boundary curves with one tag.
 struct CurveRegion { std::string name; std::vector<CurveSegment> segments; };
 
 struct CurveId {
@@ -41,14 +40,6 @@ public:
   const BoundaryCurve& curve(CurveId id) const {
     for(const auto& c:curves_) if(c.id==id) return c;
     throw std::out_of_range("Unknown or retired curve ID " + std::to_string(id.value));
-  }
-  std::vector<CurveRegion> regions() const {
-    std::vector<CurveRegion> result;
-    for(const auto& c:curves_) {
-      if(result.empty() || result.back().name!=c.region) result.push_back({c.region,{}});
-      result.back().segments.push_back(c.segment);
-    }
-    return result;
   }
   std::vector<RegionInfo> regionGroups() const {
     std::vector<RegionInfo> result;
@@ -144,7 +135,7 @@ public:
     return split(r.pieces.front(),fractions,names,name);
   }
 
-  // Compatibility API: positions refer to regions() runs; t is a segment's
+  // Positional API: regions are consecutive tagged runs; t is a segment's
   // mathematical parameter, NOT a length fraction. Names cover the whole run.
   void splitRegion(std::size_t regionIndex,std::size_t segmentIndex,double t,const std::string& first,const std::string& second) {
     auto runs=regionRuns();
@@ -210,9 +201,7 @@ private:
     return {nextId_++};
   }
   static void validateName(const std::string& name) {
-    if(name.empty() || name=="-" || !std::all_of(name.begin(),name.end(),[](unsigned char c) {
-      return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='-';
-    })) throw std::invalid_argument("Region names require ASCII letters, digits, _, . or -; '-' is reserved");
+    if(name.empty() || !boundary_detail::valid_tag(name)) throw std::invalid_argument("Region names require ASCII letters, digits, _, . or -; '-' is reserved");
   }
   std::vector<BoundaryCurve> makeCurves(const std::vector<CurveRegion>& regions) {
     if(regions.empty()) throw std::invalid_argument("Curve geometry requires regions");

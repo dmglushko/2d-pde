@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <locale>
+#include <span>
 
 namespace discretization {
 enum class SvgScaleMode { Factor, Nearest, Farthest };
@@ -98,7 +99,15 @@ namespace svg_detail {
 // Serialize before touching the destination, including validation at the same
 // coordinate precision/tolerance as importSvg. No boundary sampling is used.
 inline std::string document(const CurveGeometry& geometry) {
- const auto runs=geometry.regions();
+ const auto& curves=geometry.curves();
+ struct Run { std::string name; std::span<const BoundaryCurve> curves; };
+ std::vector<Run> runs;
+ for(std::size_t begin=0;begin<curves.size();) {
+  std::size_t end=begin+1;
+  while(end<curves.size() && curves[end].region==curves[begin].region) ++end;
+  runs.push_back({curves[begin].region,std::span<const BoundaryCurve>(curves).subspan(begin,end-begin)});
+  begin=end;
+ }
  if(runs.empty()) throw std::invalid_argument("SVG geometry requires curves");
  auto stream=[] { std::ostringstream s; s.imbue(std::locale::classic()); s<<std::setprecision(std::numeric_limits<double>::max_digits10); return s; };
  const double rotationCos=std::cos(geometry.rotation()),rotationSin=std::sin(geometry.rotation());
@@ -134,7 +143,7 @@ inline std::string document(const CurveGeometry& geometry) {
     self(self,halves.first,depth-1); self(self,halves.second,depth-1);
    } else segments.push_back(segment);
   };
-  for(const auto& segment:r.segments) append(append,segment,12);
+  for(const auto& record:r.curves) append(append,record.segment,12);
   for(const auto& segment:segments) {
    curve_detail::validateCurve(segment);
    Point2 begin=transform(curvePoint(segment,0)),end=transform(curvePoint(segment,1));
