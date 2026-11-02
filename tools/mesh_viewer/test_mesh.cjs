@@ -72,6 +72,10 @@ let m=base(),a=analyse(m);assert.equal(a.issues.length,0);assert.ok(Math.abs(a.t
 m=base();m.nodes[2]=[0.5,Math.sqrt(3)/2];assert.ok(Math.abs(analyse(m).triangles[0].quality-1)<1e-14);
 m=base();m.elements[0]=[0,2,1];assert.equal(analyse(m).summary.inverted,1);
 m=base();m.nodes[2]=[2,0];assert.equal(analyse(m).summary.degenerate,1);
+for(const height of [1e-15,Number.MIN_VALUE]) {
+  m=base();m.nodes[2]=[1,height];assert.equal(analyse(m).triangles[0].status,'valid');
+  m.elements[0]=[0,2,1];assert.equal(analyse(m).triangles[0].status,'inverted');
+}
 m=base();m.elements.push([0,1,2]);a=analyse(m);assert.ok(a.issues.some(s=>s.includes('duplicates triangle')));assert.equal(a.problemTriangles.size,2);
 m=base();m.boundaryEdges.push([0,1]);assert.ok(analyse(m).problemEdges.has('0,1'));
 m=base();m.boundaryEdges.pop();assert.ok(analyse(m).issues.some(s=>s.includes('degree')));

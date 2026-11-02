@@ -32,6 +32,10 @@ Boundary colors are assigned deterministically by region name, with orange for u
 - Toggle node and triangle IDs independently. Quality measures use the three corner nodes.
 - Red marks degenerate/inverted triangles and triangles with repeated indices or duplicate connectivity. Purple marks edges with boundary ownership mismatch, non-manifold connectivity, inconsistent shared-edge direction, or invalid boundary degree/records. Quality summaries exclude degenerate and inverted triangles. Collapsed triangles can be selected by clicking within six screen pixels of their edges when no triangle interior occupies the click.
 
+Triangle orientation uses a filtered determinant with an exact JavaScript BigInt
+fallback, matching the native binary64 sign test. Thin triangles remain valid;
+their shape is described by the quality metrics rather than an area cutoff.
+
 ## Verification
 
 Run `node tools/mesh_viewer/test_mesh.cjs` from the project root. The tests read the real P1 export, check malformed data, v3 metadata/provenance roundtrips (all curve kinds), and defective connectivity, and exercise selection, panning, cancellation, and zoom with a mocked canvas. They do not verify browser rendering or pixel layout.

@@ -144,6 +144,29 @@ const key = (a, b) => a < b ? `${a},${b}` : `${b},${a}`;
 const distance = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1]);
 const format = n => Number.isFinite(n) ? Number(n.toPrecision(6)).toString() : 'undefined';
 
+// Match the native orientation predicate: use an exact dyadic determinant
+// when floating-point cancellation or underflow makes the sign uncertain.
+function orientation(a,b,c) {
+  const ax=a[0]-c[0],ay=a[1]-c[1],bx=b[0]-c[0],by=b[1]-c[1];
+  const p=ax*by,q=ay*bx,det=p-q,bound=16*Number.EPSILON*(Math.abs(p)+Math.abs(q));
+  if(Number.isFinite(det)&&Number.isFinite(bound)&&bound>=2**-1022&&Math.abs(det)>bound)
+    return Math.sign(det);
+  const bits=new DataView(new ArrayBuffer(8));
+  const parts=value=>{
+    bits.setFloat64(0,value);
+    const raw=bits.getBigUint64(0),exponent=Number((raw>>52n)&2047n);
+    let mantissa=raw&((1n<<52n)-1n);
+    if(exponent)mantissa|=1n<<52n;
+    if(raw>>63n)mantissa=-mantissa;
+    return {mantissa,exponent:exponent?exponent-1075:-1074};
+  };
+  const values=[...a,...b,...c].map(parts);
+  const scale=Math.min(...values.filter(v=>v.mantissa!==0n).map(v=>v.exponent),0);
+  const [x,y,u,v,s,t]=values.map(v=>v.mantissa<<BigInt(v.exponent-scale));
+  const exact=(x-s)*(v-t)-(y-t)*(u-s);
+  return exact>0n?1:exact<0n?-1:0;
+}
+
 function analyse(mesh) {
   const {nodes, elements, boundaryEdges} = mesh;
   const bounds = [Infinity, Infinity, -Infinity, -Infinity];
@@ -154,7 +177,6 @@ function analyse(mesh) {
   const span = Math.max(bounds[2]-bounds[0], bounds[3]-bounds[1]);
   if (!Number.isFinite(span) || !Number.isFinite(span*span))
     throw new Error('Coordinate range exceeds supported numeric scale');
-  const areaTolerance = 1e-14 * span * span; // matches mesh_io.hpp corner-area rule
   const edges = new Map(), recorded = new Map(), issues = [];
   const problemEdges = new Set(), problemTriangles = new Set(), triangleKeys = new Map();
   const triangles = elements.map((e, id) => {
@@ -174,7 +196,8 @@ function analyse(mesh) {
       return Math.atan2(Math.abs(ux*vy-uy*vx), ux*vx+uy*vy)*180/Math.PI;
     };
     const angles = [angle(e[2],e[0],e[1]),angle(e[0],e[1],e[2]),angle(e[1],e[2],e[0])];
-    const status = cross <= areaTolerance ? (cross < -areaTolerance ? 'inverted' : 'degenerate') : 'valid';
+    const sign=orientation(a,b,c);
+    const status = sign>0?'valid':sign<0?'inverted':'degenerate';
     if (status !== 'valid') issues.push(`Triangle ${id} is ${status}`);
     if (new Set(e).size !== e.length) {issues.push(`Triangle ${id} repeats a node index`);problemTriangles.add(id);}
     const triangleKey=e.slice(0,3).sort((a,b)=>a-b).join(',');
@@ -221,7 +244,7 @@ function analyse(mesh) {
     for (const value of values) {min=Math.min(min,value);max=Math.max(max,value);sum+=value;}
     return {min,mean:sum/values.length,max};
   };
-  return {bounds, triangles, edges, recorded, problemEdges, problemTriangles, issues, areaTolerance,
+  return {bounds, triangles, edges, recorded, problemEdges, problemTriangles, issues,
     summary: {nodes:nodes.length, elements:elements.length, boundaryEdges:boundaryEdges.length,
       inverted:triangles.filter(t=>t.status==='inverted').length,
       degenerate:triangles.filter(t=>t.status==='degenerate').length,

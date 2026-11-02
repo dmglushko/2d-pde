@@ -68,12 +68,18 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
         throw std::invalid_argument(
             "Boundary region disagrees with source curves");
     }
-    if (protected_vertices.contains(a)) {
+    // Chord subdivision may put new vertices off the analytical curves, but
+    // vertices retained from the polygon snapshot must match their own spans.
+    // Global coverage alone cannot detect cyclically shifted source records.
+    bool snapshot_vertex = std::any_of(
+        context.polygon_snapshot.begin(), context.polygon_snapshot.end(),
+        [&](Point2 p) { return close(mesh.nodes[a], p); });
+    if (protected_vertices.contains(a) || snapshot_vertex) {
       auto s = spans.front();
       if (!close(mesh.nodes[a],
                  curvePoint(context.curves[s.curve].segment, s.begin)))
         throw std::invalid_argument(
-            "Protected junction moved off its source curve");
+            "Boundary anchor disagrees with its source interval");
     }
   }
   validate_polygon(Boundary{context.polygon_snapshot, {}});

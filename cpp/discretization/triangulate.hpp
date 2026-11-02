@@ -236,13 +236,16 @@ bisect_sources(const BoundaryContext &context,
   if (!(total > 0) || !std::isfinite(total))
     throw std::runtime_error("Invalid source interval length");
   double target = total / 2, acc = 0;
+  // Equal-length adjacent spans can differ by a rounding bit after curve
+  // subdivision. Reuse that junction instead of creating an unresolvable sliver.
+  const double junction_tolerance = 16 * std::numeric_limits<double>::epsilon() * total;
   std::vector<CurveInterval> left, right;
   for (std::size_t i = 0; i < spans.size(); ++i) {
     auto s = spans[i];
     double next = acc + lengths[i];
-    if (next <= target)
+    if (next <= target + junction_tolerance)
       left.push_back(s);
-    else if (acc >= target)
+    else if (acc >= target - junction_tolerance)
       right.push_back(s);
     else {
       auto piece = subcurve(context.curves[s.curve].segment, s.begin, s.end);
@@ -487,6 +490,9 @@ inline MeshResult generate_mesh(const DiscretizedBoundary &boundary,
   if (options.algorithm == InteriorAlgorithm::ConstrainedDelaunay)
     return mesh_detail::refine_result(std::move(result), options, false);
   validate_mesh_geometry(result.mesh);
+  if (result.boundary_context)
+    validate_boundary_context(result.mesh, *result.boundary_context,
+                              options.preserve_regions);
   return result;
 }
 inline MeshResult generate_mesh(const Boundary &boundary,

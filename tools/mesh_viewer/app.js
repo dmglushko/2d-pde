@@ -110,7 +110,7 @@
     });
     html+='<div class="subtitle">Shape</div>';
     html+=row('Signed area',number(t.area));
-    html+=row('Orientation',t.area>0?'counterclockwise':t.area<0?'clockwise':'zero area');
+    html+=row('Orientation',t.status==='valid'?'counterclockwise':t.status==='inverted'?'clockwise':'zero area');
     html+=row('Mean-ratio quality',number(t.quality));
     html+=row('Minimum angle',`${number(Math.min(...t.angles))}°`);
     html+=row('Edge ratio',number(t.aspect));

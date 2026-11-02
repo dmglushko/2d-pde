@@ -96,6 +96,25 @@ int main(int argc, char **argv) {
   try {
     require(argc == 2, "Usage: test TEMP_DIRECTORY");
     exact_predicates();
+    for (double radius : {0.001, 0.01}) {
+      auto small = generate_mesh(CircleGeometry(radius));
+      require(small.mesh.nodes.size() >= 3, "Small circle failed to form a polygon");
+      validate_mesh_geometry(small.mesh);
+    }
+    auto shifted_sources = discretize_boundary(CircleGeometry{});
+    auto &spans = shifted_sources.context->edge_sources;
+    std::rotate(spans.begin(), spans.begin() + 1, spans.end());
+    for (auto algorithm : {InteriorAlgorithm::EarClipping,
+                           InteriorAlgorithm::ConstrainedDelaunay}) {
+      MeshOptions options;
+      options.algorithm = algorithm;
+      rejects([&] { generate_mesh(shifted_sources, options); },
+              "Shifted source intervals accepted");
+      auto missing = discretize_boundary(CircleGeometry{});
+      missing.context->edge_sources.clear();
+      rejects([&] { generate_mesh(missing, options); },
+              "Missing source intervals accepted");
+    }
     const auto path =
         (std::filesystem::path(argv[1]) / "roundtrip.pde2d").string();
     std::vector<std::unique_ptr<CurveGeometry>> shapes;

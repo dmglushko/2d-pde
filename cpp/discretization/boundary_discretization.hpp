@@ -195,6 +195,9 @@ discretize_boundary(const CurveGeometry &geometry,
       if (!std::isfinite(length) || !std::isfinite(second))
         throw std::invalid_argument("Nonfinite curve bound");
       bool split =
+          // One or two source curves still need enough samples to form a
+          // polygon when both user tolerances exceed the shape's dimensions.
+          (ctx.curves.size() < 3 && z - a > 0.25) ||
           (options.max_edge_length > 0 && length > options.max_edge_length) ||
           (options.max_curve_deviation > 0 &&
            second / 8 > options.max_curve_deviation) ||
