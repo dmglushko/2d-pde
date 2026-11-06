@@ -1,0 +1,57 @@
+{
+  "clock": "steady_clock wall seconds",
+  "nodes": 441,
+  "triangles": 800,
+  "side_length": 10,
+  "simulated_seconds": 100,
+  "time_step": 0.05,
+  "saved_frame_stride": 5,
+  "mesh_seconds": 0.005082675,
+  "data_export_seconds": 0.14944086,
+  "execution_seconds": 91.37949021,
+  "cases": [
+    {
+      "name": "100 s: driven Dirichlet wave",
+      "timings": {
+        "setup_seconds": 0.014598047,
+        "integration_seconds": 41.57972374,
+        "assembly_seconds": 27.99380947,
+        "constraints_seconds": 0.150819709,
+        "solver_seconds": 13.25297674,
+        "solver_validation_seconds": 0.008698122,
+        "rank_check_seconds": 11.97991199,
+        "factorization_seconds": 1.199646262,
+        "linear_solve_seconds": 0.040580079,
+        "residual_seconds": 0.00845991,
+        "evolution_other_seconds": 0.182117826,
+        "diagnostics_seconds": 0.008489613,
+        "assembly_calls": 2003,
+        "linear_solves": 2001
+      },
+      "max_energy_work_defect": 8.881784197e-16,
+      "mean_drift": 0.03916064278
+    },
+    {
+      "name": "100 s: source-free Neumann wave",
+      "timings": {
+        "setup_seconds": 0.011085934,
+        "integration_seconds": 42.08482454,
+        "assembly_seconds": 21.48644273,
+        "constraints_seconds": 0.081631504,
+        "solver_seconds": 20.38875946,
+        "solver_validation_seconds": 0.007953204,
+        "rank_check_seconds": 18.92817854,
+        "factorization_seconds": 1.384013428,
+        "linear_solve_seconds": 0.043586237,
+        "residual_seconds": 0.008431188,
+        "evolution_other_seconds": 0.127990843,
+        "diagnostics_seconds": 7.525632013,
+        "assembly_calls": 2003,
+        "linear_solves": 2001
+      },
+      "max_energy_work_defect": 5.329070518e-15,
+      "mean_drift": 1.031111307e-11
+    }
+  ],
+  "html_packaging_seconds": 0.108877623
+}
