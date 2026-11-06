@@ -5,6 +5,14 @@ endif()
 project(pde2d LANGUAGES CXX)
 
 include(CTest)
+option(PDE2D_ENABLE_OPENMP "Enable explicitly selected OpenMP CPU kernels" OFF)
+add_library(pde2d_execution INTERFACE)
+target_compile_features(pde2d_execution INTERFACE cxx_std_23)
+target_include_directories(pde2d_execution INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/cpp")
+if(PDE2D_ENABLE_OPENMP)
+  find_package(OpenMP REQUIRED COMPONENTS CXX)
+  target_link_libraries(pde2d_execution INTERFACE OpenMP::OpenMP_CXX)
+endif()
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 # SymEngine 0.14's installed config still declares CMake 2.8 compatibility.
 # CMake 4 requires an explicit policy floor when loading such package configs.
@@ -36,7 +44,7 @@ add_library(pde2d_fem INTERFACE)
 target_compile_features(pde2d_fem INTERFACE cxx_std_23)
 target_include_directories(pde2d_fem INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/cpp")
 target_include_directories(pde2d_fem SYSTEM INTERFACE ${SYMENGINE_INCLUDE_DIRS})
-target_link_libraries(pde2d_fem INTERFACE Eigen3::Eigen ${SYMENGINE_LIBRARIES})
+target_link_libraries(pde2d_fem INTERFACE pde2d_execution Eigen3::Eigen ${SYMENGINE_LIBRARIES})
 
 if(BUILD_TESTING)
   file(GLOB fem_test_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/fem_*.cpp")

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "problem.hpp"
+#include "execution.hpp"
 #include "quadrature.hpp"
 #include "discretization/mesh_validation.hpp"
 #include <Eigen/Sparse>
@@ -15,7 +16,10 @@
 namespace fem {
 using SparseMatrix = Eigen::SparseMatrix<double>;
 using Vector = Eigen::VectorXd;
-struct AssemblyOptions { int quadrature_degree=2; double boundary_tolerance=1e-10; };
+struct AssemblyOptions {
+  int quadrature_degree=2; double boundary_tolerance=1e-10;
+  pde2d::ExecutionOptions execution{};
+};
 struct DirichletValue { Eigen::Index node; double value; };
 struct AssembledSystem {
   SparseMatrix stiffness, first_mass, second_mass;
