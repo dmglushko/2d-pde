@@ -6,6 +6,8 @@
 #include <limits>
 #include <map>
 #include <sstream>
+#include <mutex>
+#include <unordered_map>
 
 namespace discretization {
 
@@ -29,6 +31,10 @@ struct RegionInfo {
 };
 
 // One ordered closed boundary; named membership is independent of connectivity.
+// Concurrent const queries and copying a read-only source are supported, including
+// simultaneous cache misses. Each copy owns its cache. Mutation (including move
+// from an object) requires external synchronization. Any edit may invalidate
+// references returned by curves()/curve(); cache locking does not protect them.
 class CurveGeometry : public Geometry2D {
 public:
   CurveGeometry() = default;
@@ -38,56 +44,34 @@ public:
 
   const std::vector<BoundaryCurve>& curves() const { return curves_; }
   const BoundaryCurve& curve(CurveId id) const {
-    for(const auto& c:curves_) if(c.id==id) return c;
+    auto it=ids_.find(id.value);
+    if(it!=ids_.end()) return curves_[it->second];
     throw std::out_of_range("Unknown or retired curve ID " + std::to_string(id.value));
   }
   std::vector<RegionInfo> regionGroups() const {
-    std::vector<RegionInfo> result;
-    for(const auto& c:curves_) {
-      auto it=std::find_if(result.begin(),result.end(),[&](const auto& r){return r.name==c.region;});
-      if(it==result.end()) { result.push_back({c.region,{},{}}); it=result.end()-1; }
-      it->curves.push_back(c.id);
-    }
-    for(auto& r:result) {
-      // Prefer a name transition as the start. This naturally joins a piece
-      // crossing the stored seam without changing the boundary's anchor.
-      std::size_t start=0;
-      for(std::size_t i=0;i<curves_.size();++i)
-        if(curves_[i].region==r.name && curves_[(i+curves_.size()-1)%curves_.size()].region!=r.name) { start=i; break; }
-      bool inPiece=false;
-      for(std::size_t k=0;k<curves_.size();++k) {
-        const auto& c=curves_[(start+k)%curves_.size()];
-        if(c.region==r.name) {
-          if(!inPiece) r.pieces.emplace_back();
-          r.pieces.back().push_back(c.id); inPiece=true;
-        } else inPiece=false;
-      }
-    }
-    return result;
+    return groups_;
   }
-  RegionInfo region(const std::string& name) const {
-    for(auto& r:regionGroups()) if(r.name==name) return r;
-    throw std::out_of_range("Unknown region: " + name);
-  }
+  RegionInfo region(const std::string& name) const { return regionInfo(name); }
   CurveId curveIdAt(const std::string& name,std::size_t index) const {
-    auto ids=region(name).curves;
+    const auto& ids=regionInfo(name).curves;
     if(index>=ids.size()) throw std::out_of_range("Invalid curve index in region " + name);
     return ids[index];
   }
   CurveId curveIdAt(std::size_t regionIndex,std::size_t segmentIndex) const {
-    auto runs=regionRuns();
+    const auto& runs=regionRuns();
     if(regionIndex>=runs.size() || segmentIndex>=runs[regionIndex].size()) throw std::out_of_range("Invalid region or segment index");
     return runs[regionIndex][segmentIndex];
   }
   double length(CurveId id) const {
     const auto& c=curve(id);
+    std::lock_guard lock(lengths_.mutex);
     auto it=lengths_.find(id);
     if(it==lengths_.end()) it=lengths_.emplace(id,curveLength(c.segment)).first;
     return it->second;
   }
   double regionLength(const std::string& name) const {
     double total=0;
-    for(auto id:region(name).curves) total+=length(id);
+    for(auto id:regionInfo(name).curves) total+=length(id);
     if(!std::isfinite(total)) throw std::invalid_argument("Region length exceeds supported numeric scale");
     return total;
   }
@@ -138,7 +122,7 @@ public:
   // Positional API: regions are consecutive tagged runs; t is a segment's
   // mathematical parameter, NOT a length fraction. Names cover the whole run.
   void splitRegion(std::size_t regionIndex,std::size_t segmentIndex,double t,const std::string& first,const std::string& second) {
-    auto runs=regionRuns();
+    const auto& runs=regionRuns();
     if(regionIndex>=runs.size() || segmentIndex>=runs[regionIndex].size()) throw std::out_of_range("Invalid region or segment index");
     validateFractions({t},{first,second});
     CurveGeometry next=*this;
@@ -147,7 +131,7 @@ public:
     commit(std::move(next));
   }
   void mergeRegions(std::size_t first,std::size_t count,const std::string& name) {
-    auto runs=regionRuns();
+    const auto& runs=regionRuns();
     if(count<2 || first>=runs.size() || count>runs.size()-first) throw std::out_of_range("Invalid region range");
     std::vector<CurveId> ids;
     for(std::size_t i=first;i<first+count;++i) ids.insert(ids.end(),runs[i].begin(),runs[i].end());
@@ -165,6 +149,7 @@ protected:
     if(!same && !edits_.empty()) throw std::invalid_argument("Shape topology changed; cannot preserve region edits");
     if(same) for(std::size_t i=0;i<rebuilt.size();++i) rebuilt[i].id=base_[i].id;
     next.base_=rebuilt; next.curves_=std::move(rebuilt); next.lengths_.clear();
+    next.reindex();
     // Replaying mutates the generated-ID maps only on this temporary copy.
     try {
       for(auto& edit:next.edits_) std::visit([&](auto& e){next.apply(e);},edit);
@@ -189,11 +174,56 @@ private:
   using Edit=std::variant<RelabelEdit,SplitEdit>;
   std::vector<BoundaryCurve> curves_,base_;
   std::vector<Edit> edits_;
-  mutable std::map<CurveId,double> lengths_;
+  // The mutex belongs to the cache value, never shared by geometry copies.
+  struct LengthCache : std::map<CurveId,double> {
+    mutable std::mutex mutex;
+    LengthCache()=default;
+    LengthCache(const LengthCache& other) : std::map<CurveId,double>() { std::lock_guard lock(other.mutex); std::map<CurveId,double>::operator=(other); }
+    LengthCache& operator=(const LengthCache& other) {
+      if(this!=&other) { std::scoped_lock lock(mutex,other.mutex); std::map<CurveId,double>::operator=(other); }
+      return *this;
+    }
+    LengthCache(LengthCache&& other) noexcept : std::map<CurveId,double>(std::move(other)) {}
+    LengthCache& operator=(LengthCache&& other) noexcept { std::map<CurveId,double>::operator=(std::move(other)); return *this; }
+  };
+  mutable LengthCache lengths_;
+  std::unordered_map<std::uint64_t,std::size_t> ids_;
+  std::unordered_map<std::string,std::size_t> regionIndex_;
+  std::vector<RegionInfo> groups_;
+  std::vector<std::vector<CurveId>> runs_;
+
+  const RegionInfo& regionInfo(const std::string& name) const {
+    auto it=regionIndex_.find(name);
+    if(it==regionIndex_.end()) throw std::out_of_range("Unknown region: " + name);
+    return groups_[it->second];
+  }
+  void reindex() {
+    ids_.clear(); regionIndex_.clear(); groups_.clear(); runs_.clear();
+    for(std::size_t i=0;i<curves_.size();++i) {
+      const auto& c=curves_[i]; ids_.emplace(c.id.value,i);
+      if(i==0 || curves_[i-1].region!=c.region) runs_.emplace_back();
+      runs_.back().push_back(c.id);
+      auto [it,added]=regionIndex_.emplace(c.region,groups_.size());
+      if(added) groups_.push_back({c.region,{},{}});
+      auto& r=groups_[it->second]; r.curves.push_back(c.id);
+      if(i==0 || curves_[i-1].region!=c.region) r.pieces.emplace_back();
+      r.pieces.back().push_back(c.id);
+    }
+    if(curves_.size()>1 && curves_.front().region==curves_.back().region) {
+      auto& pieces=groups_[regionIndex_.at(curves_.front().region)].pieces;
+      if(pieces.size()>1) {
+        // Old traversal starts at the first transition, so the seam piece is last.
+        auto first=std::move(pieces.front()); pieces.erase(pieces.begin());
+        pieces.back().insert(pieces.back().end(),first.begin(),first.end());
+      }
+    }
+  }
   std::uint64_t nextId_=1;
 
-  void commit(CurveGeometry&& next) noexcept {
+  void commit(CurveGeometry&& next) {
+    next.reindex();
     curves_.swap(next.curves_); base_.swap(next.base_); edits_.swap(next.edits_);
+    ids_.swap(next.ids_); regionIndex_.swap(next.regionIndex_); groups_.swap(next.groups_); runs_.swap(next.runs_);
     lengths_.swap(next.lengths_); std::swap(nextId_,next.nextId_);
   }
   CurveId allocateId() {
@@ -216,15 +246,7 @@ private:
     }
     return records;
   }
-  std::vector<std::vector<CurveId>> regionRuns() const {
-    std::vector<std::vector<CurveId>> result;
-    std::string previous;
-    for(const auto& c:curves_) {
-      if(result.empty() || previous!=c.region) result.emplace_back();
-      result.back().push_back(c.id); previous=c.region;
-    }
-    return result;
-  }
+  const std::vector<std::vector<CurveId>>& regionRuns() const { return runs_; }
   static void validateFractions(const std::vector<double>& fractions,const std::vector<std::string>& names) {
     if(fractions.empty() || names.size()!=fractions.size()+1) throw std::invalid_argument("Splits require N fractions and N+1 region names");
     double previous=0;
@@ -247,7 +269,8 @@ private:
     auto source=edit.sourceName.empty()?edit.source:region(edit.sourceName).curves;
     // Validate all targets before modifying any of them.
     for(auto id:source) (void)curve(id);
-    for(auto& c:curves_) if(std::find(source.begin(),source.end(),c.id)!=source.end()) c.region=edit.target;
+    for(auto id:source) curves_[ids_.at(id.value)].region=edit.target;
+    reindex();
   }
   std::vector<CurveId> split(const std::vector<CurveId>& source,const std::vector<double>& fractions,const std::vector<std::string>& names,const std::string& sourceName={}) {
     validateFractions(fractions,names);
@@ -340,6 +363,7 @@ private:
     curves_=std::move(next);
     for(auto id:edit.source) lengths_.erase(id);
     lengths_.insert(measured.begin(),measured.end());
+    reindex();
     return result;
   }
 };

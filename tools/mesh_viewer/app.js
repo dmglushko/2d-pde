@@ -4,7 +4,9 @@
   const canvas = $('canvas'), wrap=$('dropzone'), ctx=canvas.getContext('2d');
   const checks=['wire','boundary','nodes','triangles'];
   let mesh=null, analysis=null, selected=-1, view={x:0,y:0,s:1};
-  let pointer=null, moved=false;
+  let pointer=null, moved=false, pending=false, projected=null, projectionKey="";
+  function scheduleDraw(){if(pending)return;pending=true;requestAnimationFrame(()=>{pending=false;draw();});}
+  function projections(){const key=[view.x,view.y,view.s,canvas.width,canvas.height].join(",");if(!projected||key!==projectionKey){projected=mesh.nodes.map(screen);projectionKey=key;}return projected;}
   const safe = value => String(value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const number = n => format(n);
   const showError = message => {$('error').textContent=message;$('error').hidden=false;};
@@ -14,8 +16,9 @@
   const px = () => window.devicePixelRatio || 1;
   const resize = () => {
     const r=wrap.getBoundingClientRect(), d=px();
-    canvas.width=Math.max(1,Math.round(r.width*d));canvas.height=Math.max(1,Math.round(r.height*d));
-    ctx.setTransform(d,0,0,d,0,0);draw();
+    const w=Math.max(1,Math.round(r.width*d)),h=Math.max(1,Math.round(r.height*d));
+    if(canvas.width!==w)canvas.width=w;if(canvas.height!==h)canvas.height=h;
+    ctx.setTransform(d,0,0,d,0,0);scheduleDraw();
   };
   const size = () => [canvas.width/px(),canvas.height/px()];
   const fit = () => {
@@ -24,13 +27,13 @@
     const spanX=Math.max(x1-x0,1e-12),spanY=Math.max(y1-y0,1e-12);
     view.s=Math.max(spanX/Math.max(w-90,1),spanY/Math.max(h-90,1));
     view.x=(x0+x1)/2-w*view.s/2;view.y=(y0+y1)/2+h*view.s/2;
-    draw();
+    scheduleDraw();
   };
   function polygon(e) {
-    ctx.beginPath();e.slice(0,3).forEach((id,i)=>{const [x,y]=screen(mesh.nodes[id]);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();
+    ctx.beginPath();e.slice(0,3).forEach((id,i)=>{const [x,y]=projected[id];i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();
   }
   function draw() {
-    const [w,h]=size();ctx.clearRect(0,0,w,h);if(!mesh)return;
+    const [w,h]=size();ctx.clearRect(0,0,w,h);if(!mesh)return;projections();
     const flags=Object.fromEntries(checks.map(id=>[id,$(id).checked]));
     // A quiet blue fill makes individual triangles selectable without hiding the grid.
     for(const t of analysis.triangles){
@@ -50,12 +53,12 @@
         ctx.fillStyle='#32537f';ctx.font='10px ui-monospace, monospace';ctx.textAlign='center';ctx.fillText(t.id,x,y);ctx.textAlign='left';
       }
     }
-    if(flags.boundary){ctx.lineWidth=3;ctx.lineCap='round';for(const [a,b,region] of mesh.boundaryEdges){ctx.strokeStyle=regionColor(region);const p=screen(mesh.nodes[a]),q=screen(mesh.nodes[b]);ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();}}
+    if(flags.boundary){ctx.lineWidth=3;ctx.lineCap='round';for(const [a,b,region] of mesh.boundaryEdges){ctx.strokeStyle=regionColor(region);const p=projected[a],q=projected[b];ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();}}
     ctx.strokeStyle='#a036ac';ctx.lineWidth=3;
-    for(const k of analysis.problemEdges){const edge=analysis.edges.get(k);const ends=edge?edge.nodes:k.split(',').map(Number);const p=screen(mesh.nodes[ends[0]]),q=screen(mesh.nodes[ends[1]]);ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();}
+    for(const k of analysis.problemEdges){const edge=analysis.edges.get(k);const ends=edge?edge.nodes:k.split(',').map(Number);const p=projected[ends[0]],q=projected[ends[1]];ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();}
     if(flags.nodes){
       ctx.font='10px ui-monospace, monospace';
-      for(let id=0;id<mesh.nodes.length;id++){const [x,y]=screen(mesh.nodes[id]);
+      for(let id=0;id<mesh.nodes.length;id++){const [x,y]=projected[id];
         ctx.fillStyle='#203e68';ctx.beginPath();ctx.arc(x,y,2.2,0,2*Math.PI);ctx.fill();
         ctx.fillStyle='#193961';ctx.fillText(String(id),x+4,y-4);
       }
@@ -119,12 +122,12 @@
   }
   function load(source,name){
     try{const candidate=parseMesh(source), diagnostic=analyse(candidate);
-      mesh=candidate;analysis=diagnostic;selected=-1;
+      mesh=candidate;analysis=diagnostic;selected=-1;projected=null;
       $('filename').textContent=name;clearError();displaySummary();inspect();fit();
     }catch(error){showError(`Could not load ${name}: ${error.message}`);}
   }
   const hit=(x,y)=>{
-    const p=world(x,y), tol=1e-11;
+    projections();const p=world(x,y), tol=1e-11;
     for(let id=analysis.triangles.length-1;id>=0;id--){
       const e=mesh.elements[id],a=mesh.nodes[e[0]],b=mesh.nodes[e[1]],c=mesh.nodes[e[2]];
       const cross=(u,v)=>u[0]*v[1]-u[1]*v[0];
@@ -137,7 +140,7 @@
     let best=-1, closest=6;
     for(const t of analysis.triangles) if(t.status==='degenerate') {
       for(let i=0;i<3;i++) {
-        const a=screen(mesh.nodes[t.nodes[i]]),b=screen(mesh.nodes[t.nodes[(i+1)%3]]);
+        const a=projected[t.nodes[i]],b=projected[t.nodes[(i+1)%3]];
         const dx=b[0]-a[0],dy=b[1]-a[1],length2=dx*dx+dy*dy;
         const u=length2?Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/length2)):0;
         const distance=Math.hypot(x-a[0]-u*dx,y-a[1]-u*dy);
@@ -147,12 +150,12 @@
     return best;
   };
   canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);pointer={x:e.offsetX,y:e.offsetY,startX:e.offsetX,startY:e.offsetY};moved=false;wrap.classList.add('dragging');});
-  canvas.addEventListener('pointermove',e=>{if(!pointer)return;const dx=e.offsetX-pointer.x,dy=e.offsetY-pointer.y;if(Math.hypot(e.offsetX-pointer.startX,e.offsetY-pointer.startY)>3)moved=true;view.x-=dx*view.s;view.y+=dy*view.s;pointer.x=e.offsetX;pointer.y=e.offsetY;draw();});
-  canvas.addEventListener('pointerup',e=>{if(!moved&&analysis){selected=hit(e.offsetX,e.offsetY);inspect();draw();}pointer=null;wrap.classList.remove('dragging');});
+  canvas.addEventListener('pointermove',e=>{if(!pointer)return;const dx=e.offsetX-pointer.x,dy=e.offsetY-pointer.y;if(Math.hypot(e.offsetX-pointer.startX,e.offsetY-pointer.startY)>3)moved=true;view.x-=dx*view.s;view.y+=dy*view.s;pointer.x=e.offsetX;pointer.y=e.offsetY;scheduleDraw();});
+  canvas.addEventListener('pointerup',e=>{if(!moved&&analysis){selected=hit(e.offsetX,e.offsetY);inspect();scheduleDraw();}pointer=null;wrap.classList.remove('dragging');});
   canvas.addEventListener('pointercancel',()=>{pointer=null;wrap.classList.remove('dragging');});
-  canvas.addEventListener('wheel',e=>{e.preventDefault();if(!mesh)return;const before=world(e.offsetX,e.offsetY);view.s*=Math.exp(e.deltaY*.001);view.s=Math.min(Math.max(view.s,1e-12),1e12);view.x=before[0]-e.offsetX*view.s;view.y=before[1]+e.offsetY*view.s;draw();},{passive:false});
+  canvas.addEventListener('wheel',e=>{e.preventDefault();if(!mesh)return;const before=world(e.offsetX,e.offsetY);view.s*=Math.exp(e.deltaY*.001);view.s=Math.min(Math.max(view.s,1e-12),1e12);view.x=before[0]-e.offsetX*view.s;view.y=before[1]+e.offsetY*view.s;scheduleDraw();},{passive:false});
   $('fit').onclick=fit;
-  checks.forEach(id=>$(id).addEventListener('change',draw));
+  checks.forEach(id=>$(id).addEventListener('change',scheduleDraw));
   $('open').onclick=()=>$('file').click();
   $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)load(await file.text(),file.name);e.target.value='';});
   wrap.addEventListener('dragover',e=>e.preventDefault());

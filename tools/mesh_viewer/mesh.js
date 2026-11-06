@@ -13,15 +13,18 @@ const interiorAlgorithmIds = new Set([0,1]); // EarClipping, ConstrainedDelaunay
 const boundaryTreatmentIds = new Set([0,1,2]); // Fixed, SplitPolygonEdges, RefineOnCurves
 // PDE2D_MESH 1 through 4 reader and corner-triangle diagnostics. No external packages.
 function parseMesh(source) {
-  const tokens = source.trim().split(/\s+/);
+  // Count without retaining token strings, so huge claimed counts fail before allocation.
+  const scanner = /\S+/g;
+  let tokenCount=0;while(scanner.exec(source))++tokenCount;
+  scanner.lastIndex=0;
   let at = 0;
   const take = () => {
-    if (at >= tokens.length) throw new Error('Unexpected end of file');
-    return tokens[at++];
+    if (at >= tokenCount) throw new Error('Unexpected end of file');
+    ++at;return scanner.exec(source)[0];
   };
   const expect = word => { if (take() !== word) throw new Error(`Expected ${word}`); };
   const remaining = (count, name) => {
-    if (count > tokens.length-at) throw new Error(`Truncated ${name} section`);
+    if (count > tokenCount-at) throw new Error(`Truncated ${name} section`);
   };
   const integer = (name, max = 50_000_000) => {
     const value = take();
@@ -146,7 +149,7 @@ function parseMesh(source) {
     } else result.boundaryContext=null;
     expect('END_RESULT');
   }
-  if (at !== tokens.length) throw new Error(`Unexpected trailing token: ${tokens[at]}`);
+  if (at !== tokenCount) throw new Error(`Unexpected trailing token: ${take()}`);
   return result;
 }
 

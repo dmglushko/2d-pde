@@ -1,5 +1,6 @@
 #pragma once
 #include "predicates.hpp"
+#include "spatial_index.hpp"
 #include <map>
 #include <queue>
 #include <set>
@@ -24,10 +25,18 @@ inline void validate_polygon(const Boundary &b) {
       throw std::invalid_argument("Nonfinite or zero-length boundary edge");
     if (predicates::on_segment(p, a, c) || predicates::on_segment(a, c, p))
       throw std::invalid_argument("Overlapping adjacent boundary edges");
-    for (std::size_t j = i + 1; j < n; ++j)
-      if ((i + 1) % n != j && (j + 1) % n != i)
-        if (predicates::intersects(a, c, b.points[j], b.points[(j + 1) % n]))
-          throw std::invalid_argument("Boundary self-intersects");
+  }
+  std::vector<Box> boxes;
+  for (std::size_t i = 0; i < n; ++i)
+    boxes.push_back(Box::segment(b.points[i], b.points[(i + 1) % n]));
+  BoxIndex index(boxes);
+  for (std::size_t i = 0; i < n; ++i) {
+    auto a = b.points[i], c = b.points[(i + 1) % n];
+    for (auto j : index.candidates(boxes[i]))
+      if (j > i)
+        if ((i + 1) % n != j && (j + 1) % n != i)
+          if (predicates::intersects(a, c, b.points[j], b.points[(j + 1) % n]))
+            throw std::invalid_argument("Boundary self-intersects");
   }
 }
 } // namespace mesh_detail
@@ -121,17 +130,22 @@ inline void validate_mesh_geometry(const TriangleMesh &mesh) {
   }
   if (visited.size() != mesh.elements.size())
     throw std::invalid_argument("Disconnected mesh");
-  for (auto i = owners.begin(); i != owners.end(); ++i)
-    for (auto j = std::next(i); j != owners.end(); ++j) {
-      auto [a, b] = i->first;
-      auto [c, d] = j->first;
+  std::vector<Edge> edges;
+  std::vector<Box> boxes;
+  for (const auto &[e, own] : owners) {
+    (void)own;
+    edges.push_back(e);
+    boxes.push_back(Box::segment(mesh.nodes[e.first], mesh.nodes[e.second]));
+  }
+  BoxIndex index(boxes);
+  for (std::size_t i = 0; i < edges.size(); ++i)
+    for (auto j : index.candidates(boxes[i])) {
+      if (j <= i)
+        continue;
+      auto [a, b] = edges[i];
+      auto [c, d] = edges[j];
       auto p = mesh.nodes[a], q = mesh.nodes[b], r = mesh.nodes[c],
            s = mesh.nodes[d];
-      if (std::max(p.x, q.x) < std::min(r.x, s.x) ||
-          std::max(r.x, s.x) < std::min(p.x, q.x) ||
-          std::max(p.y, q.y) < std::min(r.y, s.y) ||
-          std::max(r.y, s.y) < std::min(p.y, q.y))
-        continue;
       if (a == c || a == d || b == c || b == d) {
         std::size_t common = (a == c || a == d) ? a : b,
                     u = common == a ? b : a, v = common == c ? d : c;

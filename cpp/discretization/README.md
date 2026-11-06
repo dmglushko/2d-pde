@@ -195,10 +195,12 @@ the standalone `-` token reserved for untagged edges.
 
 Validation checks indices, positive triangle area, shared-edge ownership and
 orientation, exterior boundary records, connected disk topology, unused and
-duplicate vertices, and crossing or overlapping edges. The geometric edge-pair
-check is quadratic; it does not certify minimum angles. Meshing requires Boost
-development headers for exact binary64 predicate fallbacks. No PDE assembly, solver,
-or error estimator is implemented. See the [reference](../../docs/learning/reference.md)
+duplicate vertices, and crossing or overlapping edges. Conservative spatial
+indexes prune edge-pair checks before robust predicates; overlapping boxes can
+still yield quadratic work. Validation does not certify minimum angles. Meshing requires Boost
+development headers for exact binary64 predicate fallbacks. The optional
+[FEM module](../../docs/fem/README.md) assembles and solves scalar linear
+equations on these meshes. See the [reference](../../docs/learning/reference.md)
 and [rendered showcase](../../docs/showcase/README.md).
 
 ### SVG geometry import and export

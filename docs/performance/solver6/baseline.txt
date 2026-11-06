@@ -1,0 +1,2 @@
+method=0 total=0.303984 assembly=0.245454 solver=0.0517044 rank=0.0257755 factor=0.022318 solves=200 assemblies=201 final_norm=4.98327e-16
+method=2 total=0.312391 assembly=0.258035 solver=0.0480132 rank=0.0254498 factor=0.0197056 solves=201 assemblies=203 final_norm=3.67714

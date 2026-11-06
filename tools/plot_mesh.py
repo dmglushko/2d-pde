@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Render PDE2D_MESH v1/v2/v3 topology to PNG, without a browser/server.
+"""Render PDE2D_MESH v1/v2/v3/v4 topology to PNG, without a browser/server.
 
 Use the project-local visualization venv; see docs/showcase/README.md.
-The v3 metadata trailer is intentionally ignored: this is a topology plotter,
+The v3/v4 metadata trailer is intentionally ignored: this is a topology plotter,
 not an importer or validator for resuming refinement.
 """
 import argparse
@@ -26,7 +26,7 @@ def read_mesh(path):
             return line.split()
 
         header = record()
-        if len(header) != 2 or header[0] != "PDE2D_MESH" or header[1] not in {"1", "2", "3"}:
+        if len(header) != 2 or header[0] != "PDE2D_MESH" or header[1] not in {"1", "2", "3", "4"}:
             raise ValueError(f"{path}: unsupported mesh header")
         version = int(header[1])
         if record() != ["ORDER", "1"]:
@@ -67,8 +67,8 @@ def read_mesh(path):
         return nodes, triangles, boundary, tags
 
 
-def draw(ax, path, title, colors):
-    nodes, triangles, boundary, tags = read_mesh(path)
+def draw(ax, mesh, title, colors):
+    nodes, triangles, boundary, tags = mesh
     edges = {tuple(sorted((t[i], t[(i + 1) % 3]))) for t in triangles for i in range(3)}
     ax.add_collection(LineCollection([[nodes[a], nodes[b]] for a, b in sorted(edges)],
                                     colors="#7892aa", linewidths=0.55))
@@ -103,13 +103,14 @@ def main():
     if not entries:
         parser.error("supply mesh paths or --manifest")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    all_tags = sorted({tag for path, _ in entries for tag in read_mesh(path)[3]})
+    loaded = {path: read_mesh(path) for path in dict(entries)}
+    all_tags = sorted({tag for mesh in loaded.values() for tag in mesh[3]})
     palette = plt.get_cmap("tab10")
     colors = {tag: palette(i % 10) for i, tag in enumerate(all_tags)}
     colors["untagged"] = "#27384a"
     for path, title in entries:
         fig, ax = plt.subplots(figsize=(5, 4), layout="constrained")
-        used = draw(ax, path, title, colors)
+        used = draw(ax, loaded[path], title, colors)
         ax.legend(handles=[Line2D([0], [0], color=colors[tag], label=tag, linewidth=2)
                            for tag in sorted(used)], fontsize=7, loc="best")
         fig.savefig(args.output_dir / (path.stem + ".png"), dpi=160)
@@ -118,7 +119,7 @@ def main():
     fig, axes = plt.subplots(rows, args.columns, figsize=(4 * args.columns, 3.4 * rows),
                              squeeze=False)
     for ax, (path, title) in zip(axes.flat, entries):
-        draw(ax, path, title, colors)
+        draw(ax, loaded[path], title, colors)
     for ax in list(axes.flat)[len(entries):]:
         ax.set_visible(False)
     fig.suptitle("P1 mesh showcase · boundary colors identify regions", fontsize=16,
