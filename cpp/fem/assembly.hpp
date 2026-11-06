@@ -8,9 +8,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <map>
 #include <memory>
+#include <new>
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -93,6 +95,7 @@ struct PreparedEdge {
   double length, normal_x, normal_y;
   std::array<Evaluator, 4> evaluators;
   std::array<Evaluator, 3> prescribed;
+  std::array<std::exception_ptr, 3> prescribed_errors;
   bool dirichlet, constant;
   std::array<bool, 3> variable;
   LocalBlock block;
@@ -273,7 +276,8 @@ public:
           normal_y,
           {Evaluator(alpha), Evaluator(gamma), Evaluator(value),
            Evaluator(beta)},
-          {Evaluator(g), Evaluator(diff(g, t)), Evaluator(diff(diff(g, t), t))},
+          {Evaluator(g), Evaluator(0), Evaluator(0)},
+          {},
           dirichlet,
           !time_dependent(alpha) && !time_dependent(gamma) &&
               !time_dependent(value) && !time_dependent(beta),
@@ -281,6 +285,23 @@ public:
            time_dependent(gamma) || time_dependent(beta),
            time_dependent(value) || time_dependent(beta)},
           {}};
+      // Prepare supported derivatives serially, but preserve the value-only
+      // API when the symbolic library cannot evaluate an unused derivative.
+      // Re-throw only if that derivative is actually requested. Workers never
+      // construct/copy symbolic expressions or mutate a lazy cache.
+      if (e.dirichlet)
+        for (int order = 1; order < 3; ++order) {
+          try {
+            Expr derivative = g;
+            for (int k = 0; k < order; ++k)
+              derivative = diff(derivative, t);
+            e.prescribed[order] = Evaluator(derivative);
+          } catch (const std::bad_alloc &) {
+            throw;
+          } catch (...) {
+            e.prescribed_errors[order] = std::current_exception();
+          }
+        }
       if (!e.dirichlet)
         e.block = edge_block(e, 0, 0, true).block;
       edges.push_back(std::move(e));
@@ -359,6 +380,8 @@ public:
       }
     }
     if (e.dirichlet) {
+      if (e.prescribed_errors[order])
+        std::rethrow_exception(e.prescribed_errors[order]);
       for (int k = 0; k < 2; ++k)
         result.values[k] = e.prescribed[order](at(k));
       for (const auto &q : edge_rule)
