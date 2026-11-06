@@ -46,6 +46,10 @@ void write_timings(std::ostream& out,const Case& c) {
      <<",\"retained_frames\":"<<c.evolution.frames.size()
      <<",\"retained_reports\":"<<c.evolution.reports.size()
      <<",\"time_steps\":"<<e.time_steps
+     <<",\"solver_preparations\":"<<s.preparations
+     <<",\"rank_checks\":"<<s.rank_checks
+     <<",\"factorizations\":"<<s.factorizations
+     <<",\"solver_reuses\":"<<e.solver_reuses
      <<",\"assembly_calls\":"<<e.assembly_calls
      <<",\"linear_solves\":"<<e.linear_solves<<'}';
 }
@@ -56,6 +60,12 @@ int main(int argc,char** argv) {
     const std::filesystem::path destination=argc>1?argv[1]:"build/long-waves.json";
     const int divisions=argc>2?std::stoi(argv[2]):20;
     const double step=argc>3?std::stod(argv[3]):.05;
+    const int threads=argc>4?std::stoi(argv[4]):1;
+    if(argc>5||threads<1)throw std::invalid_argument("Usage: fem_long_waves [output.json [subdivisions [step [threads>=1]]]]");
+    pde2d::ExecutionOptions execution;
+    execution.threads=threads;
+    if(threads>1)execution.backend=pde2d::ExecutionBackend::OpenMP;
+    pde2d::validate_execution(execution);
     constexpr double length=10, end=100;
     if(destination.has_parent_path())std::filesystem::create_directories(destination.parent_path());
     auto phase=Clock::now();
@@ -91,7 +101,8 @@ int main(int argc,char** argv) {
       // Constant matrices for energy and a spatial load for source-work checks.
       auto diagnostic_problem=c.problem;
       diagnostic_problem.equation.source=c.exact?Expr(0):source_space;
-      const auto system=assemble(mesh,diagnostic_problem,0,AssemblyOptions{6});
+      AssemblyOptions diagnostic_options{6};diagnostic_options.execution=execution;
+      const auto system=assemble(mesh,diagnostic_problem,0,diagnostic_options);
       const Vector ones=Vector::Ones(mesh.nodes.size());
       const Vector weights=system.second_mass*ones;
       const double area=weights.sum();
@@ -100,6 +111,7 @@ int main(int argc,char** argv) {
       c.setup_seconds=timing_detail::seconds(phase);
       TimeOptions time;time.method=TimeMethod::Newmark;time.end=end;time.step=step;
       time.assembly.quadrature_degree=6;time.frame_stride=5;
+      time.assembly.execution=execution;
       double cumulative_work=0,initial_energy=0,initial_mean=0,max_energy=0,previous_time=0;
       Vector previous_values;
       time.observer=[&](const Frame& f){
@@ -116,7 +128,7 @@ int main(int argc,char** argv) {
         max_energy=std::max(max_energy,energy);
         if(c.observed_frames%time.frame_stride==0 || f.time==end){
           c.energy.push_back(energy);c.mean.push_back(mean);c.work.push_back(cumulative_work);
-          if(errors){const auto error=errors->evaluate(f.values,f.time);c.l2.push_back(error.l2);c.h1.push_back(error.h1_seminorm);}
+          if(errors){const auto error=errors->evaluate(f.values,f.time,execution);c.l2.push_back(error.l2);c.h1.push_back(error.h1_seminorm);}
         }
         if(!c.exact)previous_values=f.values;
         previous_time=f.time;++c.observed_frames;
@@ -144,6 +156,7 @@ int main(int argc,char** argv) {
     phase=Clock::now();
     std::ofstream out(destination);if(!out)throw std::runtime_error("Cannot open wave output");
     out<<std::setprecision(17)<<'{';write_mesh(out,mesh);
+    out<<",\"execution_backend\":\""<<(threads==1?"serial":"openmp")<<"\",\"execution_threads\":"<<threads;
     out<<",\"previewTime\":20,\"time_step\":"<<step<<",\"simulated_seconds\":100,\"mesh_seconds\":"<<mesh_seconds<<",\"convergence\":[],\"examples\":[";
     for(std::size_t i=0;i<cases.size();++i) {
       if(i)out<<',';
@@ -177,6 +190,7 @@ int main(int argc,char** argv) {
     auto profile_path=destination;profile_path.replace_extension("timings.json");
     std::ofstream profile(profile_path);if(!profile)throw std::runtime_error("Cannot open timing output");
     profile<<std::setprecision(17)<<"{\"clock\":\"steady_clock wall seconds\",\"nodes\":"<<mesh.nodes.size()<<",\"triangles\":"<<mesh.elements.size()
+      <<",\"execution_backend\":\""<<(threads==1?"serial":"openmp")<<"\",\"execution_threads\":"<<threads
       <<",\"side_length\":10,\"simulated_seconds\":100,\"time_step\":"<<step<<",\"saved_frame_stride\":5,\"mesh_seconds\":"<<mesh_seconds
       <<",\"data_export_seconds\":"<<export_seconds<<",\"execution_seconds\":"<<timing_detail::seconds(started)<<",\"cases\":[";
     for(std::size_t i=0;i<cases.size();++i){if(i)profile<<',';profile<<"{\"name\":";quote(profile,cases[i].name);profile<<",\"timings\":";write_timings(profile,cases[i]);profile<<",\"max_energy_work_defect\":"<<cases[i].max_balance_error<<",\"mean_drift\":"<<cases[i].mean_drift<<'}';}

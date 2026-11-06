@@ -19,12 +19,12 @@ They include energy/work checks and a recorded execution-time breakdown.
 
 Prerequisites: C++23 compiler, CMake 3.20+, Boost headers, Eigen3 development
 headers, and Node.js for packaging the standalone gallery. SymEngine is a
-compiled dependency. CMake uses an installed SymEngine when available; otherwise
-it downloads the hash-verified v0.14.0 release and builds it with Boost integers.
-The first configure needs network access in the latter case.
+compiled dependency. Enable FEM explicitly; geometry-only builds need neither
+Eigen nor SymEngine. Downloading hash-verified SymEngine v0.14.0 is opt-in.
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPDE2D_BUILD_FEM=ON \
+  -DPDE2D_FETCH_SYMENGINE=ON
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ./build/fem_showcase build/fem-showcase.json
@@ -209,8 +209,8 @@ auto motion=evolve(generated.mesh,problem,sin(pi*x)*sin(pi*y),Expr(0),time);
 
 Backward Euler and Crank–Nicolson handle first-order evolution. Newmark uses
 average acceleration (`beta=1/4`, `gamma=1/2`) and supports both `m2*u_tt` and
-`m1*u_t` simultaneously, including dynamic boundary contributions. Data are
-reassembled at each required time; no constant-coefficient assumption is made.
+`m1*u_t` simultaneously, including dynamic boundary contributions. Time-dependent
+data are reevaluated at each required time; constant contributions are prepared once.
 A shorter final step reaches the requested end time.
 
 Initial displacement must agree with strong Dirichlet data. Wave evolution also
@@ -223,6 +223,34 @@ reports failure instead of choosing a normalization silently. Add an appropriate
 Dirichlet condition or a coercive reaction/Robin term; automatic mean-zero gauges
 are not implemented. Ordinary Galerkin P1 has no transport stabilization, and the
 API does not certify ellipticity, well-posedness, or stability for arbitrary
-coefficient choices. Time stepping currently repeats mesh validation, symbolic
-preparation, and sparse factorization; caching and factor reuse remain future
-performance work.
+coefficient choices.
+
+`PreparedAssembly(mesh,problem,options)` owns an immutable snapshot with geometry,
+evaluators and constant local contributions prepared once. Its `assemble(time)`
+reevaluates time-dependent data. `PreparedLinearSolver` reuses rank checking and
+factorization while the actual constrained matrix and solver options are equal;
+changing either forces preparation. `evolve` uses both automatically.
+
+## Optional parallel execution and verification
+
+Configure with `-DPDE2D_ENABLE_OPENMP=ON`, then select a policy explicitly:
+
+```cpp
+time.assembly.execution.backend=pde2d::ExecutionBackend::OpenMP;
+time.assembly.execution.threads=4;
+```
+
+The default remains serial in either build. Element and boundary numerical work,
+initial fields and prepared error diagnostics can run in parallel. Symbolic
+preparation, ordered sparse reduction and mesh topology mutation remain serial.
+Workers own separate outputs; deterministic reduction preserves serial results.
+Requesting OpenMP in a serial-only build throws an explicit error.
+
+`time.frame_stride` bounds retained frames (initial and final always included),
+`store_reports=false` avoids retaining per-step reports, and `observer` receives
+every accepted state synchronously. Borrowed observer data last only for the
+callback. Defaults preserve every frame and report.
+
+See [the independent verification guide](../performance/verification-build-2026-11-06.md)
+for isolated scikit-fem/SciPy comparisons, analytical convergence checks and
+serial/2/4-worker tests.

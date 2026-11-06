@@ -84,21 +84,31 @@ These are measurements of a single run, not a controlled hardware benchmark.
 `Evolution::timings` aggregates every assembly and solve, including the initial
 acceleration solve, and records call counts. `reports` still contains only
 per-time-step solve reports. Durations use `std::chrono::steady_clock`.
-The current baseline reassembles, rechecks rank, and refactorizes at every
-step, even for constant matrices; the profile includes that cost.
+Prepared assembly reuses geometry, evaluators and constant contributions.
+These constant-matrix wave runs need two solver preparations: the initial mass
+solve and the Newmark effective system. The other 1,999 solves reuse the latter
+factorization. The profile records preparation/reuse counts explicitly.
+Diagnostics run inside the full-step observer, so their time is included in the
+integration total. `integration_excluding_observer_seconds` subtracts the timed
+diagnostics for comparison with the earlier postprocessing-based profile saved
+in `docs/performance/baseline-long-waves-695d785.json`.
 
 ## Reproduce
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPDE2D_BUILD_FEM=ON \
+  -DSymEngine_DIR=/path/to/lib/cmake/symengine
 cmake --build build --target fem_long_waves -j2
 ./build/fem_long_waves build/long-waves.json
 node tools/render_solutions.mjs build/long-waves.json docs/fem/long-waves.html
 cp build/long-waves.timings.json docs/fem/long-waves-timings.json
 ```
 
-Optional numerical arguments are grid subdivisions and time step:
-`./build/fem_long_waves build/long-waves.json 20 0.05`.
+Optional numerical arguments are grid subdivisions, time step and thread count:
+`./build/fem_long_waves build/long-waves.json 20 0.05 1`.
+To request two or four workers, configure `-DPDE2D_ENABLE_OPENMP=ON` and replace
+the final argument. Serial is the default; parallel work is optional and can
+cost more on small meshes. Each profile records the selected policy.
 The full gallery keeps all 401 saved frames per example at full output
 precision. `--compact` on the renderer creates the lighter inline version,
 which samples at most 101 frames per example and quantizes plotted values to
