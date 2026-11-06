@@ -87,16 +87,18 @@ m=base();m.nodes[1]=[1e308,0];assert.throws(()=>analyse(m),/numeric scale/);
 console.log('P1 export, malformed input, quality values, and defect diagnostics passed');
 
 function boot(input) {
-  const listeners={},elements={},strokes=[];
+  const listeners={},elements={},strokes=[],queue=[];let clears=0,resizeCallback,width=800,height=600;const coordinates=[];
+  const flush=()=>{const work=queue.splice(0);work.forEach(f=>f());};
   for(const id of ['canvas','dropzone','error','filename','mesh-title','overview','inspector','diagnostics','settings','report','regions','scale','fit','open','file','wire','boundary','nodes','triangles'])
-    elements[id]={checked:['wire','boundary'].includes(id),hidden:false,innerHTML:'',textContent:'',classList:{add(){},remove(){}},addEventListener(name,fn){listeners[id+':'+name]=fn;},getBoundingClientRect(){return {width:800,height:600}}};
+    elements[id]={checked:['wire','boundary'].includes(id),hidden:false,innerHTML:'',textContent:'',classList:{add(){},remove(){}},addEventListener(name,fn){listeners[id+':'+name]=fn;},getBoundingClientRect(){return {width,height}}};
   elements.canvas.setPointerCapture=()=>{};
-  elements.canvas.getContext=()=>({setTransform(){},clearRect(){},beginPath(){},lineTo(){},moveTo(){},closePath(){},fill(){},stroke(){strokes.push(this.strokeStyle);},arc(){},fillText(){}});
-  const context={window:{devicePixelRatio:1,exampleMesh:input},document:{getElementById:id=>elements[id]},ResizeObserver:class{observe(){}}};
+  elements.canvas.getContext=()=>({setTransform(){},clearRect(){clears++},beginPath(){},lineTo(){},moveTo(x,y){coordinates.push([x,y]);},closePath(){},fill(){},stroke(){strokes.push(this.strokeStyle);},arc(){},fillText(){}});
+  const context={requestAnimationFrame:f=>queue.push(f),window:{devicePixelRatio:1,exampleMesh:input},document:{getElementById:id=>elements[id]},ResizeObserver:class{constructor(f){resizeCallback=f}observe(){}}};
   vm.createContext(context);
   for(const file of ['mesh.js','app.js'])vm.runInContext(fs.readFileSync(path.join(here,file),'utf8'),context);
+  flush();
   const event=(type,x=400,y=300)=>listeners['canvas:'+type]({pointerId:1,offsetX:x,offsetY:y});
-  return {listeners,elements,event,strokes};
+  return {listeners,elements,event,strokes,flush,get clears(){return clears},coordinates,resize(w,h){width=w;height=h;resizeCallback();flush();}};
 }
 const embeddedContext={window:{}};vm.createContext(embeddedContext);
 vm.runInContext(fs.readFileSync(path.join(examples,'example_mesh.js'),'utf8'),embeddedContext);
@@ -127,11 +129,13 @@ ui=boot(embeddedContext.window.exampleMesh);
 assert.match(ui.elements.regions.innerHTML,/bottom/);
 assert.equal(ui.elements.error.hidden,true);assert.equal(ui.elements['mesh-title'].textContent,'P1 triangular mesh');assert.match(ui.elements.filename.textContent,/P1/);
 ui.event('pointerdown');ui.event('pointerup');assert.match(ui.elements.inspector.innerHTML,/Triangle \d+/);
-const selected=ui.elements.inspector.innerHTML;
-ui.event('pointerdown');for(let x=401;x<=410;x++)ui.event('pointermove',x,300);ui.event('pointerup',410,300);assert.equal(ui.elements.inspector.innerHTML,selected);
+const selected=ui.elements.inspector.innerHTML;const beforePan=JSON.stringify(ui.coordinates.at(-1));const beforeDraw=ui.clears;
+ui.event('pointerdown');for(let x=401;x<=410;x++)ui.event('pointermove',x,300);ui.event('pointerup',410,300);assert.equal(ui.clears,beforeDraw);ui.flush();assert.equal(ui.clears,beforeDraw+1);assert.notEqual(JSON.stringify(ui.coordinates.at(-1)),beforePan);assert.equal(ui.elements.inspector.innerHTML,selected);
 ui.event('pointerdown');ui.event('pointercancel');const scale=ui.elements.scale.textContent;ui.event('pointermove',600,300);assert.equal(ui.elements.scale.textContent,scale);
-ui.listeners['canvas:wheel']({offsetX:400,offsetY:300,deltaY:-100,preventDefault(){}});assert.notEqual(ui.elements.scale.textContent,scale);
-ui.elements.nodes.checked=true;ui.listeners['nodes:change']();
+ui.listeners['canvas:wheel']({offsetX:400,offsetY:300,deltaY:-100,preventDefault(){}});ui.flush();assert.notEqual(ui.elements.scale.textContent,scale);
+const draws=ui.clears;
+ui.elements.nodes.checked=true;ui.listeners['nodes:change']();ui.listeners['nodes:change']();ui.listeners['nodes:change']();assert.equal(ui.clears,draws);ui.flush();assert.equal(ui.clears,draws+1);
+ui.resize(1000,700);assert.equal(ui.elements.canvas.width,1000);assert.equal(ui.elements.canvas.height,700);assert.equal(ui.elements.inspector.innerHTML,selected);ui.elements.fit.onclick();ui.flush();
 ui=boot('PDE2D_MESH 1 ORDER 1 NODES 3 0 0 1 0 2 0 ELEMENTS 1 3 0 1 2 BOUNDARY_EDGES 3 0 1 1 2 2 0');
 ui.event('pointerdown');ui.event('pointerup');assert.match(ui.elements.inspector.innerHTML,/degenerate/);
 console.log('P1 startup, selection, slow pan, pointer cancellation, zoom, node redraw, and collapsed selection passed');

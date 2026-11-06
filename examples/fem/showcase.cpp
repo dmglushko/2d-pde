@@ -38,7 +38,7 @@ int main(int argc,char** argv) {
     if(destination.has_parent_path())std::filesystem::create_directories(destination.parent_path());
     std::ofstream out(destination);
     if(!out)throw std::runtime_error("Cannot open showcase output");
-    out<<std::setprecision(10);
+    out<<std::setprecision(17);
     const double pi=std::numbers::pi;
     const Expr shape=sin(pi*x)*sin(pi*y);
     std::vector<Example> examples;
@@ -151,19 +151,21 @@ int main(int argc,char** argv) {
         quote(out,key);out<<':';quote(out,value);out<<',';
       }
       out<<"\"residual\":"<<residual<<",\"frames\":[";
+      const PreparedErrorNorms errors(mesh,ex.exact);
+      const auto& evaluator=errors.exact_evaluator();
       for(std::size_t k=0;k<frames.size();++k) {
         if(k)out<<',';
         const auto& frame=frames[k];
-        const auto error=error_norms(mesh,frame.values,ex.exact,frame.time);
+        const auto error=errors.evaluate(frame.values,frame.time);
         out<<"{\"time\":"<<frame.time<<",\"l2\":"<<error.l2<<",\"h1\":"<<error.h1_seminorm<<",\"values\":";
         write_vector(out,frame.values);
-        Vector truth(mesh.nodes.size());Evaluator evaluator(ex.exact);
+        Vector truth(mesh.nodes.size());
         for(std::size_t i=0;i<mesh.nodes.size();++i)truth[i]=evaluator({mesh.nodes[i].x,mesh.nodes[i].y,frame.time});
         out<<",\"exact\":";write_vector(out,truth);out<<'}';
       }
       out<<"]}";
       std::cout<<ex.name<<": "<<frames.size()<<" frames, final L2 error "
-               <<error_norms(mesh,frames.back().values,ex.exact,frames.back().time).l2<<'\n';
+               <<errors.evaluate(frames.back().values,frames.back().time).l2<<'\n';
     }
     out<<"],\"convergence\":[";
     for(int i=0;i<3;++i) {

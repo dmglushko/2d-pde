@@ -21,6 +21,7 @@ struct Case {
   std::optional<Expr> exact;
   Evolution evolution;
   double setup_seconds=0,diagnostics_seconds=0;
+  std::size_t observed_frames=0;
   double max_balance_error=0,mean_drift=0;
   std::vector<double> energy,mean,work,l2,h1;
 };
@@ -39,6 +40,12 @@ void write_timings(std::ostream& out,const Case& c) {
      <<",\"residual_seconds\":"<<s.residual_seconds
      <<",\"evolution_other_seconds\":"<<e.other_seconds
      <<",\"diagnostics_seconds\":"<<c.diagnostics_seconds
+     <<",\"observer_included_in_integration\":true"
+     <<",\"integration_excluding_observer_seconds\":"<<std::max(0.,e.total_seconds-c.diagnostics_seconds)
+     <<",\"observed_frames\":"<<c.observed_frames
+     <<",\"retained_frames\":"<<c.evolution.frames.size()
+     <<",\"retained_reports\":"<<c.evolution.reports.size()
+     <<",\"time_steps\":"<<e.time_steps
      <<",\"assembly_calls\":"<<e.assembly_calls
      <<",\"linear_solves\":"<<e.linear_solves<<'}';
 }
@@ -88,38 +95,43 @@ int main(int argc,char** argv) {
       const Vector ones=Vector::Ones(mesh.nodes.size());
       const Vector weights=system.second_mass*ones;
       const double area=weights.sum();
+      std::optional<PreparedErrorNorms> errors;
+      if(c.exact)errors.emplace(mesh,*c.exact);
       c.setup_seconds=timing_detail::seconds(phase);
       TimeOptions time;time.method=TimeMethod::Newmark;time.end=end;time.step=step;
-      time.assembly.quadrature_degree=6;
+      time.assembly.quadrature_degree=6;time.frame_stride=5;
+      double cumulative_work=0,initial_energy=0,initial_mean=0,max_energy=0,previous_time=0;
+      Vector previous_values;
+      time.observer=[&](const Frame& f){
+        const auto diagnostic_started=Clock::now();
+        const double energy=.5*(f.velocity.dot(system.second_mass*f.velocity)+f.values.dot(system.stiffness*f.values));
+        const double mean=weights.dot(f.values)/area;
+        if(c.observed_frames==0){initial_energy=energy;initial_mean=mean;}
+        else if(!c.exact){
+          const double forcing=.5*(drive_value({0,0,previous_time})+drive_value({0,0,f.time}));
+          cumulative_work+=(f.values-previous_values).dot(system.load)*forcing;
+        }
+        c.max_balance_error=std::max(c.max_balance_error,std::abs(energy-initial_energy-cumulative_work));
+        c.mean_drift=std::max(c.mean_drift,std::abs(mean-initial_mean));
+        max_energy=std::max(max_energy,energy);
+        if(c.observed_frames%time.frame_stride==0 || f.time==end){
+          c.energy.push_back(energy);c.mean.push_back(mean);c.work.push_back(cumulative_work);
+          if(errors){const auto error=errors->evaluate(f.values,f.time);c.l2.push_back(error.l2);c.h1.push_back(error.h1_seminorm);}
+        }
+        if(!c.exact)previous_values=f.values;
+        previous_time=f.time;++c.observed_frames;
+        c.diagnostics_seconds+=timing_detail::seconds(diagnostic_started);
+      };
       std::cout<<"Running "<<c.name<<" on "<<mesh.nodes.size()<<" nodes, dt="<<step<<" s"<<std::endl;
       c.evolution=evolve(mesh,c.problem,c.initial,0,time);
-      phase=Clock::now();
-      double cumulative_work=0;
       const auto& frames=c.evolution.frames;
-      for(std::size_t k=0;k<frames.size();++k) {
-        const auto& f=frames[k];
-        const double energy=.5*(f.velocity.dot(system.second_mass*f.velocity)+f.values.dot(system.stiffness*f.values));
-        c.energy.push_back(energy);c.mean.push_back(weights.dot(f.values)/area);
-        if(k && !c.exact) {
-          const auto& previous=frames[k-1];
-          const double forcing=.5*(drive_value({0,0,previous.time})+drive_value({0,0,f.time}));
-          cumulative_work+=(f.values-previous.values).dot(system.load)*forcing;
-        }
-        c.work.push_back(cumulative_work);
-        c.max_balance_error=std::max(c.max_balance_error,std::abs(energy-c.energy.front()-cumulative_work));
-        c.mean_drift=std::max(c.mean_drift,std::abs(c.mean.back()-c.mean.front()));
-        if(k%5==0 || k+1==frames.size()) {
-          if(c.exact){const auto error=error_norms(mesh,f.values,*c.exact,f.time);c.l2.push_back(error.l2);c.h1.push_back(error.h1_seminorm);}
-        }
-      }
-      c.diagnostics_seconds=timing_detail::seconds(phase);
-      const double energy_scale=std::max(1.,*std::max_element(c.energy.begin(),c.energy.end()));
+      const double energy_scale=std::max(1.,max_energy);
       if(c.max_balance_error/energy_scale>1e-8)throw std::runtime_error("Discrete energy/work balance check failed");
       if(c.exact && c.mean_drift>1e-9)throw std::runtime_error("Source-free Neumann mean conservation failed");
       if(frames.back().time!=end)throw std::runtime_error("Simulation did not reach 100 seconds");
-      if(frames.size()!=static_cast<std::size_t>(std::ceil(end/step))+1)
+      if(c.observed_frames!=c.evolution.timings.time_steps+1 || frames.size()!=c.energy.size() || frames.front().time!=0)
         throw std::runtime_error("Unexpected number of simulation time steps");
-      std::cout<<"  "<<frames.size()-1<<" steps in "<<c.evolution.timings.total_seconds
+      std::cout<<"  "<<c.evolution.timings.time_steps<<" steps in "<<c.evolution.timings.total_seconds
                <<" wall seconds; max energy/work defect "<<c.max_balance_error
                <<"; mean drift "<<c.mean_drift<<std::endl;
       std::cout<<"  assembly "<<c.evolution.timings.assembly_seconds
@@ -131,7 +143,7 @@ int main(int argc,char** argv) {
     }
     phase=Clock::now();
     std::ofstream out(destination);if(!out)throw std::runtime_error("Cannot open wave output");
-    out<<std::setprecision(10)<<'{';write_mesh(out,mesh);
+    out<<std::setprecision(17)<<'{';write_mesh(out,mesh);
     out<<",\"previewTime\":20,\"time_step\":"<<step<<",\"simulated_seconds\":100,\"mesh_seconds\":"<<mesh_seconds<<",\"convergence\":[],\"examples\":[";
     for(std::size_t i=0;i<cases.size();++i) {
       if(i)out<<',';
@@ -142,9 +154,9 @@ int main(int argc,char** argv) {
       }
       double residual=0;for(const auto& r:c.evolution.reports)residual=std::max(residual,r.relative_residual);
       out<<"\"residual\":"<<residual<<",\"timings\":";write_timings(out,c);out<<",\"frames\":[";
+      std::optional<Evaluator> evaluator;if(c.exact)evaluator.emplace(*c.exact);
       bool first=true;std::size_t saved=0;
       for(std::size_t k=0;k<c.evolution.frames.size();++k) {
-        if(k%5!=0 && k+1!=c.evolution.frames.size())continue;
         if(!first)out<<',';
         first=false;
         const auto& frame=c.evolution.frames[k];
@@ -152,8 +164,8 @@ int main(int argc,char** argv) {
         write_vector(out,frame.values);
         if(c.exact) {
           out<<",\"l2\":"<<c.l2[saved]<<",\"h1\":"<<c.h1[saved]<<",\"exact\":";
-          Vector truth(mesh.nodes.size());Evaluator evaluator(*c.exact);
-          for(std::size_t n=0;n<mesh.nodes.size();++n)truth[n]=evaluator({mesh.nodes[n].x,mesh.nodes[n].y,frame.time});
+          Vector truth(mesh.nodes.size());
+          for(std::size_t n=0;n<mesh.nodes.size();++n)truth[n]=(*evaluator)({mesh.nodes[n].x,mesh.nodes[n].y,frame.time});
           write_vector(out,truth);
         }
         out<<'}';++saved;
@@ -164,7 +176,7 @@ int main(int argc,char** argv) {
     const double export_seconds=timing_detail::seconds(phase);
     auto profile_path=destination;profile_path.replace_extension("timings.json");
     std::ofstream profile(profile_path);if(!profile)throw std::runtime_error("Cannot open timing output");
-    profile<<std::setprecision(10)<<"{\"clock\":\"steady_clock wall seconds\",\"nodes\":"<<mesh.nodes.size()<<",\"triangles\":"<<mesh.elements.size()
+    profile<<std::setprecision(17)<<"{\"clock\":\"steady_clock wall seconds\",\"nodes\":"<<mesh.nodes.size()<<",\"triangles\":"<<mesh.elements.size()
       <<",\"side_length\":10,\"simulated_seconds\":100,\"time_step\":"<<step<<",\"saved_frame_stride\":5,\"mesh_seconds\":"<<mesh_seconds
       <<",\"data_export_seconds\":"<<export_seconds<<",\"execution_seconds\":"<<timing_detail::seconds(started)<<",\"cases\":[";
     for(std::size_t i=0;i<cases.size();++i){if(i)profile<<',';profile<<"{\"name\":";quote(profile,cases[i].name);profile<<",\"timings\":";write_timings(profile,cases[i]);profile<<",\"max_energy_work_defect\":"<<cases[i].max_balance_error<<",\"mean_drift\":"<<cases[i].mean_drift<<'}';}
