@@ -125,6 +125,17 @@ discretize_boundary(const CurveGeometry &geometry,
   }
   // Remove representation-only junctions when the combined chord still meets
   // both requested bounds. Each chord retains all source intervals it spans.
+  struct IntervalData { double length, second; Point2 begin, end; };
+  std::vector<std::vector<IntervalData>> intervalData;
+  intervalData.reserve(ctx.edge_sources.size());
+  for(const auto& spans:ctx.edge_sources) {
+    auto& data=intervalData.emplace_back();
+    for(const auto& span:spans) {
+      auto piece=subcurve(ctx.curves[span.curve].segment,span.begin,span.end);
+      auto bounds=curve_bounds(piece);
+      data.push_back({bounds.first,bounds.second,curvePoint(piece,0),curvePoint(piece,1)});
+    }
+  }
   bool changed = true;
   while (changed && b.points.size() > 3) {
     changed = false;
@@ -135,27 +146,23 @@ discretize_boundary(const CurveGeometry &geometry,
       auto a = b.points[p], end = b.points[z];
       if (distance(a, end) == 0)
         continue;
-      auto spans = ctx.edge_sources[p];
-      spans.insert(spans.end(), ctx.edge_sources[i].begin(),
-                   ctx.edge_sources[i].end());
       double length = 0, error = 0;
-      for (auto span : spans) {
-        auto piece =
-            subcurve(ctx.curves[span.curve].segment, span.begin, span.end);
-        auto bounds = curve_bounds(piece);
-        length += bounds.first;
-        error = std::max(
-            error,
-            bounds.second / 8 +
-                std::max(point_segment_distance(curvePoint(piece, 0), a, end),
-                         point_segment_distance(curvePoint(piece, 1), a, end)));
+      for(auto edge : {p,i}) for(const auto& data : intervalData[edge]) {
+        length+=data.length;
+        error=std::max(error,data.second/8 +
+            std::max(point_segment_distance(data.begin,a,end),
+                     point_segment_distance(data.end,a,end)));
       }
       if ((options.max_edge_length > 0 &&
            length > options.max_edge_length * (1 + 1e-12)) ||
           (options.max_curve_deviation > 0 &&
            error > options.max_curve_deviation))
         continue;
-      ctx.edge_sources[p] = std::move(spans);
+      auto& spans=ctx.edge_sources[p];
+      spans.insert(spans.end(),ctx.edge_sources[i].begin(),ctx.edge_sources[i].end());
+      auto& data=intervalData[p];
+      data.insert(data.end(),intervalData[i].begin(),intervalData[i].end());
+      intervalData.erase(intervalData.begin()+i);
       b.points.erase(b.points.begin() + i);
       ctx.edge_sources.erase(ctx.edge_sources.begin() + i);
       protected_flags.erase(protected_flags.begin() + i);

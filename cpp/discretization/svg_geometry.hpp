@@ -1,5 +1,6 @@
 #pragma once
 #include "curve_geometry.hpp"
+#include "mesh_validation.hpp"
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <cctype>
@@ -88,7 +89,47 @@ inline CurveGeometry importSvg(const std::string& filename,SvgOptions options={}
   else throw std::invalid_argument("Unsupported SVG element");
  }
  if(regions.empty()) throw std::invalid_argument("SVG has no paths");
- for(std::size_t i=1;i<regions.size();++i) { Point2 end=curvePoint(regions[i-1].segments.back(),1); std::size_t match=regions.size(); bool flip=false; for(std::size_t j=i;j<regions.size();++j) { bool a=near(end,curvePoint(regions[j].segments.front(),0)),b=near(end,curvePoint(regions[j].segments.back(),1)); if(a||b) { if(match!=regions.size()|| (a&&b)) throw std::invalid_argument("Ambiguous SVG boundary"); match=j; flip=b; } } if(match==regions.size()) throw std::invalid_argument("Disconnected SVG boundary"); std::swap(regions[i],regions[match]); if(flip) reverse(regions[i]); }
+ // Index original endpoints; consumed paths are filtered without changing the
+ // first path anchor. Broad-phase hits always use the original near() test.
+ std::vector<mesh_detail::Box> boxes;
+ double endpointScale=1;
+ for(const auto& r:regions) for(auto p:{curvePoint(r.segments.front(),0),curvePoint(r.segments.back(),1)}) {
+   boxes.push_back(mesh_detail::Box::segment(p,p));
+   double norm=std::hypot(p.x,p.y);
+   endpointScale=std::isfinite(norm)?std::max(endpointScale,norm):INFINITY;
+ }
+ std::unique_ptr<mesh_detail::BoxIndex> endpoints;
+ if(std::isfinite(endpointScale)) endpoints=std::make_unique<mesh_detail::BoxIndex>(std::move(boxes));
+ std::vector<bool> consumed(regions.size(),false); consumed[0]=true;
+ std::vector<CurveRegion> ordered; ordered.reserve(regions.size()); ordered.push_back(std::move(regions[0]));
+ for(std::size_t i=1;i<regions.size();++i) {
+   Point2 end=curvePoint(ordered.back().segments.back(),1);
+   std::vector<std::size_t> candidates;
+   if(endpoints && std::isfinite(end.x) && std::isfinite(end.y)) {
+     // Global endpoint norm bounds both operands of near(). Outward rounding
+     // protects contacts exactly at the relative tolerance boundary.
+     double radius=1e-9*std::max(endpointScale,std::hypot(end.x,end.y));
+     auto down=[](double v){return std::nextafter(v,-INFINITY);};
+     auto up=[](double v){return std::nextafter(v,INFINITY);};
+     candidates=endpoints->candidates({down(end.x-radius),up(end.x+radius),down(end.y-radius),up(end.y+radius)});
+   } else {
+     // Nonfinite computed endpoints retain the old exhaustive validation path.
+     for(std::size_t j=0;j<2*regions.size();++j) candidates.push_back(j);
+   }
+   std::size_t match=regions.size(); bool flip=false;
+   for(auto endpoint:candidates) {
+     auto j=endpoint/2; if(consumed[j]) continue;
+     const auto& r=regions[j];
+     Point2 p=endpoint%2?curvePoint(r.segments.back(),1):curvePoint(r.segments.front(),0);
+     if(near(end,p)) {
+       if(match!=regions.size()) throw std::invalid_argument("Ambiguous SVG boundary");
+       match=j; flip=endpoint%2;
+     }
+   }
+   if(match==regions.size()) throw std::invalid_argument("Disconnected SVG boundary");
+   consumed[match]=true; if(flip) reverse(regions[match]); ordered.push_back(std::move(regions[match]));
+ }
+ regions=std::move(ordered);
  if(!near(curvePoint(regions.back().segments.back(),1),curvePoint(regions.front().segments.front(),0))) throw std::invalid_argument("SVG boundary is open");
  double distance=options.mode==SvgScaleMode::Nearest?INFINITY:0;
  if(options.mode!=SvgScaleMode::Factor) for(auto& region:regions) for(auto& segment:region.segments) { std::size_t n=curveIsLinear(segment)?1:options.samples_per_curve; for(std::size_t i=0;i<n;++i) { Point2 a=curvePoint(segment,double(i)/n),b=curvePoint(segment,double(i+1)/n); double dx=b.x-a.x,dy=b.y-a.y,den=dx*dx+dy*dy; double t=den?std::clamp(((origin.x-a.x)*dx+(origin.y-a.y)*dy)/den,0.,1.):0.; double d=options.mode==SvgScaleMode::Nearest?std::hypot(a.x+t*dx-origin.x,a.y+t*dy-origin.y):std::max(std::hypot(a.x-origin.x,a.y-origin.y),std::hypot(b.x-origin.x,b.y-origin.y)); distance=options.mode==SvgScaleMode::Nearest?std::min(distance,d):std::max(distance,d); } }

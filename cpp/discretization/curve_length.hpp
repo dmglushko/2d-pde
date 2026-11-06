@@ -65,8 +65,8 @@ inline double curveParameterAtLengthFraction(const CurveSegment& segment,double 
   double low=0,high=1;
   const bool fromEnd=fraction>.5;
   const double target=fromEnd?1-fraction:fraction;
-  for(int i=0;i<128;++i) {
-    double t=(low+high)/2;
+  double t=fraction;
+  for(int i=0;i<144;++i) {
     if(!(t>low && t<high)) break;
     // Measure the smaller requested portion directly. Subtracting almost
     // equal total/prefix lengths would lose precision near the endpoint.
@@ -74,6 +74,13 @@ inline double curveParameterAtLengthFraction(const CurveSegment& segment,double 
     double roundoff=4*std::numeric_limits<double>::epsilon()*std::abs(t)*(curve_detail::speed(segment,t)/length);
     if(std::abs(ratio-target)<=1e-11*target+roundoff) return t;
     if(fromEnd ? ratio>target : ratio<target) low=t; else high=t;
+    // Newton accelerates regular portions; keep the bracket and periodically
+    // bisect even when a nearly stationary derivative gives a poor proposal.
+    // After 16 attempts retain the original full 128-step bisection budget.
+    double derivative=curve_detail::speed(segment,t)/length;
+    double candidate=t+(fromEnd ? ratio-target : target-ratio)/derivative;
+    t=(i<16 && i%4!=3 && std::isfinite(candidate) && candidate>low && candidate<high)
+      ? candidate : (low+high)/2;
   }
   throw std::runtime_error("Curve length inversion did not converge");
 }
