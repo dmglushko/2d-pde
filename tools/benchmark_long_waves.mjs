@@ -60,7 +60,10 @@ for(let run=1;run<=repetitions;run++)for(const [policy,binary,threads] of polici
   fs.writeFileSync(path.join(destination,'results.json'),JSON.stringify(report,null,2)+'\n');
   console.log(JSON.stringify({run,policy,integration_seconds:profile.cases.map(c=>c.timings.comparable_integration_seconds),diagnostics_seconds:profile.cases.map(c=>c.timings.diagnostics_seconds)}));
 }
-const median=values=>[...values].sort((a,b)=>a-b)[Math.floor(values.length/2)];
+const median=values=>{
+  const sorted=[...values].sort((a,b)=>a-b),middle=Math.floor(sorted.length/2);
+  return sorted.length%2?sorted[middle]:(sorted[middle-1]+sorted[middle])/2;
+};
 report.summary=policies.map(([policy])=>({policy,cases:[0,1].map(i=>{
   const cases=report.runs.filter(r=>r.policy===policy).map(r=>r.profile.cases[i]);
   const keys=['comparable_integration_seconds','assembly_seconds','constraints_seconds','rank_check_seconds','factorization_seconds','linear_solve_seconds','diagnostics_seconds'];

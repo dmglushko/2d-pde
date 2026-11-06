@@ -17,6 +17,10 @@ void rejects(auto f, const std::string &text) {
 }
 int main() {
   using namespace pde2d;
+#ifdef _OPENMP
+  // Observe actual teams rather than inferring concurrency from policy values.
+  omp_set_dynamic(0);
+#endif
   rejects(
       [] { parallel_for(0, {ExecutionBackend::Serial, -1, 0}, [](auto) {}); },
       "nonnegative");
@@ -34,10 +38,19 @@ int main() {
     for (int workers : {1, 2, 4})
       for (std::size_t threshold : {0, 10000}) {
         ExecutionOptions o{backend, workers, threshold};
-        std::vector<int> a(128);
-        parallel_for(a.size(), o, [&](auto i) { a[i] = i * i; });
-        for (std::size_t i = 0; i < a.size(); ++i)
+        std::vector<int> a(128), teams(128,1);
+        parallel_for(a.size(), o, [&](auto i) {
+          a[i] = i * i;
+#ifdef _OPENMP
+          teams[i] = omp_get_num_threads();
+#endif
+        });
+        const int expected_team=backend==ExecutionBackend::OpenMP &&
+            workers>1 && a.size()>=threshold ? workers : 1;
+        for (std::size_t i = 0; i < a.size(); ++i) {
           check(a[i] == int(i * i));
+          check(teams[i] == expected_team);
+        }
         try {
           parallel_for(a.size(), o, [](auto i) {
             if (i == 3 || i == 99)
@@ -49,5 +62,5 @@ int main() {
         }
       }
   }
-  std::cout << "Execution checks passed; OpenMP=" << openmp_available() << '\n';
+  std::cout << "Execution and observed team-size checks passed; OpenMP=" << openmp_available() << '\n';
 }
