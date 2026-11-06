@@ -1,6 +1,8 @@
 #include "fem/quadrature.hpp"
 #include <iostream>
 #include <limits>
+#include <array>
+#include <vector>
 
 namespace {
 void check(bool ok,const char* message) { if (!ok) throw std::runtime_error(message); }
@@ -31,15 +33,27 @@ int main() {
                 triangle_sum+=p.weight;
             }
             near(edge_sum,1); near(triangle_sum,1);
+            // Recurrence caches preserve every degree/monomial check below.
+            std::vector<std::array<long double,65>> ep(edge.size()), xp(triangle.size()), yp(triangle.size());
+            for(std::size_t k=0;k<edge.size();++k) {
+                ep[k][0]=1;
+                for(int i=1;i<=degree;++i) ep[k][i]=ep[k][i-1]*edge[k].coordinate;
+            }
+            for(std::size_t k=0;k<triangle.size();++k) {
+                xp[k][0]=yp[k][0]=1;
+                for(int i=1;i<=degree;++i) {
+                    xp[k][i]=xp[k][i-1]*triangle[k].barycentric[1];
+                    yp[k][i]=yp[k][i-1]*triangle[k].barycentric[2];
+                }
+            }
             for(int i=0;i<=degree;++i) {
                 long double integral=0;
-                for(auto p:edge) integral+=p.weight*std::pow(static_cast<long double>(p.coordinate),i);
+                for(std::size_t k=0;k<edge.size();++k) integral+=edge[k].weight*ep[k][i];
                 near(integral,1.L/(i+1));
                 for(int j=0;j<=degree-i;++j) {
                     integral=0;
-                    for(auto p:triangle)
-                        integral+=p.weight*std::pow(static_cast<long double>(p.barycentric[1]),i)
-                                          *std::pow(static_cast<long double>(p.barycentric[2]),j);
+                    for(std::size_t k=0;k<triangle.size();++k)
+                        integral+=triangle[k].weight*xp[k][i]*yp[k][j];
                     // Normalized reference-triangle integral: 2*i!*j!/(i+j+2)!.
                     const long double exact=2*std::exp(std::lgamma(static_cast<long double>(i+1))+
                         std::lgamma(static_cast<long double>(j+1))-std::lgamma(static_cast<long double>(i+j+3)));
