@@ -1,5 +1,6 @@
 #pragma once
 #include "assembly.hpp"
+#include "timing.hpp"
 #include <Eigen/SparseLU>
 #include <Eigen/SparseQR>
 #include <Eigen/SparseCholesky>
@@ -22,6 +23,7 @@ struct SolverReport {
   double residual_norm=std::numeric_limits<double>::infinity();
   double relative_residual=std::numeric_limits<double>::infinity();
   std::string message;
+  SolverTimings timings;
 };
 struct LinearSolution { Vector values; SolverReport report; };
 namespace solver_detail {
@@ -69,48 +71,69 @@ inline std::pair<SparseMatrix,Vector> constrain(const SparseMatrix& a,const Vect
   return {std::move(result),std::move(rhs)};
 }
 inline LinearSolution solve_linear(const SparseMatrix& input,const Vector& b,const SolverOptions& o={}) {
+  const auto started=timing_detail::Clock::now();
   solver_detail::validate(o);solver_detail::validate(input,b);
   SparseMatrix a=input;a.makeCompressed();
   LinearSolution result{Vector::Zero(b.size()),{}};
   auto& r=result.report;
+  auto finish=[&]() {r.timings.total_seconds=timing_detail::seconds(started);return std::move(result);};
   r.residual_norm=b.stableNorm();
   r.relative_residual=r.residual_norm>0?1.:0.;
+  r.timings.validation_seconds=timing_detail::seconds(started);
   // A rank check also catches compatible singular systems with a zero RHS.
   Eigen::SparseQR<SparseMatrix,Eigen::COLAMDOrdering<int>> rank;
+  auto phase=timing_detail::Clock::now();
   rank.compute(a);
+  r.timings.rank_check_seconds=timing_detail::seconds(phase);
   if(rank.info()!=Eigen::Success||rank.rank()!=a.rows()) {
-    r.message="Singular or numerically rank-deficient linear system";return result;
+    r.message="Singular or numerically rank-deficient linear system";return finish();
   }
   const double bn=b.stableNorm();
   const double target=std::max(o.absolute_tolerance,o.relative_tolerance*bn);
   const double tolerance=bn>0?target/bn:o.relative_tolerance;
   if(o.method==LinearSolver::ConjugateGradient) {
+    phase=timing_detail::Clock::now();
     const SparseMatrix skew=a-SparseMatrix(a.transpose());
     if(skew.norm()>1e-12*a.norm()) {
-      r.message="ConjugateGradient requires a symmetric positive definite matrix";return result;
+      r.timings.factorization_seconds=timing_detail::seconds(phase);
+      r.message="ConjugateGradient requires a symmetric positive definite matrix";return finish();
     }
     Eigen::SimplicialLDLT<SparseMatrix> ldlt;ldlt.compute(a);
     if(ldlt.info()!=Eigen::Success||!ldlt.vectorD().allFinite()||ldlt.vectorD().minCoeff()<=0) {
-      r.message="ConjugateGradient requires a positive definite matrix";return result;
+      r.timings.factorization_seconds=timing_detail::seconds(phase);
+      r.message="ConjugateGradient requires a positive definite matrix";return finish();
     }
     Eigen::ConjugateGradient<SparseMatrix,Eigen::Lower|Eigen::Upper> cg;
     cg.setMaxIterations(o.max_iterations);cg.setTolerance(tolerance);cg.compute(a);
+    r.timings.factorization_seconds=timing_detail::seconds(phase);
+    phase=timing_detail::Clock::now();
     result.values=cg.solve(b);r.iterations=static_cast<int>(cg.iterations());
+    r.timings.solve_seconds=timing_detail::seconds(phase);
   } else if(o.method==LinearSolver::GMRES) {
+    phase=timing_detail::Clock::now();
     Eigen::GMRES<SparseMatrix> gmres;
     gmres.setMaxIterations(o.max_iterations);gmres.set_restart(o.restart);gmres.setTolerance(tolerance);
-    gmres.compute(a);result.values=gmres.solve(b);r.iterations=static_cast<int>(gmres.iterations());
+    gmres.compute(a);r.timings.factorization_seconds=timing_detail::seconds(phase);
+    phase=timing_detail::Clock::now();
+    result.values=gmres.solve(b);r.iterations=static_cast<int>(gmres.iterations());
+    r.timings.solve_seconds=timing_detail::seconds(phase);
   } else {
+    phase=timing_detail::Clock::now();
     Eigen::SparseLU<SparseMatrix> lu;lu.compute(a);
-    if(lu.info()!=Eigen::Success) {r.message="SparseLU factorization failed";return result;}
+    r.timings.factorization_seconds=timing_detail::seconds(phase);
+    if(lu.info()!=Eigen::Success) {r.message="SparseLU factorization failed";return finish();}
+    phase=timing_detail::Clock::now();
     result.values=lu.solve(b);r.iterations=1;
-    if(lu.info()!=Eigen::Success) {r.message="SparseLU solve failed";return result;}
+    r.timings.solve_seconds=timing_detail::seconds(phase);
+    if(lu.info()!=Eigen::Success) {r.message="SparseLU solve failed";return finish();}
   }
+  phase=timing_detail::Clock::now();
   r.residual_norm=(a*result.values-b).stableNorm();
   r.relative_residual=bn>0?r.residual_norm/bn:r.residual_norm;
   r.converged=result.values.allFinite()&&std::isfinite(r.residual_norm)&&r.residual_norm<=target;
   r.message=r.converged?"Converged":"Linear solver did not converge to requested true residual tolerance";
-  return result;
+  r.timings.residual_seconds=timing_detail::seconds(phase);
+  return finish();
 }
 inline LinearSolution solve_stationary(const discretization::TriangleMesh& mesh,const Problem& problem,
     const AssemblyOptions& assembly={},const SolverOptions& solver={}) {

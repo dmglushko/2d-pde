@@ -11,6 +11,10 @@ press **Play**. The gallery includes exact-solution comparisons and a separate
 mesh-refinement experiment. Frames are calculated in C++, not simulated in the
 viewer.
 
+The [100-second wave examples](long-waves.md) use a larger 10-by-10 square:
+a localized source with fixed Dirichlet edges, and a source-free Neumann wave.
+They include energy/work checks and a recorded execution-time breakdown.
+
 ## Build and reproduce
 
 Prerequisites: C++23 compiler, CMake 3.20+, Boost headers, Eigen3 development

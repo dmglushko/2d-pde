@@ -10,7 +10,10 @@ struct TimeOptions {
   SolverOptions solver;
 };
 struct Frame { double time; Vector values; Vector velocity; };
-struct Evolution { std::vector<Frame> frames; std::vector<SolverReport> reports; };
+struct Evolution {
+  std::vector<Frame> frames; std::vector<SolverReport> reports;
+  EvolutionTimings timings;
+};
 namespace evolution_detail {
 inline Vector initial(const discretization::TriangleMesh& mesh,const Expr& field,double time) {
   Evaluator evaluate_field(field);Vector v(mesh.nodes.size());
@@ -28,8 +31,14 @@ inline void compatible(Vector& v,const std::vector<DirichletValue>& data,double 
 }
 inline Vector step(const SparseMatrix& a,const Vector& b,const std::vector<DirichletValue>& data,
     const SolverOptions& options,Evolution& result) {
+  auto phase=timing_detail::Clock::now();
   auto [matrix,rhs]=constrain(a,b,data);
+  result.timings.constraints_seconds+=timing_detail::seconds(phase);
+  phase=timing_detail::Clock::now();
   auto solution=solve_linear(matrix,rhs,options);
+  result.timings.solver_seconds+=timing_detail::seconds(phase);
+  result.timings.solver+=solution.report.timings;
+  ++result.timings.linear_solves;
   if(!solution.report.converged) throw std::runtime_error("Evolution solve: "+solution.report.message);
   result.reports.push_back(solution.report);
   return solution.values;
@@ -46,6 +55,15 @@ inline void check_method(const AssembledSystem& s,TimeMethod method) {
 inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& problem,
     const Expr& initial_value,const Expr& initial_velocity=Expr(0),const TimeOptions& options={}) {
   using namespace evolution_detail;
+  const auto started=timing_detail::Clock::now();
+  Evolution result;
+  auto timed_assembly=[&](double time,int derivative_order=0) {
+    const auto phase=timing_detail::Clock::now();
+    auto system=assembly_detail::assemble_impl(mesh,problem,time,options.assembly,derivative_order);
+    result.timings.assembly_seconds+=timing_detail::seconds(phase);
+    ++result.timings.assembly_calls;
+    return system;
+  };
   if(!std::isfinite(options.start)||!std::isfinite(options.end)||!std::isfinite(options.step)||
       options.step<=0||options.end<options.start||!std::isfinite(options.end-options.start))
     throw std::invalid_argument("Invalid time interval or step");
@@ -54,23 +72,22 @@ inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& 
     default: throw std::invalid_argument("Unsupported time method");
   }
   solver_detail::validate(options.solver);
-  auto old=assemble(mesh,problem,options.start,options.assembly);
+  auto old=timed_assembly(options.start);
   check_method(old,options.method);
   Vector u=initial(mesh,initial_value,options.start);
   Vector v=initial(mesh,initial_velocity,options.start);
   compatible(u,old.dirichlet,options.assembly.boundary_tolerance,"displacement");
-  Evolution result;
   Vector acceleration;
   if(options.method==TimeMethod::Newmark) {
     // Differentiate the prescribed value AFTER boundary reduction. General
     // input may become Dirichlet through cancellation only on a selected edge.
-    auto velocity_data=assembly_detail::assemble_impl(mesh,problem,options.start,options.assembly,1).dirichlet;
-    auto acceleration_data=assembly_detail::assemble_impl(mesh,problem,options.start,options.assembly,2).dirichlet;
+    auto velocity_data=timed_assembly(options.start,1).dirichlet;
+    auto acceleration_data=timed_assembly(options.start,2).dirichlet;
     compatible(v,velocity_data,options.assembly.boundary_tolerance,"velocity");
     // Initialization is a solve, but reports correspond to time steps only.
-    Evolution initialization;
     acceleration=step(old.second_mass,old.load-old.stiffness*u-old.first_mass*v,
-        acceleration_data,options.solver,initialization);
+        acceleration_data,options.solver,result);
+    result.reports.clear(); // Keep initialization in timings, not the per-step reports.
   }
   result.frames.push_back({options.start,u,v});
   double time=options.start;
@@ -89,7 +106,7 @@ inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& 
         ?options.end:candidate;
     const double h=next-time;
     if(!(h>0)||!std::isfinite(h)) throw std::invalid_argument("Time step cannot advance representable time");
-    auto current=assemble(mesh,problem,next,options.assembly);
+    auto current=timed_assembly(next);
     check_method(current,options.method);
     Vector next_u,next_v;
     if(options.method==TimeMethod::Newmark) {
@@ -126,6 +143,9 @@ inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& 
     result.frames.push_back({time,u,v});
     ++step_index;
   }
+  result.timings.total_seconds=timing_detail::seconds(started);
+  result.timings.other_seconds=std::max(0.,result.timings.total_seconds-
+      result.timings.assembly_seconds-result.timings.constraints_seconds-result.timings.solver_seconds);
   return result;
 }
 } // namespace fem

@@ -22,6 +22,8 @@ Implemented:
   evolution, including dynamic Robin boundaries with `u_t`.
 - [Computed static, heat, and wave demonstrations](docs/fem/showcase.html)
   with exact-solution comparisons and refinement checks.
+- [100-second driven Dirichlet and source-free Neumann waves](docs/fem/long-waves.md)
+  on a larger square, with execution profiling and energy/work checks.
 
 ## P1-only design
 

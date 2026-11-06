@@ -24,6 +24,10 @@ void linear() {
   for(auto method:{LinearSolver::SparseLU,LinearSolver::ConjugateGradient,LinearSolver::GMRES}) {
     SolverOptions o;o.method=method;
     auto s=solve_linear(a,b,o);check(s.report.converged,"Linear solve failed");
+    const auto& timing=s.report.timings;
+    check(timing.total_seconds>=0 && timing.rank_check_seconds>=0 &&
+          timing.total_seconds>=timing.rank_check_seconds+timing.factorization_seconds+timing.solve_seconds,
+          "Solver timing phases exceed total");
     near(s.report.residual_norm,(a*s.values-b).norm());
     near(s.report.relative_residual,s.report.residual_norm/b.norm());
   }
@@ -82,6 +86,10 @@ void heat() {
   auto error=[&](TimeMethod method,double h) {
     TimeOptions o;o.method=method;o.end=.1;o.step=h;
     auto e=evolve(mesh,p,initial,0,o);
+    check(e.timings.linear_solves==e.frames.size()-1 &&
+          e.timings.assembly_calls==e.frames.size(),"First-order timing call counts");
+    check(e.timings.total_seconds>=e.timings.assembly_seconds+e.timings.constraints_seconds+e.timings.solver_seconds,
+          "Evolution timing phases exceed total");
     check(e.frames.front().time==0&&e.frames.back().time==o.end,"Endpoint missing");
     return std::abs(e.frames.back().values[4]-std::exp(-lambda*o.end));
   };
