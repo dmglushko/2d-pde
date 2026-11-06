@@ -1,6 +1,6 @@
 #pragma once
 #include "curve_geometry.hpp"
-#include "mesh_validation.hpp"
+#include "spatial_index.hpp"
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <cctype>
