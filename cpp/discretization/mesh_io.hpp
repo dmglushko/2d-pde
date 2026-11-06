@@ -103,7 +103,7 @@ inline void validate_result(const MeshResult &r) {
   } catch (const std::invalid_argument &) {
     throw std::runtime_error("Invalid mesh result options");
   }
-  if (r.report.delaunay_verified && !is_constrained_delaunay(r.mesh))
+  if (r.report.delaunay_verified && !mesh_detail::cdt_verified(r.mesh))
     throw std::runtime_error("Recorded CDT guarantee does not hold");
   if (r.report.size_satisfied && o.refinement.max_edge_length > 0) {
     for (auto t : r.mesh.elements)

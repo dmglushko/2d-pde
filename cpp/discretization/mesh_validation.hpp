@@ -11,6 +11,78 @@ inline Edge edge_key(std::size_t a, std::size_t b) { return std::minmax(a, b); }
 inline double distance(Point2 a, Point2 b) {
   return std::hypot(a.x - b.x, a.y - b.y);
 }
+// Inclusive AABBs are only a broad phase; exact predicates decide all contacts.
+struct Box {
+  double xmin, xmax, ymin, ymax;
+  static Box segment(Point2 a, Point2 b) {
+    return {std::min(a.x, b.x), std::max(a.x, b.x), std::min(a.y, b.y),
+            std::max(a.y, b.y)};
+  }
+  bool overlaps(const Box &b) const {
+    return xmin <= b.xmax && b.xmin <= xmax && ymin <= b.ymax && b.ymin <= ymax;
+  }
+};
+class BoxIndex {
+  struct Node {
+    Box box;
+    std::size_t begin, end, left = 0, right = 0;
+  };
+  std::vector<Box> boxes;
+  std::vector<std::size_t> order;
+  std::vector<Node> tree;
+  std::size_t build(std::size_t begin, std::size_t end) {
+    Box b = boxes[order[begin]];
+    for (auto i = begin + 1; i < end; ++i) {
+      auto q = boxes[order[i]];
+      b = {std::min(b.xmin, q.xmin), std::max(b.xmax, q.xmax),
+           std::min(b.ymin, q.ymin), std::max(b.ymax, q.ymax)};
+    }
+    auto n = tree.size();
+    tree.push_back({b, begin, end});
+    if (end - begin > 8) {
+      bool x = b.xmax - b.xmin >= b.ymax - b.ymin;
+      auto middle = begin + (end - begin) / 2;
+      std::nth_element(order.begin() + begin, order.begin() + middle,
+                       order.begin() + end, [&](auto i, auto j) {
+                         double a = x ? boxes[i].xmin : boxes[i].ymin,
+                                c = x ? boxes[j].xmin : boxes[j].ymin;
+                         return a < c || (a == c && i < j);
+                       });
+      auto l = build(begin, middle), r = build(middle, end);
+      tree[n].left = l;
+      tree[n].right = r;
+    }
+    return n;
+  }
+  void query(std::size_t n, const Box &b, std::vector<std::size_t> &out) const {
+    const auto &t = tree[n];
+    if (!t.box.overlaps(b))
+      return;
+    if (t.left) {
+      query(t.left, b, out);
+      query(t.right, b, out);
+    } else
+      for (auto i = t.begin; i < t.end; ++i)
+        if (boxes[order[i]].overlaps(b))
+          out.push_back(order[i]);
+  }
+
+public:
+  explicit BoxIndex(std::vector<Box> b)
+      : boxes(std::move(b)), order(boxes.size()) {
+    for (std::size_t i = 0; i < order.size(); ++i)
+      order[i] = i;
+    if (!order.empty())
+      build(0, order.size());
+  }
+  std::vector<std::size_t> candidates(const Box &b) const {
+    std::vector<std::size_t> out;
+    if (!tree.empty())
+      query(0, b, out);
+    std::sort(out.begin(), out.end());
+    return out;
+  }
+};
 inline void validate_polygon(const Boundary &b) {
   if (b.points.size() < 3)
     throw std::invalid_argument("Boundary needs at least three vertices");
@@ -24,10 +96,18 @@ inline void validate_polygon(const Boundary &b) {
       throw std::invalid_argument("Nonfinite or zero-length boundary edge");
     if (predicates::on_segment(p, a, c) || predicates::on_segment(a, c, p))
       throw std::invalid_argument("Overlapping adjacent boundary edges");
-    for (std::size_t j = i + 1; j < n; ++j)
-      if ((i + 1) % n != j && (j + 1) % n != i)
-        if (predicates::intersects(a, c, b.points[j], b.points[(j + 1) % n]))
-          throw std::invalid_argument("Boundary self-intersects");
+  }
+  std::vector<Box> boxes;
+  for (std::size_t i = 0; i < n; ++i)
+    boxes.push_back(Box::segment(b.points[i], b.points[(i + 1) % n]));
+  BoxIndex index(boxes);
+  for (std::size_t i = 0; i < n; ++i) {
+    auto a = b.points[i], c = b.points[(i + 1) % n];
+    for (auto j : index.candidates(boxes[i]))
+      if (j > i)
+        if ((i + 1) % n != j && (j + 1) % n != i)
+          if (predicates::intersects(a, c, b.points[j], b.points[(j + 1) % n]))
+            throw std::invalid_argument("Boundary self-intersects");
   }
 }
 } // namespace mesh_detail
@@ -121,17 +201,22 @@ inline void validate_mesh_geometry(const TriangleMesh &mesh) {
   }
   if (visited.size() != mesh.elements.size())
     throw std::invalid_argument("Disconnected mesh");
-  for (auto i = owners.begin(); i != owners.end(); ++i)
-    for (auto j = std::next(i); j != owners.end(); ++j) {
-      auto [a, b] = i->first;
-      auto [c, d] = j->first;
+  std::vector<Edge> edges;
+  std::vector<Box> boxes;
+  for (const auto &[e, own] : owners) {
+    (void)own;
+    edges.push_back(e);
+    boxes.push_back(Box::segment(mesh.nodes[e.first], mesh.nodes[e.second]));
+  }
+  BoxIndex index(boxes);
+  for (std::size_t i = 0; i < edges.size(); ++i)
+    for (auto j : index.candidates(boxes[i])) {
+      if (j <= i)
+        continue;
+      auto [a, b] = edges[i];
+      auto [c, d] = edges[j];
       auto p = mesh.nodes[a], q = mesh.nodes[b], r = mesh.nodes[c],
            s = mesh.nodes[d];
-      if (std::max(p.x, q.x) < std::min(r.x, s.x) ||
-          std::max(r.x, s.x) < std::min(p.x, q.x) ||
-          std::max(p.y, q.y) < std::min(r.y, s.y) ||
-          std::max(r.y, s.y) < std::min(p.y, q.y))
-        continue;
       if (a == c || a == d || b == c || b == d) {
         std::size_t common = (a == c || a == d) ? a : b,
                     u = common == a ? b : a, v = common == c ? d : c;

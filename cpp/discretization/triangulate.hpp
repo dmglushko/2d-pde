@@ -2,6 +2,7 @@
 #include "boundary_context.hpp"
 #include "boundary_discretization.hpp"
 #include <deque>
+#include <memory>
 #include <numeric>
 
 namespace discretization {
@@ -39,6 +40,11 @@ inline std::vector<Triangle> ear_clip(const Boundary &boundary) {
     throw std::invalid_argument("Zero-area polygon");
   if (winding < 0)
     std::reverse(ring.begin(), ring.end());
+  std::vector<Box> point_boxes;
+  for (auto p : pts)
+    point_boxes.push_back(Box::segment(p, p));
+  BoxIndex point_index(std::move(point_boxes));
+  std::vector<bool> active(pts.size(), true);
   std::vector<Triangle> triangles;
   while (ring.size() > 3) {
     bool clipped = false;
@@ -48,8 +54,11 @@ inline std::vector<Triangle> ear_clip(const Boundary &boundary) {
       if (predicates::orient(pts[a], pts[b], pts[c]) <= 0)
         continue;
       bool contains = false;
-      for (auto v : ring)
-        if (v != a && v != b && v != c &&
+      auto box = Box::segment(pts[a], pts[b]);
+      box = {std::min(box.xmin, pts[c].x), std::max(box.xmax, pts[c].x),
+             std::min(box.ymin, pts[c].y), std::max(box.ymax, pts[c].y)};
+      for (auto v : point_index.candidates(box))
+        if (active[v] && v != a && v != b && v != c &&
             in_triangle(pts[v], pts[a], pts[b], pts[c])) {
           contains = true;
           break;
@@ -57,6 +66,7 @@ inline std::vector<Triangle> ear_clip(const Boundary &boundary) {
       if (contains)
         continue;
       triangles.push_back({a, b, c});
+      active[b] = false;
       ring.erase(ring.begin() + i);
       clipped = true;
       break;
@@ -73,7 +83,55 @@ public:
   TriangleMesh &mesh;
   std::map<Edge, std::set<std::size_t>> owners;
   std::set<Edge> constrained;
+  std::set<Edge> pending;
+  std::map<Edge, std::size_t> generations;
+  std::size_t generation = 0;
+  struct SizeEntry {
+    double length;
+    Edge edge;
+    std::size_t generation;
+    bool operator<(const SizeEntry &b) const {
+      if (length != b.length)
+        return length < b.length;
+      return edge > b.edge; // first lexicographic edge wins equal lengths
+    }
+  };
+  std::priority_queue<SizeEntry> sizes;
+  double target = 0;
+  std::set<std::pair<double, double>> coordinates;
+  void queue_size(Edge e) {
+    auto g = ++generation;
+    generations[e] = g;
+    if (target > 0) {
+      double d = distance(mesh.nodes[e.first], mesh.nodes[e.second]);
+      if (d > target * (1 + 1e-12))
+        sizes.push({d, e, g});
+    }
+  }
+  void initialize_size(double h) {
+    target = h;
+    sizes = {};
+    for (const auto &[e, own] : owners) {
+      (void)own;
+      queue_size(e);
+    }
+  }
+  std::optional<Edge> longest() {
+    while (!sizes.empty()) {
+      auto t = sizes.top();
+      auto g = generations.find(t.edge);
+      if (!owners.contains(t.edge) || g == generations.end() ||
+          g->second != t.generation) {
+        sizes.pop();
+        continue;
+      }
+      return t.edge;
+    }
+    return std::nullopt;
+  }
   explicit Topology(TriangleMesh &m) : mesh(m) {
+    for (auto p : m.nodes)
+      coordinates.emplace(p.x, p.y);
     for (std::size_t i = 0; i < m.elements.size(); ++i)
       add(i);
     for (auto [a, b] : m.boundary_edges)
@@ -81,8 +139,16 @@ public:
   }
   void add(std::size_t i) {
     auto t = mesh.elements[i];
-    for (int e = 0; e < 3; ++e)
-      owners[edge_key(t[e], t[(e + 1) % 3])].insert(i);
+    for (int e = 0; e < 3; ++e) {
+      auto key = edge_key(t[e], t[(e + 1) % 3]);
+      auto &own = owners[key];
+      own.insert(i);
+      if (own.size() > 2)
+        throw std::invalid_argument(
+            "Nonmanifold mesh or incorrect boundary records");
+      pending.insert(key);
+      queue_size(key);
+    }
   }
   void remove(std::size_t i) {
     auto t = mesh.elements[i];
@@ -90,8 +156,10 @@ public:
       auto key = edge_key(t[e], t[(e + 1) % 3]);
       auto it = owners.find(key);
       it->second.erase(i);
-      if (it->second.empty())
+      if (it->second.empty()) {
         owners.erase(it);
+        generations.erase(key);
+      }
     }
   }
   std::size_t opposite(std::size_t t, Edge e) const {
@@ -116,18 +184,21 @@ public:
     return predicates::incircle(mesh.nodes[a], mesh.nodes[b], mesh.nodes[c],
                                 mesh.nodes[d]) > 0;
   }
-  void legalize() {
-    std::deque<Edge> queue;
-    for (const auto &[e, own] : owners) {
-      (void)own;
-      queue.push_back(e);
-    }
+  void legalize(bool global = true) {
+    if (global)
+      for (const auto &[e, own] : owners) {
+        (void)own;
+        pending.insert(e);
+      }
+    std::deque<Edge> queue(pending.begin(), pending.end());
+
     std::size_t flips = 0,
                 limit = std::max<std::size_t>(
                     1000, mesh.elements.size() * mesh.elements.size() * 4);
     while (!queue.empty()) {
       auto edge = queue.front();
       queue.pop_front();
+      pending.erase(edge);
       if (!illegal(edge))
         continue;
       if (++flips > limit)
@@ -141,11 +212,17 @@ public:
       remove(j);
       mesh.elements[i] = first;
       mesh.elements[j] = second;
-      add(i);
-      add(j);
+      // add() records size changes, including flip-created oversized edges.
+      // Queue each affected edge once, allowing later re-enqueue after popping.
+      std::set<Edge> affected;
       for (auto t : {first, second})
         for (int e = 0; e < 3; ++e)
-          queue.push_back(edge_key(t[e], t[(e + 1) % 3]));
+          affected.insert(edge_key(t[e], t[(e + 1) % 3]));
+      for (auto e : affected)
+        if (!pending.contains(e))
+          queue.push_back(e);
+      add(i);
+      add(j);
     }
   }
   void split(Edge edge, Point2 point) {
@@ -155,6 +232,7 @@ public:
     auto own = it->second;
     auto n = mesh.nodes.size();
     mesh.nodes.push_back(point);
+    coordinates.emplace(point.x, point.y);
     for (auto i : own) {
       auto c = opposite(i, edge);
       auto a = ccw({edge.first, n, c}, mesh.nodes),
@@ -171,11 +249,16 @@ public:
     }
   }
   void insert(Point2 point) {
-    for (auto p : mesh.nodes)
-      if (p.x == point.x && p.y == point.y)
-        return;
+    if (coordinates.contains({point.x, point.y}))
+      return;
     for (std::size_t i = 0; i < mesh.elements.size(); ++i) {
       auto t = mesh.elements[i];
+      auto box = Box::segment(mesh.nodes[t[0]], mesh.nodes[t[1]]);
+      auto p = mesh.nodes[t[2]];
+      box = {std::min(box.xmin, p.x), std::max(box.xmax, p.x),
+             std::min(box.ymin, p.y), std::max(box.ymax, p.y)};
+      if (!box.overlaps(Box::segment(point, point)))
+        continue;
       if (!in_triangle(point, mesh.nodes[t[0]], mesh.nodes[t[1]],
                        mesh.nodes[t[2]]))
         continue;
@@ -187,6 +270,7 @@ public:
         }
       auto n = mesh.nodes.size();
       mesh.nodes.push_back(point);
+      coordinates.emplace(point.x, point.y);
       remove(i);
       mesh.elements[i] = ccw({t[0], t[1], n}, mesh.nodes);
       add(i);
@@ -208,13 +292,14 @@ inline TriangleMesh seed_mesh(const Boundary &boundary) {
     m.boundary_edges.emplace_back(i, (i + 1) % m.nodes.size());
   return m;
 }
-inline bool inside_polygon(Point2 p, const Boundary &boundary) {
+inline bool inside_polygon(Point2 p, const Boundary &boundary,
+                           bool strict = false) {
   int winding = 0;
   for (std::size_t i = 0; i < boundary.points.size(); ++i) {
     auto a = boundary.points[i],
          b = boundary.points[(i + 1) % boundary.points.size()];
     if (predicates::on_segment(a, b, p))
-      return true;
+      return !strict;
     if (a.y <= p.y && b.y > p.y && predicates::orient(a, b, p) > 0)
       ++winding;
     if (a.y > p.y && b.y <= p.y && predicates::orient(a, b, p) < 0)
@@ -237,8 +322,10 @@ bisect_sources(const BoundaryContext &context,
     throw std::runtime_error("Invalid source interval length");
   double target = total / 2, acc = 0;
   // Equal-length adjacent spans can differ by a rounding bit after curve
-  // subdivision. Reuse that junction instead of creating an unresolvable sliver.
-  const double junction_tolerance = 16 * std::numeric_limits<double>::epsilon() * total;
+  // subdivision. Reuse that junction instead of creating an unresolvable
+  // sliver.
+  const double junction_tolerance =
+      16 * std::numeric_limits<double>::epsilon() * total;
   std::vector<CurveInterval> left, right;
   for (std::size_t i = 0; i < spans.size(); ++i) {
     auto s = spans[i];
@@ -329,15 +416,7 @@ inline void rebuild_curved(MeshResult &result) {
   for (std::size_t i = 0; i < m.nodes.size(); ++i)
     if (!boundary_vertices.contains(i)) {
       auto p = m.nodes[i];
-      bool on_boundary = false;
-      for (std::size_t e = 0; e < polygon.points.size(); ++e)
-        if (predicates::on_segment(
-                polygon.points[e],
-                polygon.points[(e + 1) % polygon.points.size()], p)) {
-          on_boundary = true;
-          break;
-        }
-      if (!on_boundary && inside_polygon(p, polygon))
+      if (inside_polygon(p, polygon, true))
         topology.insert(p);
       else
         ++removed;
@@ -356,7 +435,8 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
   validate_mesh_geometry(result.mesh);
   if (result.boundary_context)
     validate_boundary_context(result.mesh, *result.boundary_context,
-                              options.preserve_regions, options.boundary.preserve_corners);
+                              options.preserve_regions,
+                              options.boundary.preserve_corners);
   result.options = options;
   result.report = {};
   if (!options.preserve_regions)
@@ -391,10 +471,9 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
     if (off_curve)
       rebuild_curved(result);
   }
-  if (delaunay) {
-    Topology topology(result.mesh);
-    topology.legalize();
-  }
+  auto topology = std::make_unique<Topology>(result.mesh);
+  if (delaunay)
+    topology->legalize();
   double h = options.refinement.max_edge_length;
   if (h > 0 && options.boundary_treatment == BoundaryTreatment::Fixed) {
     for (auto [a, b] : result.mesh.boundary_edges)
@@ -407,23 +486,12 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
         return result;
       }
   }
+  topology->initialize_size(h);
   for (int step = 0; h > 0; ++step) {
-    Topology topology(result.mesh);
-    Edge longest{};
-    double length = h * (1 + 1e-12);
-    bool found = false;
-    for (const auto &[edge, own] : topology.owners) {
-      (void)own;
-      double d = distance(result.mesh.nodes[edge.first],
-                          result.mesh.nodes[edge.second]);
-      if (d > length) {
-        longest = edge;
-        length = d;
-        found = true;
-      }
-    }
-    if (!found)
+    auto candidate = topology->longest();
+    if (!candidate)
       break;
+    Edge longest = *candidate;
     if (step >= options.refinement.max_steps) {
       result.report.size_satisfied = false;
       result.report.message = "Refinement step budget exhausted";
@@ -437,9 +505,11 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
       result.report.message = "Refinement reached coordinate precision limit";
       break;
     }
-    auto it = std::find_if(
-        result.mesh.boundary_edges.begin(), result.mesh.boundary_edges.end(),
-        [&](auto e) { return edge_key(e.first, e.second) == longest; });
+    auto it = result.mesh.boundary_edges.end();
+    if (topology->constrained.contains(longest))
+      it = std::find_if(
+          result.mesh.boundary_edges.begin(), result.mesh.boundary_edges.end(),
+          [&](auto e) { return edge_key(e.first, e.second) == longest; });
     bool boundary = it != result.mesh.boundary_edges.end();
     auto index =
         static_cast<std::size_t>(it - result.mesh.boundary_edges.begin());
@@ -451,13 +521,15 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
       result.mesh.nodes.push_back(mid);
       split_boundary_record(result, index, n);
       rebuild_curved(result);
+      topology = std::make_unique<Topology>(result.mesh);
+      topology->initialize_size(h);
     } else {
       auto n = result.mesh.nodes.size();
-      topology.split(longest, mid);
+      topology->split(longest, mid);
       if (boundary)
         split_boundary_record(result, index, n);
       if (delaunay)
-        topology.legalize();
+        topology->legalize(false);
     }
     ++result.report.refinement_steps;
   }
@@ -467,16 +539,38 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
 }
 } // namespace mesh_detail
 
-inline bool is_constrained_delaunay(const TriangleMesh &mesh) {
-  validate_mesh_geometry(mesh);
-  auto copy = mesh;
-  mesh_detail::Topology topology(copy);
-  for (const auto &[edge, own] : topology.owners) {
-    (void)own;
-    if (topology.illegal(edge))
+namespace mesh_detail {
+// Caller has already validated geometry. Read-only verification is independent
+// of legalization scheduling and never copies the complete mesh.
+inline bool cdt_verified(const TriangleMesh &mesh) {
+  std::map<Edge, std::vector<std::size_t>> opposites;
+  std::set<Edge> constrained;
+  for (auto [a, b] : mesh.boundary_edges)
+    constrained.insert(edge_key(a, b));
+  for (auto t : mesh.elements)
+    for (int e = 0; e < 3; ++e)
+      opposites[edge_key(t[e], t[(e + 1) % 3])].push_back(t[(e + 2) % 3]);
+  for (const auto &[edge, own] : opposites) {
+    if (own.size() != 2 || constrained.contains(edge))
+      continue;
+    auto [a, b] = edge;
+    auto c = own[0], d = own[1];
+    if (predicates::orient(mesh.nodes[c], mesh.nodes[d], mesh.nodes[a]) *
+            predicates::orient(mesh.nodes[c], mesh.nodes[d], mesh.nodes[b]) >=
+        0)
+      continue;
+    if (predicates::orient(mesh.nodes[a], mesh.nodes[b], mesh.nodes[c]) < 0)
+      std::swap(a, b);
+    if (predicates::incircle(mesh.nodes[a], mesh.nodes[b], mesh.nodes[c],
+                             mesh.nodes[d]) > 0)
       return false;
   }
   return true;
+}
+} // namespace mesh_detail
+inline bool is_constrained_delaunay(const TriangleMesh &mesh) {
+  validate_mesh_geometry(mesh);
+  return mesh_detail::cdt_verified(mesh);
 }
 inline MeshResult generate_mesh(const DiscretizedBoundary &boundary,
                                 const MeshOptions &options = {}) {
@@ -492,7 +586,8 @@ inline MeshResult generate_mesh(const DiscretizedBoundary &boundary,
   validate_mesh_geometry(result.mesh);
   if (result.boundary_context)
     validate_boundary_context(result.mesh, *result.boundary_context,
-                              options.preserve_regions, options.boundary.preserve_corners);
+                              options.preserve_regions,
+                              options.boundary.preserve_corners);
   return result;
 }
 inline MeshResult generate_mesh(const Boundary &boundary,

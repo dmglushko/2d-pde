@@ -27,6 +27,32 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
     return std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(b.x) &&
            std::isfinite(b.y) && distance(a, b) <= tolerance;
   };
+  auto point_boxes = [](const std::vector<Point2> &points) {
+    std::vector<Box> boxes;
+    for (auto p : points) {
+      boxes.push_back(std::isfinite(p.x) && std::isfinite(p.y)
+                          ? Box::segment(p, p)
+                          : Box{0, 0, 0, 0});
+    }
+    return boxes;
+  };
+  auto down = [](double x) {
+    return std::nextafter(x, -std::numeric_limits<double>::infinity());
+  };
+  auto up = [](double x) {
+    return std::nextafter(x, std::numeric_limits<double>::infinity());
+  };
+  auto near_box = [&](Point2 p) {
+    return Box{down(p.x - tolerance), up(p.x + tolerance),
+               down(p.y - tolerance), up(p.y + tolerance)};
+  };
+  // Keep original indices, even for malformed nonfinite snapshots.
+  std::vector<Box> snapshot_boxes;
+  for (auto p : context.polygon_snapshot)
+    snapshot_boxes.push_back(std::isfinite(p.x) && std::isfinite(p.y)
+                                 ? Box::segment(p, p)
+                                 : Box{0, 0, 0, 0});
+  BoxIndex snapshot_index(std::move(snapshot_boxes));
   std::set<std::uint64_t> ids;
   for (const auto &c : context.curves) {
     curve_detail::validateCurve(c.segment);
@@ -58,11 +84,13 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
           s.end > 1 || s.begin == s.end)
         throw std::invalid_argument("Invalid boundary source interval");
       const auto &c = context.curves[s.curve];
-      if (preserve_corners && previous_span && previous_span->curve != s.curve &&
+      if (preserve_corners && previous_span &&
+          previous_span->curve != s.curve &&
           is_corner(subcurve(context.curves[previous_span->curve].segment,
                              previous_span->begin, previous_span->end),
                     subcurve(c.segment, s.begin, s.end)))
-        throw std::invalid_argument("Corner protection requires regenerating boundary discretization");
+        throw std::invalid_argument(
+            "Corner protection requires regenerating boundary discretization");
       auto start = curvePoint(c.segment, s.begin);
       source_anchors.push_back(start);
       source_anchors.push_back(curvePoint(c.segment, s.end));
@@ -79,9 +107,12 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
     // Chord subdivision may put new vertices off the analytical curves, but
     // vertices retained from the polygon snapshot must match their own spans.
     // Global coverage alone cannot detect cyclically shifted source records.
-    bool snapshot_vertex = std::any_of(
-        context.polygon_snapshot.begin(), context.polygon_snapshot.end(),
-        [&](Point2 p) { return close(mesh.nodes[a], p); });
+    bool snapshot_vertex = false;
+    for (auto j : snapshot_index.candidates(near_box(mesh.nodes[a])))
+      if (close(mesh.nodes[a], context.polygon_snapshot[j])) {
+        snapshot_vertex = true;
+        break;
+      }
     if (protected_vertices.contains(a) || snapshot_vertex) {
       auto s = spans.front();
       if (!close(mesh.nodes[a],
@@ -91,15 +122,32 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
     }
   }
   validate_polygon(Boundary{context.polygon_snapshot, {}});
+  BoxIndex anchor_index(point_boxes(source_anchors));
   for (auto p : context.polygon_snapshot) {
-    if (std::none_of(source_anchors.begin(), source_anchors.end(),
-                     [&](auto q) { return close(p, q); }))
+    bool anchored = false;
+    for (auto j : anchor_index.candidates(near_box(p)))
+      if (close(p, source_anchors[j])) {
+        anchored = true;
+        break;
+      }
+    if (!anchored)
       throw std::invalid_argument(
           "Polygon snapshot vertex is not anchored to source curves");
   }
+  std::vector<Box> segment_boxes;
+  for (std::size_t i = 0; i < context.polygon_snapshot.size(); ++i) {
+    auto box = Box::segment(
+        context.polygon_snapshot[i],
+        context.polygon_snapshot[(i + 1) % context.polygon_snapshot.size()]);
+    segment_boxes.push_back(
+        {down(box.xmin - tolerance), up(box.xmax + tolerance),
+         down(box.ymin - tolerance), up(box.ymax + tolerance)});
+  }
+  BoxIndex segment_index(std::move(segment_boxes));
   for (auto [a, b] : mesh.boundary_edges) {
     bool supported = false;
-    for (std::size_t i = 0; i < context.polygon_snapshot.size(); ++i) {
+    for (auto i :
+         segment_index.candidates(Box::segment(mesh.nodes[a], mesh.nodes[a]))) {
       auto p = context.polygon_snapshot[i],
            q = context
                    .polygon_snapshot[(i + 1) % context.polygon_snapshot.size()];
@@ -133,8 +181,10 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
         !protected_vertices.contains(b))
       throw std::invalid_argument("Region junction is not protected");
     if (preserve_corners && left.curve != right.curve &&
-        is_corner(subcurve(context.curves[left.curve].segment, left.begin, left.end),
-                  subcurve(context.curves[right.curve].segment, right.begin, right.end)) &&
+        is_corner(
+            subcurve(context.curves[left.curve].segment, left.begin, left.end),
+            subcurve(context.curves[right.curve].segment, right.begin,
+                     right.end)) &&
         !protected_vertices.contains(b))
       throw std::invalid_argument("Geometric corner is not protected");
   }
