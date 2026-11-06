@@ -152,9 +152,39 @@ void dirichlet_and_errors() {
   rejects([&]{assemble(mesh,p,0,AssemblyOptions{2,-1});});
   rejects([&]{assemble(mesh,p,0,AssemblyOptions{-1});});
 }
+void boundary_restriction_regressions() {
+  auto mesh=triangle();auto p=zero_flux();
+  p.boundaries[0].regions={"diagonal","left"};
+  p.assign(flux_robin(1,2*x-1,1),{"bottom"});
+  rejects([&]{assemble(mesh,p);},"vanishes or changes sign");
+  p.boundaries.back().condition=flux_robin(1,x-.3,1);
+  rejects([&]{assemble(mesh,p);},"vanishes or changes sign");
+  // This cross coefficient vanishes on the bottom edge, so du_dn=q_n there.
+  p.equation.a_xy=y;
+  p.boundaries.back().condition=neumann(1);
+  const auto normal=assemble(mesh,p);
+  p.boundaries.back().condition=flux_neumann(1);
+  const auto natural=assemble(mesh,p);
+  near((normal.load-natural.load).norm(),0);
+  // The x flux component vanishes on the edge. Select the regular y pivot.
+  p.equation.a_xy=2*y;p.equation.a_yy=-2;
+  BoundaryCondition general;general.beta_x=x*y+y;general.beta_y=-2*x-2;general.value=1;
+  p.boundaries.back().condition=general;
+  const auto converted=assemble(mesh,p);
+  p.boundaries.back().condition=flux_robin(0,x+1,1);
+  const auto reference=assemble(mesh,p);
+  near((converted.load-reference.load).norm(),0);
+  p.equation.a_xy=2*x;
+  general.beta_x=x*(x+1);general.beta_y=-2*(x+1);
+  p.boundaries.back().condition=general;
+  const auto crossing_pivot=assemble(mesh,p);
+  p.boundaries.back().condition=flux_robin(0,x+1,1);
+  const auto crossing_reference=assemble(mesh,p);
+  near((crossing_pivot.load-crossing_reference.load).norm(),0);
+}
 }
 int main() {
-  try { element_matrices();boundary_matrices();affine_patch();dirichlet_and_errors();
+  try { element_matrices();boundary_matrices();affine_patch();dirichlet_and_errors();boundary_restriction_regressions();
     std::cout<<"FEM assembly tests passed\n";
   } catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 1; }
 }

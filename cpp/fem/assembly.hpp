@@ -30,15 +30,25 @@ inline double checked(double v) {
   if (!std::isfinite(v)) throw std::domain_error("Nonfinite FEM assembly contribution");
   return v;
 }
-inline Expr edge_expression(const Expr& e, double normal_x, double normal_y) {
-  return e.subs({{nx.get_basic(), Expr(normal_x).get_basic()}, {ny.get_basic(), Expr(normal_y).get_basic()}});
+inline Expr edge_expression(const Expr& e, double normal_x, double normal_y,
+                            discretization::Point2 a, discretization::Point2 b) {
+  // SymEngine substitution is simultaneous: x on the right is the new edge
+  // coordinate s, not the original world coordinate. Restrict BEFORE deciding
+  // equivalence or choosing a nonzero flux component for division.
+  return SymEngine::expand(e.subs({
+      {nx.get_basic(),Expr(normal_x).get_basic()},
+      {ny.get_basic(),Expr(normal_y).get_basic()},
+      {x.get_basic(),(Expr(a.x)+(b.x-a.x)*x).get_basic()},
+      {y.get_basic(),(Expr(a.y)+(b.y-a.y)*x).get_basic()}}));
 }
 } // namespace assembly_detail
 
 // Matrices are deliberately unconstrained, including for pure Neumann problems.
 // Rows are test functions, columns are trial functions.
-inline AssembledSystem assemble(const discretization::TriangleMesh& mesh,
-    const Problem& problem, double time=0, const AssemblyOptions& options={}) {
+namespace assembly_detail {
+inline AssembledSystem assemble_impl(const discretization::TriangleMesh& mesh,
+    const Problem& problem, double time, const AssemblyOptions& options,
+    int dirichlet_derivative_order=0) {
   using assembly_detail::checked;
   if (!std::isfinite(time) || !std::isfinite(options.boundary_tolerance) ||
       options.boundary_tolerance < 0)
@@ -124,7 +134,7 @@ inline AssembledSystem assemble(const discretization::TriangleMesh& mesh,
     if (normal_x*(inside.x-a.x)+normal_y*(inside.y-a.y)>0) {
       normal_x=-normal_x;normal_y=-normal_y;
     }
-    const auto on_edge=[&](const Expr& e) { return assembly_detail::edge_expression(e,normal_x,normal_y); };
+    const auto on_edge=[&](const Expr& e) { return assembly_detail::edge_expression(e,normal_x,normal_y,a,b); };
     const Expr alpha=on_edge(bc.alpha), gamma=on_edge(bc.gamma), value=on_edge(bc.value);
     const Expr flux_x=on_edge(-nx*eq.a_xx-ny*eq.a_xy/2);
     const Expr flux_y=on_edge(-nx*eq.a_xy/2-ny*eq.a_yy);
@@ -135,18 +145,40 @@ inline AssembledSystem assemble(const discretization::TriangleMesh& mesh,
       if (!assembly_detail::zero(extra_x*flux_y-extra_y*flux_x) ||
           (assembly_detail::zero(flux_x) && assembly_detail::zero(flux_y)))
         throw std::invalid_argument("Unsupported oblique/normal derivative boundary condition: derivative vector is not algebraically proportional to natural flux");
-      beta=beta+(assembly_detail::zero(flux_x)?extra_y/flux_y:extra_x/flux_x);
+      // Project only AFTER proving exact proportionality. This quotient avoids
+      // a removable 0/0 where one component vanishes but the flux vector does not.
+      beta=beta+(extra_x*flux_x+extra_y*flux_y)/(flux_x*flux_x+flux_y*flux_y);
     }
     const Evaluator eval_alpha(alpha),eval_gamma(gamma),eval_value(value),eval_beta(beta);
-    auto point_at=[&](double s) { return EvaluationPoint{(1-s)*a.x+s*b.x,(1-s)*a.y+s*b.y,time,normal_x,normal_y}; };
+    // Boundary expressions above now use x as their parameter on [0,1].
+    auto point_at=[&](double s) { return EvaluationPoint{s,0,time,normal_x,normal_y}; };
+    auto validate_divisor=[&](const Evaluator& evaluator,const char* name) {
+      std::vector<double> samples{0,.5,1};
+      for(const auto& q:edge_rule) samples.push_back(q.coordinate);
+      std::sort(samples.begin(),samples.end());
+      double previous=evaluator(point_at(samples.front()));
+      for(const double s:samples) {
+        const double current=evaluator(point_at(s));
+        if(current==0 || std::signbit(current)!=std::signbit(previous))
+          throw std::invalid_argument(std::string(name)+" vanishes or changes sign on boundary");
+        previous=current;
+      }
+      // This detects sampled zeros and sign changes, not every possible root
+      // of arbitrary symbolic functions. Nonvanishing data remain a precondition.
+    };
     if (assembly_detail::zero(beta)) {
       if (!assembly_detail::zero(gamma)) throw std::invalid_argument("Derivative-free dynamic boundary conditions are unsupported");
       if (assembly_detail::zero(alpha)) throw std::invalid_argument("Boundary condition has no nonzero operator");
+      validate_divisor(eval_alpha,"Dirichlet alpha");
+      Expr prescribed_value=value/alpha;
+      for(int order=0;order<dirichlet_derivative_order;++order)
+        prescribed_value=diff(prescribed_value,t);
+      const Evaluator eval_prescribed(prescribed_value);
       for (int k=0;k<2;++k) {
         const auto point=point_at(k);
         const double av=eval_alpha(point);
         if (av==0) throw std::invalid_argument("Dirichlet alpha vanishes on boundary");
-        const double g=checked(eval_value(point)/av);
+        const double g=eval_prescribed(point);
         auto [it,inserted]=prescribed.emplace(nodes[k],g);
         if (!inserted && std::abs(it->second-g)>options.boundary_tolerance*std::max({1.,std::abs(it->second),std::abs(g)}))
           throw std::invalid_argument("Contradictory corner Dirichlet values");
@@ -158,6 +190,7 @@ inline AssembledSystem assemble(const discretization::TriangleMesh& mesh,
         (void)eval_value(p);
       }
     } else {
+      validate_divisor(eval_beta,"Natural flux multiplier");
       for (int endpoint=0;endpoint<2;++endpoint) {
         const auto p=point_at(endpoint);
         if (eval_beta(p)==0)
@@ -188,5 +221,11 @@ inline AssembledSystem assemble(const discretization::TriangleMesh& mesh,
   for (const auto* matrix:{&system.stiffness,&system.first_mass,&system.second_mass})
     for (int k=0;k<matrix->nonZeros();++k) checked(matrix->valuePtr()[k]);
   return system;
+}
+} // namespace assembly_detail
+
+inline AssembledSystem assemble(const discretization::TriangleMesh& mesh,
+    const Problem& problem, double time=0, const AssemblyOptions& options={}) {
+  return assembly_detail::assemble_impl(mesh,problem,time,options);
 }
 } // namespace fem
