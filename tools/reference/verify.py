@@ -18,6 +18,13 @@ from skfem import MeshTri, Basis, FacetBasis, ElementTriP1, BilinearForm, Linear
 exporter, directory = sys.argv[1:]
 subprocess.run([exporter, directory], check=True)
 data = json.loads((Path(directory) / 'reference.json').read_text())
+# Check the experiment inventory before rates: an empty pair sequence must
+# never turn a missing refinement experiment into a successful assertion.
+expected_steps = [.04, .02, .01]
+assert len(data['runs']) == 9, 'Expected three methods at three time steps'
+assert {r['method'] for r in data['runs']} == {0, 1, 2}
+for method in range(3):
+    assert [r['dt'] for r in data['runs'] if r['method'] == method] == expected_steps, 'Unexpected time-step inventory/order'
 if data['openmp']:
     for workers in (2, 4):
         child = str(Path(directory) / str(workers))
@@ -97,10 +104,12 @@ for method in range(3):
     oracle_gap = np.max(np.abs(solutions[0].y[:, -1]-solutions[1].y[:, -1]))
     assert oracle_gap < 2e-10
     ref = solutions[0].y[:basis.N, -1]
-    errors = [float(np.max(np.abs(np.array(r['u'])-ref[mapping]))) for r in data['runs'] if r['method'] == method]
+    runs = [r for r in data['runs'] if r['method'] == method]
+    errors = [float(np.max(np.abs(np.array(r['u'])-ref[mapping]))) for r in runs]
+    assert all(np.isfinite(e) and e > 0 for e in errors), errors
     assert errors[-1] < (.02 if method == 0 else .002), errors
     assert all(a/b > (1.7 if method == 0 else 3.4) for a, b in zip(errors, errors[1:])), errors
-    metrics[str(method)] = {'dt': [.04, .02, .01], 'max_errors': errors, 'oracle_gap': float(oracle_gap), 'operation_counts': [{k: r[k] for k in ('assembly_calls', 'linear_solves', 'solver_reuses')} for r in data['runs'] if r['method'] == method]}
+    metrics[str(method)] = {'dt': [r['dt'] for r in runs], 'max_errors': errors, 'oracle_gap': float(oracle_gap), 'operation_counts': [{k: r[k] for k in ('assembly_calls', 'linear_solves', 'solver_reuses')} for r in runs]}
 metrics['versions'] = {'python': sys.version, 'numpy': np.__version__, 'scipy': scipy.__version__, 'scikit-fem': skfem.__version__, 'matplotlib': matplotlib.__version__}
 (Path(directory) / 'metrics.json').write_text(json.dumps(metrics, indent=2)+'\n')
 print(json.dumps(metrics, indent=2))
