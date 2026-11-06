@@ -12,7 +12,7 @@ const repetitions=Number(count);
 if(!baseline||!serial||!openmp||!Number.isInteger(repetitions)||repetitions<1)
   throw Error('Usage: benchmark_long_waves.mjs baseline_binary serial_binary openmp_binary [directory [repetitions]]');
 fs.mkdirSync(destination,{recursive:true});
-const policies=[['baseline',baseline,1],['serial',serial,1],['omp2',openmp,2],['omp4',openmp,4]];
+const policies=[['serial',serial,1],['baseline',baseline,1],['omp2',openmp,2],['omp4',openmp,4]];
 const env={...process.env,OMP_DYNAMIC:'FALSE',OPENBLAS_NUM_THREADS:'1',MKL_NUM_THREADS:'1'};
 const report={
   recorded_at:new Date().toISOString(),commit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
