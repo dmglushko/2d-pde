@@ -48,6 +48,20 @@ void linear() {
   rejects([&]{constrain(a,b,{{0,1},{0,2}});},"Conflicting");
   SolverOptions bad;bad.relative_tolerance=std::numeric_limits<double>::quiet_NaN();
   rejects([&]{solve_linear(a,b,bad);},"options");
+  SparseMatrix uncompressed(3,3);
+  uncompressed.reserve(Eigen::VectorXi::Constant(3,4));
+  uncompressed.insert(0,0)=1;
+  uncompressed.insert(2,2)=std::numeric_limits<double>::quiet_NaN();
+  rejects([&]{solve_linear(uncompressed,b);},"Nonfinite linear matrix");
+  dense.setIdentity();
+  const Vector tiny=Vector::Constant(3,1e-180);
+  SolverOptions strict;strict.absolute_tolerance=0;
+  auto small=solve_linear(sparse(dense),tiny,strict);
+  check(small.report.converged,"Tiny finite RHS rejected by direct solver");
+  strict.method=LinearSolver::ConjugateGradient;
+  small=solve_linear(sparse(dense),tiny,strict);
+  check(!small.report.converged || (small.values-tiny).stableNorm()<1e-190,
+        "Residual underflow falsely reported iterative convergence");
 }
 void stationary() {
   auto mesh=square_mesh(3);Problem p;
@@ -161,9 +175,20 @@ void invalid_options() {
   o.step=.1;o.end=-1;rejects([&]{evolve(mesh,p,0,0,o);});
   o.end=0;auto e=evolve(mesh,p,0,0,o);check(e.frames.size()==1,"Initial-only evolution");
 }
+void offset_interval() {
+  auto mesh=square_mesh(1);Problem p;p.equation.m1=1;p.equation.c=1;
+  p.assign(flux_neumann(0),{"bottom","right","top","left"});
+  TimeOptions o;o.start=1e15;o.end=o.start+1;o.step=.125;
+  auto result=evolve(mesh,p,1,0,o);
+  check(result.frames.size()==9,"Large time origin collapsed valid steps");
+  for(double value:result.frames.back().values)
+    near(value,std::pow(1.125,-8));
+  for(std::size_t i=1;i<result.frames.size();++i)
+    near(result.frames[i].time-result.frames[i-1].time,.125);
+}
 }
 int main() {
-  try {linear();stationary();heat();damped_eigenmode();moving_and_waves();invalid_options();
+  try {linear();stationary();heat();damped_eigenmode();moving_and_waves();invalid_options();offset_interval();
     std::cout<<"FEM solver tests passed\n";
   } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
 }

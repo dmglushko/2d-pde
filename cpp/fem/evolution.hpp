@@ -47,7 +47,7 @@ inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& 
     const Expr& initial_value,const Expr& initial_velocity=Expr(0),const TimeOptions& options={}) {
   using namespace evolution_detail;
   if(!std::isfinite(options.start)||!std::isfinite(options.end)||!std::isfinite(options.step)||
-      options.step<=0||options.end<options.start)
+      options.step<=0||options.end<options.start||!std::isfinite(options.end-options.start))
     throw std::invalid_argument("Invalid time interval or step");
   switch(options.method) {
     case TimeMethod::BackwardEuler: case TimeMethod::CrankNicolson: case TimeMethod::Newmark: break;
@@ -78,9 +78,14 @@ inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& 
   while(time<options.end) {
     // Compute from the origin to avoid accumulating a spurious tiny final step.
     const double candidate=std::fma(static_cast<double>(step_index),options.step,options.start);
-    const double scale=std::max({std::abs(options.start),std::abs(options.end),std::abs(candidate)});
+    const double duration=options.end-options.start;
+    const double elapsed=static_cast<double>(step_index)*options.step;
+    // A large absolute time origin must not turn the rounding allowance into
+    // several valid steps. Scale by duration and cap below a requested step.
+    const double snap=std::min(options.step/8,
+        8*std::numeric_limits<double>::epsilon()*std::max(duration,std::abs(elapsed)));
     const double next=candidate>=options.end ||
-        options.end-candidate<=8*std::numeric_limits<double>::epsilon()*scale
+        duration-elapsed<=snap
         ?options.end:candidate;
     const double h=next-time;
     if(!(h>0)||!std::isfinite(h)) throw std::invalid_argument("Time step cannot advance representable time");

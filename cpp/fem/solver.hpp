@@ -39,8 +39,10 @@ inline void validate(const SparseMatrix& a,const Vector& b) {
   if(a.rows()!=a.cols()||a.rows()!=b.size()||a.rows()==0)
     throw std::invalid_argument("Linear system must be nonempty and square with matching RHS");
   if(!b.allFinite()) throw std::invalid_argument("Nonfinite linear RHS");
-  for(Eigen::Index k=0;k<a.nonZeros();++k)
-    if(!std::isfinite(a.valuePtr()[k])) throw std::invalid_argument("Nonfinite linear matrix");
+  // An uncompressed Eigen matrix may have unused slots between columns.
+  for(int column=0;column<a.outerSize();++column)
+    for(SparseMatrix::InnerIterator entry(a,column);entry;++entry)
+      if(!std::isfinite(entry.value())) throw std::invalid_argument("Nonfinite linear matrix");
 }
 }
 inline std::pair<SparseMatrix,Vector> constrain(const SparseMatrix& a,const Vector& b,
@@ -71,7 +73,7 @@ inline LinearSolution solve_linear(const SparseMatrix& input,const Vector& b,con
   SparseMatrix a=input;a.makeCompressed();
   LinearSolution result{Vector::Zero(b.size()),{}};
   auto& r=result.report;
-  r.residual_norm=b.norm();
+  r.residual_norm=b.stableNorm();
   r.relative_residual=r.residual_norm>0?1.:0.;
   // A rank check also catches compatible singular systems with a zero RHS.
   Eigen::SparseQR<SparseMatrix,Eigen::COLAMDOrdering<int>> rank;
@@ -79,7 +81,7 @@ inline LinearSolution solve_linear(const SparseMatrix& input,const Vector& b,con
   if(rank.info()!=Eigen::Success||rank.rank()!=a.rows()) {
     r.message="Singular or numerically rank-deficient linear system";return result;
   }
-  const double bn=b.norm();
+  const double bn=b.stableNorm();
   const double target=std::max(o.absolute_tolerance,o.relative_tolerance*bn);
   const double tolerance=bn>0?target/bn:o.relative_tolerance;
   if(o.method==LinearSolver::ConjugateGradient) {
@@ -104,7 +106,7 @@ inline LinearSolution solve_linear(const SparseMatrix& input,const Vector& b,con
     result.values=lu.solve(b);r.iterations=1;
     if(lu.info()!=Eigen::Success) {r.message="SparseLU solve failed";return result;}
   }
-  r.residual_norm=(a*result.values-b).norm();
+  r.residual_norm=(a*result.values-b).stableNorm();
   r.relative_residual=bn>0?r.residual_norm/bn:r.residual_norm;
   r.converged=result.values.allFinite()&&std::isfinite(r.residual_norm)&&r.residual_norm<=target;
   r.message=r.converged?"Converged":"Linear solver did not converge to requested true residual tolerance";
