@@ -7,3 +7,4 @@
 #include "assembly.hpp"
 #include "solver.hpp"
 #include "evolution.hpp"
+#include "report.hpp"

@@ -151,6 +151,13 @@ if(PDE2D_BUILD_FEM)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/fem/${example}.cpp")
       add_executable(fem_${example} examples/fem/${example}.cpp)
       target_link_libraries(fem_${example} PRIVATE pde2d_fem)
+      if(example STREQUAL "long_waves" AND BUILD_TESTING AND PDE2D_NODE)
+        pde2d_test(fem_wave_benchmark_cli "${PDE2D_NODE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/long_waves_benchmark_cli.cjs"
+          $<TARGET_FILE:fem_long_waves>
+          "${CMAKE_CURRENT_BINARY_DIR}/fixtures/fem_wave_benchmark_cli"
+          "${PDE2D_ENABLE_OPENMP}")
+      endif()
     endif()
   endforeach()
 endif()

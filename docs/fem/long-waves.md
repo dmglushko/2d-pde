@@ -113,3 +113,48 @@ The full gallery keeps all 401 saved frames per example at full output
 precision. `--compact` on the renderer creates the lighter inline version,
 which samples at most 101 frames per example and quantizes plotted values to
 16 bits. Error norms and conservation diagnostics retain full precision.
+
+## Native timing reports and benchmarking
+
+The [post-review benchmark](../performance/post-review-waves-2026-11-07.md)
+records matched serial/OpenMP runs with all five review fixes applied, including
+a separately compiled no-OpenMP binary and an interactive phase comparison.
+
+Profiling is part of every solve: returned solver/evolution reports contain
+phase timings and work counts by default. The wave executable prints the
+report and saves a `.timings.json` sidecar on an ordinary run. There is no
+separate profiling pass or timer option to enable. Durations measure wall
+time, not the simulated interval.
+
+Comparing execution policies requires solving the problem more than once.
+The executable provides this as a single option in an OpenMP-enabled build:
+
+```sh
+./build/fem_long_waves --benchmark
+# Optional: output directory, repetitions, subdivisions, time step.
+./build/fem_long_waves --benchmark build/wave-benchmark 3 20 0.05
+```
+
+This runs both 100-second wave problems with serial execution and with 2 and
+4 requested OpenMP workers. It uses the same executable, mesh, time integrator,
+SparseLU solver, and default checked validation for every policy. It checks
+every retained displacement, velocity, and conservation/error diagnostic
+against the serial reference. The first run is serial; subsequent rounds rotate
+the order. No warmup is discarded. OpenMP availability and requested worker
+limits are checked before any simulations run; runtime settings may still
+limit the actual teams used.
+
+The default is three repetitions. `benchmark.json` records every run, median
+and min/max total times, per-case integration/diagnostic times, settings and
+compiler. Each raw run and its phase profile are retained alongside it.
+Totals include diagnostic callbacks and export; phase totals are nested and
+must not be summed twice. No wall-time threshold is a test assertion. Avoid
+concurrent builds or other heavy work when collecting comparable measurements.
+
+The serial policy in this comparison bypasses OpenMP kernels within the same
+OpenMP-enabled binary. To measure compile-time OpenMP overhead separately,
+also configure `-DPDE2D_ENABLE_OPENMP=OFF` in another build directory and run
+its normal executable with the same `20 0.05 1` arguments. Building and running
+the historical revision remains a separate advanced workflow supported by
+`tools/benchmark_long_waves.mjs`; it is unnecessary for routine profiling or
+the serial/OpenMP comparison above.
