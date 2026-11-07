@@ -284,3 +284,45 @@ callback. Defaults preserve every frame and report.
 See [the independent verification guide](../performance/verification-build-2026-11-06.md)
 for isolated scikit-fem/SciPy comparisons, analytical convergence checks and
 serial/2/4-worker tests.
+
+## Native profiling and report output
+
+Timings are always collected in returned native reports; no timer option or
+external script is needed. The library stays quiet until explicitly asked to
+format a summary. Include `fem/report.hpp` (also exported by `fem/fem.hpp`):
+
+```cpp
+#include "fem/report.hpp"
+#include <iostream>
+
+fem::write_report(std::cout, motion);          // fem::Evolution
+fem::write_report(std::cout, solution);        // fem::LinearSolution
+fem::write_report(std::cout, solution.report); // fem::SolverReport
+```
+
+These overloads return `std::ostream&`, emit one summary without per-step output,
+and preserve the caller's formatting flags, precision, fill, width and locale.
+`LinearSolution` prints its solver report. For `solve_stationary`, those timings
+cover the linear solve, not preceding assembly and constraint elimination.
+A `PreparedLinearSolver::solve` report covers that RHS only; preparation is
+available separately through `preparation_timings()`.
+
+`Evolution::timings` contains disjoint wall-clock phases in seconds:
+`assembly_seconds`, `constraints_seconds`, `solver_seconds`, `observer_seconds`,
+and `other_seconds`, all included in `total_seconds`. Observer time measures
+only synchronous callback invocation; constructing/copying frames and retaining
+output belong to `other_seconds`. The nested `timings.solver` contains solver
+subphases and must not be added again to the evolution total. Counters include
+initial acceleration solves for Newmark, although per-step reports do not.
+`store_reports=false` retains all aggregate timings and work counters.
+Observers still receive the initial state and every accepted step independently
+of frame stride; callback exceptions propagate to the caller.
+
+`Evolution::metadata` records mesh node, element and boundary-edge counts,
+quadrature degree, time method/interval/step, solver options, OpenMP build
+availability, and the selected `execution` policy. Its `execution.threads` is
+the requested count (zero means runtime default), **not** measured team size.
+Small loops, nested execution and runtime limits may cause serial or smaller
+teams. The formatter labels this distinction explicitly. The default selected
+backend remains serial in both builds. These timings measure elapsed time,
+not CPU consumption, and overlapping application activity can affect them.

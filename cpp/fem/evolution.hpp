@@ -16,9 +16,21 @@ struct TimeOptions {
   bool store_reports=true;
   std::function<void(const Frame&)> observer{};
 };
+struct EvolutionMetadata {
+  // Selected policy, not an observation of actual OpenMP team sizes. Zero
+  // threads delegates the choice to the runtime; small loops may stay serial.
+  pde2d::ExecutionOptions execution;
+  bool openmp_available=false;
+  std::size_t nodes=0,elements=0,boundary_edges=0;
+  int quadrature_degree=2;
+  TimeMethod method=TimeMethod::BackwardEuler;
+  SolverOptions solver;
+  double start=0,end=0,step=0;
+};
 struct Evolution {
   std::vector<Frame> frames; std::vector<SolverReport> reports;
   EvolutionTimings timings;
+  EvolutionMetadata metadata;
 };
 namespace evolution_detail {
 inline Vector initial(const discretization::TriangleMesh& mesh,const Expr& field,double time,
@@ -71,6 +83,10 @@ inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& 
   using namespace evolution_detail;
   const auto started=timing_detail::Clock::now();
   Evolution result;
+  result.metadata={options.assembly.execution,pde2d::openmp_available(),
+      mesh.nodes.size(),mesh.elements.size(),mesh.boundary_edges.size(),
+      options.assembly.quadrature_degree,options.method,options.solver,
+      options.start,options.end,options.step};
   std::unique_ptr<PreparedAssembly> assembly;
   std::unique_ptr<PreparedLinearSolver> prepared;
   auto timed_assembly=[&](double time,int derivative_order=0) {
@@ -110,7 +126,11 @@ inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& 
     const bool retain=index==0||index%options.frame_stride==0||stamp==options.end;
     if(!retain&&!options.observer) return;
     Frame frame{stamp,u,v};
-    if(options.observer) options.observer(frame);
+    if(options.observer) {
+      const auto phase=timing_detail::Clock::now();
+      options.observer(frame);
+      result.timings.observer_seconds+=timing_detail::seconds(phase);
+    }
     if(retain)
       result.frames.push_back(std::move(frame));
   };
@@ -175,7 +195,8 @@ inline Evolution evolve(const discretization::TriangleMesh& mesh,const Problem& 
   }
   result.timings.total_seconds=timing_detail::seconds(started);
   result.timings.other_seconds=std::max(0.,result.timings.total_seconds-
-      result.timings.assembly_seconds-result.timings.constraints_seconds-result.timings.solver_seconds);
+      result.timings.assembly_seconds-result.timings.constraints_seconds-result.timings.solver_seconds-
+      result.timings.observer_seconds);
   return result;
 }
 } // namespace fem

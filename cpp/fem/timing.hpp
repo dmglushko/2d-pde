@@ -21,7 +21,8 @@ struct SolverTimings {
 };
 struct EvolutionTimings {
   double assembly_seconds=0,constraints_seconds=0,solver_seconds=0;
-  double other_seconds=0,total_seconds=0;
+  // Disjoint evolution phases; solver below contains nested solver subphases.
+  double observer_seconds=0,other_seconds=0,total_seconds=0;
   std::size_t assembly_calls=0,linear_solves=0,time_steps=0,solver_reuses=0;
   SolverTimings solver;
 };
