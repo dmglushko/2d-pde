@@ -91,7 +91,7 @@ factorization. The profile records preparation/reuse counts explicitly.
 Diagnostics run inside the full-step observer, so their time is included in the
 integration total. `integration_excluding_observer_seconds` subtracts the timed
 diagnostics for comparison with the earlier postprocessing-based profile saved
-in `docs/performance/baseline-long-waves-695d785.json`.
+in `docs/archive/performance/baseline-long-waves-695d785.json`.
 
 ## Reproduce
 

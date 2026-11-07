@@ -1,0 +1,100 @@
+# Agent guide
+
+C++23 header-only library for 2D geometry, triangle meshing and scalar P1
+finite elements, plus JavaScript/Python tools that read its files. Read
+[docs/architecture.md](docs/architecture.md) first for the layer diagram and
+data flow.
+
+## Where things are
+
+| Path | Contents |
+| --- | --- |
+| `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
+| `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing, mesh validation, `.pde2d` and SVG IO. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
+| `cpp/fem/` | equations, boundary conditions, assembly, solvers, time integration. [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests), `support/` (shared helpers). Registered in `tests/**/CMakeLists.txt` |
+| `examples/` | runnable programs (learning, meshing showcase, FEM showcase, long waves). Built as CTest smoke tests |
+| `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
+| `tools/` | mesh viewer (`mesh_viewer/`), `plot_mesh.py`, `render_solutions.mjs`, independent references (`reference/`), `format.sh`, `test*.sh` |
+| `docs/` | user docs (`fem/`, `learning/`, `showcase/`, `formats/`), current performance (`performance/`), `archive/` = dated historical reports |
+
+## Build and test
+
+Run builds inside WSL/Linux (the checkout is on ext4; Windows git refuses it).
+
+```sh
+tools/test.sh                         # geometry only: no Eigen/SymEngine needed
+tools/test_fem.sh -DPDE2D_FETCH_SYMENGINE=ON          # + FEM (fetches pinned SymEngine)
+tools/test_fem.sh -DSymEngine_DIR=<prefix>/lib/cmake/symengine   # installed SymEngine
+tools/test_fem.sh -DPDE2D_ENABLE_OPENMP=ON            # parallel kernels
+tools/format.sh --check               # clang-format; run tools/format.sh to fix
+ctest --test-dir build -R fem_assembly --output-on-failure   # one test
+```
+
+Set `PDE2D_BUILD_JOBS`/`PDE2D_TEST_JOBS` for parallelism and `PDE2D_BUILD_DIR`
+to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
+
+## Conventions
+
+- Namespaces: `pde2d` (execution), `pde2d::discretization`, `pde2d::fem`.
+  `*_detail` namespaces are private: tests and examples must use public API.
+  Benchmarks are the only exception.
+- Dependencies point downward: `fem` may include `discretization`, never the
+  reverse. Only `svg_geometry.hpp` needs libxml2.
+- Style: clang-format (LLVM, 80 columns). FEM and meshing free functions use
+  snake_case. The geometry/curve API is camelCase (`setCenter`, `curveLength`)
+  for compatibility; don't rename it piecemeal.
+- Errors are exceptions with specific messages. Tests match message
+  fragments, so keep messages stable or update the tests.
+- Numerical code is deterministic: parallel loops write per-item slots and
+  reductions/scatter run serially in a fixed order. Keep it that way. Serial
+  and OpenMP results must be bit-identical.
+- Symbolic (`SymEngine`) work happens only during preparation, never inside
+  `parallel_for` bodies.
+
+## Invariants that are easy to break
+
+- **P1 only.** No element-order switch; higher order is a separate module.
+- **Wire IDs are permanent:** `InteriorAlgorithm`, `BoundaryTreatment` and
+  curve-kind IDs in `curve_io.hpp`. The `.pde2d` format is specified in
+  [docs/formats/pde2d-mesh.md](docs/formats/pde2d-mesh.md) and parsed by
+  C++, `tools/mesh_viewer/mesh.js` and `tools/plot_mesh.py`. Change all three
+  together.
+- **Sign convention:** `Equation` is `a_xx u_xx + a_xy u_xy + a_yy u_yy + ... = source`
+  with default `a_xx = a_yy = -1` (that is, −Δu). Natural flux is
+  `q_n = -n·A∇u`. See `cpp/fem/problem.hpp` and `weak_form.hpp`.
+- **Initial conditions** are not part of `Problem`. They are passed to
+  `evolve(mesh, problem, InitialConditions{value, velocity}, options)`.
+  Newmark requires `velocity`.
+- `MeshResult::report` must be checked: meshing can return a mesh that misses
+  its size target.
+
+## Tests
+
+- Put a new test in the module directory and register it in that directory's
+  `CMakeLists.txt` with `pde2d_add_cpp_test(NAME ... SOURCE ... [FEM] [LIBXML2] ...)`.
+- Use `tests/support/check.hpp` (`check`, `near`, `expect_throws`, `run`).
+  Use `check_eigen.hpp` for vectors. Use `discretization/square_mesh.hpp` for
+  structured meshes and `fem/error_norms.hpp` for L2/H1 errors.
+- Oracles: exact or manufactured solutions, convergence rates, invariants, or
+  independent implementations (`tools/reference/`, `tests/support/error_norms_reference.hpp`).
+  Don't copy the algorithm under test into the test. To test caching, drive
+  the same public components without the cache (see
+  `tests/fem/reusable_evolution.cpp`).
+- Exact work counters (`solver_reuses`, `preparations`) are performance
+  contracts. Assert them as relations (`== time_steps - 1`), with a comment.
+
+## Generated files (regenerate, don't hand-edit)
+
+`docs/showcase/*`, `docs/fem/showcase.html`, `docs/fem/long-waves.html`,
+`docs/fem/long-waves-timings.json`, `docs/performance/*.json|html`,
+`examples/mesh_viewer/example_mesh.js`, `pde_aware_fem_guide.pdf`. The
+commands are in the README next to each artifact. Files in `docs/archive/`
+are historical snapshots: don't update them to match current code.
+
+## Before finishing a change
+
+1. `tools/format.sh --check`
+2. `tools/test.sh`, and `tools/test_fem.sh` if `cpp/fem`, FEM tests or examples changed.
+3. Update the module README or EXTENDING guide when you change a public API or
+   an extension point, and this file when you change layout or conventions.

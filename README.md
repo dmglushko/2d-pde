@@ -25,7 +25,7 @@ Implemented:
 - [100-second driven Dirichlet and source-free Neumann waves](docs/fem/long-waves.md)
   on a larger square, with execution profiling and energy/work checks.
 - Prepared assembly and solver reuse, optional deterministic OpenMP numerical
-  kernels, and [analytical/independent-library verification](docs/performance/verification-build-2026-11-06.md).
+  kernels, and [analytical/independent-library verification](docs/archive/performance/verification-build-2026-11-06.md).
 
 ## P1-only design
 
@@ -77,13 +77,18 @@ node tools/render_solutions.mjs build/fem-showcase.json docs/fem/showcase.html
 
 ## Project map
 
+- [Architecture: layers, data flow, build configurations](docs/architecture.md)
+  and the [agent/contributor guide](AGENTS.md)
 - [Geometry, free-function meshing, region editing, and I/O](cpp/discretization/README.md)
+- [FEM module map](cpp/fem/README.md) and [extension guide](cpp/fem/EXTENDING.md)
 - [Equation input, boundary conditions, assembly, and solutions](docs/fem/README.md)
-- [Current performance results and historical verification](docs/performance/README.md)
+- [`.pde2d` mesh file format](docs/formats/pde2d-mesh.md)
+- [Current performance results](docs/performance/README.md)
 - [Opt-in standalone benchmarks](benchmarks/README.md)
 - [Learning walkthrough](docs/learning/README.md), [reference](docs/learning/reference.md), and [questions](docs/learning/questions.md)
 - [Viewer instructions](tools/mesh_viewer/README.md)
-- [Historical audit](docs/audit-2026-10-23.md), predating the current API
+- [Archived dated reports](docs/archive/), including the
+  [first audit](docs/archive/audit-2026-10-23.md), which predates the current API
 - Broader background: [FEM guide PDF](pde_aware_fem_guide.pdf) and [LaTeX source](pde_aware_fem_guide.tex)
 
 The mesher accepts one simple outline without holes. CDT size refinement uses

@@ -26,12 +26,12 @@ These reports describe their recorded snapshots, not the current API or new
 performance promises. Raw measurements are retained to make comparisons
 auditable.
 
-- [November 6 audit and issue inventory](audit-2026-11-06.md)
-- [Integrated implementation and verification](integration-2026-11-06.md)
-- [Assembly preparation](assembly-2026-11-06.md)
-- [Geometry query performance](geometry-issue48-2026-11-06.md)
-- [Mesh refinement](mesh-issue3/README.md)
-- [Solver reuse](solver6/README.md)
-- [Diagnostics and viewers](issue-7-diagnostics-viewers.md)
-- [Independent references and build verification](verification-build-2026-11-06.md)
-- [Repeated historical wave measurements](waves-benchmark.html)
+- [November 6 audit and issue inventory](../archive/performance/audit-2026-11-06.md)
+- [Integrated implementation and verification](../archive/performance/integration-2026-11-06.md)
+- [Assembly preparation](../archive/performance/assembly-2026-11-06.md)
+- [Geometry query performance](../archive/performance/geometry-issue48-2026-11-06.md)
+- [Mesh refinement](../archive/performance/mesh-issue3/README.md)
+- [Solver reuse](../archive/performance/solver6/README.md)
+- [Diagnostics and viewers](../archive/performance/issue-7-diagnostics-viewers.md)
+- [Independent references and build verification](../archive/performance/verification-build-2026-11-06.md)
+- [Repeated historical wave measurements](../archive/performance/waves-benchmark.html)
