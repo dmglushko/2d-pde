@@ -7,6 +7,7 @@ const help=run('--help');assert.equal(help.status,0,help.stderr);assert.ok(help.
 const result=run('--benchmark',directory,'2','2','50');
 if(openmp==='ON'){
   assert.equal(result.status,0,result.stderr+result.stdout);
+  assert.ok(result.stdout.includes('FEM evolution:')&&result.stdout.includes('observer='));
   const report=JSON.parse(fs.readFileSync(path.join(directory,'benchmark.json'),'utf8'));
   assert.equal(report.repetitions,2);assert.equal(report.subdivisions,2);assert.equal(report.time_step,50);
   assert.equal(report.runs.length,6);assert.deepEqual(report.summary.map(s=>s.threads),[1,2,4]);
@@ -29,6 +30,7 @@ if(openmp==='ON'){
   assert.notEqual(result.status,0);assert.ok(result.stderr.includes('requires an OpenMP-enabled build'));
   const single=run(path.join(directory,'serial.json'),'2','50','1');
   assert.equal(single.status,0,single.stderr+single.stdout);
+  assert.ok(single.stdout.includes('FEM evolution:')&&single.stdout.includes('selected_backend=Serial'));
 }
 const invalid=run('--benchmark',directory,'0');assert.notEqual(invalid.status,0);
 console.log('Native benchmark CLI, reports and backend availability checks passed');
