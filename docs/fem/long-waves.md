@@ -116,6 +116,10 @@ which samples at most 101 frames per example and quantizes plotted values to
 
 ## Native timing reports and benchmarking
 
+The [post-review benchmark](../performance/post-review-waves-2026-11-07.md)
+records matched serial/OpenMP runs with all five review fixes applied, including
+a separately compiled no-OpenMP binary and an interactive phase comparison.
+
 Profiling is part of every solve: returned solver/evolution reports contain
 phase timings and work counts by default. The wave executable prints the
 report and saves a `.timings.json` sidecar on an ordinary run. There is no
