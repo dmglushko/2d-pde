@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 using namespace fem;
 void vector(std::ostream &out, const Vector &v) {
   out << '[';
@@ -23,7 +24,7 @@ void matrix(std::ostream &out, const SparseMatrix &a) {
   }
   out << ']';
 }
-int main(int argc, char **argv) {
+int main(int argc, char **argv) try {
   if (argc != 2 && argc != 3)
     return 2;
   AssemblyOptions assembly{8};
@@ -32,7 +33,9 @@ int main(int argc, char **argv) {
                           0};
   std::filesystem::create_directories(argv[1]);
   auto mesh = square_mesh(4);
-  std::ofstream out(std::string(argv[1]) + "/reference.json");
+  std::ofstream out;
+  out.exceptions(std::ios::failbit | std::ios::badbit);
+  out.open(std::string(argv[1]) + "/reference.json");
   out << std::setprecision(17);
   out << "{\"openmp\":" << (pde2d::openmp_available() ? "true" : "false")
       << ",\"nodes\":[";
@@ -99,4 +102,9 @@ int main(int argc, char **argv) {
       out << '}';
     }
   out << "]}\n";
+  // Destruction alone cannot report a buffered write or close failure.
+  out.close();
+} catch (const std::exception &error) {
+  std::cerr << "Reference export failed: " << error.what() << '\n';
+  return 1;
 }
