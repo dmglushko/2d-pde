@@ -105,12 +105,12 @@ saves; optional execution is not a universal scaling claim.
 
 ## Long-wave reproduction
 
-`tools/benchmark_long_waves.mjs` runs each policy as a separate sequential process,
+`benchmarks/benchmark_long_waves.mjs` runs each policy as a separate sequential process,
 keeps raw fields/profiles/logs, checks all retained states against serial, and
 records binary hashes and environment. Run after builds and other tasks finish:
 
 ```sh
-node tools/benchmark_long_waves.mjs /tmp/pde2d-baseline-long-waves-695d785 \
+node benchmarks/benchmark_long_waves.mjs /tmp/pde2d-baseline-long-waves-695d785 \
   build/fem_long_waves build/openmp/fem_long_waves build/wave-benchmark 3
 ```
 

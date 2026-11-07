@@ -156,5 +156,5 @@ OpenMP-enabled binary. To measure compile-time OpenMP overhead separately,
 also configure `-DPDE2D_ENABLE_OPENMP=OFF` in another build directory and run
 its normal executable with the same `20 0.05 1` arguments. Building and running
 the historical revision remains a separate advanced workflow supported by
-`tools/benchmark_long_waves.mjs`; it is unnecessary for routine profiling or
+`benchmarks/benchmark_long_waves.mjs`; it is unnecessary for routine profiling or
 the serial/OpenMP comparison above.

@@ -69,7 +69,7 @@ Benchmark command (run three times per binary):
 
 ```sh
 g++ -std=c++23 -O2 -Wall -Wextra -Werror -Icpp \
-  $(pkg-config --cflags libxml-2.0) benchmarks/geometry_issue48.cpp \
+  $(pkg-config --cflags libxml-2.0) benchmarks/geometry_queries.cpp \
   $(pkg-config --libs libxml-2.0) -o /tmp/pde-geometry-48/current
 /tmp/pde-geometry-48/current /tmp/pde-geometry-48/input.svg
 ```
