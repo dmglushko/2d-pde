@@ -1,7 +1,7 @@
 // Standalone build command and recorded settings:
 // docs/performance/assembly-2026-11-06.md
-#include "../examples/fem/square_mesh.hpp"
-#include "fem/prepared_assembly.hpp"
+#include "discretization/square_mesh.hpp"
+#include "fem/assembly.hpp"
 #include <chrono>
 #include <iostream>
 int main(int argc, char **argv) {

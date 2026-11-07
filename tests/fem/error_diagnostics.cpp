@@ -1,14 +1,12 @@
-#include "../examples/fem/error_norms.hpp"
-#include "../examples/fem/square_mesh.hpp"
+#include "fem/error_norms.hpp"
+#include "discretization/square_mesh.hpp"
 #include <iostream>
 #include <stdexcept>
 
-#include "error_norms_reference.hpp"
-void check(bool b) {
-  if (!b)
-    throw std::runtime_error("diagnostic regression");
-}
-int main() {
+#include "support/error_norms_reference.hpp"
+#include "support/check.hpp"
+using pde2d_test::check;
+void error_norm_diagnostics() {
   using namespace fem;
   auto mesh = square_mesh(20);
   Vector v = Vector::Zero(mesh.nodes.size());
@@ -68,10 +66,7 @@ int main() {
   auto analytic = PreparedErrorNorms(mesh, x * x).evaluate(v);
   check(std::abs(analytic.l2 - std::sqrt(.2)) < 1e-13 &&
         std::abs(analytic.h1_seminorm - std::sqrt(4. / 3)) < 1e-13);
-  std::cout << "analytical, original, compatibility, physical geometry and "
-               "ownership checks passed; OpenMP "
-            << (pde2d::openmp_available()
-                    ? "agreement verified"
-                    : "unavailable-backend rejection verified")
-            << '\n';
+}
+int main() {
+  return pde2d_test::run({{"error_norm_diagnostics", error_norm_diagnostics}});
 }

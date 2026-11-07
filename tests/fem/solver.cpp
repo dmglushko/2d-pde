@@ -1,28 +1,15 @@
 #include "fem/evolution.hpp"
-#include "../examples/fem/square_mesh.hpp"
+#include "discretization/square_mesh.hpp"
+#include "support/check.hpp"
 #include <Eigen/Dense>
 #include <iostream>
 
+using pde2d_test::check;
+using pde2d_test::expect_throws;
 namespace {
 using namespace fem;
-void check(bool ok, const char *message) {
-  if (!ok)
-    throw std::runtime_error(message);
-}
 void near(double a, double b, double tol = 1e-9) {
-  check(std::abs(a - b) <= tol * std::max({1., std::abs(a), std::abs(b)}),
-        "Numerical mismatch");
-}
-template <class F> void rejects(F f, const char *fragment = "") {
-  try {
-    f();
-  } catch (const std::exception &e) {
-    if (std::string(e.what()).find(fragment) == std::string::npos)
-      throw std::runtime_error(std::string("Unexpected diagnostic: ") +
-                               e.what());
-    return;
-  }
-  throw std::runtime_error("Expected rejection");
+  pde2d_test::near(a, b, tol);
 }
 SparseMatrix sparse(const Eigen::MatrixXd &a) { return a.sparseView(); }
 void linear() {
@@ -79,15 +66,16 @@ void linear() {
   cg.restart = 1;
   check(!solve_linear(sparse(dense), b, cg).report.converged,
         "GMRES failure missed");
-  rejects([&] { constrain(a, b, {{0, 1}, {0, 2}}); }, "Conflicting");
+  expect_throws([&] { constrain(a, b, {{0, 1}, {0, 2}}); }, "Conflicting");
   SolverOptions bad;
   bad.relative_tolerance = std::numeric_limits<double>::quiet_NaN();
-  rejects([&] { solve_linear(a, b, bad); }, "options");
+  expect_throws([&] { solve_linear(a, b, bad); }, "options");
   SparseMatrix uncompressed(3, 3);
   uncompressed.reserve(Eigen::VectorXi::Constant(3, 4));
   uncompressed.insert(0, 0) = 1;
   uncompressed.insert(2, 2) = std::numeric_limits<double>::quiet_NaN();
-  rejects([&] { solve_linear(uncompressed, b); }, "Nonfinite linear matrix");
+  expect_throws([&] { solve_linear(uncompressed, b); },
+                "Nonfinite linear matrix");
   dense.setIdentity();
   const Vector tiny = Vector::Constant(3, 1e-180);
   SolverOptions strict;
@@ -146,15 +134,18 @@ void validation_policies() {
           "Default numerical rank safeguard lost");
     auto nonfinite = dense;
     nonfinite(0, 0) = std::numeric_limits<double>::infinity();
-    rejects([&] { solve_linear(sparse(nonfinite), b, trusted); }, "Nonfinite");
-    rejects([&] { solve_linear(sparse(dense), Vector::Zero(2), trusted); },
-            "matching RHS");
+    expect_throws([&] { solve_linear(sparse(nonfinite), b, trusted); },
+                  "Nonfinite");
+    expect_throws(
+        [&] { solve_linear(sparse(dense), Vector::Zero(2), trusted); },
+        "matching RHS");
     Vector bad_rhs = b;
     bad_rhs[0] = std::numeric_limits<double>::quiet_NaN();
-    rejects([&] { fast.solve(bad_rhs); }, "RHS");
+    expect_throws([&] { fast.solve(bad_rhs); }, "RHS");
     auto nonsquare = SparseMatrix(2, 3);
-    rejects([&] { PreparedLinearSolver invalid_shape(nonsquare, trusted); },
-            "square");
+    expect_throws(
+        [&] { PreparedLinearSolver invalid_shape(nonsquare, trusted); },
+        "square");
     trusted.max_iterations = 1;
     trusted.restart = 1;
     trusted.absolute_tolerance = 0;
@@ -181,7 +172,8 @@ void validation_policies() {
   check(!solve_linear(sparse(asymmetric), Vector::Zero(3), cg).report.converged,
         "Trusted CG lost inexpensive symmetry check");
   cg.validation = static_cast<SolverValidation>(-1);
-  rejects([&] { solve_linear(sparse(dense), b, cg); }, "validation policy");
+  expect_throws([&] { solve_linear(sparse(dense), b, cg); },
+                "validation policy");
 }
 void stationary() {
   auto mesh = square_mesh(3);
@@ -192,7 +184,7 @@ void stationary() {
     near(s.values[i], 1 + mesh.nodes[i].x + 2 * mesh.nodes[i].y);
   p.boundaries.clear();
   p.assign(flux_neumann(0), {"bottom", "right", "top", "left"});
-  rejects([&] { solve_stationary(mesh, p); }, "Singular");
+  expect_throws([&] { solve_stationary(mesh, p); }, "Singular");
 }
 void heat() {
   // One free node gives an exact semidiscrete eigenmode, removing spatial
@@ -314,10 +306,10 @@ void moving_and_waves() {
              2e-9);
         near(frame.velocity[i], f * (1 + 2 * frame.time), 2e-8);
       }
-    rejects([&] { evolve(mesh, p, phi, 0, o); }, "velocity");
-    rejects([&] { evolve(mesh, p, 0, phi, o); }, "displacement");
+    expect_throws([&] { evolve(mesh, p, phi, 0, o); }, "velocity");
+    expect_throws([&] { evolve(mesh, p, 0, phi, o); }, "displacement");
     o.method = TimeMethod::BackwardEuler;
-    rejects([&] { evolve(mesh, p, phi, phi, o); }, "second mass");
+    expect_throws([&] { evolve(mesh, p, phi, phi, o); }, "second mass");
   }
   // Moving boundary lifting with a time-varying bulk first mass. The affine
   // solution is exact for both first-order schemes and exercises reassembly.
@@ -352,19 +344,19 @@ void invalid_options() {
   auto mesh = square_mesh(2);
   Problem p;
   p.assign(dirichlet(0), {"bottom", "right", "top", "left"});
-  rejects([&] { evolve(mesh, p, 0); }, "first mass");
+  expect_throws([&] { evolve(mesh, p, 0); }, "first mass");
   p.equation.m1 = 1;
   TimeOptions o;
   o.method = TimeMethod::Newmark;
-  rejects([&] { evolve(mesh, p, 0, 0, o); }, "second mass");
+  expect_throws([&] { evolve(mesh, p, 0, 0, o); }, "second mass");
   o.method = TimeMethod::BackwardEuler;
   o.step = std::numeric_limits<double>::infinity();
-  rejects([&] { evolve(mesh, p, 0, 0, o); }, "time interval");
+  expect_throws([&] { evolve(mesh, p, 0, 0, o); }, "time interval");
   o.step = 0;
-  rejects([&] { evolve(mesh, p, 0, 0, o); });
+  expect_throws([&] { evolve(mesh, p, 0, 0, o); });
   o.step = .1;
   o.end = -1;
-  rejects([&] { evolve(mesh, p, 0, 0, o); });
+  expect_throws([&] { evolve(mesh, p, 0, 0, o); });
   o.end = 0;
   auto e = evolve(mesh, p, 0, 0, o);
   check(e.frames.size() == 1, "Initial-only evolution");
@@ -388,18 +380,12 @@ void offset_interval() {
 }
 } // namespace
 int main() {
-  try {
-    linear();
-    validation_policies();
-    stationary();
-    heat();
-    damped_eigenmode();
-    moving_and_waves();
-    invalid_options();
-    offset_interval();
-    std::cout << "FEM solver tests passed\n";
-  } catch (const std::exception &e) {
-    std::cerr << e.what() << '\n';
-    return 1;
-  }
+  return pde2d_test::run({{"linear", linear},
+                          {"validation_policies", validation_policies},
+                          {"stationary", stationary},
+                          {"heat", heat},
+                          {"damped_eigenmode", damped_eigenmode},
+                          {"moving_and_waves", moving_and_waves},
+                          {"invalid_options", invalid_options},
+                          {"offset_interval", offset_interval}});
 }

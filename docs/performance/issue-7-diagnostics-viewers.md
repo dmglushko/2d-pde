@@ -53,11 +53,11 @@ This saves token retention, not a measured peak-memory quantity.
 - `node tools/mesh_viewer/test_mesh.cjs`: versions 1–4, uint64 IDs, malformed
   metadata/counts/truncation, upload preservation, selection, slow pan, zoom,
   cancellation, redraw coalescing, resize and fit.
-- `node tests/viewer_diagnostics.cjs`: actual generated standalone script with a
+- `node tests/tools/viewer_diagnostics.cjs`: actual generated standalone script with a
   deterministic DOM/canvas; frame/case/field/map switches, fixed scale, canvas
   reuse, resized projection, speed/time playback, wrapping, pause and scrubbing.
 - `fem_long_waves /tmp/pde2d-issue7-output/waves.json 20 .05`, then
-  `node tests/long_waves_diagnostics.cjs /tmp/pde2d-issue7-output/waves.json /tmp/pde2d-issue7-baseline/long-waves.json`:
+  `node tests/tools/long_waves_diagnostics.cjs /tmp/pde2d-issue7-output/waves.json /tmp/pde2d-issue7-baseline/long-waves.json`:
   401 frames, 2,001 observations, exact endpoints, aligned diagnostics, no driven
   error metrics, timing overlap. Largest old/new nodal difference 5.11e-10;
   energy/mean/work/norm differences below 6.65e-11 (old JSON has ten digits).
@@ -87,7 +87,7 @@ diagnostics. Full-step energy/work defects: 8.33e-16 driven, 4.44e-15 free;
 free mean drift 1.92e-12. These integration times include previously integrated
 assembly/solver changes and are not attributed to this issue alone.
 
-`node tests/viewer_diagnostics.cjs BASELINE.html CURRENT.html`, same historical
+`node tests/tools/viewer_diagnostics.cjs BASELINE.html CURRENT.html`, same historical
 441-node / 800-triangle / 401-frame case, 20 surface redraws, no-op canvas:
 
 | Work | Baseline | Current |
@@ -127,7 +127,7 @@ c++ -std=c++23 -O3 -fopenmp -Icpp -isystem /usr/include/eigen3 \
 ```
 
 The serial-only test used the same compile command without `-fopenmp`, replacing
-benchmark source with `tests/fem_error_diagnostics.cpp`. The diagnostic regression
+benchmark source with `tests/fem/error_diagnostics.cpp`. The diagnostic regression
 also checks a translated/sheared/scaled mesh and verifies prepared geometry
 survives subsequent changes to the input mesh. Final full and compact wave HTML
 and showcase HTML were executed by the Node harness as well as packaged.

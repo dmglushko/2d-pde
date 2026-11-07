@@ -1,5 +1,5 @@
 // Opt-in data producer, deliberately outside tests/ discovery.
-#include "../../examples/fem/square_mesh.hpp"
+#include "discretization/square_mesh.hpp"
 #include "fem/evolution.hpp"
 #include <filesystem>
 #include <fstream>

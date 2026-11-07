@@ -1,9 +1,11 @@
 #include "fem/fem.hpp"
-#include "../examples/fem/square_mesh.hpp"
+#include "discretization/square_mesh.hpp"
+#include "support/check.hpp"
 #include <iostream>
 #include <sstream>
 
 using namespace fem;
+using pde2d_test::check;
 namespace {
 struct CommaDecimal : std::numpunct<char> {
   char do_decimal_point() const override { return ','; }
@@ -13,10 +15,6 @@ struct ThrowingBuffer : std::streambuf {
     throw std::runtime_error("output sentinel");
   }
 };
-void check(bool condition, const char *message) {
-  if (!condition)
-    throw std::runtime_error(message);
-}
 void accounting(const Evolution &e) {
   const auto &t = e.timings;
   for (double value :
@@ -195,12 +193,4 @@ void reports() {
         "Failed report missing status");
 }
 } // namespace
-int main() {
-  try {
-    reports();
-    std::cout << "Native reporting checks passed\n";
-  } catch (const std::exception &e) {
-    std::cerr << e.what() << '\n';
-    return 1;
-  }
-}
+int main() { return pde2d_test::run({{"reports", reports}}); }

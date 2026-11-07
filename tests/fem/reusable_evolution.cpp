@@ -1,17 +1,14 @@
 #include "fem/evolution.hpp"
-#include "../examples/fem/square_mesh.hpp"
+#include "discretization/square_mesh.hpp"
+#include "support/check_eigen.hpp"
 #include <iostream>
 #include <thread>
 
 using namespace fem;
+using pde2d_test::check;
 namespace {
-void check(bool yes, const char *text) {
-  if (!yes)
-    throw std::runtime_error(text);
-}
 void near(const Vector &a, const Vector &b) {
-  check((a - b).stableNorm() < 2e-9 * std::max(1., b.stableNorm()),
-        "Cached and uncached values differ");
+  pde2d_test::near_vector(a, b, 2e-9);
 }
 // Deliberately reassemble and prepare each solve. This checks the complete
 // recurrence, including endpoint loads, lifting and initial wave acceleration.
@@ -265,12 +262,6 @@ void evolution() {
 }
 } // namespace
 int main() {
-  try {
-    repeated_rhs();
-    evolution();
-    std::cout << "Reusable solver/evolution checks passed\n";
-  } catch (const std::exception &e) {
-    std::cerr << e.what() << '\n';
-    return 1;
-  }
+  return pde2d_test::run(
+      {{"repeated_rhs", repeated_rhs}, {"evolution", evolution}});
 }

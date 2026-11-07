@@ -1,5 +1,5 @@
 #pragma once
-#include "../examples/fem/error_norms.hpp"
+#include "fem/error_norms.hpp"
 // Independent original quadrature loop, intentionally rebuilding rules.
 ErrorNorms reference(const discretization::TriangleMesh &mesh,
                      const fem::Vector &v, const fem::Expr &exact,

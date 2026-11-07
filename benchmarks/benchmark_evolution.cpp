@@ -1,5 +1,5 @@
 #include "fem/evolution.hpp"
-#include "../examples/fem/square_mesh.hpp"
+#include "discretization/square_mesh.hpp"
 #include <iostream>
 int main() {
   using namespace fem;

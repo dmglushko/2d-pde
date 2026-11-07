@@ -1,13 +1,12 @@
 #include "discretization/geometry.hpp"
+#include "support/check.hpp"
 #include <barrier>
 #include <thread>
 #include <iostream>
 using namespace discretization;
-void check(bool ok) {
-  if (!ok)
-    throw std::runtime_error("Geometry query invariant failed");
-}
-int main() {
+using pde2d_test::check;
+using pde2d_test::expect_throws;
+void concurrent_queries_and_edits() {
   // Every fresh geometry exercises shared cold misses, hits, and copies while
   // other readers fill the source cache. Workers never edit the shared source.
   for (int pass = 0; pass < 8; ++pass) {
@@ -55,13 +54,7 @@ int main() {
   auto old = seam.curves()[0].id;
   auto parts = seam.splitCurve(old, .3, "x", "y");
   check(std::abs(seam.length(parts[0]) - .3) < 1e-12);
-  bool retired = false;
-  try {
-    (void)seam.curve(old);
-  } catch (const std::out_of_range &) {
-    retired = true;
-  }
-  check(retired);
+  expect_throws<std::out_of_range>([&] { (void)seam.curve(old); });
   EllipseGeometry e(2, 1);
   auto copy = e;
   auto id = e.curves()[0].id;
@@ -78,6 +71,8 @@ int main() {
   } catch (const std::invalid_argument &) {
   }
   check(e.curves().size() == before.size());
-  std::cout << "Concurrent cold/hit/copy queries, seam indexing and "
-               "independent edits passed\n";
+}
+int main() {
+  return pde2d_test::run(
+      {{"concurrent_queries_and_edits", concurrent_queries_and_edits}});
 }

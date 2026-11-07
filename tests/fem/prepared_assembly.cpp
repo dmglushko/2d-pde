@@ -1,16 +1,12 @@
-#include "../examples/fem/square_mesh.hpp"
-#include "fem/prepared_assembly.hpp"
+#include "discretization/square_mesh.hpp"
+#include "fem/assembly.hpp"
+#include "support/check.hpp"
 #include <iostream>
 #include <stdexcept>
 using namespace fem;
+using pde2d_test::check;
 namespace {
-void check(bool v) {
-  if (!v)
-    throw std::runtime_error("Prepared assembly mismatch");
-}
-void near(double a, double b) {
-  check(std::abs(a - b) < 3e-10 * std::max({1., std::abs(a), std::abs(b)}));
-}
+void near(double a, double b) { pde2d_test::near(a, b, 3e-10); }
 void same(const AssembledSystem &a, const AssembledSystem &b) {
   near((a.stiffness - b.stiffness).norm(), 0);
   near((a.first_mass - b.first_mass).norm(), 0);
@@ -143,13 +139,6 @@ void moving() {
 }
 } // namespace
 int main() {
-  try {
-    known();
-    patch();
-    moving();
-    std::cout << "Prepared assembly tests passed\n";
-  } catch (const std::exception &e) {
-    std::cerr << e.what() << '\n';
-    return 1;
-  }
+  return pde2d_test::run(
+      {{"known", known}, {"patch", patch}, {"moving", moving}});
 }

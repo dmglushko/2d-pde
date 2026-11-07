@@ -1,29 +1,17 @@
 #include "fem/assembly.hpp"
-#include "../examples/fem/square_mesh.hpp"
+#include "discretization/square_mesh.hpp"
+#include "support/check.hpp"
 #include <Eigen/Dense>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 
+using pde2d_test::check;
+using pde2d_test::expect_throws;
 namespace {
 using namespace fem;
-void check(bool ok, const char *message) {
-  if (!ok)
-    throw std::runtime_error(message);
-}
 void near(double a, double b, double tolerance = 2e-11) {
-  check(std::abs(a - b) <= tolerance * std::max({1., std::abs(a), std::abs(b)}),
-        "Assembly value mismatch");
-}
-template <class F> void rejects(F f, const char *fragment = "") {
-  try {
-    f();
-  } catch (const std::exception &e) {
-    check(std::string(e.what()).find(fragment) != std::string::npos,
-          "Unexpected rejection diagnostic");
-    return;
-  }
-  throw std::runtime_error("Invalid assembly accepted");
+  pde2d_test::near(a, b, tolerance);
 }
 discretization::TriangleMesh triangle() {
   return {{{0, 0}, {1, 0}, {0, 1}},
@@ -156,72 +144,73 @@ void dirichlet_and_errors() {
   p.assign(dirichlet(0), {"bottom"});
   p.assign(dirichlet(1), {"left"});
   p.assign(flux_neumann(0), {"diagonal"});
-  rejects([&] { assemble(mesh, p); }, "Contradictory");
+  expect_throws([&] { assemble(mesh, p); }, "Contradictory");
   p = zero_flux();
   p.boundaries[0].regions = {"bottom", "left"};
-  rejects([&] { assemble(mesh, p); }, "Missing");
+  expect_throws([&] { assemble(mesh, p); }, "Missing");
   p = zero_flux();
   p.assign(flux_neumann(0), {"bottom"});
-  rejects([&] { assemble(mesh, p); }, "Overlapping");
+  expect_throws([&] { assemble(mesh, p); }, "Overlapping");
   p = zero_flux();
   p.assign(flux_neumann(0), {"absent"});
-  rejects([&] { assemble(mesh, p); }, "Absent");
+  expect_throws([&] { assemble(mesh, p); }, "Absent");
   p = zero_flux();
   auto no_tags = mesh;
   no_tags.boundary_tags.clear();
-  rejects([&] { assemble(no_tags, p); }, "tag");
+  expect_throws([&] { assemble(no_tags, p); }, "tag");
   auto bad = mesh;
   bad.elements[0] = {0, 2, 1};
-  rejects([&] { assemble(bad, p); }, "positive area");
+  expect_throws([&] { assemble(bad, p); }, "positive area");
   bad = mesh;
   bad.boundary_edges[0] = {0, 2};
-  rejects([&] { assemble(bad, p); });
+  expect_throws([&] { assemble(bad, p); });
   p = zero_flux();
   p.boundaries[0].condition = neumann(0);
   p.equation.a_xx = -2;
   p.equation.a_yy = -3;
-  rejects([&] { assemble(mesh, p); }, "not algebraically proportional");
+  expect_throws([&] { assemble(mesh, p); }, "not algebraically proportional");
   // Off-diagonal diffusion makes even an axis-aligned normal derivative oblique
   // relative to flux. This must fail before trying to integrate that boundary.
   p = zero_flux();
   p.equation.a_xy = -1;
   p.boundaries[0].regions = {"diagonal", "left"};
   p.assign(neumann(0), {"bottom"});
-  rejects([&] { assemble(mesh, p); }, "not algebraically proportional");
+  expect_throws([&] { assemble(mesh, p); }, "not algebraically proportional");
   // General oblique derivative not aligned with flux must not be projected.
   p = zero_flux();
   p.boundaries[0].condition = {};
   p.boundaries[0].condition.beta_x = 1;
-  rejects([&] { assemble(mesh, p); }, "Unsupported oblique");
+  expect_throws([&] { assemble(mesh, p); }, "Unsupported oblique");
   p = zero_flux();
   p.boundaries[0].condition = {};
   p.boundaries[0].condition.gamma = 1;
-  rejects([&] { assemble(mesh, p); }, "Derivative-free dynamic");
+  expect_throws([&] { assemble(mesh, p); }, "Derivative-free dynamic");
   p = zero_flux();
   p.boundaries[0].condition = {};
-  rejects([&] { assemble(mesh, p); }, "no nonzero operator");
+  expect_throws([&] { assemble(mesh, p); }, "no nonzero operator");
   p = zero_flux();
   p.equation.source = log(Expr(-1));
-  rejects([&] { assemble(mesh, p); });
+  expect_throws([&] { assemble(mesh, p); });
   p = zero_flux();
   p.equation.source = nx;
-  rejects([&] { assemble(mesh, p); }, "boundary normals");
+  expect_throws([&] { assemble(mesh, p); }, "boundary normals");
   p = zero_flux();
   p.boundaries[0].condition.value = log(x);
-  rejects([&] { assemble(mesh, p); });
+  expect_throws([&] { assemble(mesh, p); });
   p = zero_flux();
-  rejects([&] { assemble(mesh, p, std::numeric_limits<double>::infinity()); });
-  rejects([&] { assemble(mesh, p, 0, AssemblyOptions{2, -1}); });
-  rejects([&] { assemble(mesh, p, 0, AssemblyOptions{-1}); });
+  expect_throws(
+      [&] { assemble(mesh, p, std::numeric_limits<double>::infinity()); });
+  expect_throws([&] { assemble(mesh, p, 0, AssemblyOptions{2, -1}); });
+  expect_throws([&] { assemble(mesh, p, 0, AssemblyOptions{-1}); });
 }
 void boundary_restriction_regressions() {
   auto mesh = triangle();
   auto p = zero_flux();
   p.boundaries[0].regions = {"diagonal", "left"};
   p.assign(flux_robin(1, 2 * x - 1, 1), {"bottom"});
-  rejects([&] { assemble(mesh, p); }, "vanishes or changes sign");
+  expect_throws([&] { assemble(mesh, p); }, "vanishes or changes sign");
   p.boundaries.back().condition = flux_robin(1, x - .3, 1);
-  rejects([&] { assemble(mesh, p); }, "vanishes or changes sign");
+  expect_throws([&] { assemble(mesh, p); }, "vanishes or changes sign");
   // This cross coefficient vanishes on the bottom edge, so du_dn=q_n there.
   p.equation.a_xy = y;
   p.boundaries.back().condition = neumann(1);
@@ -283,23 +272,18 @@ void slanted_normal_boundaries() {
   auto bc = neumann(0);
   bc.beta_x = 1e-14;
   p.assign(bc, {"b"});
-  rejects([&] { assemble(mesh, p); }, "not algebraically proportional");
+  expect_throws([&] { assemble(mesh, p); }, "not algebraically proportional");
   p.boundaries[0].condition = neumann(0);
   p.equation.a_yy = -11;
-  rejects([&] { assemble(mesh, p); }, "not algebraically proportional");
+  expect_throws([&] { assemble(mesh, p); }, "not algebraically proportional");
 }
 } // namespace
 int main() {
-  try {
-    element_matrices();
-    boundary_matrices();
-    affine_patch();
-    dirichlet_and_errors();
-    boundary_restriction_regressions();
-    slanted_normal_boundaries();
-    std::cout << "FEM assembly tests passed\n";
-  } catch (const std::exception &e) {
-    std::cerr << e.what() << '\n';
-    return 1;
-  }
+  return pde2d_test::run(
+      {{"element_matrices", element_matrices},
+       {"boundary_matrices", boundary_matrices},
+       {"affine_patch", affine_patch},
+       {"dirichlet_and_errors", dirichlet_and_errors},
+       {"boundary_restriction_regressions", boundary_restriction_regressions},
+       {"slanted_normal_boundaries", slanted_normal_boundaries}});
 }

@@ -1,20 +1,10 @@
 #include "discretization/mesh_io.hpp"
+#include "support/check.hpp"
 #include <iostream>
 #include <random>
 using namespace discretization;
-void require(bool x, const char *m) {
-  if (!x)
-    throw std::runtime_error(m);
-}
-template <class F> void rejects(F f) {
-  bool caught = false;
-  try {
-    f();
-  } catch (const std::exception &) {
-    caught = true;
-  }
-  require(caught, "Malformed geometry accepted");
-}
+using pde2d_test::check;
+using pde2d_test::expect_throws;
 TriangleMesh witness() {
   return {{{-.5, 0}, {.5, 0}, {0, .25}, {0, -.8125}},
           {{0, 1, 2}, {1, 0, 3}},
@@ -47,9 +37,9 @@ void independent_cdt(const TriangleMesh &m) {
         continue;
       if (predicates::orient(m.nodes[a], m.nodes[b], m.nodes[c]) < 0)
         std::swap(a, b);
-      require(predicates::incircle(m.nodes[a], m.nodes[b], m.nodes[c],
-                                   m.nodes[d]) <= 0,
-              "Independent CDT failure");
+      check(predicates::incircle(m.nodes[a], m.nodes[b], m.nodes[c],
+                                 m.nodes[d]) <= 0,
+            "Independent CDT failure");
     }
 }
 void broad_phase() {
@@ -68,16 +58,16 @@ void broad_phase() {
     for (std::size_t j = 0; j < boxes.size(); ++j)
       if (boxes[i].overlaps(boxes[j]))
         expected.push_back(j);
-    require(index.candidates(boxes[i]) == expected,
-            "Broad phase omitted contact");
+    check(index.candidates(boxes[i]) == expected,
+          "Broad phase omitted contact");
   }
-  rejects(
+  expect_throws(
       [] { validate_polygon(Boundary{{{0, 0}, {2, 0}, {1, 0}, {1, 1}}, {}}); });
-  rejects(
+  expect_throws(
       [] { validate_polygon(Boundary{{{0, 0}, {2, 2}, {0, 2}, {2, 0}}, {}}); });
   auto m = witness();
   m.elements.push_back({0, 1, 2});
-  rejects([&] { validate_mesh_geometry(m); });
+  expect_throws([&] { validate_mesh_geometry(m); });
 }
 void queue_keys() {
   using namespace mesh_detail;
@@ -89,7 +79,7 @@ void queue_keys() {
   t.remove(1);
   t.add(0);
   t.add(1);
-  require(t.generations.at({0, 1}) > old, "Recreated generation reused");
+  check(t.generations.at({0, 1}) > old, "Recreated generation reused");
   auto heap = t.sizes;
   std::size_t stale = 0;
   while (!heap.empty()) {
@@ -98,7 +88,7 @@ void queue_keys() {
     if (t.generations.at(x.edge) != x.generation)
       ++stale;
   }
-  require(stale > 0, "Stale/recreated heap entries were not exercised");
+  check(stale > 0, "Stale/recreated heap entries were not exercised");
   t.legalize();
   independent_cdt(m);
   for (int step = 0; step < 100; ++step) {
@@ -113,14 +103,14 @@ void queue_keys() {
       }
     }
     auto actual = t.longest();
-    require(actual == expected, "Heap disagrees with ordered full scan");
+    check(actual == expected, "Heap disagrees with ordered full scan");
     if (!actual)
       break;
     auto e = *actual;
     t.split(e, {std::midpoint(m.nodes[e.first].x, m.nodes[e.second].x),
                 std::midpoint(m.nodes[e.first].y, m.nodes[e.second].y)});
     t.legalize(false);
-    require(t.pending.empty(), "Later legalization not drained");
+    check(t.pending.empty(), "Later legalization not drained");
     if (step % 10 == 0)
       independent_cdt(m);
   }
@@ -132,41 +122,38 @@ void queue_keys() {
   equal.initialize_size(.1);
   equal.split({0, 2}, {.5, .5});
   equal.legalize(false);
-  require(equal.longest() == std::optional<Edge>{{0, 1}},
-          "Equal length tie order changed");
+  check(equal.longest() == std::optional<Edge>{{0, 1}},
+        "Equal length tie order changed");
   // A third owner must be detected rather than silently discarded.
   auto nonmanifold = witness();
   nonmanifold.nodes.push_back({0, .5});
   nonmanifold.elements.push_back({0, 1, 4});
-  rejects([&] { Topology invalid(nonmanifold); });
-  rejects([&] { validate_mesh_geometry(nonmanifold); });
+  expect_throws([&] { Topology invalid(nonmanifold); });
+  expect_throws([&] { validate_mesh_geometry(nonmanifold); });
 }
-int main() {
-  broad_phase();
-  queue_keys();
+void witness_and_budgets() {
   MeshOptions o;
   o.boundary_treatment = BoundaryTreatment::SplitPolygonEdges;
   o.refinement.max_edge_length = 1;
-  require(!is_constrained_delaunay(witness()), "Illegal witness accepted");
+  check(!is_constrained_delaunay(witness()), "Illegal witness accepted");
   for (int budget : {0, 1, 10}) {
     o.refinement.max_steps = budget;
     auto r = refine_mesh(witness(), o);
     independent_cdt(r.mesh);
-    require(r.report.delaunay_verified, "CDT report lost");
-    require(r.report.size_satisfied == (budget > 0),
-            "Flip-created oversized edge missed");
-    require(r.report.refinement_steps == std::size_t(budget > 0),
-            "Unexpected witness steps");
+    check(r.report.delaunay_verified, "CDT report lost");
+    check(r.report.size_satisfied == (budget > 0),
+          "Flip-created oversized edge missed");
+    check(r.report.refinement_steps == std::size_t(budget > 0),
+          "Unexpected witness steps");
     if (!budget)
-      require(r.report.message == "Refinement step budget exhausted",
-              "Budget message changed");
+      check(r.report.message == "Refinement step budget exhausted",
+            "Budget message changed");
   }
   o.refinement.max_edge_length = .2;
   o.refinement.max_steps = 1;
   auto limited = refine_mesh(witness(), o);
-  require(!limited.report.size_satisfied &&
-              limited.report.refinement_steps == 1,
-          "Exhausted budget hidden");
+  check(!limited.report.size_satisfied && limited.report.refinement_steps == 1,
+        "Exhausted budget hidden");
   independent_cdt(limited.mesh);
   o.refinement.max_edge_length = 0;
   o.refinement.max_steps = 0;
@@ -175,11 +162,15 @@ int main() {
              {"a", "a", "b", "c", "d"}};
   o.refinement = {.125, 10000};
   auto a = generate_mesh(b, o), c = generate_mesh(b, o);
-  require(a.mesh.elements == c.mesh.elements, "Nondeterministic refinement");
+  check(a.mesh.elements == c.mesh.elements, "Nondeterministic refinement");
   independent_cdt(a.mesh);
   o.boundary_treatment = BoundaryTreatment::Fixed;
   o.refinement.max_edge_length = .5;
-  require(!generate_mesh(b, o).report.size_satisfied,
-          "Fixed boundary report lost");
-  std::cout << "Mesh performance regression checks passed\n";
+  check(!generate_mesh(b, o).report.size_satisfied,
+        "Fixed boundary report lost");
+}
+int main() {
+  return pde2d_test::run({{"broad_phase", broad_phase},
+                          {"queue_keys", queue_keys},
+                          {"witness_and_budgets", witness_and_budgets}});
 }

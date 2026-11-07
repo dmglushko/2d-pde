@@ -1,38 +1,29 @@
 #include "execution.hpp"
+#include "support/check.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
-void check(bool b) {
-  if (!b)
-    throw std::runtime_error("Execution contract failed");
-}
-void rejects(auto f, const std::string &text) {
-  try {
-    f();
-  } catch (const std::invalid_argument &e) {
-    check(std::string(e.what()).find(text) != std::string::npos);
-    return;
-  }
-  throw std::runtime_error("Expected rejection");
-}
-int main() {
+using pde2d_test::check;
+using pde2d_test::expect_throws;
+void execution_contract() {
   using namespace pde2d;
 #ifdef _OPENMP
   // Observe actual teams rather than inferring concurrency from policy values.
   omp_set_dynamic(0);
 #endif
-  rejects(
+  expect_throws<std::invalid_argument>(
       [] { parallel_for(0, {ExecutionBackend::Serial, -1, 0}, [](auto) {}); },
       "nonnegative");
-  rejects(
+  expect_throws<std::invalid_argument>(
       [] {
         parallel_for(0, {static_cast<ExecutionBackend>(42), 0, 0}, [](auto) {});
       },
       "Unknown");
   for (auto backend : {ExecutionBackend::Serial, ExecutionBackend::OpenMP}) {
     if (backend == ExecutionBackend::OpenMP && !openmp_available()) {
-      rejects([&] { parallel_for(0, {backend, 2, 10000}, [](auto) {}); },
-              "serial-only");
+      expect_throws<std::invalid_argument>(
+          [&] { parallel_for(0, {backend, 2, 10000}, [](auto) {}); },
+          "serial-only");
       continue;
     }
     for (int workers : {1, 2, 4})
@@ -50,20 +41,22 @@ int main() {
                                       ? workers
                                       : 1;
         for (std::size_t i = 0; i < a.size(); ++i) {
-          check(a[i] == int(i * i));
-          check(teams[i] == expected_team);
+          check(a[i] == int(i * i), "parallel_for result mismatch");
+          check(teams[i] == expected_team, "unexpected team size");
         }
         try {
           parallel_for(a.size(), o, [](auto i) {
             if (i == 3 || i == 99)
               throw std::runtime_error(std::to_string(i));
           });
-          check(false);
+          check(false, "expected parallel_for exception");
         } catch (const std::runtime_error &e) {
-          check(std::string(e.what()) == "3");
+          check(std::string(e.what()) == "3", "wrong exception propagated");
         }
       }
   }
-  std::cout << "Execution and observed team-size checks passed; OpenMP="
-            << openmp_available() << '\n';
+  std::cout << "OpenMP=" << openmp_available() << '\n';
+}
+int main() {
+  return pde2d_test::run({{"execution_contract", execution_contract}});
 }

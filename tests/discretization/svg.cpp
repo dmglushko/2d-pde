@@ -1,19 +1,17 @@
 #include "discretization/svg_geometry.hpp"
 #include "discretization/triangulate.hpp"
+#include "support/geometry.hpp"
+#include "support/check.hpp"
 #include <fstream>
 #include <iostream>
 using namespace discretization;
-int main(int argc, char **argv) {
-  if (argc != 2)
-    return 1;
-  std::string file = std::string(argv[1]) + "/test.svg";
+using pde2d_test::check;
+using pde2d_test::expect_throws;
+void svg_import_export(const std::string &dir) {
+  std::string file = std::string(dir) + "/test.svg";
   auto write = [&](const std::string &s) {
     std::ofstream f(file);
     f << s;
-  };
-  auto check = [](bool b) {
-    if (!b)
-      throw std::runtime_error("SVG test failed");
   };
   write("<svg><circle id='origin' cx='1' cy='1'/><path id='bottom' d='M0 0 L2 "
         "0'/><path id='top' d='M0 2 Q1 3 2 2'/><path id='right' d='M2 2 C3 2 3 "
@@ -62,13 +60,7 @@ int main(int argc, char **argv) {
         "<svg><path id='x' d='M0 0 L1 0'/></svg>",
         "<svg><path id='x' transform='scale(2)' d='M0 0 L1 0'/></svg>"}) {
     write(bad);
-    bool rejected = false;
-    try {
-      (void)importSvg(file);
-    } catch (const std::invalid_argument &) {
-      rejected = true;
-    }
-    check(rejected);
+    expect_throws<std::invalid_argument>([&] { (void)importSvg(file); });
   }
 
   // Compare analytical parameterizations, not just sampled mesh outlines.
@@ -92,7 +84,8 @@ int main(int argc, char **argv) {
                  s = std::sin(source.rotation());
           Point2 expected{source.center().x + c * p.x - s * p.y,
                           source.center().y + s * p.x + c * p.y};
-          check(svg_detail::near(expected, curvePoint(actual.segment, t)));
+          check(
+              pde2d_test::points_near(expected, curvePoint(actual.segment, t)));
         }
       }
     }
@@ -169,8 +162,9 @@ int main(int argc, char **argv) {
   check(closedCopy.curves().size() == 2);
   for (std::size_t i = 0; i < 2; ++i)
     for (double t : {0., .3, .7, 1.})
-      check(svg_detail::near(curvePoint(closedCopy.curves()[i].segment, t),
-                             curvePoint(closedBezier, (i + t) / 2)));
+      check(
+          pde2d_test::points_near(curvePoint(closedCopy.curves()[i].segment, t),
+                                  curvePoint(closedBezier, (i + t) / 2)));
   for (const std::string bad :
        {"<svg><path id='x' data-region='' d='M0 0 L1 0 L0 1 Z'/></svg>",
         "<svg><path id='x' data-region='a' d='M0 0 L1 0'/><path id='x' "
@@ -178,23 +172,11 @@ int main(int argc, char **argv) {
         "<svg><path id='x' data-region='bad&amp;name' d='M0 0 L1 0 L0 1 "
         "Z'/></svg>"}) {
     write(bad);
-    bool rejected = false;
-    try {
-      (void)importSvg(file);
-    } catch (const std::invalid_argument &) {
-      rejected = true;
-    }
-    check(rejected);
+    expect_throws<std::invalid_argument>([&] { (void)importSvg(file); });
   }
   auto invalidExport = [&](const CurveGeometry &g) {
     write("keep existing file");
-    bool rejected = false;
-    try {
-      exportSvg(g, file);
-    } catch (const std::invalid_argument &) {
-      rejected = true;
-    }
-    check(rejected);
+    expect_throws<std::invalid_argument>([&] { exportSvg(g, file); });
     std::ifstream input(file);
     std::string saved;
     std::getline(input, saved);
@@ -209,22 +191,11 @@ int main(int argc, char **argv) {
   auto huge = mixed;
   huge.setCenter(1e300, 1e300);
   invalidExport(huge);
-  bool failed = false;
-  try {
-    exportSvg(mixed, std::string(argv[1]));
-  } catch (const std::runtime_error &) {
-    failed = true;
-  }
-  check(failed);
+  expect_throws<std::runtime_error>(
+      [&] { exportSvg(mixed, std::string(dir)); });
   std::ostringstream broken;
   broken.setstate(std::ios::badbit);
-  failed = false;
-  try {
-    exportSvg(mixed, broken);
-  } catch (const std::runtime_error &) {
-    failed = true;
-  }
-  check(failed);
+  expect_throws<std::runtime_error>([&] { exportSvg(mixed, broken); });
   std::ostringstream untouched;
   try {
     exportSvg(CurveGeometry{}, untouched);
@@ -236,21 +207,15 @@ int main(int argc, char **argv) {
     std::streamsize xsputn(const char *, std::streamsize) override { return 0; }
   } buffer;
   std::ostream shortWrite(&buffer);
-  failed = false;
-  try {
-    exportSvg(mixed, shortWrite);
-  } catch (const std::runtime_error &) {
-    failed = true;
-  }
-  check(failed);
+  expect_throws<std::runtime_error>([&] { exportSvg(mixed, shortWrite); });
   shortWrite.clear();
   shortWrite.exceptions(std::ios::badbit);
-  failed = false;
-  try {
-    exportSvg(mixed, shortWrite);
-  } catch (const std::ios_base::failure &) {
-    failed = true;
-  }
-  check(failed);
-  return 0;
+  expect_throws<std::ios_base::failure>([&] { exportSvg(mixed, shortWrite); });
+}
+int main(int argc, char **argv) {
+  return pde2d_test::run({{"svg_import_export", [&] {
+                             pde2d_test::check(argc == 2,
+                                               "Usage: test TEMP_DIRECTORY");
+                             svg_import_export(argv[1]);
+                           }}});
 }

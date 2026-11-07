@@ -1,7 +1,7 @@
 // Two 100-second waves on a 10 x 10 square, with wall-clock profiling.
 #include "fem/report.hpp"
-#include "square_mesh.hpp"
-#include "error_norms.hpp"
+#include "discretization/square_mesh.hpp"
+#include "fem/error_norms.hpp"
 #include "showcase_io.hpp"
 #include <algorithm>
 #include <array>

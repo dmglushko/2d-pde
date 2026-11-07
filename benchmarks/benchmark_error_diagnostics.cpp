@@ -1,5 +1,5 @@
-#include "../tests/error_norms_reference.hpp"
-#include "../examples/fem/square_mesh.hpp"
+#include "../tests/support/error_norms_reference.hpp"
+#include "discretization/square_mesh.hpp"
 #include <chrono>
 #include <iostream>
 int main() {

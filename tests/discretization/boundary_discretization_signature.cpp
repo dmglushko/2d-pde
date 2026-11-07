@@ -1,5 +1,6 @@
 #include "discretization/geometry.hpp"
 #include "discretization/boundary_discretization.hpp"
+#include "support/check.hpp"
 #include <bit>
 #include <iostream>
 using namespace discretization;
@@ -37,7 +38,7 @@ std::uint64_t signature(const DiscretizedBoundary &result) {
   }
   return h;
 }
-int main(int argc, char **) {
+std::vector<std::uint64_t> signatures() {
   std::vector<std::uint64_t> values;
   EllipseGeometry e(2, 1);
   for (auto o : {BoundaryOptions{.04, .0003}, BoundaryOptions{.5, .01}})
@@ -68,18 +69,22 @@ int main(int argc, char **) {
       o.preserve_corners = corners;
       values.push_back(signature(discretize_boundary(square, o, preserve)));
     }
-  const std::vector<std::uint64_t> expected = {
-      11149290545666623588ull, 626144503457228534ull,  13003977193416062361ull,
-      12007940997374442325ull, 6797412203164507221ull, 6797412203164507221ull,
-  };
-  if (argc > 1) {
-    for (auto v : values)
+  return values;
+}
+int main(int argc, char **) {
+  if (argc > 1) { // Regenerate the recorded signatures.
+    for (auto v : signatures())
       std::cout << v << ",";
     std::cout << '\n';
     return 0;
   }
-  if (values != expected)
-    throw std::runtime_error("Sampling order/provenance changed");
-  std::cout
-      << "Byte-exact sampling, seam, region and provenance signatures passed\n";
+  const std::vector<std::uint64_t> expected = {
+      11149290545666623588ull, 626144503457228534ull,  13003977193416062361ull,
+      12007940997374442325ull, 6797412203164507221ull, 6797412203164507221ull,
+  };
+  return pde2d_test::run({{"byte_exact_signatures", [&] {
+                             pde2d_test::check(
+                                 signatures() == expected,
+                                 "Sampling order/provenance changed");
+                           }}});
 }

@@ -1,8 +1,8 @@
 #include "fem/evolution.hpp"
 #include "discretization/geometry.hpp"
 #include "discretization/triangulate.hpp"
-#include "square_mesh.hpp"
-#include "error_norms.hpp"
+#include "discretization/square_mesh.hpp"
+#include "fem/error_norms.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iomanip>

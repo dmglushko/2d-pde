@@ -84,13 +84,13 @@ g++ -std=c++23 -O2 -Wall -Wextra -Werror -Icpp benchmarks/mesh_issue3.cpp -o /tm
 /usr/bin/time -v -o /tmp/pde2d-mesh-issue3/after-memory.txt /tmp/pde2d-mesh-issue3/after > /tmp/pde2d-mesh-issue3/after.csv
 /tmp/pde2d-mesh-issue3/after /tmp/pde2d-mesh-issue3/benchmark-roundtrip.pde2d > /tmp/pde2d-mesh-issue3/candidates.csv
 bash tools/test.sh
-g++ -std=c++23 -O2 -Wall -Wextra -Werror -Icpp tests/mesh_performance_regression.cpp -o /tmp/pde2d-mesh-issue3/regression
+g++ -std=c++23 -O2 -Wall -Wextra -Werror -Icpp -Itests tests/discretization/mesh_refinement_cdt.cpp -o /tmp/pde2d-mesh-issue3/regression
 /tmp/pde2d-mesh-issue3/regression
-g++ -std=c++23 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Icpp tests/mesh_performance_regression.cpp -o /tmp/pde2d-mesh-issue3/regression-asan
+g++ -std=c++23 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Icpp -Itests tests/discretization/mesh_refinement_cdt.cpp -o /tmp/pde2d-mesh-issue3/regression-asan
 ASAN_OPTIONS=detect_leaks=1 /tmp/pde2d-mesh-issue3/regression-asan
-g++ -std=c++23 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Icpp tests/discretization.cpp -o /tmp/pde2d-mesh-issue3/discretization-asan
+g++ -std=c++23 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Icpp -Itests tests/discretization/discretization.cpp -o /tmp/pde2d-mesh-issue3/discretization-asan
 ASAN_OPTIONS=detect_leaks=1 /tmp/pde2d-mesh-issue3/discretization-asan /tmp/pde2d-mesh-issue3
-g++ -std=c++23 -O1 -g -fsanitize=thread -Icpp tests/mesh_performance_regression.cpp -o /tmp/pde2d-mesh-issue3/regression-tsan
+g++ -std=c++23 -O1 -g -fsanitize=thread -Icpp -Itests tests/discretization/mesh_refinement_cdt.cpp -o /tmp/pde2d-mesh-issue3/regression-tsan
 /tmp/pde2d-mesh-issue3/regression-tsan
 ```
 

@@ -1,8 +1,9 @@
-#include "../examples/fem/square_mesh.hpp"
+#include "discretization/square_mesh.hpp"
 #include "fem/evolution.hpp"
+#include "support/check.hpp"
 #include <iostream>
 using namespace fem;
-int main() {
+void moving_boundary_convergence() {
   auto mesh = square_mesh(4);
   const Expr base = 1 + x + y, exact = base * exp(t);
   for (auto method : {TimeMethod::BackwardEuler, TimeMethod::CrankNicolson,
@@ -44,4 +45,8 @@ int main() {
       previous = error;
     }
   }
+}
+int main() {
+  return pde2d_test::run(
+      {{"moving_boundary_convergence", moving_boundary_convergence}});
 }

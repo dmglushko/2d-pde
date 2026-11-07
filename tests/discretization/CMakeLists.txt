@@ -1,0 +1,11 @@
+pde2d_add_cpp_test(NAME curve_length SOURCE curve_length.cpp)
+pde2d_add_cpp_test(NAME curve_length_inversion SOURCE curve_length_inversion.cpp)
+pde2d_add_cpp_test(NAME curve_operations SOURCE curve_operations.cpp)
+pde2d_add_cpp_test(NAME boundary_discretization_signature SOURCE boundary_discretization_signature.cpp)
+pde2d_add_cpp_test(NAME geometry_query_threads SOURCE geometry_query_threads.cpp)
+pde2d_add_cpp_test(NAME mesh_refinement_cdt SOURCE mesh_refinement_cdt.cpp)
+pde2d_add_cpp_test(NAME discretization SOURCE discretization.cpp
+  FIXTURE_ARG FIXTURE_FILES examples/mesh_viewer/rectangle_p1.pde2d)
+pde2d_add_cpp_test(NAME region_editing SOURCE region_editing.cpp FIXTURE_ARG)
+pde2d_add_cpp_test(NAME svg SOURCE svg.cpp LIBXML2 FIXTURE_ARG)
+pde2d_add_cpp_test(NAME geometry_svg_index SOURCE geometry_svg_index.cpp LIBXML2 FIXTURE_ARG)
