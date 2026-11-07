@@ -1,12 +1,13 @@
 #pragma once
 #include "fem/error_norms.hpp"
 // Independent original quadrature loop, intentionally rebuilding rules.
-ErrorNorms reference(const discretization::TriangleMesh &mesh,
-                     const fem::Vector &v, const fem::Expr &exact,
-                     double time) {
-  fem::Evaluator u(exact), ux(fem::diff(exact, fem::x)),
-      uy(fem::diff(exact, fem::y));
-  ErrorNorms r;
+inline pde2d::fem::ErrorNorms
+reference(const pde2d::discretization::TriangleMesh &mesh,
+          const pde2d::fem::Vector &v, const pde2d::fem::Expr &exact,
+          double time) {
+  pde2d::fem::Evaluator u(exact), ux(pde2d::fem::diff(exact, pde2d::fem::x)),
+      uy(pde2d::fem::diff(exact, pde2d::fem::y));
+  pde2d::fem::ErrorNorms r;
   for (const auto &tri : mesh.elements) {
     const auto a = mesh.nodes[tri[0]], b = mesh.nodes[tri[1]],
                c = mesh.nodes[tri[2]];
@@ -20,8 +21,8 @@ ErrorNorms reference(const discretization::TriangleMesh &mesh,
       dx += gx[j] * v[tri[j]];
       dy += gy[j] * v[tri[j]];
     }
-    for (const auto &q : fem::triangle_quadrature(8)) {
-      fem::EvaluationPoint p{0, 0, time};
+    for (const auto &q : pde2d::fem::triangle_quadrature(8)) {
+      pde2d::fem::EvaluationPoint p{0, 0, time};
       double uh = 0;
       for (int j = 0; j < 3; j++) {
         p.x += q.barycentric[j] * mesh.nodes[tri[j]].x;

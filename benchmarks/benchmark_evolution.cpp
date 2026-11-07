@@ -1,8 +1,9 @@
 #include "fem/evolution.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include <iostream>
 int main() {
-  using namespace fem;
+  using namespace pde2d::fem;
   auto mesh = square_mesh(10);
   Problem p;
   p.equation.m1 = 1;
@@ -14,8 +15,9 @@ int main() {
     o.method = method;
     o.end = 2;
     o.step = .01;
-    auto e = evolve(
-        mesh, p, sin(3.141592653589793 * x) * sin(3.141592653589793 * y), 0, o);
+    auto e =
+        evolve(mesh, p,
+               {sin(3.141592653589793 * x) * sin(3.141592653589793 * y), 0}, o);
     std::cout << "method=" << int(method)
               << " total=" << e.timings.total_seconds
               << " assembly=" << e.timings.assembly_seconds

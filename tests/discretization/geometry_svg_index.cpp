@@ -3,7 +3,7 @@
 #include "support/geometry.hpp"
 #include <filesystem>
 #include <iostream>
-using namespace discretization;
+using namespace pde2d::discretization;
 using pde2d_test::check;
 using pde2d_test::expect_throws;
 void indexed_svg_ordering(const std::string &dir) {

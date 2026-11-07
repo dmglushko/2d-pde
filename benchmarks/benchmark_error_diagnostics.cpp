@@ -1,9 +1,10 @@
 #include "../tests/support/error_norms_reference.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include <chrono>
 #include <iostream>
 int main() {
-  using namespace fem;
+  using namespace pde2d::fem;
   auto mesh = square_mesh(20);
   Vector v = Vector::Zero(mesh.nodes.size());
   const Expr exact = sin(2 * x) * cos(y) + t * x * y;

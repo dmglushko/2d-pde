@@ -10,7 +10,7 @@
 #include <string>
 #include <utility>
 
-namespace fem {
+namespace pde2d::fem {
 enum class LinearSolver { SparseLU, ConjugateGradient, GMRES };
 // AssumeValid transfers responsibility for nonsingularity (and positive
 // definiteness for CG) to the caller. Checked preserves numerical rank checks.
@@ -119,24 +119,24 @@ public:
   PreparedLinearSolver(const SparseMatrix &input,
                        const SolverOptions &options = {})
       : options_(options) {
-    const auto started = timing_detail::Clock::now();
+    const auto started = timing::Clock::now();
     matrix_ = input;
     solver_detail::validate(options_);
     solver_detail::validate(matrix_, Vector::Zero(matrix_.rows()));
     matrix_.makeCompressed();
     preparation_.preparations = 1;
-    preparation_.validation_seconds = timing_detail::seconds(started);
-    auto phase = timing_detail::Clock::now();
+    preparation_.validation_seconds = timing::seconds_since(started);
+    auto phase = timing::Clock::now();
     if (options_.validation == SolverValidation::Checked) {
       Eigen::SparseQR<SparseMatrix, Eigen::COLAMDOrdering<int>> rank;
       rank.compute(matrix_);
       ++preparation_.rank_checks;
-      preparation_.rank_check_seconds = timing_detail::seconds(phase);
+      preparation_.rank_check_seconds = timing::seconds_since(phase);
       if (rank.info() != Eigen::Success || rank.rank() != matrix_.rows())
         failure_ = "Singular or numerically rank-deficient linear system";
     }
     if (failure_.empty()) {
-      phase = timing_detail::Clock::now();
+      phase = timing::Clock::now();
       ++preparation_.factorizations;
       if (options_.method == LinearSolver::ConjugateGradient) {
         const SparseMatrix skew = matrix_ - SparseMatrix(matrix_.transpose());
@@ -166,9 +166,9 @@ public:
         if (lu_.info() != Eigen::Success)
           failure_ = "SparseLU factorization failed";
       }
-      preparation_.factorization_seconds = timing_detail::seconds(phase);
+      preparation_.factorization_seconds = timing::seconds_since(phase);
     }
-    preparation_.total_seconds = timing_detail::seconds(started);
+    preparation_.total_seconds = timing::seconds_since(started);
   }
   const SparseMatrix &matrix() const noexcept { return matrix_; }
   const SolverOptions &options() const noexcept { return options_; }
@@ -197,7 +197,7 @@ public:
     return true;
   }
   LinearSolution solve(const Vector &b) {
-    const auto started = timing_detail::Clock::now();
+    const auto started = timing::Clock::now();
     if (b.size() != matrix_.rows() || !b.allFinite())
       throw std::invalid_argument("Invalid linear RHS");
     LinearSolution result{Vector::Zero(b.size()), {}};
@@ -206,9 +206,9 @@ public:
     const double bn = b.stableNorm();
     r.residual_norm = bn;
     r.relative_residual = bn > 0 ? 1. : 0.;
-    r.timings.validation_seconds = timing_detail::seconds(started);
+    r.timings.validation_seconds = timing::seconds_since(started);
     auto finish = [&]() {
-      r.timings.total_seconds = timing_detail::seconds(started);
+      r.timings.total_seconds = timing::seconds_since(started);
       return std::move(result);
     };
     if (!failure_.empty()) {
@@ -218,7 +218,7 @@ public:
     const double target =
         std::max(options_.absolute_tolerance, options_.relative_tolerance * bn);
     const double tolerance = bn > 0 ? target / bn : options_.relative_tolerance;
-    auto phase = timing_detail::Clock::now();
+    auto phase = timing::Clock::now();
     if (options_.method == LinearSolver::ConjugateGradient) {
       cg_.setTolerance(tolerance);
       result.values = cg_.solve(b);
@@ -231,13 +231,13 @@ public:
       result.values = lu_.solve(b);
       r.iterations = 1;
       if (lu_.info() != Eigen::Success) {
-        r.timings.solve_seconds = timing_detail::seconds(phase);
+        r.timings.solve_seconds = timing::seconds_since(phase);
         r.message = "SparseLU solve failed";
         return finish();
       }
     }
-    r.timings.solve_seconds = timing_detail::seconds(phase);
-    phase = timing_detail::Clock::now();
+    r.timings.solve_seconds = timing::seconds_since(phase);
+    phase = timing::Clock::now();
     r.residual_norm = (matrix_ * result.values - b).stableNorm();
     r.relative_residual = bn > 0 ? r.residual_norm / bn : r.residual_norm;
     r.converged = result.values.allFinite() && std::isfinite(r.residual_norm) &&
@@ -245,19 +245,19 @@ public:
     r.message = r.converged ? "Converged"
                             : "Linear solver did not converge to requested "
                               "true residual tolerance";
-    r.timings.residual_seconds = timing_detail::seconds(phase);
+    r.timings.residual_seconds = timing::seconds_since(phase);
     return finish();
   }
 };
 inline LinearSolution solve_linear(const SparseMatrix &input, const Vector &b,
                                    const SolverOptions &o = {}) {
-  const auto started = timing_detail::Clock::now();
+  const auto started = timing::Clock::now();
   solver_detail::validate(o);
   solver_detail::validate(input, b);
   PreparedLinearSolver prepared(input, o);
   auto result = prepared.solve(b);
   result.report.timings += prepared.preparation_timings();
-  result.report.timings.total_seconds = timing_detail::seconds(started);
+  result.report.timings.total_seconds = timing::seconds_since(started);
   return result;
 }
 inline LinearSolution solve_stationary(const discretization::TriangleMesh &mesh,
@@ -271,4 +271,4 @@ inline LinearSolution solve_stationary(const discretization::TriangleMesh &mesh,
     throw std::runtime_error("Stationary solve: " + solution.report.message);
   return solution;
 }
-} // namespace fem
+} // namespace pde2d::fem

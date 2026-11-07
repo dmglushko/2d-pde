@@ -29,10 +29,10 @@ Changing meshing options does not change that editing contract.
 ## 2. Options choose sampling and triangulation
 
 ```cpp
-discretization::MeshOptions options;
+pde2d::discretization::MeshOptions options;
 options.boundary.max_edge_length = 0.4;
 options.refinement.max_edge_length = 0.5;
-auto result = discretization::generate_mesh(geometry, options);
+auto result = pde2d::discretization::generate_mesh(geometry, options);
 ```
 
 `MeshOptions{}` defaults to CDT with fixed boundary and region preservation.

@@ -2,7 +2,7 @@
 
 #include "curve_geometry.hpp"
 
-namespace discretization {
+namespace pde2d::discretization {
 
 class CircleGeometry final : public CurveGeometry {
 public:
@@ -236,4 +236,4 @@ private:
   double sideLength_ = 1.0;
 };
 
-} // namespace discretization
+} // namespace pde2d::discretization

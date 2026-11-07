@@ -1,12 +1,13 @@
 #include "fem/evolution.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/error_norms.hpp"
 #include "support/check.hpp"
 #include <iostream>
 #include <stdexcept>
 
 void dynamic_boundary_convergence() {
-  using namespace fem;
+  using namespace pde2d::fem;
   const auto mesh = square_mesh(3);
   const Expr base = 1 + x + y, exact = exp(-t) * base;
   Problem problem;
@@ -24,7 +25,7 @@ void dynamic_boundary_convergence() {
       options.method = method;
       options.end = .4;
       options.step = dt;
-      const auto solution = evolve(mesh, problem, base, -base, options);
+      const auto solution = evolve(mesh, problem, {base, -base}, options);
       if (solution.frames.size() !=
           static_cast<std::size_t>(std::lround(.4 / dt)) + 1)
         throw std::runtime_error(
@@ -53,7 +54,7 @@ void dynamic_boundary_convergence() {
   options.method = TimeMethod::Newmark;
   options.end = .25;
   options.step = .1;
-  auto result = evolve(mesh, problem, base, base, options);
+  auto result = evolve(mesh, problem, {base, base}, options);
   if (std::abs(result.frames.back().time - .25) > 1e-14)
     throw std::runtime_error("Short final time step missed endpoint");
   for (const auto &frame : result.frames)
@@ -65,7 +66,7 @@ void dynamic_boundary_convergence() {
   auto &general = problem.boundaries.front().condition;
   general.beta_flux = 1;
   general.beta_normal = -1;
-  result = evolve(mesh, problem, base, base, options);
+  result = evolve(mesh, problem, {base, base}, options);
   for (const auto &frame : result.frames)
     if (error_norms(mesh, frame.values, moving, frame.time).l2 > 1e-10)
       throw std::runtime_error(

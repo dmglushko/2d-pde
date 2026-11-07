@@ -4,7 +4,7 @@
 #include "support/check.hpp"
 #include <fstream>
 #include <iostream>
-using namespace discretization;
+using namespace pde2d::discretization;
 using pde2d_test::check;
 using pde2d_test::expect_throws;
 void svg_import_export(const std::string &dir) {

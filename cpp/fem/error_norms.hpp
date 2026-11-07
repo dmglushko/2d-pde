@@ -4,6 +4,8 @@
 #include "execution.hpp"
 #include <cmath>
 
+namespace pde2d::fem {
+
 struct ErrorNorms {
   double l2 = 0, h1_seminorm = 0;
 };
@@ -12,7 +14,7 @@ struct ErrorNorms {
 // workers never construct or copy symbolic expressions (including RCPs).
 class PreparedErrorNorms {
   struct Point {
-    fem::EvaluationPoint location;
+    EvaluationPoint location;
     std::array<double, 3> basis;
     double weight;
   };
@@ -22,16 +24,16 @@ class PreparedErrorNorms {
     std::vector<Point> points;
   };
   std::size_t node_count_;
-  fem::Evaluator u_, ux_, uy_;
+  Evaluator u_, ux_, uy_;
   std::vector<Element> elements_;
 
 public:
   PreparedErrorNorms(const discretization::TriangleMesh &mesh,
-                     const fem::Expr &exact, int degree = 8)
-      : node_count_(mesh.nodes.size()), u_(exact),
-        ux_(fem::diff(exact, fem::x)), uy_(fem::diff(exact, fem::y)) {
+                     const Expr &exact, int degree = 8)
+      : node_count_(mesh.nodes.size()), u_(exact), ux_(diff(exact, x)),
+        uy_(diff(exact, y)) {
     discretization::validate_mesh_geometry(mesh);
-    const auto rule = fem::triangle_quadrature(degree);
+    const auto rule = triangle_quadrature(degree);
     elements_.reserve(mesh.elements.size());
     for (const auto &tri : mesh.elements) {
       const auto a = mesh.nodes[tri[0]], b = mesh.nodes[tri[1]],
@@ -44,7 +46,7 @@ public:
                 {(c.x - b.x) / det, (a.x - c.x) / det, (b.x - a.x) / det},
                 {}};
       for (const auto &q : rule) {
-        fem::EvaluationPoint p;
+        EvaluationPoint p;
         for (int j = 0; j < 3; ++j) {
           p.x += q.barycentric[j] * mesh.nodes[tri[j]].x;
           p.y += q.barycentric[j] * mesh.nodes[tri[j]].y;
@@ -54,8 +56,8 @@ public:
       elements_.push_back(std::move(e));
     }
   }
-  const fem::Evaluator &exact_evaluator() const { return u_; }
-  ErrorNorms evaluate(const fem::Vector &values, double time = 0,
+  const Evaluator &exact_evaluator() const { return u_; }
+  ErrorNorms evaluate(const Vector &values, double time = 0,
                       const pde2d::ExecutionOptions &execution = {}) const {
     if (values.size() != static_cast<Eigen::Index>(node_count_) ||
         !values.allFinite() || !std::isfinite(time))
@@ -91,9 +93,10 @@ public:
   }
 };
 inline ErrorNorms error_norms(const discretization::TriangleMesh &mesh,
-                              const fem::Vector &values, const fem::Expr &exact,
+                              const Vector &values, const Expr &exact,
                               double time = 0, int degree = 8,
                               const pde2d::ExecutionOptions &execution = {}) {
   return PreparedErrorNorms(mesh, exact, degree)
       .evaluate(values, time, execution);
 }
+} // namespace pde2d::fem

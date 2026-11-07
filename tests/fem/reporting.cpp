@@ -1,10 +1,11 @@
 #include "fem/fem.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "support/check.hpp"
 #include <iostream>
 #include <sstream>
 
-using namespace fem;
+using namespace pde2d::fem;
 using pde2d_test::check;
 namespace {
 struct CommaDecimal : std::numpunct<char> {
@@ -63,13 +64,13 @@ void reports() {
   double inside_callback = 0;
   std::vector<double> stamps;
   options.observer = [&](const Frame &f) {
-    const auto started = timing_detail::Clock::now();
+    const auto started = timing::Clock::now();
     ++calls;
     stamps.push_back(f.time);
     check(f.values.allFinite(), "Invalid observed values");
-    inside_callback += timing_detail::seconds(started);
+    inside_callback += timing::seconds_since(started);
   };
-  const auto evolution = evolve(mesh, p, 0, 0, options);
+  const auto evolution = evolve(mesh, p, {0, 0}, options);
   accounting(evolution);
   check(calls == 5 && stamps.front() == 0 && stamps.back() == options.end,
         "Observer frequency changed");
@@ -78,13 +79,12 @@ void reports() {
         "Stride/report retention changed");
   check(evolution.timings.observer_seconds >= inside_callback,
         "Callback not included in observer timing");
-  check(evolution.timings.time_steps == 4 &&
-            evolution.timings.assembly_calls == 5 &&
-            evolution.timings.linear_solves == 4 &&
-            evolution.timings.solver.rhs_solves == 4 &&
-            evolution.timings.solver.preparations +
-                    evolution.timings.solver_reuses ==
-                4,
+  // First-order accounting: one assembly per stamp, one solve per step.
+  const auto &w = evolution.timings;
+  check(w.time_steps == 4 && w.assembly_calls == w.time_steps + 1 &&
+            w.linear_solves == w.time_steps &&
+            w.solver.rhs_solves == w.linear_solves &&
+            w.solver.preparations + w.solver_reuses == w.linear_solves,
         "Aggregates lost with store_reports=false");
   const auto &m = evolution.metadata;
   check(m.nodes == mesh.nodes.size() && m.elements == mesh.elements.size() &&
@@ -107,7 +107,7 @@ void reports() {
           "Evolution summary missing field");
   options.observer = {};
   options.store_reports = true;
-  const auto stored = evolve(mesh, p, 0, 0, options);
+  const auto stored = evolve(mesh, p, {0, 0}, options);
   accounting(stored);
   check(stored.timings.observer_seconds == 0 && stored.reports.size() == 4 &&
             stored.timings.solver.rhs_solves ==
@@ -125,14 +125,14 @@ void reports() {
   };
   bool threw = false;
   try {
-    evolve(mesh, p, 0, 0, options);
+    evolve(mesh, p, {0, 0}, options);
   } catch (const std::runtime_error &e) {
     threw = std::string(e.what()) == "observer sentinel";
   }
   check(threw && calls == 3, "Observer exception changed");
   options.end = 0;
   calls = 0;
-  auto initial = evolve(mesh, p, 0, 0, options);
+  auto initial = evolve(mesh, p, {0, 0}, options);
   accounting(initial);
   check(calls == 1 && initial.timings.time_steps == 0 &&
             initial.timings.linear_solves == 0,
@@ -141,17 +141,19 @@ void reports() {
   options.end = .02;
   options.method = TimeMethod::Newmark;
   p.equation.m2 = 1;
-  auto wave = evolve(mesh, p, 0, 0, options);
+  auto wave = evolve(mesh, p, {0, 0}, options);
   accounting(wave);
-  check(wave.timings.linear_solves == 3 &&
-            wave.timings.solver.rhs_solves == 3 && wave.reports.size() == 2,
+  // Newmark adds one start-up acceleration solve that has no step report.
+  check(wave.timings.linear_solves == wave.timings.time_steps + 1 &&
+            wave.timings.solver.rhs_solves == wave.timings.linear_solves &&
+            wave.reports.size() == wave.timings.time_steps,
         "Newmark initial solve missing from aggregate report");
   if (pde2d::openmp_available()) {
     options.assembly.execution.backend = pde2d::ExecutionBackend::OpenMP;
     options.assembly.execution.threads = 2;
     // Force serial loops despite selected OpenMP; metadata must record policy.
     options.assembly.execution.min_parallel_size = 1000000;
-    auto parallel = evolve(mesh, p, 0, 0, options);
+    auto parallel = evolve(mesh, p, {0, 0}, options);
     accounting(parallel);
     check(parallel.metadata.execution.threads == 2 &&
               parallel.metadata.execution.min_parallel_size == 1000000 &&

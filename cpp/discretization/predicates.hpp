@@ -7,7 +7,7 @@
 #include <initializer_list>
 #include <limits>
 
-namespace discretization::predicates {
+namespace pde2d::discretization::predicates {
 // Filtered predicates: ordinary floating point for well-separated cases,
 // exact integer determinants for uncertain signs. Every finite binary64 value
 // is a dyadic rational; a common power-of-two scale makes all inputs integers.
@@ -91,4 +91,4 @@ inline bool intersects(Point2 a, Point2 b, Point2 c, Point2 d) {
          (!q && on_segment(a, b, d)) || (!r && on_segment(c, d, a)) ||
          (!s && on_segment(c, d, b));
 }
-} // namespace discretization::predicates
+} // namespace pde2d::discretization::predicates

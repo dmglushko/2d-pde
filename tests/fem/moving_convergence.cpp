@@ -1,8 +1,9 @@
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/evolution.hpp"
 #include "support/check.hpp"
 #include <iostream>
-using namespace fem;
+using namespace pde2d::fem;
 void moving_boundary_convergence() {
   auto mesh = square_mesh(4);
   const Expr base = 1 + x + y, exact = base * exp(t);
@@ -23,7 +24,7 @@ void moving_boundary_convergence() {
       o.end = .4;
       o.step = dt;
       o.assembly.quadrature_degree = 6;
-      auto result = evolve(mesh, p, base, base, o);
+      auto result = evolve(mesh, p, {base, base}, o);
       auto &last = result.frames.back();
       if (last.time != o.end || !last.values.allFinite() ||
           !last.velocity.allFinite())

@@ -1,12 +1,13 @@
 #include "fem/assembly.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "support/check.hpp"
 #include <iostream>
 #include <optional>
 #include <stdexcept>
 
 void dirichlet_time_derivatives() {
-  using namespace fem;
+  using namespace pde2d::fem;
   const auto mesh = square_mesh(2);
   const Expr boundary = Expr(SymEngine::abs(t.get_basic()));
   Problem p;

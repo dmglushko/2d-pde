@@ -1,5 +1,6 @@
 #include "fem/error_norms.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include <iostream>
 #include <stdexcept>
 
@@ -7,7 +8,7 @@
 #include "support/check.hpp"
 using pde2d_test::check;
 void error_norm_diagnostics() {
-  using namespace fem;
+  using namespace pde2d::fem;
   auto mesh = square_mesh(20);
   Vector v = Vector::Zero(mesh.nodes.size());
   const Expr exact = sin(2 * x) * cos(y) + t * x * y;

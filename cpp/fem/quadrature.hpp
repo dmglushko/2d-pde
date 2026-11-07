@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace fem {
+namespace pde2d::fem {
 struct TriangleQuadraturePoint {
   std::array<double, 3> barycentric;
   double weight;
@@ -87,4 +87,4 @@ triangle_quadrature(int degree = 2) {
     }
   return points;
 }
-} // namespace fem
+} // namespace pde2d::fem

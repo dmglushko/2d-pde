@@ -7,7 +7,7 @@
 #include <iostream>
 #include <memory>
 #include <random>
-using namespace discretization;
+using namespace pde2d::discretization;
 using pde2d_test::check;
 namespace {
 // Keeps a per-call description of what was wrongly accepted.

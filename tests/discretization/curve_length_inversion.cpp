@@ -1,7 +1,7 @@
 #include "discretization/curve_length.hpp"
 #include "support/geometry.hpp"
 #include <iostream>
-using namespace discretization;
+using namespace pde2d::discretization;
 using pde2d_test::check;
 void safeguarded_inversion() {
   for (double scale : {1e-100, 1., 1e100})

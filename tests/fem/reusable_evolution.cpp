@@ -1,75 +1,55 @@
 #include "fem/evolution.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "support/check_eigen.hpp"
 #include <iostream>
 #include <thread>
 
-using namespace fem;
+using namespace pde2d::fem;
 using pde2d_test::check;
 namespace {
 void near(const Vector &a, const Vector &b) {
   pde2d_test::near_vector(a, b, 2e-9);
 }
-// Deliberately reassemble and prepare each solve. This checks the complete
-// recurrence, including endpoint loads, lifting and initial wave acceleration.
-std::vector<Frame> uncached(const discretization::TriangleMesh &mesh,
+// Uncached reference driver: the same integrators as evolve(), but every
+// assembly is a fresh one-shot assemble() and every solve prepares a new
+// factorization. Agreement isolates evolve()'s caching (prepared assembly,
+// factorization reuse) from the schemes themselves, whose accuracy is
+// checked against exact solutions in transient.cpp and moving_convergence.cpp.
+std::vector<Frame> uncached(const pde2d::discretization::TriangleMesh &mesh,
                             const Problem &p, const Expr &field,
                             const Expr &velocity, const TimeOptions &o) {
-  auto old = assemble(mesh, p, o.start, o.assembly);
-  Vector u = evolution_detail::initial(mesh, field, o.start),
-         v = evolution_detail::initial(mesh, velocity, o.start), acc;
-  auto solve = [&](const SparseMatrix &a, const Vector &b,
-                   const std::vector<DirichletValue> &d) {
+  auto integrator = make_time_integrator(o.method);
+  IntegratorServices services;
+  services.boundary_tolerance = o.assembly.boundary_tolerance;
+  services.solve = [&](const SparseMatrix &a, const Vector &b,
+                       const std::vector<DirichletValue> &d, bool) {
     auto [c, r] = constrain(a, b, d);
     auto s = solve_linear(c, r, o.solver);
     check(s.report.converged, "Uncached reference failed");
     return s.values;
   };
-  if (o.method == TimeMethod::Newmark) {
-    auto d = assembly_detail::assemble_impl(mesh, p, o.start, o.assembly, 2)
-                 .dirichlet;
-    acc = solve(old.second_mass,
-                old.load - old.stiffness * u - old.first_mass * v, d);
-  }
-  std::vector<Frame> out{{o.start, u, v}};
-  for (std::size_t i = 1; out.back().time < o.end; ++i) {
-    double elapsed = i * o.step;
-    double stamp = std::min(o.end, std::fma(double(i), o.step, o.start));
-    double h = elapsed >= o.end - o.start ? o.end - o.start - (i - 1) * o.step
-                                          : o.step;
-    auto cur = assemble(mesh, p, stamp, o.assembly);
-    Vector un, vn;
-    if (o.method == TimeMethod::Newmark) {
-      Vector pu = u + h * v + (h * h / 4) * acc, pv = v + (h / 2) * acc;
-      SparseMatrix a = cur.second_mass + (h / 2) * cur.first_mass +
-                       (h * h / 4) * cur.stiffness;
-      auto d = cur.dirichlet;
-      for (auto &x : d)
-        x.value = (x.value - pu[x.node]) / (h * h / 4);
-      acc = solve(a, cur.load - cur.stiffness * pu - cur.first_mass * pv, d);
-      un = pu + (h * h / 4) * acc;
-      vn = pv + (h / 2) * acc;
-    } else {
-      SparseMatrix a;
-      Vector rhs;
-      if (o.method == TimeMethod::BackwardEuler) {
-        a = cur.first_mass + h * cur.stiffness;
-        rhs = cur.first_mass * u + h * cur.load;
-      } else {
-        SparseMatrix m = (old.first_mass + cur.first_mass) * .5;
-        a = m + (h / 2) * cur.stiffness;
-        rhs = m * u - (h / 2) * (old.stiffness * u) +
-              (h / 2) * (old.load + cur.load);
-      }
-      un = solve(a, rhs, cur.dirichlet);
-      vn = (un - u) / h;
-    }
-    for (auto d : cur.dirichlet)
-      un[d.node] = d.value;
-    u = un;
-    v = vn;
-    old = cur;
-    out.push_back({stamp, u, v});
+  services.start_dirichlet = [&](int order) {
+    return PreparedAssembly(mesh, p, o.assembly)
+        .assemble(o.start, order)
+        .dirichlet;
+  };
+  auto old = assemble(mesh, p, o.start, o.assembly);
+  IntegratorState state{interpolate(mesh, field, o.start),
+                        interpolate(mesh, velocity, o.start)};
+  impose_compatible(state.u, old.dirichlet, o.assembly.boundary_tolerance,
+                    "displacement");
+  integrator->start(old, state, services);
+  std::vector<Frame> out{{o.start, state.u, state.v}};
+  TimeGrid grid(o.start, o.end, o.step);
+  while (const auto step = grid.next()) {
+    auto cur = assemble(mesh, p, step->time, o.assembly);
+    auto next = integrator->advance(old, cur, step->h, state, services);
+    for (const auto &d : cur.dirichlet)
+      next.u[d.node] = d.value;
+    state = std::move(next);
+    old = std::move(cur);
+    out.push_back({step->time, state.u, state.v});
   }
   return out;
 }
@@ -150,7 +130,7 @@ void evolution() {
           o.solver.validation = validation;
           o.step = .03;
           o.end = .1;
-          auto e = evolve(mesh, p, phi, phi, o);
+          auto e = evolve(mesh, p, {phi, phi}, o);
           auto ref = uncached(mesh, p, phi, phi, o);
           check(e.frames.size() == ref.size(), "Frame count mismatch");
           for (std::size_t i = 0; i < ref.size(); ++i) {
@@ -177,10 +157,12 @@ void evolution() {
   TimeOptions o;
   o.end = .3;
   o.step = .01;
-  auto full = evolve(mesh, p, 0, 0, o);
+  auto full = evolve(mesh, p, {0, 0}, o);
+  // Performance contract: a time-independent matrix is factorized once, even
+  // though stamps are computed from the origin and the source varies in t.
   check(full.timings.time_steps == 30 &&
             full.timings.solver.preparations == 1 &&
-            full.timings.solver_reuses == 29,
+            full.timings.solver_reuses == full.timings.time_steps - 1,
         "Timestamp ULPs or source variation prevented reuse");
   o.frame_stride = 7;
   o.store_reports = false;
@@ -191,7 +173,7 @@ void evolution() {
     near(f.values, full.frames.at(observed).values);
     ++observed;
   };
-  auto bounded = evolve(mesh, p, 0, 0, o);
+  auto bounded = evolve(mesh, p, {0, 0}, o);
   check(observed == 31 && bounded.frames.size() == 6 && bounded.reports.empty(),
         "Observation/storage semantics");
   check(bounded.frames.front().time == 0 && bounded.frames.back().time == .3,
@@ -203,7 +185,7 @@ void evolution() {
   };
   bool threw = false;
   try {
-    evolve(mesh, p, 0, 0, o);
+    evolve(mesh, p, {0, 0}, o);
   } catch (const std::runtime_error &e) {
     threw = std::string(e.what()) == "observer failure";
   }
@@ -211,21 +193,24 @@ void evolution() {
   o.observer = {};
   p.equation.m2 = 1;
   o.method = TimeMethod::Newmark;
-  auto wave = evolve(mesh, p, 0, 0, o);
-  check(wave.timings.solver.preparations == 2 &&
-            wave.timings.solver_reuses == 29 &&
-            wave.timings.linear_solves == 31 && wave.timings.time_steps == 30,
+  auto wave = evolve(mesh, p, {0, 0}, o);
+  // Performance contract: one factorization for the start-up mass solve and
+  // one for the constant step matrix, reused for every later step.
+  const auto steps = wave.timings.time_steps;
+  check(steps == 30 && wave.timings.solver.preparations == 2 &&
+            wave.timings.solver_reuses == steps - 1 &&
+            wave.timings.linear_solves == steps + 1,
         "Constant wave reuse count");
-  check(wave.timings.solver.rhs_solves == 31,
+  check(wave.timings.solver.rhs_solves == wave.timings.linear_solves,
         "Initial solve omitted from timings");
   p.equation.m2 = 0;
   o.method = TimeMethod::BackwardEuler;
   o.end = 0;
-  check(evolve(mesh, p, 0, 0, o).frames.size() == 1, "Zero duration");
+  check(evolve(mesh, p, {0, 0}, o).frames.size() == 1, "Zero duration");
   o.frame_stride = 0;
   threw = false;
   try {
-    evolve(mesh, p, 0, 0, o);
+    evolve(mesh, p, {0, 0}, o);
   } catch (const std::invalid_argument &) {
     threw = true;
   }
@@ -235,8 +220,8 @@ void evolution() {
     parallel.backend = pde2d::ExecutionBackend::OpenMP;
     parallel.threads = 2;
     parallel.min_parallel_size = 0;
-    near(evolution_detail::initial(mesh, exp(x + y), 0, parallel),
-         evolution_detail::initial(mesh, exp(x + y), 0));
+    near(interpolate(mesh, exp(x + y), 0, parallel),
+         interpolate(mesh, exp(x + y), 0));
     o.frame_stride = 1;
     o.end = .04;
     o.assembly.execution = parallel;
@@ -245,15 +230,15 @@ void evolution() {
       check(std::this_thread::get_id() == caller, "Parallel observer thread");
       ++observed;
     };
-    auto par = evolve(mesh, p, 0, 0, o);
+    auto par = evolve(mesh, p, {0, 0}, o);
     o.assembly.execution = {};
     o.observer = {};
     near(par.frames.back().values,
-         evolve(mesh, p, 0, 0, o).frames.back().values);
+         evolve(mesh, p, {0, 0}, o).frames.back().values);
     check(observed == 5, "Parallel observer count");
     threw = false;
     try {
-      evolution_detail::initial(mesh, log(x - 2), 0, parallel);
+      interpolate(mesh, log(x - 2), 0, parallel);
     } catch (const std::exception &) {
       threw = true;
     }

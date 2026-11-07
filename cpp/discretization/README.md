@@ -8,7 +8,7 @@ polygons, without holes. Every triangle has three vertex indices (P1).
 #include "discretization/geometry.hpp"
 #include "discretization/triangulate.hpp"
 #include "discretization/mesh_io.hpp"
-using namespace discretization;
+using namespace pde2d::discretization;
 
 RectangleGeometry shape(2.0, 1.0);
 MeshOptions options;

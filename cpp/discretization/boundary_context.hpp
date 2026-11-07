@@ -3,7 +3,7 @@
 #include "mesh_types.hpp"
 #include "mesh_validation.hpp"
 
-namespace discretization {
+namespace pde2d::discretization {
 // A source context is an ordered, complete partition of the analytical loop.
 // Chord refinement may place its mesh vertices off these source curves, but
 // it must not lose, duplicate, or reorder any source interval.
@@ -201,4 +201,4 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
       throw std::invalid_argument("Source curve is not fully represented");
   }
 }
-} // namespace discretization
+} // namespace pde2d::discretization

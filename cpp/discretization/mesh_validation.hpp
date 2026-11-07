@@ -5,7 +5,7 @@
 #include <queue>
 #include <set>
 
-namespace discretization {
+namespace pde2d::discretization {
 namespace mesh_detail {
 using Edge = std::pair<std::size_t, std::size_t>;
 inline Edge edge_key(std::size_t a, std::size_t b) { return std::minmax(a, b); }
@@ -159,4 +159,4 @@ inline void validate_mesh_geometry(const TriangleMesh &mesh) {
         throw std::invalid_argument("Crossing mesh edges / hanging vertex");
     }
 }
-} // namespace discretization
+} // namespace pde2d::discretization

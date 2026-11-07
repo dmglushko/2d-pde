@@ -3,7 +3,7 @@
 #include <ostream>
 #include <string>
 namespace showcase_io {
-inline void write_vector(std::ostream &out, const fem::Vector &values) {
+inline void write_vector(std::ostream &out, const pde2d::fem::Vector &values) {
   out << '[';
   for (Eigen::Index i = 0; i < values.size(); ++i) {
     if (i)
@@ -25,7 +25,7 @@ inline void quote(std::ostream &out, const std::string &text) {
   out << '"';
 }
 inline void write_mesh(std::ostream &out,
-                       const discretization::TriangleMesh &mesh) {
+                       const pde2d::discretization::TriangleMesh &mesh) {
   out << "\"nodes\":[";
   for (std::size_t i = 0; i < mesh.nodes.size(); ++i) {
     if (i)

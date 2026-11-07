@@ -6,10 +6,10 @@
 
 using pde2d_test::check;
 using pde2d_test::expect_throws;
-using namespace fem;
+using namespace pde2d::fem;
 static_assert(std::is_same_v<Expr, SymEngine::Expression>);
-static_assert(std::is_floating_point_v<decltype(fem::sin(1))>);
-static_assert(std::is_floating_point_v<decltype(fem::pow(2, 3))>);
+static_assert(std::is_floating_point_v<decltype(pde2d::fem::sin(1))>);
+static_assert(std::is_floating_point_v<decltype(pde2d::fem::pow(2, 3))>);
 namespace {
 void near(double a, double b) { pde2d_test::near(a, b, 1e-12); }
 } // namespace
@@ -32,20 +32,21 @@ void expression_semantics() {
   }
   const auto copied = prepared;
   near(copied({1, 2, 3, 4, 5}), 44);
-  Expr functions =
-      fem::sin(x) + fem::cos(y) + fem::exp(t) + fem::sqrt(nx) + fem::log(ny);
+  Expr functions = pde2d::fem::sin(x) + pde2d::fem::cos(y) +
+                   pde2d::fem::exp(t) + pde2d::fem::sqrt(nx) +
+                   pde2d::fem::log(ny);
   near(evaluate(functions, {.2, .3, .4, 4, 2}),
        std::sin(.2) + std::cos(.3) + std::exp(.4) + 2 + std::log(2));
-  near(evaluate(fem::pow(2, x), {3}), 8);
-  near(fem::sin(.3) + fem::cos(.2) + fem::exp(.1) + fem::sqrt(4) + fem::log(2) +
-           fem::pow(2, 3),
+  near(evaluate(pde2d::fem::pow(2, x), {3}), 8);
+  near(pde2d::fem::sin(.3) + pde2d::fem::cos(.2) + pde2d::fem::exp(.1) +
+           pde2d::fem::sqrt(4) + pde2d::fem::log(2) + pde2d::fem::pow(2, 3),
        std::sin(.3) + std::cos(.2) + std::exp(.1) + 2 + std::log(2) + 8);
-  near(evaluate(diff(fem::sin(x), x), {.4}), std::cos(.4));
+  near(evaluate(diff(pde2d::fem::sin(x), x), {.4}), std::cos(.4));
   expect_throws([] { Evaluator invalid(Expr(SymEngine::symbol("unbound"))); });
   expect_throws([] { diff(x, x + y); });
   expect_throws([] { evaluate(1 / x, {}); });
-  expect_throws([] { evaluate(fem::sqrt(x), {-1}); });
-  expect_throws([] { evaluate(fem::exp(x), {1000}); });
+  expect_throws([] { evaluate(pde2d::fem::sqrt(x), {-1}); });
+  expect_throws([] { evaluate(pde2d::fem::exp(x), {1000}); });
   expect_throws(
       [] { evaluate(x, {std::numeric_limits<double>::quiet_NaN()}); });
 }

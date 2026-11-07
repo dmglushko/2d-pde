@@ -1,11 +1,12 @@
 // Opt-in data producer, deliberately outside tests/ discovery.
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/evolution.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-using namespace fem;
+using namespace pde2d::fem;
 void vector(std::ostream &out, const Vector &v) {
   out << '[';
   for (int i = 0; i < v.size(); ++i) {
@@ -90,7 +91,7 @@ int main(int argc, char **argv) try {
       o.end = .2;
       o.step = dt;
       o.assembly = assembly;
-      auto e = evolve(mesh, p, 1 + x + y, -(1 + x + y), o);
+      auto e = evolve(mesh, p, {1 + x + y, -(1 + x + y)}, o);
       if (comma)
         out << ',';
       comma = true;

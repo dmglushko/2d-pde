@@ -1,5 +1,6 @@
 #include "fem/solver.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/error_norms.hpp"
 #include "support/check.hpp"
 #include <iostream>
@@ -7,7 +8,7 @@
 #include <stdexcept>
 
 void manufactured_convergence() {
-  using namespace fem;
+  using namespace pde2d::fem;
   const double pi = std::numbers::pi;
   const Expr exact = sin(pi * x) * sin(pi * y);
   Problem p;

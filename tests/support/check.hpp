@@ -45,15 +45,17 @@ inline std::string describe(long double a, long double b, long double tol) {
 } // namespace detail
 
 // |a - b| <= tol.
-inline void near_abs(long double a, long double b, long double tol,
-                     std::source_location at = std::source_location::current()) {
+inline void
+near_abs(long double a, long double b, long double tol,
+         std::source_location at = std::source_location::current()) {
   if (!(std::abs(a - b) <= tol))
     fail("near_abs: " + detail::describe(a, b, tol), at);
 }
 
 // |a - b| <= tol * |b| (pure relative; b is the reference value).
-inline void near_rel(long double a, long double b, long double tol,
-                     std::source_location at = std::source_location::current()) {
+inline void
+near_rel(long double a, long double b, long double tol,
+         std::source_location at = std::source_location::current()) {
   if (!(std::abs(a - b) <= tol * std::abs(b)))
     fail("near_rel: " + detail::describe(a, b, tol), at);
 }
@@ -61,8 +63,7 @@ inline void near_rel(long double a, long double b, long double tol,
 // |a - b| <= tol * max(1, |a|, |b|): absolute near zero, relative elsewhere.
 inline void near(long double a, long double b, long double tol,
                  std::source_location at = std::source_location::current()) {
-  const long double scale =
-      std::max({1.L, std::abs(a), std::abs(b)});
+  const long double scale = std::max({1.L, std::abs(a), std::abs(b)});
   if (!(std::abs(a - b) <= tol * scale))
     fail("near: " + detail::describe(a, b, tol), at);
 }
@@ -70,9 +71,8 @@ inline void near(long double a, long double b, long double tol,
 // Passes when f() throws Exception (and, if given, what() contains fragment).
 // Other exception types propagate and fail the enclosing case.
 template <class Exception = std::exception, class F>
-void expect_throws(
-    F &&f, std::string_view fragment = {},
-    std::source_location at = std::source_location::current()) {
+void expect_throws(F &&f, std::string_view fragment = {},
+                   std::source_location at = std::source_location::current()) {
   try {
     f();
   } catch (const Exception &e) {

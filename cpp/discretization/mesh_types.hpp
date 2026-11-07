@@ -3,7 +3,7 @@
 #include "curve_geometry.hpp"
 #include <optional>
 
-namespace discretization {
+namespace pde2d::discretization {
 
 // Explicit values are stable PDE2D_MESH wire IDs. Never renumber.
 enum class InteriorAlgorithm { EarClipping = 0, ConstrainedDelaunay = 1 };
@@ -91,4 +91,4 @@ struct MeshResult {
   MeshOptions options{};
   MeshReport report{};
 };
-} // namespace discretization
+} // namespace pde2d::discretization

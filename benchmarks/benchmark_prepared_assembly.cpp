@@ -1,11 +1,12 @@
 // Standalone build command and recorded settings:
-// docs/performance/assembly-2026-11-06.md
+// docs/archive/performance/assembly-2026-11-06.md
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/assembly.hpp"
 #include <chrono>
 #include <iostream>
 int main(int argc, char **argv) {
-  using namespace fem;
+  using namespace pde2d::fem;
   const int threads = argc > 1 ? std::stoi(argv[1]) : 0;
   const bool variable = argc > 2;
   auto mesh = square_mesh(20);

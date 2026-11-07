@@ -2,7 +2,7 @@
 #include "support/check.hpp"
 #include <iostream>
 #include <random>
-using namespace discretization;
+using namespace pde2d::discretization;
 using pde2d_test::check;
 using pde2d_test::expect_throws;
 TriangleMesh witness() {

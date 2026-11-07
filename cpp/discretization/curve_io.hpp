@@ -5,7 +5,7 @@
 #include <ostream>
 #include <type_traits>
 
-namespace discretization::curve_io {
+namespace pde2d::discretization::curve_io {
 // PDE2D_MESH v3 wire IDs. Never renumber or derive these from variant order.
 // The primary template is intentionally undefined: new alternatives must
 // explicitly opt into the format, independently of their geometry operations.
@@ -109,4 +109,4 @@ template <class Variant> void write(std::ostream &out, const Variant &curve) {
       },
       curve);
 }
-} // namespace discretization::curve_io
+} // namespace pde2d::discretization::curve_io

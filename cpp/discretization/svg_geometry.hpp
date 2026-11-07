@@ -12,7 +12,7 @@
 #include <locale>
 #include <span>
 
-namespace discretization {
+namespace pde2d::discretization {
 enum class SvgScaleMode { Factor, Nearest, Farthest };
 // samples_per_curve controls distance scaling only; meshing uses
 // BoundaryOptions.
@@ -523,4 +523,4 @@ inline void exportSvg(const CurveGeometry &geometry,
   if (!output)
     throw std::runtime_error("Failed to write SVG geometry: " + filename);
 }
-} // namespace discretization
+} // namespace pde2d::discretization

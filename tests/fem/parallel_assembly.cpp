@@ -1,9 +1,10 @@
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/assembly.hpp"
 #include "support/check.hpp"
 #include <iostream>
 #include <stdexcept>
-using namespace fem;
+using namespace pde2d::fem;
 using pde2d_test::check;
 using pde2d_test::thrown_what;
 namespace {

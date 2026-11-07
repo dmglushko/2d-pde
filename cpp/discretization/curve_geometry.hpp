@@ -9,7 +9,7 @@
 #include <mutex>
 #include <unordered_map>
 
-namespace discretization {
+namespace pde2d::discretization {
 
 // Construction input: consecutive boundary curves with one tag.
 struct CurveRegion {
@@ -511,4 +511,4 @@ private:
     return result;
   }
 };
-} // namespace discretization
+} // namespace pde2d::discretization

@@ -3,7 +3,7 @@
 #include "support/check.hpp"
 #include <bit>
 #include <iostream>
-using namespace discretization;
+using namespace pde2d::discretization;
 // Byte-exact signatures recorded against the pre-optimization implementation.
 // Cover points, region tags, protected vertices and every provenance interval.
 std::uint64_t signature(const DiscretizedBoundary &result) {

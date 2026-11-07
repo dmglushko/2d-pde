@@ -11,18 +11,18 @@ int main(int argc, char **argv) {
     return 2;
   }
   try {
-    discretization::RectangleGeometry geometry(3.0, 2.0);
+    pde2d::discretization::RectangleGeometry geometry(3.0, 2.0);
     geometry.setRotation(0.12);
-    discretization::MeshOptions options;
+    pde2d::discretization::MeshOptions options;
     options.boundary.max_edge_length = 0.35;
     options.refinement.max_edge_length = 0.42;
-    auto result = discretization::generate_mesh(geometry, options);
+    auto result = pde2d::discretization::generate_mesh(geometry, options);
     if (!result.report.size_satisfied) {
       std::cerr << result.report.message << '\n';
       return 1;
     }
-    discretization::export_mesh(result, argv[1]);
-    auto restored = discretization::import_mesh_result(argv[1]);
+    pde2d::discretization::export_mesh(result, argv[1]);
+    auto restored = pde2d::discretization::import_mesh_result(argv[1]);
     std::cout << "Saved P1 mesh: " << restored.mesh.nodes.size() << " nodes, "
               << restored.mesh.elements.size() << " triangles, "
               << restored.mesh.boundary_edges.size() << " boundary edges\n";

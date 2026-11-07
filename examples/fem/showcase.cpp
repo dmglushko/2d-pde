@@ -2,6 +2,7 @@
 #include "discretization/geometry.hpp"
 #include "discretization/triangulate.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/error_norms.hpp"
 #include <filesystem>
 #include <fstream>
@@ -9,7 +10,7 @@
 #include <iostream>
 #include <numbers>
 
-using namespace fem;
+using namespace pde2d::fem;
 
 struct Example {
   std::string id, name, equation, boundary, description;
@@ -176,13 +177,14 @@ int main(int argc, char **argv) {
     boundary.time.step = .0125;
     examples.push_back(boundary);
 
-    discretization::RectangleGeometry geometry(1, 1);
+    pde2d::discretization::RectangleGeometry geometry(1, 1);
     geometry.setCenter(.5, .5);
-    discretization::MeshOptions mesh_options;
+    pde2d::discretization::MeshOptions mesh_options;
     mesh_options.boundary.max_edge_length = .1;
     mesh_options.boundary.preserve_corners = true;
     mesh_options.refinement.max_edge_length = .12;
-    const auto meshed = discretization::generate_mesh(geometry, mesh_options);
+    const auto meshed =
+        pde2d::discretization::generate_mesh(geometry, mesh_options);
     if (!meshed.report.size_satisfied)
       throw std::runtime_error(meshed.report.message);
     const auto &mesh = meshed.mesh;
@@ -212,7 +214,7 @@ int main(int argc, char **argv) {
         const Expr initial =
             ex.exact.subs({{t.get_basic(), Expr(0).get_basic()}});
         auto solution =
-            evolve(mesh, ex.problem, initial, ex.initial_velocity, ex.time);
+            evolve(mesh, ex.problem, {initial, ex.initial_velocity}, ex.time);
         frames = std::move(solution.frames);
         for (const auto &report : solution.reports)
           residual = std::max(residual, report.relative_residual);

@@ -7,7 +7,7 @@
 #include <iostream>
 #include <memory>
 
-using namespace discretization;
+using namespace pde2d::discretization;
 
 int main(int argc, char **argv) {
   try {

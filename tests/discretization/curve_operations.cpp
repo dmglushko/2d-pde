@@ -7,7 +7,7 @@
 #include <iostream>
 #include <sstream>
 
-using namespace discretization;
+using namespace pde2d::discretization;
 using pde2d_test::check;
 using pde2d_test::expect_throws;
 using pde2d_test::norm;

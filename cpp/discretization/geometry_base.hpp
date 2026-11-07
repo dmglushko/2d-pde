@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace discretization {
+namespace pde2d::discretization {
 
 namespace boundary_detail {
 // Empty tags represent untagged mesh edges; '-' is the file-format sentinel.
@@ -67,4 +67,4 @@ private:
   double rotation_ = 0.0;
 };
 
-} // namespace discretization
+} // namespace pde2d::discretization

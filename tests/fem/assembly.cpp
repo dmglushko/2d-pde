@@ -1,5 +1,6 @@
 #include "fem/assembly.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "support/check.hpp"
 #include <Eigen/Dense>
 #include <iostream>
@@ -9,11 +10,11 @@
 using pde2d_test::check;
 using pde2d_test::expect_throws;
 namespace {
-using namespace fem;
+using namespace pde2d::fem;
 void near(double a, double b, double tolerance = 2e-11) {
   pde2d_test::near(a, b, tolerance);
 }
-discretization::TriangleMesh triangle() {
+pde2d::discretization::TriangleMesh triangle() {
   return {{{0, 0}, {1, 0}, {0, 1}},
           {{0, 1, 2}},
           {{1, 0}, {2, 1}, {0, 2}},
@@ -242,10 +243,10 @@ void boundary_restriction_regressions() {
 void slanted_normal_boundaries() {
   // Unequal normal components exposed floating-point cancellation in the
   // symbolic proportionality test, even for constant isotropic diffusion.
-  discretization::TriangleMesh mesh{{{0, 0}, {1, 0}, {.3, .7}},
-                                    {{0, 1, 2}},
-                                    {{0, 1}, {1, 2}, {2, 0}},
-                                    {"b", "b", "b"}};
+  pde2d::discretization::TriangleMesh mesh{{{0, 0}, {1, 0}, {.3, .7}},
+                                           {{0, 1, 2}},
+                                           {{0, 1}, {1, 2}, {2, 0}},
+                                           {"b", "b", "b"}};
   for (const Expr scale : {Expr(10), Expr(.1), Expr(10) * (1 + x + y + t)}) {
     for (int kind = 0; kind < 3; ++kind) {
       Problem p;

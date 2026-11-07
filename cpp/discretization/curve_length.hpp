@@ -3,7 +3,7 @@
 #include "curve_segment.hpp"
 #include <limits>
 
-namespace discretization {
+namespace pde2d::discretization {
 namespace curve_detail {
 
 inline void validateCurve(const CurveSegment &segment) {
@@ -124,4 +124,4 @@ inline double curveParameterAtLengthFraction(const CurveSegment &segment,
   }
   throw std::runtime_error("Curve length inversion did not converge");
 }
-} // namespace discretization
+} // namespace pde2d::discretization

@@ -1,5 +1,6 @@
 #include "fem/evolution.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "support/check.hpp"
 #include <Eigen/Dense>
 #include <iostream>
@@ -7,7 +8,7 @@
 using pde2d_test::check;
 using pde2d_test::expect_throws;
 namespace {
-using namespace fem;
+using namespace pde2d::fem;
 void near(double a, double b, double tol = 1e-9) {
   pde2d_test::near(a, b, tol);
 }
@@ -202,7 +203,7 @@ void heat() {
     o.method = method;
     o.end = .1;
     o.step = h;
-    auto e = evolve(mesh, p, initial, 0, o);
+    auto e = evolve(mesh, p, {initial, 0}, o);
     check(e.timings.linear_solves == e.frames.size() - 1 &&
               e.timings.assembly_calls == e.frames.size(),
           "First-order timing call counts");
@@ -225,7 +226,7 @@ void heat() {
   TimeOptions o;
   o.step = .03;
   o.end = .1;
-  auto e = evolve(mesh, p, initial, 0, o);
+  auto e = evolve(mesh, p, {initial, 0}, o);
   check(e.frames.size() == 5 && e.frames.back().time == .1, "Short final step");
   near(e.frames[0].values[4], 1);
   double amplification = 1;
@@ -251,7 +252,7 @@ void damped_eigenmode() {
     o.method = TimeMethod::Newmark;
     o.step = h;
     o.end = end;
-    auto e = evolve(mesh, p, initial, 0, o);
+    auto e = evolve(mesh, p, {initial, 0}, o);
     return std::abs(e.frames.back().values[4] - exact);
   };
   check(error(.02) / error(.01) > 3.8, "Damped Newmark temporal order");
@@ -264,7 +265,7 @@ void damped_eigenmode() {
   o.method = TimeMethod::CrankNicolson;
   o.step = .07;
   o.end = .2;
-  auto e = evolve(mesh, p, initial, 0, o);
+  auto e = evolve(mesh, p, {initial, 0}, o);
   double expected = 1;
   for (std::size_t k = 1; k < e.frames.size(); ++k) {
     const double s = e.frames[k - 1].time, q = e.frames[k].time, h = q - s;
@@ -298,7 +299,7 @@ void moving_and_waves() {
     o.end = .13;
     o.step = .04;
     o.assembly.quadrature_degree = 6;
-    auto e = evolve(mesh, p, phi, phi, o);
+    auto e = evolve(mesh, p, {phi, phi}, o);
     for (const auto &frame : e.frames)
       for (std::size_t i = 0; i < mesh.nodes.size(); ++i) {
         const double f = 1 + mesh.nodes[i].x + 2 * mesh.nodes[i].y;
@@ -306,10 +307,10 @@ void moving_and_waves() {
              2e-9);
         near(frame.velocity[i], f * (1 + 2 * frame.time), 2e-8);
       }
-    expect_throws([&] { evolve(mesh, p, phi, 0, o); }, "velocity");
-    expect_throws([&] { evolve(mesh, p, 0, phi, o); }, "displacement");
+    expect_throws([&] { evolve(mesh, p, {phi, 0}, o); }, "velocity");
+    expect_throws([&] { evolve(mesh, p, {0, phi}, o); }, "displacement");
     o.method = TimeMethod::BackwardEuler;
-    expect_throws([&] { evolve(mesh, p, phi, phi, o); }, "second mass");
+    expect_throws([&] { evolve(mesh, p, {phi, phi}, o); }, "second mass");
   }
   // Moving boundary lifting with a time-varying bulk first mass. The affine
   // solution is exact for both first-order schemes and exercises reassembly.
@@ -322,7 +323,7 @@ void moving_and_waves() {
     o.method = method;
     o.step = .03;
     o.end = .1;
-    auto e = evolve(mesh, p, phi, 0, o);
+    auto e = evolve(mesh, p, {phi, 0}, o);
     for (const auto &frame : e.frames)
       for (std::size_t i = 0; i < mesh.nodes.size(); ++i)
         near(frame.values[i],
@@ -336,7 +337,7 @@ void moving_and_waves() {
   TimeOptions o;
   o.end = .1;
   o.step = .03;
-  auto e = evolve(tiny, storage, 1, 0, o);
+  auto e = evolve(tiny, storage, {1, 0}, o);
   for (double value : e.frames.back().values)
     near(value, 1.1);
 }
@@ -344,21 +345,21 @@ void invalid_options() {
   auto mesh = square_mesh(2);
   Problem p;
   p.assign(dirichlet(0), {"bottom", "right", "top", "left"});
-  expect_throws([&] { evolve(mesh, p, 0); }, "first mass");
+  expect_throws([&] { evolve(mesh, p, {0}); }, "first mass");
   p.equation.m1 = 1;
   TimeOptions o;
   o.method = TimeMethod::Newmark;
-  expect_throws([&] { evolve(mesh, p, 0, 0, o); }, "second mass");
+  expect_throws([&] { evolve(mesh, p, {0, 0}, o); }, "second mass");
   o.method = TimeMethod::BackwardEuler;
   o.step = std::numeric_limits<double>::infinity();
-  expect_throws([&] { evolve(mesh, p, 0, 0, o); }, "time interval");
+  expect_throws([&] { evolve(mesh, p, {0, 0}, o); }, "time interval");
   o.step = 0;
-  expect_throws([&] { evolve(mesh, p, 0, 0, o); });
+  expect_throws([&] { evolve(mesh, p, {0, 0}, o); });
   o.step = .1;
   o.end = -1;
-  expect_throws([&] { evolve(mesh, p, 0, 0, o); });
+  expect_throws([&] { evolve(mesh, p, {0, 0}, o); });
   o.end = 0;
-  auto e = evolve(mesh, p, 0, 0, o);
+  auto e = evolve(mesh, p, {0, 0}, o);
   check(e.frames.size() == 1, "Initial-only evolution");
 }
 void offset_interval() {
@@ -371,7 +372,7 @@ void offset_interval() {
   o.start = 1e15;
   o.end = o.start + 1;
   o.step = .125;
-  auto result = evolve(mesh, p, 1, 0, o);
+  auto result = evolve(mesh, p, {1, 0}, o);
   check(result.frames.size() == 9, "Large time origin collapsed valid steps");
   for (double value : result.frames.back().values)
     near(value, std::pow(1.125, -8));

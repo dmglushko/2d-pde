@@ -1,6 +1,7 @@
 // Two 100-second waves on a 10 x 10 square, with wall-clock profiling.
 #include "fem/report.hpp"
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/error_norms.hpp"
 #include "showcase_io.hpp"
 #include <algorithm>
@@ -13,9 +14,9 @@
 #include <optional>
 #include <thread>
 
-using namespace fem;
+using namespace pde2d::fem;
 using namespace showcase_io;
-using Clock = fem::timing_detail::Clock;
+using Clock = pde2d::fem::timing::Clock;
 
 struct Case {
   std::string id, name, equation, boundary, description;
@@ -90,8 +91,8 @@ WaveRun run_waves(const std::filesystem::path &destination, int divisions,
     node.x *= length;
     node.y *= length;
   }
-  discretization::validate_mesh_geometry(mesh);
-  const double mesh_seconds = timing_detail::seconds(phase);
+  pde2d::discretization::validate_mesh_geometry(mesh);
+  const double mesh_seconds = timing::seconds_since(phase);
   const double pi = std::numbers::pi;
   const Expr source_space =
       .15 * exp(-((x - 3) * (x - 3) + (y - 5) * (y - 5)) / 1.2);
@@ -150,7 +151,7 @@ WaveRun run_waves(const std::filesystem::path &destination, int divisions,
     std::optional<PreparedErrorNorms> errors;
     if (c.exact)
       errors.emplace(mesh, *c.exact);
-    c.setup_seconds = timing_detail::seconds(phase);
+    c.setup_seconds = timing::seconds_since(phase);
     TimeOptions time;
     time.method = TimeMethod::Newmark;
     time.end = end;
@@ -197,7 +198,7 @@ WaveRun run_waves(const std::filesystem::path &destination, int divisions,
     };
     std::cout << "Running " << c.name << " on " << mesh.nodes.size()
               << " nodes, dt=" << step << " s" << std::endl;
-    c.evolution = evolve(mesh, c.problem, c.initial, 0, time);
+    c.evolution = evolve(mesh, c.problem, {c.initial, 0}, time);
     c.diagnostics_seconds = c.evolution.timings.observer_seconds;
     const auto &frames = c.evolution.frames;
     const double energy_scale = std::max(1., max_energy);
@@ -282,7 +283,7 @@ WaveRun run_waves(const std::filesystem::path &destination, int divisions,
   out.close();
   if (!out)
     throw std::runtime_error("Wave output write failed");
-  const double export_seconds = timing_detail::seconds(phase);
+  const double export_seconds = timing::seconds_since(phase);
   auto profile_path = destination;
   profile_path.replace_extension("timings.json");
   std::ofstream profile(profile_path);
@@ -297,7 +298,7 @@ WaveRun run_waves(const std::filesystem::path &destination, int divisions,
           << step
           << ",\"saved_frame_stride\":5,\"mesh_seconds\":" << mesh_seconds
           << ",\"data_export_seconds\":" << export_seconds
-          << ",\"execution_seconds\":" << timing_detail::seconds(started)
+          << ",\"execution_seconds\":" << timing::seconds_since(started)
           << ",\"cases\":[";
   for (std::size_t i = 0; i < cases.size(); ++i) {
     if (i)
@@ -317,7 +318,7 @@ WaveRun run_waves(const std::filesystem::path &destination, int divisions,
             << " s; profile: " << profile_path << std::endl;
   WaveRun result;
   result.export_seconds = export_seconds;
-  result.execution_seconds = timing_detail::seconds(started);
+  result.execution_seconds = timing::seconds_since(started);
   for (const auto &c : cases) {
     result.cases.push_back(
         {c.id, c.evolution.timings, c.setup_seconds, c.diagnostics_seconds});

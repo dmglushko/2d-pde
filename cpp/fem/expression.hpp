@@ -9,7 +9,7 @@
 #include <memory>
 #include <stdexcept>
 
-namespace fem {
+namespace pde2d::fem {
 using Expr = SymEngine::Expression;
 inline const Expr x{SymEngine::symbol("x")}, y{SymEngine::symbol("y")},
     t{SymEngine::symbol("t")}, nx{SymEngine::symbol("nx")},
@@ -31,6 +31,13 @@ inline bool is_zero(const Expr &expression) {
   return SymEngine::is_a_Number(*expanded.get_basic()) &&
          SymEngine::down_cast<const SymEngine::Number &>(*expanded.get_basic())
              .is_zero();
+}
+// True when `symbol` occurs freely in `expression` (e.g. time dependence).
+inline bool depends_on(const Expr &expression, const Expr &symbol) {
+  for (const auto &s : SymEngine::free_symbols(*expression.get_basic()))
+    if (SymEngine::eq(*s, *symbol.get_basic()))
+      return true;
+  return false;
 }
 
 // Numeric overloads preserve ordinary floating-point arithmetic in generic
@@ -88,4 +95,4 @@ public:
 inline double evaluate(const Expr &expression, EvaluationPoint point) {
   return Evaluator(expression)(point);
 }
-} // namespace fem
+} // namespace pde2d::fem

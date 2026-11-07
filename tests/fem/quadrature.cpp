@@ -11,11 +11,11 @@ namespace {
 void near(long double a, long double b) { pde2d_test::near_rel(a, b, 3e-13L); }
 } // namespace
 void quadrature_rules() {
-  check(fem::triangle_quadrature().size() == 3,
+  check(pde2d::fem::triangle_quadrature().size() == 3,
         "Baseline must have three points");
   for (int degree = 0; degree <= 64; ++degree) {
-    const auto edge = fem::edge_quadrature(degree);
-    const auto triangle = fem::triangle_quadrature(degree);
+    const auto edge = pde2d::fem::edge_quadrature(degree);
+    const auto triangle = pde2d::fem::triangle_quadrature(degree);
     long double edge_sum = 0, triangle_sum = 0;
     for (auto p : edge) {
       check(p.coordinate > 0 && p.coordinate < 1 && p.weight > 0,
@@ -66,9 +66,10 @@ void quadrature_rules() {
   }
   for (int degree : {-1, 65, std::numeric_limits<int>::max(),
                      std::numeric_limits<int>::min()}) {
-    expect_throws<std::invalid_argument>([=] { fem::edge_quadrature(degree); });
     expect_throws<std::invalid_argument>(
-        [=] { fem::triangle_quadrature(degree); });
+        [=] { pde2d::fem::edge_quadrature(degree); });
+    expect_throws<std::invalid_argument>(
+        [=] { pde2d::fem::triangle_quadrature(degree); });
   }
 }
 int main() { return pde2d_test::run({{"quadrature_rules", quadrature_rules}}); }

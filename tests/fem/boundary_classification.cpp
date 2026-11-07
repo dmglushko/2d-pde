@@ -1,0 +1,137 @@
+// classify_edge_condition is pure: these cases need no mesh or assembly.
+#include "fem/boundary_classification.hpp"
+#include "support/check.hpp"
+
+using namespace pde2d::fem;
+using pde2d_test::check;
+using pde2d_test::expect_throws;
+using pde2d_test::near;
+
+namespace {
+// Bottom edge of the unit square: outward normal (0,-1).
+const p1::EdgeFrame bottom = p1::edge_frame({0, 0}, {1, 0}, {0, 1});
+// Right edge: outward normal (1,0).
+const p1::EdgeFrame right = p1::edge_frame({1, 0}, {1, 1}, {0, 0});
+
+double at(const Expr &restricted, double s, double time = 0) {
+  return Evaluator(restricted)({s, 0, time});
+}
+
+void edge_frames() {
+  near(bottom.length, 1, 1e-15);
+  near(bottom.normal_x, 0, 1e-15);
+  near(bottom.normal_y, -1, 1e-15);
+  near(right.normal_x, 1, 1e-15);
+  expect_throws([] { p1::edge_frame({0, 0}, {0, 0}, {1, 1}); }, "Zero");
+}
+
+void dirichlet_restricts_to_edge_parameter() {
+  const auto c = classify_edge_condition({}, dirichlet(2 * (1 + x + y)), right);
+  check(c.dirichlet, "Dirichlet condition misclassified");
+  // On the right edge x = 1 and y = s.
+  near(at(c.prescribed, 0), 4, 1e-14);
+  near(at(c.prescribed, .5), 5, 1e-14);
+  // A scaled Dirichlet operator still prescribes value/alpha.
+  const auto scaled = classify_edge_condition({}, robin(4, 0, 8), bottom);
+  check(scaled.dirichlet, "Zero-beta Robin should be Dirichlet");
+  near(at(scaled.prescribed, .3), 2, 1e-14);
+}
+
+void neumann_and_robin_are_natural() {
+  // Default equation is -Laplace(u), so q_n = du/dn and beta reduces to 1.
+  const auto n = classify_edge_condition({}, neumann(3), bottom);
+  check(!n.dirichlet, "Neumann misclassified");
+  near(at(n.beta, .5), 1, 1e-14);
+  near(at(n.value, .5), 3, 1e-14);
+  const auto r = classify_edge_condition({}, robin(2, 5, 7 * t), bottom);
+  check(!r.dirichlet, "Robin misclassified");
+  near(at(r.alpha, .2), 2, 1e-14);
+  near(at(r.beta, .2), 5, 1e-14);
+  near(at(r.value, .2, 2), 14, 1e-14);
+  // Flux form: beta multiplies q_n directly.
+  const auto f = classify_edge_condition({}, flux_robin(1, 4, 0), right);
+  near(at(f.beta, .5), 4, 1e-14);
+}
+
+void diffusion_scales_normal_derivative() {
+  // -3 Laplace(u): a_xx = a_yy = -3, so A = -3 I and q_n = -n.A grad u =
+  // 3 du/dn. A Neumann condition du/dn = g therefore becomes q_n / 3 = g.
+  Equation eq;
+  eq.a_xx = -3;
+  eq.a_yy = -3;
+  near(at(classify_edge_condition(eq, neumann(1), bottom).beta, .5), 1. / 3,
+       1e-14);
+  // The sign follows the operator: +3 Laplace(u) flips the natural flux.
+  eq.a_xx = 3;
+  eq.a_yy = 3;
+  near(at(classify_edge_condition(eq, neumann(1), bottom).beta, .5), -1. / 3,
+       1e-14);
+}
+
+void normals_are_substituted() {
+  const auto c = classify_edge_condition({}, neumann(nx + 2 * ny), right);
+  near(at(c.value, .5), 1, 1e-14);
+  const auto d = classify_edge_condition({}, neumann(nx + 2 * ny), bottom);
+  near(at(d.value, .5), -2, 1e-14);
+}
+
+void proportional_partial_derivatives_are_accepted() {
+  // u_x on the right edge is the outward normal derivative.
+  BoundaryCondition bc;
+  bc.beta_x = 1;
+  bc.value = 1;
+  const auto c = classify_edge_condition({}, bc, right);
+  check(!c.dirichlet, "u_x on a vertical edge should be natural");
+  near(at(c.beta, .5), 1, 1e-14);
+}
+
+void oblique_derivatives_are_rejected() {
+  BoundaryCondition bc;
+  bc.beta_x = 1; // tangential on the bottom edge
+  expect_throws<std::invalid_argument>(
+      [&] { classify_edge_condition({}, bc, bottom); }, "oblique");
+}
+
+void cancelled_derivatives_reduce_to_dirichlet() {
+  BoundaryCondition bc;
+  bc.alpha = 2;
+  bc.beta_flux = 1;
+  bc.beta_normal = -1; // q_n - du/dn = 0 for -Laplace(u)
+  bc.value = 6;
+  const auto c = classify_edge_condition({}, bc, bottom);
+  check(c.dirichlet, "Cancelled derivative terms should leave Dirichlet");
+  near(at(c.prescribed, .5), 3, 1e-14);
+  bc.alpha = 0;
+  expect_throws<std::invalid_argument>(
+      [&] { classify_edge_condition({}, bc, bottom); }, "no nonzero operator");
+}
+
+void dynamic_dirichlet_is_rejected() {
+  BoundaryCondition bc;
+  bc.alpha = 1;
+  bc.gamma = 1;
+  expect_throws<std::invalid_argument>(
+      [&] { classify_edge_condition({}, bc, bottom); }, "Derivative-free");
+  // With a flux term the same gamma is a dynamic natural condition.
+  const auto c = classify_edge_condition({}, dynamic_robin(1, 1, 1, 0), bottom);
+  check(!c.dirichlet, "Dynamic Robin misclassified");
+  near(at(c.gamma, .5), 1, 1e-14);
+}
+} // namespace
+
+int main() {
+  return pde2d_test::run(
+      {{"edge_frames", edge_frames},
+       {"dirichlet_restricts_to_edge_parameter",
+        dirichlet_restricts_to_edge_parameter},
+       {"neumann_and_robin_are_natural", neumann_and_robin_are_natural},
+       {"diffusion_scales_normal_derivative",
+        diffusion_scales_normal_derivative},
+       {"normals_are_substituted", normals_are_substituted},
+       {"proportional_partial_derivatives_are_accepted",
+        proportional_partial_derivatives_are_accepted},
+       {"oblique_derivatives_are_rejected", oblique_derivatives_are_rejected},
+       {"cancelled_derivatives_reduce_to_dirichlet",
+        cancelled_derivatives_reduce_to_dirichlet},
+       {"dynamic_dirichlet_is_rejected", dynamic_dirichlet_is_rejected}});
+}

@@ -5,7 +5,7 @@
 #include <ostream>
 #include <sstream>
 
-namespace fem {
+namespace pde2d::fem {
 namespace report_detail {
 inline const char *name(TimeMethod method) {
   switch (method) {
@@ -102,4 +102,4 @@ inline std::ostream &write_report(std::ostream &out,
     report_detail::solver_timings(s, t.solver);
   });
 }
-} // namespace fem
+} // namespace pde2d::fem

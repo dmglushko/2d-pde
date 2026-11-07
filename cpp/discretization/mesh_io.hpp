@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-namespace discretization {
+namespace pde2d::discretization {
 namespace detail {
 
 inline void validate_mesh_format(const TriangleMesh &mesh) {
@@ -380,4 +380,4 @@ inline TriangleMesh import_mesh(const std::string &path) {
   return import_mesh_result(path).mesh;
 }
 
-} // namespace discretization
+} // namespace pde2d::discretization

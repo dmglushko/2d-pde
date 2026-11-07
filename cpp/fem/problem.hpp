@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-namespace fem {
+namespace pde2d::fem {
 
 // m2*u_tt + m1*u_t + a_xx*u_xx + a_xy*u_xy + a_yy*u_yy
 //     + b_x*u_x + b_y*u_y + c*u = source.
@@ -73,6 +73,9 @@ inline BoundaryCondition dynamic_flux_robin(Expr gamma, Expr alpha, Expr beta,
   return bc;
 }
 
+// The spatial problem: one equation and one condition per boundary region.
+// Initial conditions are not part of it; transient problems pass them to
+// evolve() as InitialConditions (evolution.hpp).
 struct BoundaryAssignment {
   std::vector<std::string> regions;
   BoundaryCondition condition;
@@ -86,4 +89,4 @@ struct Problem {
   }
 };
 
-} // namespace fem
+} // namespace pde2d::fem

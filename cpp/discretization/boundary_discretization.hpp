@@ -2,7 +2,7 @@
 #include "mesh_types.hpp"
 #include "mesh_validation.hpp"
 
-namespace discretization {
+namespace pde2d::discretization {
 struct DiscretizedBoundary {
   Boundary boundary;
   std::optional<BoundaryContext> context;
@@ -189,4 +189,4 @@ discretize_boundary(const CurveGeometry &geometry,
   ctx.polygon_snapshot = b.points;
   return {std::move(b), std::move(ctx)};
 }
-} // namespace discretization
+} // namespace pde2d::discretization

@@ -2,7 +2,7 @@
 #include <chrono>
 #include <cstddef>
 
-namespace fem {
+namespace pde2d::fem {
 // Wall-clock seconds from steady_clock; parent totals include their subphases.
 struct SolverTimings {
   double validation_seconds = 0, rank_check_seconds = 0,
@@ -34,10 +34,22 @@ struct EvolutionTimings {
               solver_reuses = 0;
   SolverTimings solver;
 };
-namespace timing_detail {
+namespace timing {
 using Clock = std::chrono::steady_clock;
-inline double seconds(Clock::time_point start) {
+inline double seconds_since(Clock::time_point start) {
   return std::chrono::duration<double>(Clock::now() - start).count();
 }
-} // namespace timing_detail
-} // namespace fem
+// Adds the lifetime of the scope to `target` (also when leaving by
+// exception), e.g.  { timing::Accumulate _(t.assembly_seconds); ... }
+class Accumulate {
+  double &target_;
+  Clock::time_point start_ = Clock::now();
+
+public:
+  explicit Accumulate(double &target) : target_(target) {}
+  Accumulate(const Accumulate &) = delete;
+  Accumulate &operator=(const Accumulate &) = delete;
+  ~Accumulate() { target_ += seconds_since(start_); }
+};
+} // namespace timing
+} // namespace pde2d::fem

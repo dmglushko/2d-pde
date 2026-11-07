@@ -1,9 +1,10 @@
 #include "discretization/square_mesh.hpp"
+using pde2d::discretization::square_mesh;
 #include "fem/assembly.hpp"
 #include "support/check.hpp"
 #include <iostream>
 #include <stdexcept>
-using namespace fem;
+using namespace pde2d::fem;
 using pde2d_test::check;
 namespace {
 void near(double a, double b) { pde2d_test::near(a, b, 3e-10); }
@@ -19,10 +20,10 @@ void same(const AssembledSystem &a, const AssembledSystem &b) {
   }
 }
 void known() {
-  discretization::TriangleMesh mesh{{{0, 0}, {1, 0}, {0, 1}},
-                                    {{0, 1, 2}},
-                                    {{0, 1}, {1, 2}, {2, 0}},
-                                    {"b", "b", "b"}};
+  pde2d::discretization::TriangleMesh mesh{{{0, 0}, {1, 0}, {0, 1}},
+                                           {{0, 1, 2}},
+                                           {{0, 1}, {1, 2}, {2, 0}},
+                                           {"b", "b", "b"}};
   Problem p;
   p.equation.a_xx = -2;
   p.equation.a_xy = -2;

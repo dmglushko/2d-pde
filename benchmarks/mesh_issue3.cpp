@@ -3,7 +3,7 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
-using namespace discretization;
+using namespace pde2d::discretization;
 using Clock = std::chrono::steady_clock;
 template <class F> double timed(F f) {
   auto t = Clock::now();

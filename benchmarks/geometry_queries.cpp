@@ -6,7 +6,7 @@
 #include <iostream>
 #include <fstream>
 #include <filesystem>
-using namespace discretization;
+using namespace pde2d::discretization;
 int main(int argc, char **argv) {
   const std::filesystem::path file =
       argc > 1 ? argv[1] : "build/geometry-benchmark.svg";
