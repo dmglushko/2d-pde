@@ -1,5 +1,5 @@
 // Two 100-second waves on a 10 x 10 square, with wall-clock profiling.
-#include "fem/evolution.hpp"
+#include "fem/report.hpp"
 #include "square_mesh.hpp"
 #include "error_norms.hpp"
 #include "showcase_io.hpp"
@@ -126,7 +126,6 @@ WaveRun run_waves(const std::filesystem::path& destination,int divisions,
       double cumulative_work=0,initial_energy=0,initial_mean=0,max_energy=0,previous_time=0;
       Vector previous_values;
       time.observer=[&](const Frame& f){
-        const auto diagnostic_started=Clock::now();
         const double energy=.5*(f.velocity.dot(system.second_mass*f.velocity)+f.values.dot(system.stiffness*f.values));
         const double mean=weights.dot(f.values)/area;
         if(c.observed_frames==0){initial_energy=energy;initial_mean=mean;}
@@ -143,10 +142,10 @@ WaveRun run_waves(const std::filesystem::path& destination,int divisions,
         }
         if(!c.exact)previous_values=f.values;
         previous_time=f.time;++c.observed_frames;
-        c.diagnostics_seconds+=timing_detail::seconds(diagnostic_started);
       };
       std::cout<<"Running "<<c.name<<" on "<<mesh.nodes.size()<<" nodes, dt="<<step<<" s"<<std::endl;
       c.evolution=evolve(mesh,c.problem,c.initial,0,time);
+      c.diagnostics_seconds=c.evolution.timings.observer_seconds;
       const auto& frames=c.evolution.frames;
       const double energy_scale=std::max(1.,max_energy);
       if(c.max_balance_error/energy_scale>1e-8)throw std::runtime_error("Discrete energy/work balance check failed");
@@ -157,12 +156,7 @@ WaveRun run_waves(const std::filesystem::path& destination,int divisions,
       std::cout<<"  "<<c.evolution.timings.time_steps<<" steps in "<<c.evolution.timings.total_seconds
                <<" wall seconds; max energy/work defect "<<c.max_balance_error
                <<"; mean drift "<<c.mean_drift<<std::endl;
-      std::cout<<"  assembly "<<c.evolution.timings.assembly_seconds
-               <<" s, constraints "<<c.evolution.timings.constraints_seconds
-               <<" s, rank checks "<<c.evolution.timings.solver.rank_check_seconds
-               <<" s, factorization "<<c.evolution.timings.solver.factorization_seconds
-               <<" s, linear solves "<<c.evolution.timings.solver.solve_seconds
-               <<" s, diagnostics "<<c.diagnostics_seconds<<" s"<<std::endl;
+      write_report(std::cout,c.evolution);
     }
     phase=Clock::now();
     std::ofstream out(destination);if(!out)throw std::runtime_error("Cannot open wave output");
