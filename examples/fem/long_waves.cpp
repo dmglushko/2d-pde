@@ -3,12 +3,15 @@
 #include "square_mesh.hpp"
 #include "error_norms.hpp"
 #include "showcase_io.hpp"
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <numbers>
 #include <optional>
+#include <thread>
 
 using namespace fem;
 using namespace showcase_io;
@@ -24,6 +27,18 @@ struct Case {
   std::size_t observed_frames=0;
   double max_balance_error=0,mean_drift=0;
   std::vector<double> energy,mean,work,l2,h1;
+};
+
+struct WaveRun {
+  struct Profile {
+    std::string id;
+    EvolutionTimings timings;
+    double setup_seconds,diagnostics_seconds;
+  };
+  double execution_seconds=0,export_seconds=0;
+  std::vector<Profile> cases;
+  // Full retained fields and diagnostics, including velocity, for comparisons.
+  std::vector<double> comparison;
 };
 
 void write_timings(std::ostream& out,const Case& c) {
@@ -54,14 +69,10 @@ void write_timings(std::ostream& out,const Case& c) {
      <<",\"linear_solves\":"<<e.linear_solves<<'}';
 }
 
-int main(int argc,char** argv) {
-  try {
+WaveRun run_waves(const std::filesystem::path& destination,int divisions,
+    double step,int threads,bool compare=false) {
     const auto started=Clock::now();
-    const std::filesystem::path destination=argc>1?argv[1]:"build/long-waves.json";
-    const int divisions=argc>2?std::stoi(argv[2]):20;
-    const double step=argc>3?std::stod(argv[3]):.05;
-    const int threads=argc>4?std::stoi(argv[4]):1;
-    if(argc>5||threads<1)throw std::invalid_argument("Usage: fem_long_waves [output.json [subdivisions [step [threads>=1]]]]");
+    if(threads<1)throw std::invalid_argument("Thread count must be positive");
     pde2d::ExecutionOptions execution;
     execution.threads=threads;
     if(threads>1)execution.backend=pde2d::ExecutionBackend::OpenMP;
@@ -196,5 +207,118 @@ int main(int argc,char** argv) {
     for(std::size_t i=0;i<cases.size();++i){if(i)profile<<',';profile<<"{\"name\":";quote(profile,cases[i].name);profile<<",\"timings\":";write_timings(profile,cases[i]);profile<<",\"max_energy_work_defect\":"<<cases[i].max_balance_error<<",\"mean_drift\":"<<cases[i].mean_drift<<'}';}
     profile<<"]}\n";profile.close();if(!profile)throw std::runtime_error("Timing output write failed");
     std::cout<<"Mesh "<<mesh_seconds<<" s; data export "<<export_seconds<<" s; profile: "<<profile_path<<std::endl;
+    WaveRun result;result.export_seconds=export_seconds;
+    result.execution_seconds=timing_detail::seconds(started);
+    for(const auto& c:cases) {
+      result.cases.push_back({c.id,c.evolution.timings,c.setup_seconds,c.diagnostics_seconds});
+      if(compare)for(std::size_t i=0;i<c.evolution.frames.size();++i) {
+        const auto& f=c.evolution.frames[i];
+        result.comparison.push_back(f.time);
+        for(double v:f.values)result.comparison.push_back(v);
+        for(double v:f.velocity)result.comparison.push_back(v);
+        for(double v:{c.energy[i],c.mean[i],c.work[i]})result.comparison.push_back(v);
+        if(c.exact)for(double v:{c.l2[i],c.h1[i]})result.comparison.push_back(v);
+      }
+    }
+    // Comparison copying is benchmark bookkeeping, outside measured execution.
+    return result;
+}
+
+double median(std::vector<double> values) {
+  std::sort(values.begin(),values.end());const auto n=values.size();
+  return n%2?values[n/2]:(values[n/2-1]+values[n/2])/2;
+}
+
+void benchmark(const std::filesystem::path& directory,int repetitions,int divisions,double step) {
+  if(!pde2d::openmp_available())throw std::invalid_argument(
+      "--benchmark requires an OpenMP-enabled build (PDE2D_ENABLE_OPENMP=ON)");
+  if(repetitions<1)throw std::invalid_argument("Benchmark repetitions must be positive");
+  for(int threads:{1,2,4})pde2d::validate_execution(
+      {threads==1?pde2d::ExecutionBackend::Serial:pde2d::ExecutionBackend::OpenMP,threads});
+  std::filesystem::create_directories(directory);
+  struct Measurement {int repetition,threads;WaveRun run;double difference;};
+  std::vector<Measurement> measurements;
+  std::vector<double> reference;
+  const std::array<int,3> policies{1,2,4};
+  // Rotate the order after the first serial reference to reduce ordering bias.
+  for(int repetition=0;repetition<repetitions;++repetition)for(int slot=0;slot<3;++slot) {
+    const int threads=policies[(slot+repetition)%3];
+    const auto output=directory/((threads==1?"serial":"omp"+std::to_string(threads))+
+        "-"+std::to_string(repetition+1)+".json");
+    auto run=run_waves(output,divisions,step,threads,true);
+    if(reference.empty())reference=run.comparison;
+    if(reference.size()!=run.comparison.size())throw std::runtime_error("Benchmark workload/frame mismatch");
+    double difference=0;
+    for(std::size_t i=0;i<reference.size();++i) {
+      if(!std::isfinite(reference[i])||!std::isfinite(run.comparison[i]))
+        throw std::runtime_error("Nonfinite benchmark field or diagnostic");
+      difference=std::max(difference,std::abs(reference[i]-run.comparison[i]));
+    }
+    if(difference>1e-8)throw std::runtime_error("Serial/OpenMP benchmark solutions differ");
+    run.comparison.clear();run.comparison.shrink_to_fit();
+    measurements.push_back({repetition+1,threads,std::move(run),difference});
+  }
+  std::ofstream out;out.exceptions(std::ios::failbit|std::ios::badbit);
+  out.open(directory/"benchmark.json");out<<std::setprecision(17);
+  out<<"{\"clock\":\"steady_clock wall seconds\",\"compiler\":";
+#ifdef __VERSION__
+  quote(out,__VERSION__);
+#else
+  quote(out,"unknown");
+#endif
+  out<<",\"hardware_threads\":"<<std::thread::hardware_concurrency()
+     <<",\"repetitions\":"<<repetitions<<",\"subdivisions\":"<<divisions
+     <<",\"side_length\":10,\"simulated_seconds\":100,\"time_step\":"<<step
+     <<",\"quadrature_degree\":6,\"solver\":\"SparseLU\",\"solver_validation\":\"Checked\""
+     <<",\"note\":\"Same executable and workload, serial backend versus requested OpenMP workers. Sequential runs, rotating order, no discarded warmup; machine load/frequency not controlled. Timings are nested: total includes observer diagnostics and export.\",\"runs\":[";
+  bool first=true;
+  for(const auto& m:measurements) {
+    if(!first)out<<',';first=false;
+    out<<"{\"repetition\":"<<m.repetition<<",\"threads\":"<<m.threads
+       <<",\"backend\":\""<<(m.threads==1?"serial":"openmp")<<"\",\"execution_seconds\":"<<m.run.execution_seconds
+       <<",\"export_seconds\":"<<m.run.export_seconds<<",\"max_difference\":"<<m.difference<<",\"cases\":[";
+    for(std::size_t i=0;i<m.run.cases.size();++i) {
+      if(i)out<<',';const auto& c=m.run.cases[i];
+      out<<"{\"id\":";quote(out,c.id);
+      out<<",\"setup_seconds\":"<<c.setup_seconds<<",\"integration_seconds\":"<<c.timings.total_seconds
+         <<",\"integration_excluding_diagnostics_seconds\":"<<std::max(0.,c.timings.total_seconds-c.diagnostics_seconds)
+         <<",\"diagnostics_seconds\":"<<c.diagnostics_seconds<<'}';
+    }
+    out<<"]}";
+  }
+  out<<"],\"summary\":[";first=true;
+  for(int threads:policies) {
+    std::vector<double> total;
+    for(const auto& m:measurements)if(m.threads==threads)total.push_back(m.run.execution_seconds);
+    if(!first)out<<',';first=false;
+    out<<"{\"threads\":"<<threads<<",\"backend\":\""<<(threads==1?"serial":"openmp")
+       <<"\",\"median_seconds\":"<<median(total)<<",\"min_seconds\":"<<*std::min_element(total.begin(),total.end())
+       <<",\"max_seconds\":"<<*std::max_element(total.begin(),total.end())<<'}';
+    std::cout<<(threads==1?"Serial":"OpenMP "+std::to_string(threads))
+             <<": median "<<median(total)<<" s (range "<<*std::min_element(total.begin(),total.end())
+             <<"–"<<*std::max_element(total.begin(),total.end())<<" s)\n";
+  }
+  out<<"]}\n";out.close();
+  std::cout<<"Benchmark report: "<<directory/"benchmark.json"<<'\n';
+}
+
+int main(int argc,char** argv) {
+  try {
+    if(argc>1&&std::string(argv[1])=="--help") {
+      std::cout<<"fem_long_waves [output.json [subdivisions [step [threads>=1]]]]\n"
+          <<"fem_long_waves --benchmark [directory [repetitions [subdivisions [step]]]]\n"
+          <<"Normal solves always return and print phase timings. --benchmark repeats the same workload\n"
+          <<"with serial and 2/4 requested OpenMP workers (defaults: 3 repetitions, 20 subdivisions, dt=.05).\n";
+      return 0;
+    }
+    if(argc>1&&std::string(argv[1])=="--benchmark") {
+      if(argc>6)throw std::invalid_argument("Too many benchmark arguments; see --help");
+      benchmark(argc>2?argv[2]:"build/wave-benchmark",argc>3?std::stoi(argv[3]):3,
+          argc>4?std::stoi(argv[4]):20,argc>5?std::stod(argv[5]):.05);
+    } else {
+      if(argc>5)throw std::invalid_argument("Too many wave arguments; see --help");
+      run_waves(argc>1?argv[1]:"build/long-waves.json",argc>2?std::stoi(argv[2]):20,
+          argc>3?std::stod(argv[3]):.05,argc>4?std::stoi(argv[4]):1);
+    }
   } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }
