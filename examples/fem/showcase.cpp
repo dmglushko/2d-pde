@@ -95,6 +95,7 @@ int main(int argc,char** argv) {
     Example damped=wave;
     damped.id="damped";damped.name="Damped wave: losing energy";
     damped.equation="u_tt + 0.5 u_t - u_xx - u_yy = 0";
+    damped.boundary="u = 0 on every edge; initial velocity = -0.25 sin(pi x) sin(pi y)";
     damped.description="Both time derivatives are present. The exact mode has an exponentially decaying envelope; no source maintains the oscillation.";
     damped.exact=exp(-.25*t)*shape*cos(std::sqrt(2*pi*pi-.0625)*t);
     damped.initial_velocity=-.25*shape;
