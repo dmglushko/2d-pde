@@ -49,7 +49,7 @@ repeated subdivision. Conservative bounds are acceptable; excessive looseness
 costs subdivisions. Current floating-point scale checks and subdivision budgets
 still apply; this refactor does not introduce interval arithmetic.
 
-`tests/curve_operations.cpp` checks derivatives, reversal, transformations,
+`tests/discretization/curve_operations.cpp` checks derivatives, reversal, transformations,
 exact split identities, split derivative scaling, and shrinking bounds. Its
 sampled inequalities are regression checks, not proofs of interval bounds. Add
 analytically justified bounds and regression cases for interior extrema and

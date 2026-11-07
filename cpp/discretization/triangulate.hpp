@@ -5,7 +5,7 @@
 #include <memory>
 #include <numeric>
 
-namespace discretization {
+namespace pde2d::discretization {
 namespace mesh_detail {
 using Triangle = std::array<std::size_t, 3>;
 inline Triangle ccw(Triangle t, const std::vector<Point2> &points) {
@@ -623,4 +623,4 @@ subdivide_mesh(const TriangleMesh &mesh, const MeshOptions &options = {},
   return mesh_detail::refine_result(
       MeshResult{mesh, std::move(context), options, {}}, options, true);
 }
-} // namespace discretization
+} // namespace pde2d::discretization

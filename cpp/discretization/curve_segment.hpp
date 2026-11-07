@@ -4,7 +4,7 @@
 #include <optional>
 #include <variant>
 
-namespace discretization {
+namespace pde2d::discretization {
 
 // Bounds on Euclidean derivative norms over the ENTIRE local [0,1] interval.
 // These are analytical upper bounds, not sampled estimates or exact maxima.
@@ -287,4 +287,4 @@ inline CurveSegment transformCurve(const CurveSegment &c,
 inline bool curveIsLinear(const CurveSegment &c) {
   return std::visit([](const auto &s) { return s.isLinear(); }, c);
 }
-} // namespace discretization
+} // namespace pde2d::discretization

@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace discretization::mesh_detail {
+namespace pde2d::discretization::mesh_detail {
 // Inclusive AABBs are only a broad phase; exact predicates decide all contacts.
 struct Box {
   double xmin, xmax, ymin, ymax;
@@ -77,4 +77,4 @@ public:
     return out;
   }
 };
-} // namespace discretization::mesh_detail
+} // namespace pde2d::discretization::mesh_detail

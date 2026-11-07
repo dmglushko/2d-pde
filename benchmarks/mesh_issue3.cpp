@@ -3,7 +3,7 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
-using namespace discretization;
+using namespace pde2d::discretization;
 using Clock = std::chrono::steady_clock;
 template <class F> double timed(F f) {
   auto t = Clock::now();
@@ -73,8 +73,8 @@ int main(int argc, char **argv) {
           });
           double io = timed([&] {
             export_mesh(r, "/tmp/pde2d-mesh-issue3/benchmark-roundtrip.pde2d");
-            auto q =
-                import_mesh_result("/tmp/pde2d-mesh-issue3/benchmark-roundtrip.pde2d");
+            auto q = import_mesh_result(
+                "/tmp/pde2d-mesh-issue3/benchmark-roundtrip.pde2d");
             (void)q;
           });
           std::cout << shape << ',' << h << ',' << repeat << ',' << int(policy)

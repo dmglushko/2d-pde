@@ -43,14 +43,14 @@ tests remain available through `./tools/test.sh`.
 #include "discretization/triangulate.hpp"
 #include "fem/solver.hpp"
 
-using namespace fem;
-discretization::RectangleGeometry geometry(1,1);
+using namespace pde2d::fem;
+pde2d::discretization::RectangleGeometry geometry(1,1);
 geometry.setCenter(.5,.5);
-discretization::MeshOptions meshing;
+pde2d::discretization::MeshOptions meshing;
 meshing.boundary.max_edge_length=.1;
 meshing.boundary.preserve_corners=true;
 meshing.refinement.max_edge_length=.15;
-auto generated=discretization::generate_mesh(geometry,meshing);
+auto generated=pde2d::discretization::generate_mesh(geometry,meshing);
 if(!generated.report.size_satisfied)
     throw std::runtime_error(generated.report.message);
 
@@ -235,9 +235,21 @@ time.method=TimeMethod::Newmark;
 time.step=.01;
 time.end=2;
 const double pi=std::numbers::pi;
-auto motion=evolve(generated.mesh,problem,sin(pi*x)*sin(pi*y),Expr(0),time);
+InitialConditions initial{.value=sin(pi*x)*sin(pi*y), .velocity=Expr(0)};
+auto motion=evolve(generated.mesh,problem,initial,time);
 // motion.frames includes the initial frame and the exact final time.
 ```
+
+`Problem` is only the spatial problem (equation and boundary conditions).
+Initial conditions are passed to `evolve` separately as `InitialConditions`:
+`value` is u at `time.start`, and `velocity` is u_t at `time.start`. A
+second-order scheme (Newmark) requires `velocity` and throws if it is
+omitted. First-order schemes need only `value`; a given `velocity` only fills
+the initial frame's `Frame::velocity` (0 when omitted).
+
+Each scheme is a `TimeIntegrator` (`fem/time_integration.hpp`). Step stamps
+come from `TimeGrid` (`fem/time_grid.hpp`). See
+[cpp/fem/EXTENDING.md](../../cpp/fem/EXTENDING.md) to add a scheme.
 
 Backward Euler and Crank–Nicolson handle first-order evolution. Newmark uses
 average acceleration (`beta=1/4`, `gamma=1/2`) and supports both `m2*u_tt` and
@@ -283,7 +295,7 @@ Requesting OpenMP in a serial-only build throws an explicit error.
 every accepted state synchronously. Borrowed observer data last only for the
 callback. Defaults preserve every frame and report.
 
-See [the independent verification guide](../performance/verification-build-2026-11-06.md)
+See [the independent verification guide](../archive/performance/verification-build-2026-11-06.md)
 for isolated scikit-fem/SciPy comparisons, analytical convergence checks and
 serial/2/4-worker tests.
 
@@ -297,9 +309,9 @@ format a summary. Include `fem/report.hpp` (also exported by `fem/fem.hpp`):
 #include "fem/report.hpp"
 #include <iostream>
 
-fem::write_report(std::cout, motion);          // fem::Evolution
-fem::write_report(std::cout, solution);        // fem::LinearSolution
-fem::write_report(std::cout, solution.report); // fem::SolverReport
+pde2d::fem::write_report(std::cout, motion);          // pde2d::fem::Evolution
+pde2d::fem::write_report(std::cout, solution);        // pde2d::fem::LinearSolution
+pde2d::fem::write_report(std::cout, solution.report); // pde2d::fem::SolverReport
 ```
 
 These overloads return `std::ostream&`, emit one summary without per-step output,

@@ -1,0 +1,7 @@
+# C++ style for cpp/, tests/, examples/, benchmarks/ and tools/.
+# Run tools/format.sh (or clang-format -i) before committing C++ changes.
+BasedOnStyle: LLVM
+ColumnLimit: 80
+# Include order is meaningful in a few headers (Eigen/SymEngine before local
+# headers); keep the author's order instead of sorting.
+SortIncludes: Never

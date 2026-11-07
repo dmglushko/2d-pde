@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-namespace discretization {
+namespace pde2d::discretization {
 namespace detail {
 
 inline void validate_mesh_format(const TriangleMesh &mesh) {
@@ -116,7 +116,8 @@ inline void validate_result(const MeshResult &r) {
   if (!r.boundary_context)
     return;
   const auto &c = *r.boundary_context;
-  validate_boundary_context(r.mesh, c, o.preserve_regions, o.boundary.preserve_corners);
+  validate_boundary_context(r.mesh, c, o.preserve_regions,
+                            o.boundary.preserve_corners);
   for (const auto &curve : c.curves)
     validate_region(curve.region);
   // Unlike refinement, serialization cannot restore omitted region tags.
@@ -163,7 +164,8 @@ inline void write_result(std::ostream &out, const MeshResult &r) {
       << static_cast<int>(o.boundary_treatment) << ' ' << o.preserve_regions
       << ' ' << o.boundary.max_edge_length << ' '
       << o.boundary.max_curve_deviation << ' ' << o.refinement.max_edge_length
-      << ' ' << o.refinement.max_steps << ' ' << o.boundary.preserve_corners << '\n';
+      << ' ' << o.refinement.max_steps << ' ' << o.boundary.preserve_corners
+      << '\n';
   out << "REPORT " << r.report.size_satisfied << ' '
       << r.report.delaunay_verified << ' ' << r.report.refinement_steps << ' '
       << encode_message(r.report.message) << '\n';
@@ -378,4 +380,4 @@ inline TriangleMesh import_mesh(const std::string &path) {
   return import_mesh_result(path).mesh;
 }
 
-} // namespace discretization
+} // namespace pde2d::discretization

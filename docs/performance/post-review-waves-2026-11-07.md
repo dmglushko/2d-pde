@@ -25,8 +25,8 @@ Every solve already populates native timing reports. No rerun, profiling option 
 
 ```cpp
 #include "fem/report.hpp"
-auto result = fem::evolve(mesh, problem, initial, velocity, options);
-fem::write_report(std::cout, result);
+auto result = pde2d::fem::evolve(mesh, problem, initial, velocity, options);
+pde2d::fem::write_report(std::cout, result);
 ```
 
 The report includes execution policy, workload, assembly, constraints, solver setup/solve/residual phases, native observer time, other time, and preparation/reuse counts. Aggregate timings remain available with `store_reports=false`. Stationary summaries currently cover linear solving, not outer assembly. Parent totals include their nested subphases.

@@ -2,7 +2,7 @@
 #include "mesh_types.hpp"
 #include "mesh_validation.hpp"
 
-namespace discretization {
+namespace pde2d::discretization {
 struct DiscretizedBoundary {
   Boundary boundary;
   std::optional<BoundaryContext> context;
@@ -45,10 +45,11 @@ inline Point2 tangent(const CurveSegment &piece, bool end) {
 inline bool is_corner(const CurveSegment &left, const CurveSegment &right) {
   auto u = tangent(left, true), v = tangent(right, false);
   double ul = std::hypot(u.x, u.y), vl = std::hypot(v.x, v.y);
-  if (ul == 0 || vl == 0) return true;
-  u = {u.x / ul, u.y / ul}; v = {v.x / vl, v.y / vl};
-  return std::abs(u.x * v.y - u.y * v.x) > 1e-10 ||
-         u.x * v.x + u.y * v.y <= 0;
+  if (ul == 0 || vl == 0)
+    return true;
+  u = {u.x / ul, u.y / ul};
+  v = {v.x / vl, v.y / vl};
+  return std::abs(u.x * v.y - u.y * v.x) > 1e-10 || u.x * v.x + u.y * v.y <= 0;
 }
 inline double point_segment_distance(Point2 p, Point2 a, Point2 b) {
   double dx = b.x - a.x, dy = b.y - a.y, len = std::hypot(dx, dy);
@@ -91,8 +92,9 @@ discretize_boundary(const CurveGeometry &geometry,
         !curveIsLinear(c.segment))
       throw std::invalid_argument(
           "Curved boundary needs an enabled length or deviation constraint");
-    bool anchor = (options.preserve_corners && is_corner(prev.segment, c.segment)) ||
-                  (preserve_regions && prev.region != c.region);
+    bool anchor =
+        (options.preserve_corners && is_corner(prev.segment, c.segment)) ||
+        (preserve_regions && prev.region != c.region);
     auto emit = [&](auto &&self, const CurveSegment &piece, double a, double z,
                     int depth) -> void {
       auto [length, second] = curve_bounds(piece);
@@ -125,15 +127,20 @@ discretize_boundary(const CurveGeometry &geometry,
   }
   // Remove representation-only junctions when the combined chord still meets
   // both requested bounds. Each chord retains all source intervals it spans.
-  struct IntervalData { double length, second; Point2 begin, end; };
+  struct IntervalData {
+    double length, second;
+    Point2 begin, end;
+  };
   std::vector<std::vector<IntervalData>> intervalData;
   intervalData.reserve(ctx.edge_sources.size());
-  for(const auto& spans:ctx.edge_sources) {
-    auto& data=intervalData.emplace_back();
-    for(const auto& span:spans) {
-      auto piece=subcurve(ctx.curves[span.curve].segment,span.begin,span.end);
-      auto bounds=curve_bounds(piece);
-      data.push_back({bounds.first,bounds.second,curvePoint(piece,0),curvePoint(piece,1)});
+  for (const auto &spans : ctx.edge_sources) {
+    auto &data = intervalData.emplace_back();
+    for (const auto &span : spans) {
+      auto piece =
+          subcurve(ctx.curves[span.curve].segment, span.begin, span.end);
+      auto bounds = curve_bounds(piece);
+      data.push_back({bounds.first, bounds.second, curvePoint(piece, 0),
+                      curvePoint(piece, 1)});
     }
   }
   bool changed = true;
@@ -147,22 +154,25 @@ discretize_boundary(const CurveGeometry &geometry,
       if (distance(a, end) == 0)
         continue;
       double length = 0, error = 0;
-      for(auto edge : {p,i}) for(const auto& data : intervalData[edge]) {
-        length+=data.length;
-        error=std::max(error,data.second/8 +
-            std::max(point_segment_distance(data.begin,a,end),
-                     point_segment_distance(data.end,a,end)));
-      }
+      for (auto edge : {p, i})
+        for (const auto &data : intervalData[edge]) {
+          length += data.length;
+          error = std::max(
+              error, data.second / 8 +
+                         std::max(point_segment_distance(data.begin, a, end),
+                                  point_segment_distance(data.end, a, end)));
+        }
       if ((options.max_edge_length > 0 &&
            length > options.max_edge_length * (1 + 1e-12)) ||
           (options.max_curve_deviation > 0 &&
            error > options.max_curve_deviation))
         continue;
-      auto& spans=ctx.edge_sources[p];
-      spans.insert(spans.end(),ctx.edge_sources[i].begin(),ctx.edge_sources[i].end());
-      auto& data=intervalData[p];
-      data.insert(data.end(),intervalData[i].begin(),intervalData[i].end());
-      intervalData.erase(intervalData.begin()+i);
+      auto &spans = ctx.edge_sources[p];
+      spans.insert(spans.end(), ctx.edge_sources[i].begin(),
+                   ctx.edge_sources[i].end());
+      auto &data = intervalData[p];
+      data.insert(data.end(), intervalData[i].begin(), intervalData[i].end());
+      intervalData.erase(intervalData.begin() + i);
       b.points.erase(b.points.begin() + i);
       ctx.edge_sources.erase(ctx.edge_sources.begin() + i);
       protected_flags.erase(protected_flags.begin() + i);
@@ -179,4 +189,4 @@ discretize_boundary(const CurveGeometry &geometry,
   ctx.polygon_snapshot = b.points;
   return {std::move(b), std::move(ctx)};
 }
-} // namespace discretization
+} // namespace pde2d::discretization

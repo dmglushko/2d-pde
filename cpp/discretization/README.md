@@ -8,7 +8,7 @@ polygons, without holes. Every triangle has three vertex indices (P1).
 #include "discretization/geometry.hpp"
 #include "discretization/triangulate.hpp"
 #include "discretization/mesh_io.hpp"
-using namespace discretization;
+using namespace pde2d::discretization;
 
 RectangleGeometry shape(2.0, 1.0);
 MeshOptions options;
@@ -210,10 +210,11 @@ Include `discretization/svg_geometry.hpp` and
 `pkg-config --cflags --libs libxml-2.0`. For example:
 
 ```cpp
-auto geometry = discretization::importSvg("boundary.svg",
-    {2.0, discretization::SvgScaleMode::Farthest, 64});
-auto boundary = discretization::discretize_boundary(geometry).boundary;
-discretization::exportSvg(geometry, "edited-boundary.svg");
+namespace geo = pde2d::discretization;
+auto geometry = geo::importSvg("boundary.svg",
+    {2.0, geo::SvgScaleMode::Farthest, 64});
+auto boundary = geo::discretize_boundary(geometry).boundary;
+geo::exportSvg(geometry, "edited-boundary.svg");
 ```
 
 Each `<path id="region" d="..."/>` supplies one tagged run. An optional
