@@ -144,7 +144,9 @@ Dirichlet and flux Robin, including dynamic flux Robin, are supported. Normal
 Robin is supported when it can be converted to the assembled natural flux.
 Unsupported oblique derivative conditions fail explicitly. General input does
 not imply that every boundary problem is well posed or supported numerically.
-Equivalence checks first restrict expressions to each straight edge. Divided
+Equivalence checks cancel symbolic identities before substituting rounded
+normals, then restrict expressions to each straight edge before the exact-zero
+test. They do not accept approximate proportionality. Divided
 Robin multipliers must stay nonzero on that edge; sampled zeros and sign changes
 are rejected. These checks cannot prove nonvanishing for arbitrary symbolic
 functions, so that remains a requirement on the supplied data.

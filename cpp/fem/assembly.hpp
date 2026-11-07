@@ -242,13 +242,24 @@ public:
       };
       const Expr alpha = on_edge(bc.alpha), gamma = on_edge(bc.gamma),
                  value = on_edge(bc.value);
-      const Expr flux_x = on_edge(-nx * eq.a_xx - ny * eq.a_xy / 2);
-      const Expr flux_y = on_edge(-nx * eq.a_xy / 2 - ny * eq.a_yy);
-      const Expr extra_x = on_edge(bc.beta_normal * nx + bc.beta_x);
-      const Expr extra_y = on_edge(bc.beta_normal * ny + bc.beta_y);
+      const Expr symbolic_flux_x = -nx * eq.a_xx - ny * eq.a_xy / 2;
+      const Expr symbolic_flux_y = -nx * eq.a_xy / 2 - ny * eq.a_yy;
+      const Expr symbolic_extra_x = bc.beta_normal * nx + bc.beta_x;
+      const Expr symbolic_extra_y = bc.beta_normal * ny + bc.beta_y;
+      const Expr flux_x = on_edge(symbolic_flux_x);
+      const Expr flux_y = on_edge(symbolic_flux_y);
+      const Expr extra_x = on_edge(symbolic_extra_x);
+      const Expr extra_y = on_edge(symbolic_extra_y);
       Expr beta = on_edge(bc.beta_flux);
       if (!assembly_detail::zero(extra_x) || !assembly_detail::zero(extra_y)) {
-        if (!assembly_detail::zero(extra_x * flux_y - extra_y * flux_x) ||
+        // Cancel symbolic identities before inserting rounded edge normals.
+        // Otherwise even n and 10*n can acquire a nonzero determinant from
+        // floating-point multiplication. Still restrict to this edge before
+        // the exact-zero decision; do not admit approximate oblique data.
+        const Expr determinant = on_edge(SymEngine::expand(
+            symbolic_extra_x * symbolic_flux_y -
+            symbolic_extra_y * symbolic_flux_x));
+        if (!assembly_detail::zero(determinant) ||
             (assembly_detail::zero(flux_x) && assembly_detail::zero(flux_y)))
           throw std::invalid_argument(
               "Unsupported oblique/normal derivative boundary condition: "
