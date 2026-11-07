@@ -77,7 +77,7 @@ c++ -O3 -DNDEBUG -std=gnu++23 -DSOLVER6_PREPARED -I. -Icpp \
   -isystem /tmp/pde2d-fem-build/_deps/symengine-src \
   -isystem /tmp/pde2d-fem-build/_deps/symengine-build \
   -isystem /tmp/pde2d-fem-build/_deps/symengine-src/symengine/utilities/cereal/include \
-  docs/performance/solver6/benchmark.cpp \
+  benchmarks/benchmark_evolution.cpp \
   /tmp/pde2d-fem-build/_deps/symengine-build/symengine/libsymengine.a \
   -o /tmp/solver6-prepared
 /tmp/solver6-prepared

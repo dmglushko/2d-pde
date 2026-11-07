@@ -70,7 +70,7 @@ Single wall-clock samples on AMD Ryzen 9 6900HX (16 logical CPUs), Node 24.22.1,
 Release C++ `-O3`, shared machine. These are not controlled speedup estimates;
 compilation/other agents may contend. Benchmarks have no timing thresholds.
 
-`tools/benchmark_error_diagnostics.cpp`, 800 triangles, degree 8, 40 evaluations,
+`benchmarks/benchmark_error_diagnostics.cpp`, 800 triangles, degree 8, 40 evaluations,
 identical checksum 28.3426:
 
 | Work | Seconds |
@@ -99,7 +99,7 @@ assembly/solver changes and are not attributed to this issue alone.
 Load work intentionally increases to prepare caches for all cases. Measurements
 include VM/JavaScript execution, not actual browser drawing or layout.
 
-`node tools/benchmark_viewer_diagnostics.cjs /tmp/pde2d-issue7-baseline tools/mesh_viewer`,
+`node benchmarks/benchmark_viewer_diagnostics.cjs /tmp/pde2d-issue7-baseline tools/mesh_viewer`,
 398,128-byte v1 grid, 10,201 nodes, 20,000 triangles:
 
 | Work | Baseline | Current |
@@ -120,7 +120,7 @@ Standalone benchmark compilation used:
 c++ -std=c++23 -O3 -fopenmp -Icpp -isystem /usr/include/eigen3 \
   -isystem /tmp/pde2d-fem-build/_deps/symengine-src \
   -isystem /tmp/pde2d-fem-build/_deps/symengine-build \
-  tools/benchmark_error_diagnostics.cpp \
+  benchmarks/benchmark_error_diagnostics.cpp \
   /tmp/pde2d-fem-build/_deps/symengine-build/symengine/libsymengine.a \
   -o /tmp/pde2d-issue7-output/benchmark-diagnostics
 /tmp/pde2d-issue7-output/benchmark-diagnostics

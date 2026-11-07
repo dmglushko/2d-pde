@@ -79,7 +79,8 @@ node tools/render_solutions.mjs build/fem-showcase.json docs/fem/showcase.html
 
 - [Geometry, free-function meshing, region editing, and I/O](cpp/discretization/README.md)
 - [Equation input, boundary conditions, assembly, and solutions](docs/fem/README.md)
-- [Performance audit, implemented fixes and combined verification](docs/performance/integration-2026-11-06.md)
+- [Current performance results and historical verification](docs/performance/README.md)
+- [Opt-in standalone benchmarks](benchmarks/README.md)
 - [Learning walkthrough](docs/learning/README.md), [reference](docs/learning/reference.md), and [questions](docs/learning/questions.md)
 - [Viewer instructions](tools/mesh_viewer/README.md)
 - [Historical audit](docs/audit-2026-10-23.md), predating the current API
