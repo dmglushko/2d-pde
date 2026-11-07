@@ -12,10 +12,14 @@
 
 namespace fem {
 enum class LinearSolver { SparseLU, ConjugateGradient, GMRES };
+// AssumeValid transfers responsibility for nonsingularity (and positive
+// definiteness for CG) to the caller. Checked preserves numerical rank checks.
+enum class SolverValidation { Checked, AssumeValid };
 struct SolverOptions {
   LinearSolver method=LinearSolver::SparseLU;
   double relative_tolerance=1e-10, absolute_tolerance=1e-12;
   int max_iterations=2000, restart=40;
+  SolverValidation validation=SolverValidation::Checked;
 };
 struct SolverReport {
   bool converged=false;
@@ -35,6 +39,10 @@ inline void validate(const SolverOptions& o) {
   switch(o.method) {
     case LinearSolver::SparseLU: case LinearSolver::ConjugateGradient: case LinearSolver::GMRES: break;
     default: throw std::invalid_argument("Unsupported linear solver");
+  }
+  switch(o.validation) {
+    case SolverValidation::Checked: case SolverValidation::AssumeValid: break;
+    default: throw std::invalid_argument("Unsupported solver validation policy");
   }
 }
 inline void validate(const SparseMatrix& a,const Vector& b) {
@@ -91,12 +99,14 @@ public:
     preparation_.preparations=1;
     preparation_.validation_seconds=timing_detail::seconds(started);
     auto phase=timing_detail::Clock::now();
-    Eigen::SparseQR<SparseMatrix,Eigen::COLAMDOrdering<int>> rank;
-    rank.compute(matrix_);++preparation_.rank_checks;
-    preparation_.rank_check_seconds=timing_detail::seconds(phase);
-    if(rank.info()!=Eigen::Success||rank.rank()!=matrix_.rows())
-      failure_="Singular or numerically rank-deficient linear system";
-    else {
+    if(options_.validation==SolverValidation::Checked) {
+      Eigen::SparseQR<SparseMatrix,Eigen::COLAMDOrdering<int>> rank;
+      rank.compute(matrix_);++preparation_.rank_checks;
+      preparation_.rank_check_seconds=timing_detail::seconds(phase);
+      if(rank.info()!=Eigen::Success||rank.rank()!=matrix_.rows())
+        failure_="Singular or numerically rank-deficient linear system";
+    }
+    if(failure_.empty()) {
       phase=timing_detail::Clock::now();
       ++preparation_.factorizations;
       if(options_.method==LinearSolver::ConjugateGradient) {
@@ -104,10 +114,12 @@ public:
         if(skew.norm()>1e-12*matrix_.norm())
           failure_="ConjugateGradient requires a symmetric positive definite matrix";
         else {
-          Eigen::SimplicialLDLT<SparseMatrix> ldlt;ldlt.compute(matrix_);
-          if(ldlt.info()!=Eigen::Success||!ldlt.vectorD().allFinite()||ldlt.vectorD().minCoeff()<=0)
-            failure_="ConjugateGradient requires a positive definite matrix";
-          else {cg_.setMaxIterations(options_.max_iterations);cg_.compute(matrix_);}
+          if(options_.validation==SolverValidation::Checked) {
+            Eigen::SimplicialLDLT<SparseMatrix> ldlt;ldlt.compute(matrix_);
+            if(ldlt.info()!=Eigen::Success||!ldlt.vectorD().allFinite()||ldlt.vectorD().minCoeff()<=0)
+              failure_="ConjugateGradient requires a positive definite matrix";
+          }
+          if(failure_.empty()) {cg_.setMaxIterations(options_.max_iterations);cg_.compute(matrix_);}
         }
       } else if(options_.method==LinearSolver::GMRES) {
         gmres_.setMaxIterations(options_.max_iterations);gmres_.set_restart(options_.restart);
@@ -126,7 +138,7 @@ public:
   // Compare actual coefficients (including explicit zeros), never identities or
   // merely sparsity. A conservative false miss is safe; an approximate hit isn't.
   bool matches(const SparseMatrix& a,const SolverOptions& o) const {
-    if(o.method!=options_.method||o.relative_tolerance!=options_.relative_tolerance||
+    if(o.method!=options_.method||o.validation!=options_.validation||o.relative_tolerance!=options_.relative_tolerance||
        o.absolute_tolerance!=options_.absolute_tolerance||o.max_iterations!=options_.max_iterations||
        o.restart!=options_.restart||a.rows()!=matrix_.rows()||a.cols()!=matrix_.cols()) return false;
     for(int col=0;col<a.outerSize();++col) {
