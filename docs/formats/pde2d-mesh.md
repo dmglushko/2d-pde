@@ -89,9 +89,22 @@ the next free ID (see `cpp/discretization/EXTENDING.md`).
 
 ## Validation on import
 
-Readers reject (C++ throws `std::runtime_error`): unknown versions or orders,
-truncated data, non-finite reals, indices out of range, non-triangle elements,
-invalid tags, content after the last section, meshes failing
-`validate_mesh_geometry` (connected disk topology, duplicate/unused vertices,
-crossing or overlapping edges), and recorded guarantees that do not hold
-(e.g. `delaunay_verified` on a non-CDT mesh, or a size guarantee violated).
+The readers validate different amounts. Only a successful C++ import
+establishes the geometric and recorded guarantees.
+
+- **C++ `import_mesh_result`** (authoritative) throws `std::runtime_error` on:
+  - unknown versions or orders, truncated data and non-finite reals;
+  - out-of-range indices, non-triangle elements and invalid tags;
+  - content after the last section;
+  - meshes failing `validate_mesh_geometry` (connected disk topology,
+    duplicate or unused vertices, crossing or overlapping edges);
+  - recorded guarantees that do not hold, e.g. `delaunay_verified` on a
+    non-CDT mesh or a violated size guarantee.
+- **JavaScript `parseMesh`** (viewer) checks syntax, versions, counts,
+  numeric scale, the report encoding and the boundary-context structure
+  (curve kinds and parameters, source spans that join, region consistency).
+  It does **not** re-check mesh topology (e.g. duplicate triangles) or the
+  recorded size/Delaunay guarantees, so it displays what the file claims.
+- **Python `tools/plot_mesh.py`** checks the header, `ORDER 1`, counts,
+  finite coordinates, three-node elements and index bounds. It ignores the
+  v3/v4 result trailer entirely and does not validate topology.
