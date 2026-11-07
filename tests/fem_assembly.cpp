@@ -182,9 +182,40 @@ void boundary_restriction_regressions() {
   const auto crossing_reference=assemble(mesh,p);
   near((crossing_pivot.load-crossing_reference.load).norm(),0);
 }
+void slanted_normal_boundaries() {
+  // Unequal normal components exposed floating-point cancellation in the
+  // symbolic proportionality test, even for constant isotropic diffusion.
+  discretization::TriangleMesh mesh{
+      {{0,0},{1,0},{.3,.7}},{{0,1,2}},
+      {{0,1},{1,2},{2,0}},{"b","b","b"}};
+  for(const Expr scale : {Expr(10), Expr(.1), Expr(10)*(1+x+y+t)}) {
+    for(int kind=0;kind<3;++kind) {
+      Problem p;p.equation.a_xx=p.equation.a_yy=-scale;
+      BoundaryCondition bc=kind==0?neumann(2):
+          kind==1?robin(3,4,5):dynamic_robin(2,3,4,5);
+      p.assign(bc,{"b"});
+      const auto normal=assemble(mesh,p,.4);
+      // For -scale*Laplacian, q_n=scale*du/dn on every edge.
+      bc.beta_flux=bc.beta_normal/scale;bc.beta_normal=0;
+      p.boundaries[0].condition=bc;
+      const auto flux=assemble(mesh,p,.4);
+      near((normal.stiffness-flux.stiffness).norm(),0);
+      near((normal.first_mass-flux.first_mass).norm(),0);
+      near((normal.load-flux.load).norm(),0);
+    }
+  }
+  // No numeric tolerance should admit an actually oblique condition, even
+  // with a tiny tangential component or only on the interior of an edge.
+  Problem p;p.equation.a_xx=p.equation.a_yy=-10;
+  auto bc=neumann(0);bc.beta_x=1e-14;
+  p.assign(bc,{"b"});
+  rejects([&]{assemble(mesh,p);},"not algebraically proportional");
+  p.boundaries[0].condition=neumann(0);p.equation.a_yy=-11;
+  rejects([&]{assemble(mesh,p);},"not algebraically proportional");
+}
 }
 int main() {
-  try { element_matrices();boundary_matrices();affine_patch();dirichlet_and_errors();boundary_restriction_regressions();
+  try { element_matrices();boundary_matrices();affine_patch();dirichlet_and_errors();boundary_restriction_regressions();slanted_normal_boundaries();
     std::cout<<"FEM assembly tests passed\n";
   } catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 1; }
 }
