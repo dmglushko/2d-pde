@@ -92,14 +92,19 @@ the next free ID (see `cpp/discretization/EXTENDING.md`).
 The readers validate different amounts. Only a successful C++ import
 establishes the geometric and recorded guarantees.
 
-- **C++ `import_mesh_result`** (authoritative) throws `std::runtime_error` on:
-  - unknown versions or orders, truncated data and non-finite reals;
-  - out-of-range indices, non-triangle elements and invalid tags;
-  - content after the last section;
-  - meshes failing `validate_mesh_geometry` (connected disk topology,
-    duplicate or unused vertices, crossing or overlapping edges);
-  - recorded guarantees that do not hold, e.g. `delaunay_verified` on a
-    non-CDT mesh or a violated size guarantee.
+- **C++ `import_mesh_result`** (authoritative). Catch `std::exception` to
+  handle every failure. The exception type depends on the stage:
+  - parsing throws `std::runtime_error`: unknown versions or orders, a wrong
+    section label, truncated or unparsable numbers, non-triangle elements,
+    invalid tags, an out-of-range numeric scale, or content after the last
+    section;
+  - `validate_mesh_geometry` throws `std::invalid_argument`: out-of-range
+    indices, non-finite or duplicate vertices, non-positive triangle area,
+    duplicate triangles, a mesh that is not one connected disk, unused
+    vertices, crossing or overlapping edges;
+  - result validation throws `std::runtime_error`: recorded guarantees that do
+    not hold (e.g. `delaunay_verified` on a non-CDT mesh or a violated size
+    guarantee) and inconsistent boundary context.
 - **JavaScript `parseMesh`** (viewer) checks syntax, versions, counts,
   numeric scale, the report encoding and the boundary-context structure
   (curve kinds and parameters, source spans that join, region consistency).

@@ -1,7 +1,7 @@
 # Read the 2D mesh code, one step at a time
 
 Start with [first_mesh.cpp](../../examples/learning/first_mesh.cpp), a complete
-C++23 program that constructs a rectangle, meshes it, exports a v3 result, and
+C++23 program that constructs a rectangle, meshes it, exports a v4 result, and
 imports that result. No external meshing library is needed.
 
 ```sh
@@ -75,20 +75,23 @@ polygon subdivision without legalization; it does not support curve mode.
 zero-based indices into nodes. `.boundary_edges` contains exterior endpoint
 pairs; `.boundary_tags` is an optional parallel vector of names. The first
 outline point is not repeated at the end. Each triangle remains P1 after
-refinement; PDE basis evaluation, assembly, and solving are future work.
+refinement. The optional [FEM module](../fem/README.md) assembles and solves
+scalar PDEs on these meshes.
 
 ## 5. Save and resume
 
-`export_mesh(result, path)` writes v3 with options, report, and optional analytical
+`export_mesh(result, path)` writes v4 with options, report, and optional analytical
 context. `import_mesh_result(path)` restores these for resumed curve refinement.
 A raw `TriangleMesh` exports as v2, with topology and tags. `import_mesh(path)`
-accepts v1/v2/v3 and returns topology only, dropping context. V1 has untagged
-edges. All use fixed `ORDER 1`. A v3 boundary snapshot does not restore an
+accepts v1 through v4 and returns topology only, dropping context. V1 has untagged
+edges. All use fixed `ORDER 1`. A stored boundary snapshot does not restore an
 editable original geometry or its history.
 
-The [I/O validator](../../cpp/discretization/mesh_io.hpp) checks local topology,
-indices, positive areas, edge ownership and exterior records. Import success
-does not prove global absence of overlap or good angles.
+The [I/O validator](../../cpp/discretization/mesh_io.hpp) checks indices,
+positive areas, edge ownership, exterior records, one connected disk, unused or
+duplicate vertices, and crossing or overlapping edges, plus any recorded
+size/CDT guarantees. Import success does not certify good angles. See the
+[format specification](../formats/pde2d-mesh.md).
 
 ## Experiments and validation
 
