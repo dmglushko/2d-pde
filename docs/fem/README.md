@@ -193,6 +193,36 @@ An algebraic residual measures how accurately the discrete equations were
 solved; it does not measure PDE approximation error. The gallery reports both
 residuals and continuous exact-solution errors.
 
+`SolverOptions::validation` defaults to `SolverValidation::Checked`: every
+preparation checks numerical rank with SparseQR, and CG additionally checks
+symmetry and positive definiteness with LDLT. These direct decompositions can
+dominate iterative solve time and memory on large meshes, even with preparation
+reuse. The numerical rank check is retained for CG because positive LDLT pivots
+alone do not preserve the existing numerical rank rejection criterion.
+
+For a matrix whose properties the caller has established, explicitly opt in:
+
+```cpp
+SolverOptions solver;
+solver.method=LinearSolver::ConjugateGradient;
+solver.validation=SolverValidation::AssumeValid;
+auto solution=solve_linear(a,b,solver);
+```
+
+`AssumeValid` requires the caller to guarantee a nonsingular matrix, and for CG
+a symmetric positive definite matrix. It skips SparseQR and the CG LDLT check.
+CG and GMRES then prepare only their diagonal preconditioner, with no direct
+decomposition; SparseLU still performs its requested LU factorization. Shape,
+finite input, option, CG symmetry, and true residual checks remain active. A
+small residual (including a zero RHS) cannot certify nonsingularity or positive
+definiteness: invalid caller assumptions may produce a converged report for a
+nonunique solution or an indefinite system. Use `Checked` when those guarantees
+are needed. This policy applies to `PreparedLinearSolver`, `solve_linear`,
+`solve_stationary`, and `TimeOptions::solver`; changing it invalidates prepared
+solver reuse. Existing `factorizations` timing counters include preconditioner
+setup, so a count of one in trusted iterative mode does not imply a direct
+factorization; `rank_checks` and `rank_check_seconds` are zero in that mode.
+
 For time evolution, include `fem/evolution.hpp`:
 
 ```cpp

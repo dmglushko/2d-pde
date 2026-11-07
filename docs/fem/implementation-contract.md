@@ -38,7 +38,8 @@ Assemble UNCONSTRAINED matrices: M2 u_tt+M1 u_t+K u=F. Symmetric highest-order s
 
 ## Solving/evolution (solver.hpp, evolution.hpp)
 `enum class LinearSolver { SparseLU, ConjugateGradient, GMRES };`
-`struct SolverOptions { LinearSolver method=LinearSolver::SparseLU; double relative_tolerance=1e-10; double absolute_tolerance=1e-12; int max_iterations=2000; int restart=40; };`
+`enum class SolverValidation { Checked, AssumeValid };`
+`struct SolverOptions { LinearSolver method=LinearSolver::SparseLU; double relative_tolerance=1e-10; double absolute_tolerance=1e-12; int max_iterations=2000; int restart=40; SolverValidation validation=SolverValidation::Checked; };`
 `struct SolverReport { bool converged; int iterations; double residual_norm; double relative_residual; string message; };`
 `struct LinearSolution { Vector values; SolverReport report; };`
 `LinearSolution solve_linear(const SparseMatrix&,const Vector&,const SolverOptions&={});`

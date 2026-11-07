@@ -67,6 +67,59 @@ void linear() {
   check(!small.report.converged || (small.values-tiny).stableNorm()<1e-190,
         "Residual underflow falsely reported iterative convergence");
 }
+void validation_policies() {
+  Eigen::MatrixXd dense(3,3);dense<<4,-1,0,-1,4,-1,0,-1,3;
+  Vector b(3);b<<1,2,3;
+  const Vector reference=solve_linear(sparse(dense),b).values;
+  for(auto method:{LinearSolver::SparseLU,LinearSolver::ConjugateGradient,LinearSolver::GMRES}) {
+    SolverOptions checked;checked.method=method;
+    SolverOptions trusted=checked;trusted.validation=SolverValidation::AssumeValid;
+    PreparedLinearSolver safe(sparse(dense),checked),fast(sparse(dense),trusted);
+    check(safe.preparation_timings().rank_checks==1,"Default rank validation skipped");
+    check(fast.preparation_timings().rank_checks==0&&fast.preparation_timings().rank_check_seconds==0,
+          "AssumeValid performed rank decomposition");
+    check(safe.matches(sparse(dense),checked)&&fast.matches(sparse(dense),trusted),"Policy cache miss");
+    check(!safe.matches(sparse(dense),trusted)&&!fast.matches(sparse(dense),checked),
+          "Validation policy change reused preparation");
+    for(double scale:{0.,1.,-2.}) {
+      auto result=fast.solve(scale*b);
+      check(result.report.converged,"Trusted repeated solve failed");
+      check((result.values-scale*reference).norm()<1e-9,"Trusted solution mismatch");
+      near(result.report.residual_norm,(sparse(dense)*result.values-scale*b).stableNorm());
+      check(result.report.timings.preparations==0,"Trusted RHS repeated preparation");
+    }
+    auto invalid=dense;invalid.setIdentity();invalid(2,2)=0;
+    check(!solve_linear(sparse(invalid),Vector::Zero(3),checked).report.converged,
+          "Default accepted singular zero RHS");
+    invalid(2,2)=1e-18;
+    check(!solve_linear(sparse(invalid),Vector::Zero(3),checked).report.converged,
+          "Default numerical rank safeguard lost");
+    auto nonfinite=dense;nonfinite(0,0)=std::numeric_limits<double>::infinity();
+    rejects([&]{solve_linear(sparse(nonfinite),b,trusted);},"Nonfinite");
+    rejects([&]{solve_linear(sparse(dense),Vector::Zero(2),trusted);},"matching RHS");
+    Vector bad_rhs=b;bad_rhs[0]=std::numeric_limits<double>::quiet_NaN();
+    rejects([&]{fast.solve(bad_rhs);},"RHS");
+    auto nonsquare=SparseMatrix(2,3);
+    rejects([&]{PreparedLinearSolver invalid_shape(nonsquare,trusted);},"square");
+    trusted.max_iterations=1;trusted.restart=1;trusted.absolute_tolerance=0;trusted.relative_tolerance=1e-15;
+    if(method!=LinearSolver::SparseLU)
+      check(!solve_linear(sparse(dense),b,trusted).report.converged,"Trusted mode ignored true residual");
+  }
+  SolverOptions cg;cg.method=LinearSolver::ConjugateGradient;
+  auto indefinite=dense;indefinite.setIdentity();indefinite(0,0)=-1;
+  for(const Vector rhs:{Vector::Zero(3).eval(),b})
+    check(!solve_linear(sparse(indefinite),rhs,cg).report.converged,"Default accepted indefinite matrix");
+  cg.validation=SolverValidation::AssumeValid;
+  // Deliberately violate the caller contract: no LDLT certificate is obtained.
+  // A zero residual in trusted mode cannot establish positive definiteness.
+  check(solve_linear(sparse(indefinite),Vector::Zero(3),cg).report.converged,
+        "Trusted CG still performed definiteness decomposition");
+  auto asymmetric=dense;asymmetric(0,1)=2;
+  check(!solve_linear(sparse(asymmetric),Vector::Zero(3),cg).report.converged,
+        "Trusted CG lost inexpensive symmetry check");
+  cg.validation=static_cast<SolverValidation>(-1);
+  rejects([&]{solve_linear(sparse(dense),b,cg);},"validation policy");
+}
 void stationary() {
   auto mesh=square_mesh(3);Problem p;
   p.assign(dirichlet(1+x+2*y),{"bottom","right","top","left"});
@@ -196,7 +249,7 @@ void offset_interval() {
 }
 }
 int main() {
-  try {linear();stationary();heat();damped_eigenmode();moving_and_waves();invalid_options();offset_interval();
+  try {linear();validation_policies();stationary();heat();damped_eigenmode();moving_and_waves();invalid_options();offset_interval();
     std::cout<<"FEM solver tests passed\n";
   } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
 }

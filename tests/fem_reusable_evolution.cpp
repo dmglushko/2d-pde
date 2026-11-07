@@ -54,10 +54,12 @@ std::vector<Frame> uncached(const discretization::TriangleMesh& mesh,const Probl
 void repeated_rhs() {
   SparseMatrix a(3,3);std::vector<Eigen::Triplet<double>> entries{{0,0,4},{1,1,5},{2,2,6},{0,1,-1},{1,0,-1}};
   a.setFromTriplets(entries.begin(),entries.end());
-  for(auto method:{LinearSolver::SparseLU,LinearSolver::ConjugateGradient,LinearSolver::GMRES}) {
-    SolverOptions o;o.method=method;PreparedLinearSolver prepared(a,o);
+  for(auto method:{LinearSolver::SparseLU,LinearSolver::ConjugateGradient,LinearSolver::GMRES})
+  for(auto validation:{SolverValidation::Checked,SolverValidation::AssumeValid}) {
+    SolverOptions o;o.method=method;o.validation=validation;PreparedLinearSolver prepared(a,o);
     auto stats=prepared.preparation_timings();
-    check(stats.preparations==1&&stats.rank_checks==1&&stats.factorizations==1,"Preparation counters");
+    check(stats.preparations==1&&stats.rank_checks==(validation==SolverValidation::Checked?1u:0u)&&
+          stats.factorizations==1,"Preparation counters");
     for(double scale:{1.,0.,-2.,1e-180}) {
       Vector rhs=Vector::Constant(3,scale);
       auto cached=prepared.solve(rhs),fresh=solve_linear(a,rhs,o);
@@ -81,6 +83,7 @@ void repeated_rhs() {
 void evolution() {
   auto mesh=square_mesh(3);const Expr phi=1+x+2*y;
   for(auto solver:{LinearSolver::SparseLU,LinearSolver::ConjugateGradient,LinearSolver::GMRES})
+  for(auto validation:{SolverValidation::Checked,SolverValidation::AssumeValid})
   for(auto method:{TimeMethod::BackwardEuler,TimeMethod::CrankNicolson,TimeMethod::Newmark})
   for(bool variable:{false,true}) {
     Problem p;p.equation.m1=1+(variable?t*t:Expr(0));
@@ -89,14 +92,15 @@ void evolution() {
     p.equation.source=phi*(1+sin(t)+t*t*t);
     p.assign(dirichlet(phi*(1+t+t*t)),{"bottom"});
     p.assign(dynamic_flux_robin(.3,1,1,(nx+2*ny)*(1+t+t*t)+phi*(1+t+t*t)+.3*phi*(1+2*t)),{"right","top","left"});
-    TimeOptions o;o.method=method;o.solver.method=solver;o.step=.03;o.end=.1;
+    TimeOptions o;o.method=method;o.solver.method=solver;o.solver.validation=validation;o.step=.03;o.end=.1;
     auto e=evolve(mesh,p,phi,phi,o);auto ref=uncached(mesh,p,phi,phi,o);
     check(e.frames.size()==ref.size(),"Frame count mismatch");
     for(std::size_t i=0;i<ref.size();++i) {near(e.frames[i].values,ref[i].values);near(e.frames[i].velocity,ref[i].velocity);}
     const std::size_t prep=(variable?4:2)+(method==TimeMethod::Newmark?1:0);
     check(e.timings.solver.preparations==prep,"Effective matrix invalidation count");
     check(e.timings.time_steps==4&&e.reports.size()==4,"Step/report counts");
-    check(e.timings.solver.rank_checks==prep&&e.timings.solver.factorizations==prep,"Rank/factor count");
+    check(e.timings.solver.rank_checks==(validation==SolverValidation::Checked?prep:0)&&
+          e.timings.solver.factorizations==prep,"Rank/factor count");
     check(e.timings.solver_reuses+prep==e.timings.linear_solves,"Reuse accounting");
   }
   Problem p;p.equation.m1=1;p.equation.source=sin(t)+t*t*t;
