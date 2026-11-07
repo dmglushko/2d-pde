@@ -73,8 +73,8 @@ int main(int argc, char **argv) {
           });
           double io = timed([&] {
             export_mesh(r, "/tmp/pde2d-mesh-issue3/benchmark-roundtrip.pde2d");
-            auto q =
-                import_mesh_result("/tmp/pde2d-mesh-issue3/benchmark-roundtrip.pde2d");
+            auto q = import_mesh_result(
+                "/tmp/pde2d-mesh-issue3/benchmark-roundtrip.pde2d");
             (void)q;
           });
           std::cout << shape << ',' << h << ',' << repeat << ',' << int(policy)

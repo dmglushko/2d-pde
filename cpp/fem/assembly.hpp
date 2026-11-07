@@ -256,9 +256,9 @@ public:
         // Otherwise even n and 10*n can acquire a nonzero determinant from
         // floating-point multiplication. Still restrict to this edge before
         // the exact-zero decision; do not admit approximate oblique data.
-        const Expr determinant = on_edge(SymEngine::expand(
-            symbolic_extra_x * symbolic_flux_y -
-            symbolic_extra_y * symbolic_flux_x));
+        const Expr determinant =
+            on_edge(SymEngine::expand(symbolic_extra_x * symbolic_flux_y -
+                                      symbolic_extra_y * symbolic_flux_x));
         if (!assembly_detail::zero(determinant) ||
             (assembly_detail::zero(flux_x) && assembly_detail::zero(flux_y)))
           throw std::invalid_argument(
@@ -280,22 +280,21 @@ public:
         throw std::invalid_argument(
             "Boundary condition has no nonzero operator");
       const Expr g = dirichlet ? value / alpha : Expr(0);
-      PreparedEdge e{
-          nodes,
-          length,
-          normal_x,
-          normal_y,
-          {Evaluator(alpha), Evaluator(gamma), Evaluator(value),
-           Evaluator(beta)},
-          {Evaluator(g), Evaluator(0), Evaluator(0)},
-          {},
-          dirichlet,
-          !time_dependent(alpha) && !time_dependent(gamma) &&
-              !time_dependent(value) && !time_dependent(beta),
-          {time_dependent(alpha) || time_dependent(beta),
-           time_dependent(gamma) || time_dependent(beta),
-           time_dependent(value) || time_dependent(beta)},
-          {}};
+      PreparedEdge e{nodes,
+                     length,
+                     normal_x,
+                     normal_y,
+                     {Evaluator(alpha), Evaluator(gamma), Evaluator(value),
+                      Evaluator(beta)},
+                     {Evaluator(g), Evaluator(0), Evaluator(0)},
+                     {},
+                     dirichlet,
+                     !time_dependent(alpha) && !time_dependent(gamma) &&
+                         !time_dependent(value) && !time_dependent(beta),
+                     {time_dependent(alpha) || time_dependent(beta),
+                      time_dependent(gamma) || time_dependent(beta),
+                      time_dependent(value) || time_dependent(beta)},
+                     {}};
       // Prepare supported derivatives serially, but preserve the value-only
       // API when the symbolic library cannot evaluate an unused derivative.
       // Re-throw only if that derivative is actually requested. Workers never

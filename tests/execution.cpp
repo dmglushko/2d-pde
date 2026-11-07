@@ -38,15 +38,17 @@ int main() {
     for (int workers : {1, 2, 4})
       for (std::size_t threshold : {0, 10000}) {
         ExecutionOptions o{backend, workers, threshold};
-        std::vector<int> a(128), teams(128,1);
+        std::vector<int> a(128), teams(128, 1);
         parallel_for(a.size(), o, [&](auto i) {
           a[i] = i * i;
 #ifdef _OPENMP
           teams[i] = omp_get_num_threads();
 #endif
         });
-        const int expected_team=backend==ExecutionBackend::OpenMP &&
-            workers>1 && a.size()>=threshold ? workers : 1;
+        const int expected_team = backend == ExecutionBackend::OpenMP &&
+                                          workers > 1 && a.size() >= threshold
+                                      ? workers
+                                      : 1;
         for (std::size_t i = 0; i < a.size(); ++i) {
           check(a[i] == int(i * i));
           check(teams[i] == expected_team);
@@ -62,5 +64,6 @@ int main() {
         }
       }
   }
-  std::cout << "Execution and observed team-size checks passed; OpenMP=" << openmp_available() << '\n';
+  std::cout << "Execution and observed team-size checks passed; OpenMP="
+            << openmp_available() << '\n';
 }

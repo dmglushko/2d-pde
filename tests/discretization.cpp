@@ -98,7 +98,8 @@ int main(int argc, char **argv) {
     exact_predicates();
     for (double radius : {0.001, 0.01}) {
       auto small = generate_mesh(CircleGeometry(radius));
-      require(small.mesh.nodes.size() >= 3, "Small circle failed to form a polygon");
+      require(small.mesh.nodes.size() >= 3,
+              "Small circle failed to form a polygon");
       validate_mesh_geometry(small.mesh);
     }
     auto shifted_sources = discretize_boundary(CircleGeometry{});
@@ -407,11 +408,13 @@ int main(int argc, char **argv) {
     rejects([&] { export_mesh(bad, path); }, "Open boundary exported");
     auto serializationResult = generate_mesh(RectangleGeometry{});
     serializationResult.mesh.boundary_tags.clear();
-    rejects([&] { export_mesh(serializationResult, path); }, "Missing source tags exported");
+    rejects([&] { export_mesh(serializationResult, path); },
+            "Missing source tags exported");
     serializationResult = generate_mesh(RectangleGeometry{});
     serializationResult.boundary_context->curves.front().region = "invalid tag";
     serializationResult.options.preserve_regions = false;
-    rejects([&] { export_mesh(serializationResult, path); }, "Invalid source name exported");
+    rejects([&] { export_mesh(serializationResult, path); },
+            "Invalid source name exported");
     bad = square();
     bad.boundary_tags.assign(bad.boundary_edges.size(), "-");
     rejects([&] { export_mesh(bad, path); }, "Reserved boundary tag exported");

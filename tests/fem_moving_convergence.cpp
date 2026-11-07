@@ -24,8 +24,10 @@ int main() {
       o.assembly.quadrature_degree = 6;
       auto result = evolve(mesh, p, base, base, o);
       auto &last = result.frames.back();
-      if (last.time != o.end || !last.values.allFinite() || !last.velocity.allFinite())
-        throw std::runtime_error("Nonfinite or incomplete moving boundary solution");
+      if (last.time != o.end || !last.values.allFinite() ||
+          !last.velocity.allFinite())
+        throw std::runtime_error(
+            "Nonfinite or incomplete moving boundary solution");
       double error = 0;
       for (std::size_t i = 0; i < mesh.nodes.size(); ++i)
         error = std::max(error, std::abs(last.values[i] - (1 + mesh.nodes[i].x +

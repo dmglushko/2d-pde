@@ -5,7 +5,7 @@
 #include <exception>
 #include <iostream>
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   if (argc != 2) {
     std::cerr << "Usage: produce_mesh OUTPUT.pde2d\n";
     return 2;
@@ -23,10 +23,10 @@ int main(int argc, char** argv) {
     }
     discretization::export_mesh(result, argv[1]);
     auto restored = discretization::import_mesh_result(argv[1]);
-    std::cout << "Saved P1 mesh: " << restored.mesh.nodes.size()
-              << " nodes, " << restored.mesh.elements.size() << " triangles, "
+    std::cout << "Saved P1 mesh: " << restored.mesh.nodes.size() << " nodes, "
+              << restored.mesh.elements.size() << " triangles, "
               << restored.mesh.boundary_edges.size() << " boundary edges\n";
-  } catch (const std::exception& error) {
+  } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;
   }
