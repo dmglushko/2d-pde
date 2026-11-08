@@ -1,7 +1,8 @@
 #pragma once
 // Private part of PreparedAssembly (assembly.hpp): boundary edges.
 //
-// Preparation reduces each edge's boundary condition to one EdgeForm
+// Preparation takes the validated region binding (boundary_assignment.hpp),
+// reduces each edge's boundary condition to one EdgeForm
 // alternative (boundary_classification.hpp), compiles its restricted
 // coefficients into the matching prepared alternative and caches the
 // time-independent natural contribution. evaluate() computes the remaining
@@ -9,6 +10,7 @@
 // PreparedEdgeForm, so a new form does not compile until every step handles
 // it.
 #include "discretization/geometry_base.hpp"
+#include "fem/boundary_assignment.hpp"
 #include "fem/boundary_classification.hpp"
 #include "fem/detail/assembly_elements.hpp"
 #include "fem/expression.hpp"
@@ -21,9 +23,7 @@
 #include <cmath>
 #include <cstddef>
 #include <exception>
-#include <map>
 #include <new>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -118,33 +118,6 @@ struct EdgeResult {
   std::array<double, 2> values{};
 };
 
-// Map every boundary region present in the mesh to its single condition.
-// Regions without an assignment are reported per edge by the caller.
-inline std::map<std::string, const BoundaryCondition *>
-region_conditions(const discretization::TriangleMesh &mesh,
-                  const Problem &problem) {
-  if (mesh.boundary_tags.size() != mesh.boundary_edges.size())
-    throw std::invalid_argument(
-        "Every boundary edge needs an explicit region tag and condition");
-  std::set<std::string> present(mesh.boundary_tags.begin(),
-                                mesh.boundary_tags.end());
-  if (present.contains(""))
-    throw std::invalid_argument("Empty boundary region tag");
-  std::map<std::string, const BoundaryCondition *> assigned;
-  for (const auto &assignment : problem.boundaries) {
-    if (assignment.regions.empty())
-      throw std::invalid_argument("Empty boundary assignment");
-    for (const auto &region : assignment.regions) {
-      if (!present.contains(region))
-        throw std::invalid_argument("Absent boundary region: " + region);
-      if (!assigned.emplace(region, &assignment.condition).second)
-        throw std::invalid_argument("Overlapping boundary assignments: " +
-                                    region);
-    }
-  }
-  return assigned;
-}
-
 // Add the time-independent natural contribution cached at preparation.
 inline void add_cached(LocalBlock &out, const LocalBlock &cached) {
   for (std::size_t k = 0; k < out.stiffness.size(); ++k) {
@@ -169,23 +142,13 @@ public:
     divisor_samples = edge_divisor_samples(quadrature_degree);
   }
 
-  // Classify and prepare every boundary edge (after set_rule()).
-  void prepare(const discretization::TriangleMesh &mesh, const Problem &problem,
-               const OppositeVertices &opposite) {
-    const auto assigned = region_conditions(mesh, problem);
-    for (std::size_t edge = 0; edge < mesh.boundary_edges.size(); ++edge) {
-      const auto condition = assigned.find(mesh.boundary_tags[edge]);
-      if (condition == assigned.end())
-        throw std::invalid_argument("Missing boundary assignment: " +
-                                    mesh.boundary_tags[edge]);
-      const std::array<std::size_t, 2> nodes{mesh.boundary_edges[edge].first,
-                                             mesh.boundary_edges[edge].second};
-      const auto frame = p1::edge_frame(
-          mesh.nodes[nodes[0]], mesh.nodes[nodes[1]],
-          mesh.nodes[opposite.at(std::minmax(nodes[0], nodes[1]))]);
+  // Classify and prepare every bound edge (after set_rule()).
+  void prepare(const Problem &problem, const BoundaryBinding &binding) {
+    for (const auto &bound : binding.edges) {
+      const auto &frame = bound.frame;
       const auto c =
-          classify_edge_condition(problem.equation, *condition->second, frame);
-      PreparedEdge e{nodes, frame.length, frame.normal_x, frame.normal_y,
+          classify_edge_condition(problem.equation, *bound.condition, frame);
+      PreparedEdge e{bound.nodes, frame.length, frame.normal_x, frame.normal_y,
                      std::visit(
                          [](const auto &form) -> PreparedEdgeForm {
                            return prepare(form);

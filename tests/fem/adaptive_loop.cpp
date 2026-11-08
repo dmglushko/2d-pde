@@ -1,7 +1,10 @@
 // The solve -> estimate -> mark -> refine -> transfer/re-solve loop on a
 // stationary problem with a curved boundary, composed from public seams
-// only. Oracle: the exact H1-seminorm error of a manufactured solution must
-// decrease in every iteration. No performance claim is made.
+// only. The transferred solution seeds the next (conjugate gradient) solve
+// as its initial guess. Oracles: the exact H1-seminorm error of a
+// manufactured solution must decrease in every iteration, and the seeded
+// solve must agree with an unseeded solve within the solver tolerance. No
+// performance claim is made beyond reporting the iteration counts.
 #include "discretization/geometry.hpp"
 #include "discretization/triangulate.hpp"
 #include "fem/error_norms.hpp"
@@ -9,6 +12,7 @@
 #include "fem/solver.hpp"
 #include "fem/transfer.hpp"
 #include "support/check.hpp"
+#include "support/check_eigen.hpp"
 #include <cmath>
 #include <iostream>
 using namespace pde2d::fem;
@@ -31,7 +35,10 @@ void adaptive_loop_reduces_error() {
   auto mesh = generate_mesh(CircleGeometry(1.0), options);
   check(mesh.report.size_satisfied, mesh.report.message);
 
-  auto u = solve_stationary(mesh.mesh, p, AssemblyOptions{8}).values;
+  SolverOptions cg;
+  cg.method = LinearSolver::ConjugateGradient;
+  const auto plan = plan_from_user(AssemblyOptions{8}, cg);
+  auto u = solve_stationary(mesh.mesh, p, plan).values;
   double error = error_norms(mesh.mesh, u, exact).h1_seminorm;
   const double first_error = error;
   for (int iteration = 0; iteration < 8; ++iteration) {
@@ -46,7 +53,17 @@ void adaptive_loop_reduces_error() {
     transfer.max_outside_distance = options.boundary.max_curve_deviation;
     auto guess = transfer_field(mesh.mesh, u, refined.mesh, transfer);
     check(guess.values.allFinite());
-    auto next = solve_stationary(refined.mesh, p, AssemblyOptions{8}).values;
+    // One preparation serves the seeded and the unseeded solve.
+    PreparedStationary stationary(refined.mesh, p, plan);
+    const auto seeded = stationary.solve(0, guess.values);
+    const auto cold = stationary.solve(0);
+    check(seeded.report.initial_guess == InitialGuess::Used,
+          "the transferred field must seed the solve");
+    check(stationary.statistics().solver.preparations == 1 &&
+              stationary.statistics().solver_reuses == 1,
+          "the second solve on one mesh must reuse the preparation");
+    pde2d_test::near_vector(seeded.values, cold.values, 1e-7);
+    auto next = seeded.values;
     const double next_error =
         error_norms(refined.mesh, next, exact).h1_seminorm;
     std::cout << "iteration " << iteration << ": nodes "
@@ -54,7 +71,9 @@ void adaptive_loop_reduces_error() {
               << ", marked " << marked.size() << ", estimate "
               << estimate.global << ", H1 error " << error << " -> "
               << next_error << ", change from transferred "
-              << (next - guess.values).lpNorm<Eigen::Infinity>() << '\n';
+              << (next - guess.values).lpNorm<Eigen::Infinity>()
+              << ", CG iterations seeded " << seeded.report.iterations
+              << " / unseeded " << cold.report.iterations << '\n';
     check(next_error < error, "adaptive iteration did not reduce the error");
     mesh = std::move(refined);
     u = std::move(next);

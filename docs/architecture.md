@@ -41,13 +41,23 @@ MeshResult + marked elements ──refine_mesh──▶ MeshResult   (report.mar
 RefinementOptions: max_edge_length and/or size_field h(x,y)  (size field is request-time, not in files)
 TriangleMesh ──PointLocator──▶ element + barycentric        (outside rule: max_outside_distance)
 
-TriangleMesh + Problem ──PreparedAssembly──▶ AssembledSystem ──solve_stationary / evolve──▶ values, frames
-TriangleMesh + Problem ──analyze──▶ ProblemProperties   (each property: value + Evidence + reason)
+TriangleMesh + Problem ──bind_boundary──▶ BoundaryBinding (regions, edge frames)
+     │                                      shared by assembly and analysis
+     ├──analyze──▶ ProblemProperties   (each property: value + Evidence + reason)
+     └──PreparedAssembly──▶ AssembledSystem
+options ──plan_from_user──▶ SolvePlan {assembly, solver, time, decisions}
+SolvePlan ──PreparedStationary.solve(t[, guess]) / solve_stationary──▶ StationarySolution
+SolvePlan + InitialConditions (Expr or nodal Vector) ──evolve──▶ Evolution
+results carry RunRecord {plan, execution, workload, work, evidence}
 
 Adaptive loop (stationary):
   solve_stationary ──▶ values ──estimate_error──▶ ErrorEstimate {indicators, global}
      ──mark_bulk──▶ marked elements ──refine_mesh(result, marked)──▶ MeshResult
-     ──transfer_field(old mesh, values, new mesh)──▶ values on the new mesh ──▶ solve again
+     ──transfer_field(old mesh, values, new mesh)──▶ values on the new mesh
+     ──PreparedStationary(new mesh, plan).solve(t, guess = transferred)──▶ values
+Restart (transient): last frame ──transfer_field──▶ InitialConditions{Vector} ──evolve
+Time steps: StepController.next ──▶ trial (TimeIntegrator.trial) ──judge──▶
+     accept (commit, frame, observer) | reject (discard, next() proposes a retry)
 ```
 
 Inside meshing, refinement is one generic loop (`refine_with`) with two
@@ -65,6 +75,9 @@ integrators (`time_integration.hpp`) depend only on it. Both are strategies:
 convenience selectors. The step sequence is a third strategy:
 `TimeOptions::step_controller` plugs in a `StepController`
 (`step_control.hpp`; default `UniformStepController`, the fixed `TimeGrid`).
+Steps are transactional: integrators produce a trial without committing
+their state, the controller accepts or rejects it, and only accepted steps
+are committed and published.
 
 Preprocessing and adaptivity (see [vision.md](vision.md)) build on two
 seams. `analysis.hpp` reports properties of a problem (time order,
@@ -73,8 +86,16 @@ with an `Evidence` level (Proven, Sampled, Unknown); it calls the same
 functions the solve uses for the same judgement, so the two cannot
 disagree. `decision.hpp` records choices (`Decision`: subject, choice,
 basis, evidence, source) in `SolverReport::decisions` and
-`EvolutionMetadata::decisions`, printed by `write_report`. Today every
-recorded decision is user-selected; there is no automatic selection yet. Private implementation headers of both modules live in
+`EvolutionMetadata::decisions`, printed by `write_report`. The settings and
+their decisions travel together as a `SolvePlan` (`plan.hpp`), the one
+output type of a future automatic chooser and the one place to override
+it. Today every recorded decision is user-selected (`plan_from_user`);
+there is no automatic selection yet. Top-level results carry a `RunRecord`
+(`record.hpp`) with the plan, execution policy, workload, work counters and
+an evidence summary; `MeshResult` already carries its `MeshOptions` and
+`MeshReport`. Analysis and assembly both start from `bind_boundary`
+(`boundary_assignment.hpp`), so analysis no longer reaches into assembly
+internals. Private implementation headers of both modules live in
 `detail/` subdirectories (`*_detail` namespaces).
 
 Boundary region tags connect the two halves: geometry regions become

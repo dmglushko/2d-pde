@@ -14,8 +14,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <map>
-#include <utility>
 #include <vector>
 
 namespace pde2d::fem::assembly_detail {
@@ -35,22 +33,6 @@ struct PreparedElement {
   // Sum of every time-independent weak-form term.
   LocalBlock constant;
 };
-
-// Interior vertex opposite each element edge, keyed by sorted endpoints.
-using OppositeVertices =
-    std::map<std::pair<std::size_t, std::size_t>, std::size_t>;
-
-// Built from the element list; shared with analysis (analysis.hpp), which
-// needs the same outward edge normals.
-inline OppositeVertices
-opposite_vertices(const discretization::TriangleMesh &mesh) {
-  OppositeVertices opposite;
-  for (const auto &element : mesh.elements)
-    for (std::size_t k = 0; k < LocalBlock::nodes; ++k)
-      opposite[std::minmax(element[k], element[(k + 1) % 3])] =
-          element[(k + 2) % 3];
-  return opposite;
-}
 
 // Work counters reported through AssemblyStatistics.
 struct InteriorCounts {
@@ -76,8 +58,8 @@ public:
   }
 
   // Prepare every element (after compile()).
-  OppositeVertices prepare(const discretization::TriangleMesh &mesh,
-                           int quadrature_degree) {
+  void prepare(const discretization::TriangleMesh &mesh,
+               int quadrature_degree) {
     const auto triangle_rule = triangle_quadrature(quadrature_degree);
     for (const auto &element : mesh.elements) {
       const auto a = mesh.nodes[element[0]], b = mesh.nodes[element[1]],
@@ -108,7 +90,6 @@ public:
       e.constant = block(e, 0, fixed);
       elements.push_back(std::move(e));
     }
-    return opposite_vertices(mesh);
   }
 
   // Contribution of the `enabled` terms at `time`.

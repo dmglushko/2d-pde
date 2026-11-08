@@ -11,7 +11,9 @@
 // kernels in p1_element.hpp, optionally in parallel (execution.hpp), and
 // scatters in a fixed element/edge order so results are deterministic.
 //
-// The private pieces live in detail/: interior elements
+// Boundary regions are bound to conditions by bind_boundary
+// (boundary_assignment.hpp), shared with analysis. The private pieces live
+// in detail/: interior elements
 // (assembly_elements.hpp), boundary edges (assembly_edges.hpp) and the serial
 // scatter (assembly_scatter.hpp). The element-independent result types are in
 // system.hpp.
@@ -68,8 +70,8 @@ public:
         static_cast<std::size_t>(std::numeric_limits<int>::max()))
       throw std::invalid_argument("Mesh exceeds sparse matrix index capacity");
     interior.compile(problem.equation);
-    const auto opposite = interior.prepare(mesh, options.quadrature_degree);
-    boundary.prepare(mesh, problem, opposite);
+    interior.prepare(mesh, options.quadrature_degree);
+    boundary.prepare(problem, bind_boundary(mesh, problem));
     statistics.elements = interior.elements.size();
     statistics.edges = boundary.edges.size();
     statistics.physical_quadrature_points =

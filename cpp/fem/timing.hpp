@@ -33,6 +33,9 @@ struct EvolutionTimings {
   std::size_t assembly_calls = 0, linear_solves = 0, time_steps = 0,
               solver_reuses = 0;
   SolverTimings solver;
+  // Trial steps a StepController rejected. time_steps counts accepted steps
+  // only; the work of rejected trials is in the other counters and seconds.
+  std::size_t rejected_steps = 0;
 };
 namespace timing {
 using Clock = std::chrono::steady_clock;

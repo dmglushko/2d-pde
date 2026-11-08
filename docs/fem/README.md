@@ -269,8 +269,29 @@ second-order scheme (Newmark) requires `velocity` and throws if it is
 omitted. First-order schemes need only `value`; a given `velocity` only fills
 the initial frame's `Frame::velocity` (0 when omitted).
 
+Each of `value` and `velocity` is a `Field`: an expression in `x`, `y`, `t`
+(interpolated at the nodes) or a `Vector` with one finite value per mesh node.
+Nodal values restart an evolution, for example on a refined mesh:
+
+```cpp
+auto earlier=evolve(coarse,problem,initial,time);
+auto moved=transfer_field(coarse,earlier.frames.back().values,fine).values;
+time.start=time.end; time.end=4;
+auto later=evolve(fine,problem,InitialConditions{moved},time);
+```
+
+A wrong size or a nonfinite entry throws ("Initial value must have one finite
+entry per mesh node"); Dirichlet compatibility is checked as for expressions.
+Newmark restarted from nodal `value` and `velocity` recomputes its
+acceleration from the equation.
+
 Each scheme is a `TimeIntegrator` (`fem/time_integration.hpp`). Step stamps
-come from `TimeGrid` (`fem/time_grid.hpp`). A user scheme runs through
+come from `TimeGrid` (`fem/time_grid.hpp`) unless `time.step_controller` sets a
+`StepController` (`fem/step_control.hpp`). Every step is first a trial: a
+controller's `judge()` may reject it, the trial is discarded (no frame, no
+observer call, counted in `timings.rejected_steps`) and `next()` proposes the
+retry. A step's `h` must equal its stamp difference up to rounding
+(`step_size_consistent`). A user scheme runs through
 `evolve` without library changes: set `time.integrator=[]{ return
 std::make_unique<MyIntegrator>(); };` (called once per evolution; `method` is
 then ignored, and reports use `TimeIntegrator::name()`). See
@@ -299,6 +320,33 @@ evaluators and constant local contributions prepared once. Its `assemble(time)`
 reevaluates time-dependent data. `PreparedLinearSolver` reuses rank checking and
 factorization while the actual constrained matrix and solver options are equal;
 changing either forces preparation. `evolve` uses both automatically.
+
+## Repeated stationary solves, initial guesses and plans
+
+`PreparedStationary(mesh,problem,assembly,solver)` (`fem/solver.hpp`) keeps the
+prepared assembly and the last prepared linear solver, so repeated solves (a
+time-dependent source sampled at several times, a parameter loop, an adaptive
+loop's solves on one mesh) prepare once. `statistics()` counts solves,
+assemblies, preparations and reuses. `solve_stationary` is the one-shot
+wrapper and returns the same values.
+
+```cpp
+PreparedStationary stationary(fine,problem,{},cg);
+auto solution=stationary.solve(0,moved);    // initial guess, e.g. transferred
+```
+
+An initial guess (`solve(time,guess)`, `solve_stationary(...,guess)`,
+`solve_linear(a,b,options,guess)`, `PreparedLinearSolver::solve(b,guess)`)
+starts the iterative backends (CG, GMRES); direct backends ignore it.
+`SolverReport::initial_guess` says `None`, `Used` or `Ignored`.
+
+A `SolvePlan` (`fem/plan.hpp`) bundles assembly options, solver options, time
+settings and the decisions explaining them. `plan_from_user(assembly,solver)`
+and `plan_from_user(time_options)` record today's user choices; the overloads
+`solve_stationary(mesh,problem,plan)`, `PreparedStationary(mesh,problem,plan)`
+and `evolve(mesh,problem,initial,plan,output)` give the same results as the
+option-based calls. Nothing chooses settings automatically yet; a future
+chooser will return a `SolvePlan`, and editing the plan overrides it.
 
 ## Optional parallel execution and verification
 
@@ -335,9 +383,17 @@ format a summary. Include `fem/report.hpp` (also exported by `fem/fem.hpp`):
 #include <iostream>
 
 pde2d::fem::write_report(std::cout, motion);          // pde2d::fem::Evolution
-pde2d::fem::write_report(std::cout, solution);        // pde2d::fem::LinearSolution
+pde2d::fem::write_report(std::cout, solution);        // StationarySolution or LinearSolution
 pde2d::fem::write_report(std::cout, solution.report); // pde2d::fem::SolverReport
+pde2d::fem::write_report(std::cout, motion.record);   // pde2d::fem::RunRecord
 ```
+
+`StationarySolution::record` and `Evolution::record` (`fem/record.hpp`) carry
+what is needed to reproduce and compare a run, as fields: the plan that ran
+(with its decisions), the selected execution policy and whether OpenMP was
+compiled in, the workload (nodes, elements, boundary edges), work counters
+(assemblies, solves, preparations, reuses, accepted and rejected steps) and an
+evidence summary of the decisions. Wall-clock timings are not part of it.
 
 These overloads return `std::ostream&`, emit one summary without per-step output,
 and preserve the caller's formatting flags, precision, fill, width and locale.

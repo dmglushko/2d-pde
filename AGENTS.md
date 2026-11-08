@@ -12,7 +12,7 @@ heading and which directions to keep open.
 | --- | --- |
 | `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
 | `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing (size fields, marked refinement; criteria and boundary policies in `detail/refinement_policy.hpp`), point location (`point_location.hpp`), mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration and step control (`step_control.hpp`), problem analysis (`analysis.hpp`), decision records (`decision.hpp`), error estimation and marking (`estimation.hpp`), field transfer between meshes (`transfer.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration and step control (`step_control.hpp`), boundary region binding shared by assembly and analysis (`boundary_assignment.hpp`), problem analysis (`analysis.hpp`, types in `analysis_types.hpp`), decision records (`decision.hpp`), solve plans (`plan.hpp`), prepared stationary solves (`solver.hpp`), run records (`record.hpp`), error estimation and marking (`estimation.hpp`), field transfer between meshes (`transfer.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
 | `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
 | `examples/` | runnable programs (learning, meshing showcase, FEM showcase, long waves). Built as CTest smoke tests |
 | `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
@@ -76,8 +76,15 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   with default `a_xx = a_yy = -1` (that is, −Δu). Natural flux is
   `q_n = -n·A∇u`. See `cpp/fem/problem.hpp` and `weak_form.hpp`.
 - **Initial conditions** are not part of `Problem`. They are passed to
-  `evolve(mesh, problem, InitialConditions{value, velocity}, options)`.
-  Newmark requires `velocity`.
+  `evolve(mesh, problem, InitialConditions{value, velocity}, options)`;
+  each is an `Expr` or a nodal `Vector` (`Field`). Newmark requires
+  `velocity`.
+- **Settings travel as a `SolvePlan`** (`cpp/fem/plan.hpp`) with their
+  decisions; option-based entry points are `plan_from_user` wrappers and
+  must stay bit-identical to the plan overloads. Results carry a
+  `RunRecord` (`record.hpp`).
+- **Time steps are transactional:** an integrator with state commits it in
+  `accept()`, never in `trial()` (see `NewmarkIntegrator`).
 - `MeshResult::report` must be checked: meshing can return a mesh that misses
   its size target.
 - **Request-time options are not serialized:** `RefinementOptions::size_field`

@@ -30,6 +30,14 @@ ignores `options.method`; reports and `EvolutionMetadata::method_name` use
    - Return `u` and `v` with one finite entry per mesh node. `evolve()`
      checks this after `start()` and `advance()` and throws
      `std::runtime_error` otherwise.
+   - Transactional steps: `evolve()` calls `trial()` (default: `advance()`)
+     and then `accept()` or `reject()`. A scheme with internal state keeps
+     the new state provisional in `trial()` and commits it in `accept()`
+     (see `NewmarkIntegrator`: the trial acceleration), keeps `advance()` as
+     `trial()` + `accept()` for drivers that never reject, and returns true
+     from `transactional()`. A stateless scheme only needs
+     `transactional() == true`. With the default `false`, `evolve()` throws
+     when a controller rejects a trial.
 2. Only for a built-in scheme (in `time_integration.hpp`): add the enum value
    to `TimeMethod`, a case to `make_time_integrator` and a name in
    `time_method_name`.
@@ -48,14 +56,24 @@ std::make_unique<MyController>(...); };`; `evolve()` then ignores
   driver checks: consecutive indices from 1, strictly increasing finite
   stamps not after `TimeOptions::end`, finite `h > 0`, and the last stamp is
   exactly `end` (otherwise `std::invalid_argument`).
+- `h` must equal `time` minus the previous stamp up to rounding:
+  `step_size_consistent(step, previous, start, end)` is the documented bound
+  (32 eps times the larger of the stamps and the interval length, plus h).
+- `judge(StepOutcome)` sees every trial with the state before it and the
+  trial state, which is where a temporal error estimator would look. Return
+  `StepVerdict::Reject` to discard the trial; the next `next()` call must
+  propose the retry (same index; typically a smaller h from the same
+  previous stamp). Rejected trials publish no frames or observer calls and
+  their step reports are dropped, but their work is counted
+  (`EvolutionTimings::rejected_steps`, assemblies, solves). The driver does
+  not cap retries, so a controller must terminate.
 - `accepted(StepOutcome)` sees each accepted step with the states before
-  and after it, which is where an error estimator would look. Steps cannot
-  be rejected yet: that needs integrators that can restore their internal
-  state (Newmark keeps the acceleration). Add that as a separate seam.
+  and after it.
 - `name()` appears in `EvolutionMetadata::decisions` ("time steps").
 - Tests: a non-uniform sequence against a hand-computed recurrence on an
   exact semidiscrete solution, and the default path bit-identical (see
-  `tests/fem/step_control.cpp`). A changing `h` changes the step matrix, so
+  `tests/fem/step_control.cpp`); for rejection, retried and halved trials
+  against plain runs (`tests/fem/step_rejection.cpp`). A changing `h` changes the step matrix, so
   assert factorization counts as relations on the runs of equal `h`.
 
 ## An analysis property
@@ -64,8 +82,11 @@ std::make_unique<MyController>(...); };`; `evolve()` then ignores
 `Evidence`, reason).
 
 1. Add the field to `ProblemProperties` (or `SystemProperties` for a
-   judgement on an assembled matrix) and fill it in `interior_properties`,
-   the region accumulator or `analyze(const AssembledSystem &)`.
+   judgement on an assembled matrix) in `analysis_types.hpp` and fill it in
+   `interior_properties` (`detail/analysis_interior.hpp`), the region
+   accumulator (`detail/analysis_regions.hpp`) or
+   `analyze(const AssembledSystem &)` (`analysis.hpp`). Boundary edges come
+   from `bind_boundary`, the same binding assembly uses.
 2. Evidence: `Proven` only for exact symbolic facts (constants, symbolic
    zeros, classification), `Sampled` for checks at quadrature points, edge
    samples, sample times or one assembled matrix, `Unknown` otherwise.
@@ -77,18 +98,34 @@ std::make_unique<MyController>(...); };`; `evolve()` then ignores
 4. Print it in `write_report(std::ostream &, const ProblemProperties &)`.
 5. Tests (`tests/fem/analysis.cpp`): a problem whose property is known by
    construction, and the consequence the solver draws from it (singular
-   solve, CG rejection, assembly exception, caching counters).
+   solve, CG rejection, assembly exception, caching counters). A region
+   property can also be tested on synthetic `ClassifiedEdge`s with
+   `analyze_boundary_region` (`tests/fem/p1_kernels.cpp`).
 
 ## A decision record
 
 `Decision` (`decision.hpp`) records subject, choice, basis, evidence and
 source. User choices use `user_decision(subject, choice, "Options::field")`.
-Add a new one where the choice is applied: solver choices in
-`solver_decisions()` (copied into every `SolverReport`), evolution choices
-in `evolve()` (`EvolutionMetadata::decisions`). `write_report` prints both
-lists. An automatic chooser (not implemented yet) must use
-`DecisionSource::Automatic`, state its basis (for example the analysis
-property and its evidence) and remain overridable by an explicit option.
+Add a new one where the setting enters the plan: solver choices in
+`solver_decisions()`, time choices in `time_decisions()` (`plan.hpp`), both
+collected by `plan_from_user`. The plan's decisions are copied into every
+stationary `SolverReport` and into `EvolutionMetadata::decisions`;
+`write_report` prints them. A choice made by a strategy object (integrator
+or step controller factory) is named by `evolve()` from `name()`.
+
+## An automatic chooser (planner)
+
+Not implemented; the seam is `SolvePlan` (`plan.hpp`). A chooser is a
+function from the problem, mesh and analysis (`analyze`) to a `SolvePlan`:
+it sets `assembly`, `solver` and `time` and records one `Decision` per
+choice with `DecisionSource::Automatic`, its basis (for example the
+analysis property and its evidence) and that evidence. The user overrides
+it by editing the returned plan (and its decision) before calling
+`solve_stationary(mesh, problem, plan)`, `PreparedStationary` or
+`evolve(mesh, problem, initial, plan, output)`. The run record
+(`record.hpp`) then carries the plan and an evidence summary. Judge a
+chooser against `plan_from_user` defaults on reference problems
+(docs/vision.md, "Better is measured").
 
 ## An error estimator
 
@@ -127,6 +164,10 @@ tolerances, true-residual check, timings, `matches()` reuse) and a
 or a failure message) and `solve(rhs, relative_tolerance)` (values,
 iterations, optional failure).
 
+- **Initial guess:** an iterative backend overrides
+  `solve_with_guess(rhs, tolerance, guess)` and sets
+  `BackendSolution::used_guess`; the default ignores the guess (right for
+  direct factorizations) and reports `InitialGuess::Ignored`.
 - **User backend, no library change:** implement `LinearSolverBackend` and
   set `SolverOptions::backend = make_linear_solver_backend("Name", creator)`
   (or your own `LinearSolverBackendFactory`). It replaces `method`, receives
@@ -180,7 +221,8 @@ The weak form is linear in the coefficients of `weak::Term`.
      `prepare` overload and its branch in `PreparedBoundary::evaluate`;
   4. its branch in the scatter (`detail/assembly_scatter.hpp`);
   5. a local kernel in `p1_element.hpp`;
-  6. its branch in the analysis region accumulator (`analysis.hpp`).
+  6. its branch in the analysis region accumulator
+     (`detail/analysis_regions.hpp`).
   Every dispatch is a `std::visit` ending in a `static_assert`, so the
   build fails until all of these handle the new alternative.
 - Divisors are checked with `divisor_keeps_strict_sign` on

@@ -11,8 +11,8 @@
 // proportional to the flux vector -A n; its projection is then added to beta.
 // Oblique conditions that are not proportional are rejected. A future
 // oblique form becomes a new EdgeForm alternative; every std::visit over
-// EdgeForm (here, in detail/assembly_edges.hpp and in analysis.hpp) then
-// fails to compile until it handles it.
+// EdgeForm (here, in detail/assembly_edges.hpp and in
+// detail/analysis_regions.hpp) then fails to compile until it handles it.
 //
 // Classification is pure: no mesh, no quadrature, no evaluation. Restricted
 // expressions are written in the edge parameter s in [0,1], carried by the

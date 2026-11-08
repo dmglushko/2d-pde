@@ -9,6 +9,12 @@
 // reuse) to the driver through IntegratorServices, so the same integrator runs
 // unchanged under evolve() and under a test's uncached reference driver.
 //
+// Steps are transactional: evolve() calls trial() for a candidate step and
+// then accept() or reject() (a StepController may reject it, step_control.hpp).
+// A trial must not commit internal state; Newmark keeps its new acceleration
+// provisional until accept(). advance() is trial() followed by accept(), for
+// drivers that never reject.
+//
 // A user scheme needs no library change: implement TimeIntegrator and pass a
 // factory in TimeOptions::integrator (evolution.hpp). A built-in scheme also
 // gets a TimeMethod value, a case in make_time_integrator and a name in
@@ -129,18 +135,42 @@ public:
   // was made compatible with its Dirichlet data.
   virtual void start(const AssembledSystem &, IntegratorState &,
                      const IntegratorServices &) {}
-  // Advance from `previous` (stamp t) to `current` (stamp t+h). The driver
-  // re-imposes Dirichlet displacement on the returned u afterwards.
+  // Advance from `previous` (stamp t) to `current` (stamp t+h) and commit
+  // any internal state. The driver re-imposes Dirichlet displacement on the
+  // returned u afterwards.
   virtual IntegratorState advance(const AssembledSystem &previous,
                                   const AssembledSystem &current, double h,
                                   const IntegratorState &state,
                                   const IntegratorServices &services) = 0;
+
+  // Transactional stepping. True when trial() leaves internal state
+  // untouched until accept(), so a rejected trial can be discarded. The
+  // default (false) suits schemes written before trials existed: evolve()
+  // then refuses a controller's rejection instead of continuing from a
+  // corrupted state. Stateless schemes may simply return true.
+  virtual bool transactional() const { return false; }
+  // The candidate state of one step, same arguments as advance(). The
+  // default calls advance(), which is correct for stateless schemes.
+  virtual IntegratorState trial(const AssembledSystem &previous,
+                                const AssembledSystem &current, double h,
+                                const IntegratorState &state,
+                                const IntegratorServices &services) {
+    return advance(previous, current, h, state, services);
+  }
+  // Commit or discard the internal state of the last trial().
+  virtual void accept() {}
+  virtual void reject() {}
 };
+
+// Creates the integrator of one evolution (integrators may keep state).
+using TimeIntegratorFactory = std::function<std::unique_ptr<TimeIntegrator>()>;
 
 namespace time_integration_detail {
 class FirstOrder : public TimeIntegrator {
 public:
   int order() const override { return 1; }
+  // The built-in one-step first-order schemes keep no state between steps.
+  bool transactional() const override { return true; }
   void check(const AssembledSystem &s) const override {
     const int system_order = time_order(s);
     if (system_order == 2)
@@ -192,8 +222,10 @@ public:
 
 // Average-acceleration Newmark (beta = 1/4, gamma = 1/2), solved for the new
 // acceleration. Dirichlet displacement data become acceleration constraints.
+// The acceleration of a trial stays provisional until accept().
 class NewmarkIntegrator final : public TimeIntegrator {
-  Vector acceleration_;
+  Vector acceleration_, trial_acceleration_;
+  bool pending_ = false;
 
 public:
   TimeMethod method() const override { return TimeMethod::Newmark; }
@@ -216,9 +248,24 @@ public:
         old.second_mass, old.load - old.stiffness * s.u - old.first_mass * s.v,
         acceleration_data, false);
   }
-  IntegratorState advance(const AssembledSystem &, const AssembledSystem &cur,
-                          double h, const IntegratorState &s,
+  bool transactional() const override { return true; }
+  IntegratorState advance(const AssembledSystem &previous,
+                          const AssembledSystem &current, double h,
+                          const IntegratorState &s,
                           const IntegratorServices &services) override {
+    auto next = trial(previous, current, h, s, services);
+    accept();
+    return next;
+  }
+  void accept() override {
+    if (pending_)
+      acceleration_ = std::move(trial_acceleration_);
+    pending_ = false;
+  }
+  void reject() override { pending_ = false; }
+  IntegratorState trial(const AssembledSystem &, const AssembledSystem &cur,
+                        double h, const IntegratorState &s,
+                        const IntegratorServices &services) override {
     const Vector predicted_u = s.u + h * s.v + (h * h / 4) * acceleration_;
     const Vector predicted_v = s.v + (h / 2) * acceleration_;
     SparseMatrix a = cur.second_mass + (h / 2) * cur.first_mass +
@@ -231,7 +278,8 @@ public:
     Vector next_acceleration = services.solve(a, rhs, data, true);
     IntegratorState next{predicted_u + (h * h / 4) * next_acceleration,
                          predicted_v + (h / 2) * next_acceleration};
-    acceleration_ = std::move(next_acceleration);
+    trial_acceleration_ = std::move(next_acceleration);
+    pending_ = true;
     return next;
   }
 };

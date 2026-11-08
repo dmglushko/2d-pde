@@ -9,15 +9,24 @@
 // Contract checked by evolve(): steps have consecutive indices starting at 1,
 // strictly increasing finite stamps no later than TimeOptions::end, a finite
 // positive h, and the last step ends exactly at TimeOptions::end. `h` is what
-// the integrator uses; it may differ from the stamp difference by rounding
-// (TimeGrid computes stamps from the origin).
+// the integrator uses; it may differ from the stamp difference only by
+// rounding (TimeGrid computes stamps from the origin), within the bound of
+// step_size_consistent() below.
 //
-// Steps are not rejected or retried yet: accepted() only observes. A
-// controller that needs to reject steps will need integrators that can
-// restore their internal state, which is a separate change.
+// Trial, accept, reject: every step is first a trial. judge() sees the
+// trial state and may reject it; the driver then discards it (the
+// integrator's reject(), no frame, no observer call, counted in
+// EvolutionTimings::rejected_steps) and calls next() again, which proposes
+// the retry: the same index from the same previous stamp, typically with a
+// smaller h. An accepted trial is committed and reported to accepted().
+// Rejection needs a transactional integrator (TimeIntegrator::transactional).
+// Controllers must terminate: the driver does not cap retries.
 #include "fem/time_grid.hpp"
 #include "fem/time_integration.hpp"
+#include <algorithm>
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <locale>
 #include <memory>
 #include <optional>
@@ -25,8 +34,30 @@
 #include <string>
 
 namespace pde2d::fem {
-// What the driver reports after accepting one step: the state before and
-// after it (after Dirichlet values were imposed).
+// The rounding bound between a step's h and its stamp difference:
+//
+//   |h - (time - previous)| <= 32 eps (max(|time|, |previous|, end - start) +
+//   h)
+//
+// with eps the double machine epsilon. It covers stamps computed from the
+// origin and TimeGrid's snapping of the final step (at most 8 eps times the
+// interval length); a controller that adds h to the previous stamp is well
+// inside it. evolve() rejects steps outside it with std::invalid_argument.
+inline bool step_size_consistent(const TimeStep &step, double previous,
+                                 double start, double end) {
+  const double scale = std::max({std::abs(step.time), std::abs(previous),
+                                 std::abs(end - start)}) +
+                       step.h;
+  return std::abs(step.h - (step.time - previous)) <=
+         32 * std::numeric_limits<double>::epsilon() * scale;
+}
+
+// A controller's judgement of one trial step.
+enum class StepVerdict { Accept, Reject };
+
+// What the driver shows the controller for one step: the state before it
+// and the trial (or accepted) state after it, after Dirichlet values were
+// imposed.
 struct StepOutcome {
   const TimeStep &step;
   const IntegratorState &previous;
@@ -41,6 +72,9 @@ public:
   virtual std::string name() const = 0;
   // The next step, or nothing once the evolution has reached its end.
   virtual std::optional<TimeStep> next() = 0;
+  // Judge one trial. Reject to discard it; the next call to next() then
+  // proposes the retry. The default accepts every trial.
+  virtual StepVerdict judge(const StepOutcome &) { return StepVerdict::Accept; }
   // Called once per accepted step, before the next call to next().
   virtual void accepted(const StepOutcome &) {}
 };
@@ -52,12 +86,14 @@ class UniformStepController final : public StepController {
 public:
   UniformStepController(double start, double end, double step)
       : grid_(start, end, step) {}
-  std::string name() const override {
+  // The name of a uniform controller with this step, without building it.
+  static std::string describe(double step) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "Uniform(step=" << grid_.step() << ')';
+    out << "Uniform(step=" << step << ')';
     return out.str();
   }
+  std::string name() const override { return describe(grid_.step()); }
   std::optional<TimeStep> next() override { return grid_.next(); }
 };
 

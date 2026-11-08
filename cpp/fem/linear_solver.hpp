@@ -4,6 +4,7 @@
 //   constrain(A, b, dirichlet)        Dirichlet lifting
 //   PreparedLinearSolver(A, options)  validation, rank check, backend setup
 //   prepared.solve(b)                 backend solve + true-residual check
+//   prepared.solve(b, guess)          same, starting from an initial guess
 //
 // A backend (LinearSolverBackend) owns only the matrix-dependent work of one
 // method: factorization or preconditioner setup, and the solve itself.
@@ -64,6 +65,22 @@ struct SolverOptions {
   bool operator==(const SolverOptions &) const = default;
 };
 
+// What a solve did with an initial guess: none was given, the backend
+// started from it (iterative backends), or the backend cannot use one and
+// ignored it (direct factorizations such as SparseLU).
+enum class InitialGuess { None, Used, Ignored };
+inline const char *initial_guess_name(InitialGuess guess) {
+  switch (guess) {
+  case InitialGuess::None:
+    return "None";
+  case InitialGuess::Used:
+    return "Used";
+  case InitialGuess::Ignored:
+    return "Ignored";
+  }
+  return "Invalid";
+}
+
 struct SolverReport {
   bool converged = false;
   int iterations = 0;
@@ -73,6 +90,7 @@ struct SolverReport {
   SolverTimings timings;
   // The choices that produced this solve (solver_decisions()).
   std::vector<Decision> decisions{};
+  InitialGuess initial_guess = InitialGuess::None;
 };
 struct LinearSolution {
   Vector values;
@@ -86,6 +104,8 @@ struct BackendSolution {
   // Nonempty when the backend itself failed. The message is reported as is
   // and the true residual is not checked.
   std::string failure{};
+  // Set by solve_with_guess when the guess was actually the starting point.
+  bool used_guess = false;
 };
 
 // The method-specific part of a prepared linear solver, for one matrix.
@@ -104,6 +124,18 @@ public:
   // for b = 0). Calls are sequential.
   virtual BackendSolution solve(const Vector &rhs,
                                 double relative_tolerance) = 0;
+  // Solve starting from `guess` (finite, one entry per row). Iterative
+  // backends override this and set used_guess. The default ignores the
+  // guess, so direct backends need not override it; the report then says
+  // InitialGuess::Ignored.
+  virtual BackendSolution solve_with_guess(const Vector &rhs,
+                                           double relative_tolerance,
+                                           const Vector &guess) {
+    (void)guess;
+    auto result = solve(rhs, relative_tolerance);
+    result.used_guess = false;
+    return result;
+  }
 };
 
 // Creates backends; held by SolverOptions::backend.
@@ -169,6 +201,14 @@ public:
     solver_.setTolerance(tolerance);
     BackendSolution result{solver_.solve(rhs)};
     result.iterations = static_cast<int>(solver_.iterations());
+    return result;
+  }
+  BackendSolution solve_with_guess(const Vector &rhs, double tolerance,
+                                   const Vector &guess) override {
+    solver_.setTolerance(tolerance);
+    BackendSolution result{solver_.solveWithGuess(rhs, guess)};
+    result.iterations = static_cast<int>(solver_.iterations());
+    result.used_guess = true;
     return result;
   }
 };
@@ -245,6 +285,10 @@ public:
   BackendSolution solve(const Vector &rhs, double tolerance) override {
     return iterative_->solve(rhs, tolerance);
   }
+  BackendSolution solve_with_guess(const Vector &rhs, double tolerance,
+                                   const Vector &guess) override {
+    return iterative_->solve_with_guess(rhs, tolerance, guess);
+  }
 };
 
 class GmresBackend final : public LinearSolverBackend {
@@ -271,6 +315,10 @@ public:
   }
   BackendSolution solve(const Vector &rhs, double tolerance) override {
     return iterative_->solve(rhs, tolerance);
+  }
+  BackendSolution solve_with_guess(const Vector &rhs, double tolerance,
+                                   const Vector &guess) override {
+    return iterative_->solve_with_guess(rhs, tolerance, guess);
   }
 };
 
@@ -490,10 +538,20 @@ public:
     }
     return true;
   }
-  LinearSolution solve(const Vector &b) {
+  LinearSolution solve(const Vector &b) { return solve_from(b, nullptr); }
+  // Start from `guess` (one finite entry per row). Iterative backends use it;
+  // direct ones ignore it (SolverReport::initial_guess says which).
+  LinearSolution solve(const Vector &b, const Vector &guess) {
+    return solve_from(b, &guess);
+  }
+
+private:
+  LinearSolution solve_from(const Vector &b, const Vector *guess) {
     const auto started = timing::Clock::now();
     if (b.size() != matrix_.rows() || !b.allFinite())
       throw std::invalid_argument("Invalid linear RHS");
+    if (guess && (guess->size() != matrix_.rows() || !guess->allFinite()))
+      throw std::invalid_argument("Invalid initial guess");
     LinearSolution result{Vector::Zero(b.size()), {}};
     auto &r = result.report;
     r.decisions = solver_decisions(options_);
@@ -514,7 +572,11 @@ public:
         std::max(options_.absolute_tolerance, options_.relative_tolerance * bn);
     const double tolerance = bn > 0 ? target / bn : options_.relative_tolerance;
     auto phase = timing::Clock::now();
-    auto solved = backend_->solve(b, tolerance);
+    auto solved = guess ? backend_->solve_with_guess(b, tolerance, *guess)
+                        : backend_->solve(b, tolerance);
+    if (guess)
+      r.initial_guess =
+          solved.used_guess ? InitialGuess::Used : InitialGuess::Ignored;
     result.values = std::move(solved.values);
     r.iterations = solved.iterations;
     r.timings.solve_seconds = timing::seconds_since(phase);
@@ -537,15 +599,28 @@ public:
     return finish();
   }
 };
+namespace solver_detail {
 inline LinearSolution solve_linear(const SparseMatrix &input, const Vector &b,
-                                   const SolverOptions &o = {}) {
+                                   const SolverOptions &o,
+                                   const Vector *guess) {
   const auto started = timing::Clock::now();
-  solver_detail::validate(o);
-  solver_detail::validate(input, b);
+  validate(o);
+  validate(input, b);
   PreparedLinearSolver prepared(input, o);
-  auto result = prepared.solve(b);
+  auto result = guess ? prepared.solve(b, *guess) : prepared.solve(b);
   result.report.timings += prepared.preparation_timings();
   result.report.timings.total_seconds = timing::seconds_since(started);
   return result;
+}
+} // namespace solver_detail
+inline LinearSolution solve_linear(const SparseMatrix &input, const Vector &b,
+                                   const SolverOptions &o = {}) {
+  return solver_detail::solve_linear(input, b, o, nullptr);
+}
+// Start an iterative backend from `guess`; direct backends ignore it.
+inline LinearSolution solve_linear(const SparseMatrix &input, const Vector &b,
+                                   const SolverOptions &o,
+                                   const Vector &guess) {
+  return solver_detail::solve_linear(input, b, o, &guess);
 }
 } // namespace pde2d::fem
