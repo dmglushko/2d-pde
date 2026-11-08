@@ -3,7 +3,8 @@
 C++23 header-only library for 2D geometry, triangle meshing and scalar P1
 finite elements, plus JavaScript/Python tools that read its files. Read
 [docs/architecture.md](docs/architecture.md) first for the layer diagram and
-data flow.
+data flow, and [docs/vision.md](docs/vision.md) for where the project is
+heading and which directions to keep open.
 
 ## Where things are
 
@@ -88,9 +89,9 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
 
 `docs/showcase/*`, `docs/fem/showcase.html`, `docs/fem/long-waves.html`,
 `docs/fem/long-waves-timings.json`, `docs/performance/*.json|html`,
-`examples/mesh_viewer/example_mesh.js`, `pde_aware_fem_guide.pdf`. The
-commands are in the README next to each artifact. Files in `docs/archive/`
-are historical snapshots: don't update them to match current code.
+`examples/mesh_viewer/example_mesh.js`. The commands are in the README next
+to each artifact. Files in `docs/archive/` are historical snapshots: don't
+update them to match current code.
 
 ## Before finishing a change
 

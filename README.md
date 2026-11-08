@@ -77,6 +77,7 @@ node tools/render_solutions.mjs build/fem-showcase.json docs/fem/showcase.html
 
 ## Project map
 
+- [Vision: scope and direction of the project](docs/vision.md)
 - [Architecture: layers, data flow, build configurations](docs/architecture.md)
   and the [agent/contributor guide](AGENTS.md)
 - [Geometry, free-function meshing, region editing, and I/O](cpp/discretization/README.md)
@@ -89,7 +90,6 @@ node tools/render_solutions.mjs build/fem-showcase.json docs/fem/showcase.html
 - [Viewer instructions](tools/mesh_viewer/README.md)
 - [Archived dated reports](docs/archive/), including the
   [first audit](docs/archive/audit-2026-10-23.md), which predates the current API
-- Broader background: [FEM guide PDF](pde_aware_fem_guide.pdf) and [LaTeX source](pde_aware_fem_guide.tex)
 
 The mesher accepts one simple outline without holes. CDT size refinement uses
 longest-edge midpoint insertion, initial global legalization and local updates

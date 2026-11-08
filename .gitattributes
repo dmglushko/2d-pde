@@ -11,7 +11,6 @@ docs/fem/long-waves-timings.json linguist-generated
 docs/performance/*.json linguist-generated
 docs/performance/*.html linguist-generated
 examples/mesh_viewer/example_mesh.js linguist-generated
-pde_aware_fem_guide.pdf linguist-generated
 
 # Dated historical reports.
 docs/archive/** linguist-documentation
