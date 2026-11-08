@@ -47,12 +47,14 @@ struct DirichletData {
   PreparedDerivative value, first_derivative, second_derivative;
   // Derivative of time order 0, 1 or 2 (validated by the caller).
   const PreparedDerivative &derivative(int order) const {
-    return order == 0 ? value : order == 1 ? first_derivative
-                                           : second_derivative;
+    return order == 0   ? value
+           : order == 1 ? first_derivative
+                        : second_derivative;
   }
   PreparedDerivative &derivative(int order) {
-    return order == 0 ? value : order == 1 ? first_derivative
-                                           : second_derivative;
+    return order == 0   ? value
+           : order == 1 ? first_derivative
+                        : second_derivative;
   }
   template <class F> void for_each(F &&f) const {
     f(value.evaluator);
@@ -146,8 +148,8 @@ public:
   }
 
   // Classify and prepare every boundary edge (after set_rule()).
-  void prepare(const discretization::TriangleMesh &mesh,
-               const Problem &problem, const OppositeVertices &opposite) {
+  void prepare(const discretization::TriangleMesh &mesh, const Problem &problem,
+               const OppositeVertices &opposite) {
     const auto assigned = region_conditions(mesh, problem);
     for (std::size_t edge = 0; edge < mesh.boundary_edges.size(); ++edge) {
       const auto condition = assigned.find(mesh.boundary_tags[edge]);

@@ -18,7 +18,8 @@ namespace {
 using namespace pde2d::fem;
 
 // The theta method with endpoint mass M1(t+h):
-// (M1 + theta h K1) u1 = M1 u0 - (1-theta) h K0 u0 + h (theta F1 + (1-theta) F0).
+// (M1 + theta h K1) u1 = M1 u0 - (1-theta) h K0 u0 + h (theta F1 + (1-theta)
+// F0).
 class Theta final : public TimeIntegrator {
   double theta_;
 

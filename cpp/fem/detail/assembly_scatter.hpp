@@ -22,7 +22,8 @@ inline AssembledSystem scatter(std::size_t node_count, double time,
                                const std::vector<EdgeResult> &boundary,
                                double boundary_tolerance) {
   constexpr std::size_t element_nodes = LocalBlock::nodes;
-  constexpr std::size_t edge_nodes = std::tuple_size_v<decltype(PreparedEdge::nodes)>;
+  constexpr std::size_t edge_nodes =
+      std::tuple_size_v<decltype(PreparedEdge::nodes)>;
   const auto count = static_cast<Eigen::Index>(node_count);
   AssembledSystem result{SparseMatrix(count, count),
                          SparseMatrix(count, count),

@@ -64,8 +64,8 @@ void preconditioners() {
           "Default preconditioner changed");
     pde2d_test::near_vector(diagonal.values, reference, 1e-8);
     o.preconditioner = Preconditioner::Identity;
-    pde2d_test::near_vector(solve_stationary(mesh, p, {}, o).values,
-                            reference, 1e-8);
+    pde2d_test::near_vector(solve_stationary(mesh, p, {}, o).values, reference,
+                            1e-8);
     o.preconditioner = method == LinearSolver::GMRES
                            ? Preconditioner::IncompleteLUT
                            : Preconditioner::IncompleteCholesky;
@@ -119,8 +119,8 @@ void user_backend() {
   options.solver = o;
   *preparations = 0;
   const auto evolution = evolve(mesh, heat, {x - y}, options);
-  check(*preparations == 1 && evolution.timings.solver_reuses ==
-                                  evolution.timings.time_steps - 1,
+  check(*preparations == 1 &&
+            evolution.timings.solver_reuses == evolution.timings.time_steps - 1,
         "User backend not reused");
   TimeOptions builtin = options;
   builtin.solver = {};
@@ -175,10 +175,9 @@ void backend_failures() {
   const Vector b = Vector::Ones(2);
   auto fixed = [](std::string failure, Eigen::Index size) {
     SolverOptions o;
-    o.backend = make_linear_solver_backend(
-        "Fixed", [=](const SolverOptions &) {
-          return std::make_unique<Fixed>(failure, size);
-        });
+    o.backend = make_linear_solver_backend("Fixed", [=](const SolverOptions &) {
+      return std::make_unique<Fixed>(failure, size);
+    });
     return o;
   };
   const auto wrong = solve_linear(a, b, fixed("", 2));
@@ -186,16 +185,15 @@ void backend_failures() {
             wrong.report.message.find("did not converge") != std::string::npos,
         "True residual check skipped for a user backend");
   const auto failed = solve_linear(a, b, fixed("backend sentinel", 2));
-  check(!failed.report.converged &&
-            failed.report.message == "backend sentinel",
+  check(!failed.report.converged && failed.report.message == "backend sentinel",
         "User backend failure lost");
-  expect_throws<std::runtime_error>(
-      [&] { solve_linear(a, b, fixed("", 3)); }, "wrong size");
+  expect_throws<std::runtime_error>([&] { solve_linear(a, b, fixed("", 3)); },
+                                    "wrong size");
   expect_throws<std::invalid_argument>(
       [] { make_linear_solver_backend("None", nullptr); }, "needs a creator");
   SolverOptions empty;
-  empty.backend = make_linear_solver_backend(
-      "Empty", [](const SolverOptions &) {
+  empty.backend =
+      make_linear_solver_backend("Empty", [](const SolverOptions &) {
         return std::unique_ptr<LinearSolverBackend>();
       });
   expect_throws<std::invalid_argument>([&] { solve_linear(a, b, empty); },

@@ -196,8 +196,7 @@ public:
   std::string prepare(const SparseMatrix &matrix,
                       const SolverOptions &) override {
     lu_.compute(matrix);
-    return lu_.info() == Eigen::Success ? ""
-                                        : "SparseLU factorization failed";
+    return lu_.info() == Eigen::Success ? "" : "SparseLU factorization failed";
   }
   BackendSolution solve(const Vector &rhs, double) override {
     BackendSolution result{lu_.solve(rhs), 1};
@@ -317,8 +316,7 @@ inline void validate(const SolverOptions &o) {
       using Backend = typename decltype(backend)::type;
       if (!Backend::supports(o.preconditioner))
         throw std::invalid_argument(
-            std::string("Preconditioner is not supported by ") +
-            Backend::name);
+            std::string("Preconditioner is not supported by ") + Backend::name);
     });
 }
 inline std::unique_ptr<LinearSolverBackend>
@@ -331,8 +329,7 @@ make_backend(const SolverOptions &o) {
     return backend;
   }
   return with_builtin(
-      o.method,
-      [&](auto backend) -> std::unique_ptr<LinearSolverBackend> {
+      o.method, [&](auto backend) -> std::unique_ptr<LinearSolverBackend> {
         using Backend = typename decltype(backend)::type;
         return std::make_unique<Backend>(o.preconditioner);
       });

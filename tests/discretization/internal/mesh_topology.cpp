@@ -100,5 +100,6 @@ void queue_keys() {
 }
 } // namespace
 int main() {
-  return pde2d_test::run({{"box_index", box_index}, {"queue_keys", queue_keys}});
+  return pde2d_test::run(
+      {{"box_index", box_index}, {"queue_keys", queue_keys}});
 }
