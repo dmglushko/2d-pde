@@ -34,8 +34,10 @@ returns `MeshResult`: `.mesh`, optional `.boundary_context`, `.options`, and
 `.report`. Include `triangulate.hpp` for the meshing entry points. Its private
 helpers (`mesh_detail`) live in `detail/`: `ear_clipping.hpp` (seed
 triangulation), `cdt_topology.hpp` (incremental constrained Delaunay topology,
-flips, splits, longest-edge queue, `cdt_verified`) and `curved_boundary.hpp`
-(splitting source intervals and rebuilding on analytical curves).
+flips, splits, priority queue of edges failing the size criterion,
+`cdt_verified`), `curved_boundary.hpp` (splitting source intervals and
+rebuilding on analytical curves) and `refinement_policy.hpp` (size criteria
+and one policy per boundary treatment, see [EXTENDING](EXTENDING.md)).
 
 `discretize_boundary(geometry, BoundaryOptions = {}, bool preserve_regions = true)`
 returns `DiscretizedBoundary { boundary, context }`. Analytical source curves and
@@ -50,7 +52,8 @@ A raw `Boundary` has no analytical context.
 | `boundary.preserve_corners` | `false` | Protect geometric corners during sampling. Region junctions remain protected when regions are preserved. |
 | `boundary.max_edge_length` | `1.0` | Initial analytical boundary length bound. |
 | `boundary.max_curve_deviation` | `0.02` | Initial absolute curve-to-chord deviation bound. |
-| `refinement.max_edge_length` | `0.0` | Maximum triangle-edge length target; zero disables refinement. |
+| `refinement.max_edge_length` | `0.0` | Maximum triangle-edge length target; zero disables it. |
+| `refinement.size_field` | empty | Optional `SizeField` (`double(Point2)`): a local length target. Not serialized. |
 | `refinement.max_steps` | `10000` | Maximum midpoint insertion steps; zero allows none. |
 
 Length/deviation constraints must be finite and nonnegative; zero disables each
@@ -59,11 +62,33 @@ zero. `max_steps` is nonnegative. Boundary tolerances control initial sampling;
 the refinement target controls all triangle edges.
 
 Ear clipping triangulates the sampled polygon without interior refinement.
-Selecting ear clipping with a positive interior target throws. CDT starts with
-ear clipping and fully legalizes eligible interior edges under the constrained
-Delaunay criterion. Size refinement inserts a longest-edge midpoint and fully
-legalizes again. It is not classical circumcenter quality refinement: there is
-no minimum-angle control or guarantee, smoothing, or local size field.
+Selecting ear clipping with a positive interior target or a size field throws.
+CDT starts with ear clipping and fully legalizes eligible interior edges under
+the constrained Delaunay criterion. Size refinement inserts the midpoint of
+the edge that fails its target worst and legalizes again. It is not classical
+circumcenter quality refinement: there is no minimum-angle control or
+guarantee, and no smoothing.
+
+### Graded meshes: size fields
+
+`refinement.size_field` gives a spatially varying target. An edge `(a, b)`
+meets it when `|b - a| <= min(h(a), h((a+b)/2), h(b))` (times `1 + 1e-12`);
+with a positive `max_edge_length` as well, the smaller target applies.
+Without a field, edges are ranked by length; with one, by length divided by
+the local target (ties by length), so a constant field gives exactly the
+scalar result. Field values must be finite and positive, otherwise
+refinement throws `Size field must return a finite positive length`.
+`report.size_satisfied` states whether every edge met its local target; a
+Fixed boundary edge that exceeds it returns `false` with "Fixed boundary edge
+exceeds the local size target". The field is a request-time option:
+`export_mesh` writes only the scalar options, so an imported result has an
+empty field (see [the format](../../docs/formats/pde2d-mesh.md)).
+
+```cpp
+options.boundary_treatment = BoundaryTreatment::RefineOnCurves;
+options.refinement.size_field = [](Point2 p) { return 0.05 + 0.3 * p.x; };
+auto graded = generate_mesh(shape, options);
+```
 
 | Boundary treatment | During size refinement |
 | --- | --- |
@@ -77,6 +102,43 @@ carries forward boundary context; pass the desired options explicitly.
 `subdivide_mesh(TriangleMesh, MeshOptions = {}, optional<BoundaryContext> = nullopt)`
 performs straight polygon subdivision without Delaunay legalization. Curve mode
 is unsupported for subdivision.
+
+### Marked refinement
+
+`refine_mesh(MeshResult, std::vector<std::size_t> marked, MeshOptions)`
+refines the marked triangles (indices into `result.mesh.elements`, for
+example from `pde2d::fem::mark_bulk`). Each marked triangle selects its
+longest edge and the edge is bisected with the CDT machinery, so the
+neighbour across it is split too and the mesh stays conforming and Delaunay.
+The boundary treatment decides boundary edges: `Fixed` selects the longest
+interior edge instead (a triangle with only boundary edges is unrefinable),
+`SplitPolygonEdges` splits the chord, `RefineOnCurves` puts the new vertex on
+the source curve. Region tags and the boundary context carry over. Interior
+selections are processed before boundary ones; a selected edge that an
+earlier insertion flips away (or a curved rebuild retriangulates) is
+*absorbed*, because its triangle already changed. A size target in the
+options is enforced afterwards. `report.marked` (`MarkedRefinementReport`,
+not serialized) counts marked triangles, selected, bisected and absorbed
+edges and unrefinable triangles; `report.size_satisfied` is false if a
+triangle was unrefinable, the budget ran out or the size target was missed.
+The input should be a constrained Delaunay mesh (as `generate_mesh` and
+`refine_mesh` return); otherwise the initial legalization may absorb
+selections.
+
+### Point location
+
+`point_location.hpp`: `PointLocator(mesh, PointLocationOptions{})` builds a
+box index over the triangles; `locate(p)` returns
+`std::optional<PointLocation>` with `element`, `barycentric` (relative to
+`mesh.elements[element]` in vertex order), `inside` and `distance`.
+Containment uses exact predicates, with no tolerance; points on shared
+edges or vertices go to the lowest-index triangle. Points outside the closed
+mesh are accepted only within `max_outside_distance` (default 0) of the
+boundary: they get the triangle owning the nearest boundary edge and its
+unclamped barycentric coordinates (linear extrapolation, exact for affine
+fields), `inside = false` and the distance. Farther points give
+`std::nullopt`. `locate_point(mesh, p, options)` is the one-shot form. The
+FEM module's `transfer_field` builds on it.
 
 Always inspect `report.size_satisfied` and `report.message`. A fixed-boundary
 conflict returns `false` with an explanation. Exhausting `max_steps` returns a

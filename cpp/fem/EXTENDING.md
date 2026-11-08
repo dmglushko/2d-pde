@@ -90,6 +90,34 @@ lists. An automatic chooser (not implemented yet) must use
 `DecisionSource::Automatic`, state its basis (for example the analysis
 property and its evidence) and remain overridable by an explicit option.
 
+## An error estimator
+
+`estimation.hpp` defines `ErrorEstimator`: `name()` and
+`estimate(mesh, problem, solution, time)` returning `ErrorEstimate`
+(`indicators`, one nonnegative value per element in element order, and
+`global`, conventionally `sqrt(sum eta_T^2)`). Pass it to
+`estimate_error(..., estimator)`, which checks the result's size and
+finiteness ("returned invalid indicators"). No library change is needed.
+
+- State what norm the estimate measures and what it assumes, in the class
+  comment (the built-in ZZ estimator: H1 seminorm, smooth solutions,
+  ignores problem data).
+- Parallel loops write per-element slots and accumulate serially in element
+  order (see `GradientRecoveryEstimator`), so serial and OpenMP results stay
+  bit-identical. Prepare symbolic data (for a residual estimator: the source
+  and coefficients as `Evaluator`s) before the loop.
+- A residual estimator needs element residuals and flux jumps across
+  interior edges; reuse `weak_form_coefficients`, `p1::triangle_geometry`
+  and the quadrature rules rather than re-deriving them.
+- Tests (`tests/fem/estimation.cpp`): effectivity against the exact error
+  of a manufactured solution over several refinements, concentration of the
+  indicators where the exact element errors are largest, and serial/OpenMP
+  equality.
+
+Marking strategies are plain functions from indicators to ascending element
+indices (`mark_bulk`); the result feeds
+`discretization::refine_mesh(result, marked, options)`.
+
 ## A linear solver backend or preconditioner
 
 `linear_solver.hpp` splits a solve into a shared driver

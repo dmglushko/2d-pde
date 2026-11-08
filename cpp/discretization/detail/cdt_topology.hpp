@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <deque>
+#include <functional>
 #include <map>
 #include <optional>
 #include <queue>
@@ -33,6 +34,41 @@ inline bool in_triangle(Point2 p, Point2 a, Point2 b, Point2 c) {
          predicates::orient(c, a, p) >= 0;
 }
 
+// Refinement priority of an edge that fails a size criterion: higher tiers
+// go first, then larger values, then longer edges; equal priorities go to
+// the first lexicographic edge. The constant target uses {0, length,
+// length}. A size field uses {0, length / target, length}: for a constant
+// field the length tie-break restores exactly the constant-target order,
+// even where the division rounds two lengths to one ratio.
+struct SizePriority {
+  int tier = 0;
+  double value = 0;
+  double length = 0;
+  bool operator==(const SizePriority &) const = default;
+  bool operator<(const SizePriority &b) const {
+    if (tier != b.tier)
+      return tier < b.tier;
+    if (value != b.value)
+      return value < b.value;
+    return length < b.length;
+  }
+};
+// Every size criterion (constant target, size field, marked edges) plugs into
+// the refinement loop through this one interface: nullopt means the edge
+// between the two points meets it, otherwise its splitting priority.
+using SizeCriterion =
+    std::function<std::optional<SizePriority>(Point2, Point2)>;
+inline SizeCriterion constant_size_criterion(double h) {
+  if (!(h > 0))
+    return {};
+  return [h](Point2 a, Point2 b) -> std::optional<SizePriority> {
+    double d = distance(a, b);
+    if (d > h * (1 + 1e-12))
+      return SizePriority{0, d, d};
+    return std::nullopt;
+  };
+}
+
 class Topology {
 public:
   TriangleMesh &mesh;
@@ -42,34 +78,36 @@ public:
   std::map<Edge, std::size_t> generations;
   std::size_t generation = 0;
   struct SizeEntry {
-    double length;
+    SizePriority priority;
     Edge edge;
     std::size_t generation;
     bool operator<(const SizeEntry &b) const {
-      if (length != b.length)
-        return length < b.length;
-      return edge > b.edge; // first lexicographic edge wins equal lengths
+      if (priority != b.priority)
+        return priority < b.priority;
+      return edge > b.edge; // first lexicographic edge wins equal priorities
     }
   };
   std::priority_queue<SizeEntry> sizes;
-  double target = 0;
+  SizeCriterion criterion;
   std::set<std::pair<double, double>> coordinates;
   void queue_size(Edge e) {
     auto g = ++generation;
     generations[e] = g;
-    if (target > 0) {
-      double d = distance(mesh.nodes[e.first], mesh.nodes[e.second]);
-      if (d > target * (1 + 1e-12))
-        sizes.push({d, e, g});
-    }
+    if (criterion)
+      if (auto p = criterion(mesh.nodes[e.first], mesh.nodes[e.second]))
+        sizes.push({*p, e, g});
   }
-  void initialize_size(double h) {
-    target = h;
+  void initialize_size(SizeCriterion c) {
+    criterion = std::move(c);
     sizes = {};
     for (const auto &[e, own] : owners) {
       (void)own;
       queue_size(e);
     }
+  }
+  // Constant target h; zero or negative disables size queueing.
+  void initialize_size(double h) {
+    initialize_size(constant_size_criterion(h));
   }
   std::optional<Edge> longest() {
     while (!sizes.empty()) {

@@ -3,8 +3,8 @@
 Curve mathematics lives in `curve_segment.hpp`. Shared length integration and
 length-fraction inversion live in `curve_length.hpp`; meshing policy remains in
 `boundary_discretization.hpp` and `triangulate.hpp` (with its private
-`detail/ear_clipping.hpp`, `detail/cdt_topology.hpp` and
-`detail/curved_boundary.hpp`). SVG and PDE2D_MESH adapters
+`detail/ear_clipping.hpp`, `detail/cdt_topology.hpp`,
+`detail/curved_boundary.hpp` and `detail/refinement_policy.hpp`). SVG and PDE2D_MESH adapters
 remain separate from the mathematical curve objects. The concrete types remain
 aggregates, so existing brace initialization continues to work.
 
@@ -93,5 +93,39 @@ are not valid requests to `generate_mesh`.
 When adding an algorithm, implement its dispatch and execution compatibility in
 `triangulate.hpp` (topology operations belong in `detail/cdt_topology.hpp`,
 curve-aware boundary updates in `detail/curved_boundary.hpp`), update both format readers and UI choices, and add algorithm
-combination tests. With the current two algorithms and three boundary policies,
-this explicit dispatch is preferable to a polymorphic strategy hierarchy.
+combination tests.
+
+## Refinement: size criteria and boundary policies
+
+`triangulate.hpp` runs one generic loop, `refine_with<Policy>`: build the
+topology, legalize, ask the policy for a boundary conflict, then repeatedly
+split the highest-priority edge that fails the size criterion until none is
+left, the step budget runs out or midpoints stop resolving. Two seams plug
+into it, both in `detail/refinement_policy.hpp`:
+
+- **Size criteria.** A `SizeCriterion` maps an edge's endpoints to
+  `std::nullopt` (accepted) or a `SizePriority {tier, value, length}`
+  (higher first; ties go to the first lexicographic edge).
+  `RefinementCriterion` adds the Fixed-conflict message and an optional
+  `split_hook` called after every split. Built in: the constant target
+  (`{0, length, length}`, the historical order), a `SizeField`
+  (`{0, length / target, length}`) and marked edges (tiers 2 and 1, falling
+  back to the size criterion). A new criterion, for example an anisotropic
+  metric or a curvature-based target, is one more builder returning
+  `RefinementCriterion`; keep the constant-target path unchanged so existing
+  results stay bit-identical.
+- **Boundary policies.** One struct per `BoundaryTreatment`
+  (`FixedBoundary`, `SplitPolygonBoundary`, `CurveBoundary`) holds
+  everything that treatment decides: `validate` (required context),
+  `prepare` (curve mode first moves chord vertices onto the curves),
+  `conflict` (Fixed: a boundary edge failing the criterion makes the request
+  impossible) and `split_boundary`. `with_boundary_policy` is the only
+  dispatch. A new treatment needs a wire ID in `mesh_types.hpp`, its case in
+  `validBoundaryTreatment` and `with_boundary_policy`, the format readers and
+  viewer registry, and tests comparing it with the existing treatments.
+
+Request-time options such as the size field are not serialized
+(`docs/formats/pde2d-mesh.md`). A new option that cannot be written must be
+documented the same way rather than silently dropped. Tests:
+`tests/discretization/size_field.cpp` (graded meshes; constant field equals
+the scalar path bit for bit) and `marked_refinement.cpp`.

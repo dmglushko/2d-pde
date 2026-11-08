@@ -11,8 +11,8 @@ heading and which directions to keep open.
 | Path | Contents |
 | --- | --- |
 | `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
-| `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing, mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration and step control (`step_control.hpp`), problem analysis (`analysis.hpp`), decision records (`decision.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing (size fields, marked refinement; criteria and boundary policies in `detail/refinement_policy.hpp`), point location (`point_location.hpp`), mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
+| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration and step control (`step_control.hpp`), problem analysis (`analysis.hpp`), decision records (`decision.hpp`), error estimation and marking (`estimation.hpp`), field transfer between meshes (`transfer.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
 | `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
 | `examples/` | runnable programs (learning, meshing showcase, FEM showcase, long waves). Built as CTest smoke tests |
 | `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
@@ -80,6 +80,11 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   Newmark requires `velocity`.
 - `MeshResult::report` must be checked: meshing can return a mesh that misses
   its size target.
+- **Request-time options are not serialized:** `RefinementOptions::size_field`
+  and `MeshReport::marked` have no `.pde2d` record. Do not add one without a
+  format version (docs/formats/pde2d-mesh.md).
+- **Refinement determinism:** a constant size field must give the scalar
+  `max_edge_length` result bit for bit (`SizePriority` length tie-break).
 
 ## Tests
 

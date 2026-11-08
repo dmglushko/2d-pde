@@ -1,6 +1,7 @@
 #pragma once
 
 #include "curve_geometry.hpp"
+#include <functional>
 #include <optional>
 
 namespace pde2d::discretization {
@@ -18,10 +19,22 @@ struct BoundaryOptions {
   double max_curve_deviation = 0.02;
   bool preserve_corners = false;
 };
+// Local target edge length at a point, for spatially graded meshes. An edge
+// (a, b) meets the field when its length is at most
+// min(h(a), h((a+b)/2), h(b)); values must be finite and positive. A size
+// field is a request-time option: .pde2d files do not store it (a callable
+// cannot be serialized), so an imported result has an empty field.
+using SizeField = std::function<double(Point2)>;
 struct RefinementOptions {
-  double max_edge_length = 0.0; // Zero disables size refinement.
+  double max_edge_length = 0.0; // Zero disables the constant target.
   int max_steps = 10000;
+  // Optional graded target. With max_edge_length > 0 as well, each edge must
+  // meet both (the smaller target applies). Either one enables refinement.
+  SizeField size_field{};
 };
+inline bool size_refinement_requested(const RefinementOptions &o) {
+  return o.max_edge_length > 0 || static_cast<bool>(o.size_field);
+}
 struct MeshOptions {
   InteriorAlgorithm algorithm = InteriorAlgorithm::ConstrainedDelaunay;
   BoundaryTreatment boundary_treatment = BoundaryTreatment::Fixed;
@@ -79,11 +92,26 @@ struct BoundaryContext {
   // must remain on this polygon; its vertices are anchored to source curves.
   std::vector<Point2> polygon_snapshot;
 };
+// What refine_mesh(result, marked, options) did with the marked triangles.
+// Request-time detail: .pde2d files do not store it.
+struct MarkedRefinementReport {
+  std::size_t marked_elements = 0; // distinct marked triangles
+  std::size_t marked_edges = 0;    // distinct edges selected for bisection
+  std::size_t bisected_edges = 0;  // selected edges that were split
+  // Selected edges that an earlier insertion removed (a Delaunay flip or a
+  // curved-boundary rebuild) before their turn: their triangle was already
+  // changed by a nearby vertex.
+  std::size_t absorbed_edges = 0;
+  // Triangles with no edge the boundary treatment allows splitting (Fixed:
+  // every edge on the boundary).
+  std::size_t unrefinable_elements = 0;
+};
 struct MeshReport {
   bool size_satisfied = true;
   bool delaunay_verified = false;
   std::size_t refinement_steps = 0;
   std::string message;
+  std::optional<MarkedRefinementReport> marked{};
 };
 struct MeshResult {
   TriangleMesh mesh;

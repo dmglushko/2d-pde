@@ -66,6 +66,12 @@ END_RESULT
 `BoundaryTreatment` (0 fixed, 1 split polygon edges, 2 refine on curves) in
 `cpp/discretization/mesh_types.hpp`. **Never renumber them.**
 
+Request-time options are not stored: a `RefinementOptions::size_field` (a
+callable) and the `MeshReport::marked` summary of marked refinement have no
+record. An imported result has an empty size field; its `size_satisfied`
+refers to the request that produced it, and only the stored
+`refinement.max_edge_length` is re-checked on import.
+
 ## Curve kinds (`curve_io.hpp`)
 
 | Kind | Type | Parameters |

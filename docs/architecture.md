@@ -37,10 +37,25 @@ CurveGeometry ──discretize_boundary──▶ DiscretizedBoundary ──gener
                                                                                .report: guarantees met?
 MeshResult ──export_mesh/import_mesh_result──▶ .pde2d file   (docs/formats/pde2d-mesh.md)
 MeshResult ──refine_mesh──▶ MeshResult        (resumes from the stored boundary context)
+MeshResult + marked elements ──refine_mesh──▶ MeshResult   (report.marked: what was bisected)
+RefinementOptions: max_edge_length and/or size_field h(x,y)  (size field is request-time, not in files)
+TriangleMesh ──PointLocator──▶ element + barycentric        (outside rule: max_outside_distance)
 
 TriangleMesh + Problem ──PreparedAssembly──▶ AssembledSystem ──solve_stationary / evolve──▶ values, frames
 TriangleMesh + Problem ──analyze──▶ ProblemProperties   (each property: value + Evidence + reason)
+
+Adaptive loop (stationary):
+  solve_stationary ──▶ values ──estimate_error──▶ ErrorEstimate {indicators, global}
+     ──mark_bulk──▶ marked elements ──refine_mesh(result, marked)──▶ MeshResult
+     ──transfer_field(old mesh, values, new mesh)──▶ values on the new mesh ──▶ solve again
 ```
+
+Inside meshing, refinement is one generic loop (`refine_with`) with two
+seams in `detail/refinement_policy.hpp`: a size criterion (constant target,
+size field or marked edges, all as one `SizeCriterion`) and a boundary
+policy per `BoundaryTreatment`. Point location (`point_location.hpp`) is a
+discretization facility; field transfer and error estimation are FEM
+(`transfer.hpp`, `estimation.hpp`).
 
 `AssembledSystem` and the sparse aliases live in the element-independent
 `cpp/fem/system.hpp`; linear solvers (`linear_solver.hpp`) and time
@@ -107,7 +122,8 @@ The intended direction is in [vision.md](vision.md).
 
 
 - One simple outline without holes. CDT refinement has no minimum-angle
-  guarantee.
+  guarantee. Marked refinement only refines (no coarsening or node
+  movement), and the only built-in estimator is gradient recovery.
 - FEM is scalar, linear and P1. Extension points are in
   [cpp/fem/EXTENDING.md](../cpp/fem/EXTENDING.md) and
   [cpp/discretization/EXTENDING.md](../cpp/discretization/EXTENDING.md).

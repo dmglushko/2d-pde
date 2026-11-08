@@ -14,7 +14,7 @@ inline void nonnegative(double value, const char *name) {
 inline void validate_options(const MeshOptions &o) {
   validateMeshOptionValues(o);
   if (o.algorithm == InteriorAlgorithm::EarClipping &&
-      o.refinement.max_edge_length > 0)
+      size_refinement_requested(o.refinement))
     throw std::invalid_argument(
         "Ear clipping has no interior refinement; use constrained Delaunay or "
         "refine_mesh with subdivision");

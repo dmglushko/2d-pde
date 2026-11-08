@@ -35,6 +35,23 @@ evolve(mesh, problem, InitialConditions, opts)  evolution.hpp
 Evolution {frames, reports, timings, metadata.decisions}
    → write_report()                             report.hpp, timing.hpp, decision.hpp
 L2 / H1 errors against exact solutions          error_norms.hpp
+
+Adaptivity (stationary): solve → estimate → mark → refine → transfer
+   estimate_error → ErrorEstimate {indicators, global}   estimation.hpp
+   mark_bulk(indicators, θ) → element indices            estimation.hpp
+   discretization::refine_mesh(result, marked, options)  triangulate.hpp
+   transfer_field(old mesh, values, new mesh)            transfer.hpp
+```
+
+One adaptive iteration (see `tests/fem/adaptive_loop.cpp`):
+
+```cpp
+auto u = solve_stationary(result.mesh, problem).values;
+auto estimate = estimate_error(result.mesh, problem, u);
+auto marked = mark_bulk(estimate.indicators, 0.6);
+auto finer = discretization::refine_mesh(result, marked, result.options);
+auto start = transfer_field(result.mesh, u, finer.mesh,
+                            {.max_outside_distance = 0.02}); // curved domain
 ```
 
 `fem.hpp` includes everything. Parallel loops use `pde2d::parallel_for`
@@ -68,6 +85,8 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `analysis.hpp` | `analyze()` → `ProblemProperties` / `SystemProperties` with evidence | boundary_classification, weak_form, system, detail/assembly_* |
 | `report.hpp` | text summaries of solves, evolutions, decisions and analyses | evolution, analysis |
 | `error_norms.hpp` | prepared L2/H1 error norms (rejects normals) | system, quadrature |
+| `estimation.hpp` | `ErrorEstimator` interface, `GradientRecoveryEstimator` (ZZ, H1 seminorm), `estimate_error`, Dörfler `mark_bulk` | p1_element, problem, system |
+| `transfer.hpp` | `transfer_field`: P1 nodal field onto another mesh (point location + interpolation, documented outside rule) | discretization/point_location, system |
 
 ## Invariants
 
@@ -90,6 +109,9 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 - **Decisions are recorded.** Every choice that shapes a solve appears in
   `SolverReport::decisions` or `EvolutionMetadata::decisions`. Today all are
   user-selected; nothing selects solvers automatically yet.
+- **Estimators report, they do not decide.** `estimate_error` returns
+  indicators and a global value; marking and refinement are separate calls
+  the user (or a future automatic loop, recording a `Decision`) makes.
 - **Normals only on boundaries.** `nx`, `ny` are bound in boundary
   expressions; interior coefficients, interpolated and initial fields and
   exact solutions are checked with `require_symbols(..., field_symbols, ...)`.

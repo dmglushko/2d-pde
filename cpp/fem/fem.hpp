@@ -20,5 +20,7 @@
 #include "step_control.hpp"
 #include "evolution.hpp"
 #include "error_norms.hpp"
+#include "estimation.hpp"
+#include "transfer.hpp"
 #include "analysis.hpp"
 #include "report.hpp"
