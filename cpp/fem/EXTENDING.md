@@ -19,16 +19,76 @@ ignores `options.method`; reports and `EvolutionMetadata::method_name` use
    - `check()`: reject systems the scheme cannot integrate (e.g. nonzero
      second mass for a first-order scheme);
    - `start()`: optional start-up work (Newmark solves for the acceleration;
-     use `services.start_dirichlet(order)` for Dirichlet time derivatives);
+     use `services.start_dirichlet(DirichletDerivative::FirstDerivative)`
+     for Dirichlet time derivatives; an integer order 0..2 still works);
    - `advance()`: form the linear system(s) for one step and call
      `services.solve(matrix, rhs, constraints, true)`. Do not solve directly:
-     the driver supplies lifting, factorization reuse and accounting.
+     the driver supplies lifting, factorization reuse and accounting. A
+     multistage scheme gets the system at a stage time from
+     `services.assemble(time)`: same cached `PreparedAssembly`, counted in
+     `assembly_calls`. Do not build your own assembly.
+   - Return `u` and `v` with one finite entry per mesh node. `evolve()`
+     checks this after `start()` and `advance()` and throws
+     `std::runtime_error` otherwise.
 2. Only for a built-in scheme (in `time_integration.hpp`): add the enum value
    to `TimeMethod`, a case to `make_time_integrator` and a name in
    `time_method_name`.
 3. Tests (`tests/fem/`): a manufactured-solution convergence-rate test for
    the scheme's order, and an equivalence test that drives the integrator
    through an uncached reference driver (see the reusable-evolution test).
+
+## A step controller (adaptive time stepping)
+
+The step sequence is a strategy (`step_control.hpp`). Implement
+`StepController` and set `options.step_controller = [] { return
+std::make_unique<MyController>(...); };`; `evolve()` then ignores
+`options.step`. No change to `evolution.hpp` is needed.
+
+- `next()` returns `TimeStep{index, time, h}` or nothing at the end. The
+  driver checks: consecutive indices from 1, strictly increasing finite
+  stamps not after `TimeOptions::end`, finite `h > 0`, and the last stamp is
+  exactly `end` (otherwise `std::invalid_argument`).
+- `accepted(StepOutcome)` sees each accepted step with the states before
+  and after it, which is where an error estimator would look. Steps cannot
+  be rejected yet: that needs integrators that can restore their internal
+  state (Newmark keeps the acceleration). Add that as a separate seam.
+- `name()` appears in `EvolutionMetadata::decisions` ("time steps").
+- Tests: a non-uniform sequence against a hand-computed recurrence on an
+  exact semidiscrete solution, and the default path bit-identical (see
+  `tests/fem/step_control.cpp`). A changing `h` changes the step matrix, so
+  assert factorization counts as relations on the runs of equal `h`.
+
+## An analysis property
+
+`analysis.hpp` reports properties of a `Problem` as `Property<T>` (value,
+`Evidence`, reason).
+
+1. Add the field to `ProblemProperties` (or `SystemProperties` for a
+   judgement on an assembled matrix) and fill it in `interior_properties`,
+   the region accumulator or `analyze(const AssembledSystem &)`.
+2. Evidence: `Proven` only for exact symbolic facts (constants, symbolic
+   zeros, classification), `Sampled` for checks at quadrature points, edge
+   samples, sample times or one assembled matrix, `Unknown` otherwise.
+   Always say why in `reason`.
+3. If the solve already makes the same judgement, move it into one public
+   function and call it from both places (see `weak_time_dependence`,
+   `divisor_keeps_strict_sign`, `time_order`, `numerically_symmetric`).
+   Never copy the check.
+4. Print it in `write_report(std::ostream &, const ProblemProperties &)`.
+5. Tests (`tests/fem/analysis.cpp`): a problem whose property is known by
+   construction, and the consequence the solver draws from it (singular
+   solve, CG rejection, assembly exception, caching counters).
+
+## A decision record
+
+`Decision` (`decision.hpp`) records subject, choice, basis, evidence and
+source. User choices use `user_decision(subject, choice, "Options::field")`.
+Add a new one where the choice is applied: solver choices in
+`solver_decisions()` (copied into every `SolverReport`), evolution choices
+in `evolve()` (`EvolutionMetadata::decisions`). `write_report` prints both
+lists. An automatic chooser (not implemented yet) must use
+`DecisionSource::Automatic`, state its basis (for example the analysis
+property and its evidence) and remain overridable by an explicit option.
 
 ## A linear solver backend or preconditioner
 
@@ -74,17 +134,29 @@ The weak form is linear in the coefficients of `weak::Term`.
 ## A new boundary-condition form
 
 `classify_edge_condition` (`boundary_classification.hpp`) reduces every
-`BoundaryCondition` to Dirichlet or natural form on one edge. It is pure, so
-test it directly with an `EdgeFrame`, without a mesh.
+`BoundaryCondition` on one edge to an `EdgeForm` alternative
+(`DirichletEdge` or `NaturalEdge`). It is pure, so test it directly with an
+`EdgeFrame`, without a mesh.
 
 - A new *factory* for an existing form (e.g. a convenience constructor) only
   needs a function in `problem.hpp`.
 - A genuinely new *form* (e.g. oblique derivatives that are not
-  proportional to the flux) needs a new `EdgeCondition` kind, a new prepared
-  edge evaluation path in `detail/assembly_edges.hpp` (add evaluators as
-  named fields of `EdgeCoefficients`/`DirichletData` and list them in their
-  `for_each`, which `AssemblyStatistics::evaluators` counts) and a kernel in
-  `p1_element.hpp`.
+  proportional to the flux) is a new alternative:
+  1. a struct with its restricted coefficients, added to `EdgeForm`, and
+     cases in `edge_form_name<Form>()` / `edge_divisor_name<Form>()` plus an
+     `edge_divisor` overload if it divides by something;
+  2. return it from `classify_edge_condition` instead of the rejection;
+  3. a prepared counterpart in `detail/assembly_edges.hpp`
+     (`PreparedEdgeForm`, with `using Form = ...` and a `for_each` over its
+     evaluators, which `AssemblyStatistics::evaluators` counts), its
+     `prepare` overload and its branch in `PreparedBoundary::evaluate`;
+  4. its branch in the scatter (`detail/assembly_scatter.hpp`);
+  5. a local kernel in `p1_element.hpp`;
+  6. its branch in the analysis region accumulator (`analysis.hpp`).
+  Every dispatch is a `std::visit` ending in a `static_assert`, so the
+  build fails until all of these handle the new alternative.
+- Divisors are checked with `divisor_keeps_strict_sign` on
+  `edge_divisor_samples`; reuse it so analysis and assembly agree.
 
 ## A different element type (P2, quadrilaterals, systems)
 

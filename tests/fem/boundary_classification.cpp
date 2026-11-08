@@ -1,6 +1,9 @@
 // classify_edge_condition is pure: these cases need no mesh or assembly.
 #include "fem/boundary_classification.hpp"
 #include "support/check.hpp"
+#include <algorithm>
+#include <string>
+#include <variant>
 
 using namespace pde2d::fem;
 using pde2d_test::check;
@@ -16,6 +19,37 @@ const p1::EdgeFrame right = p1::edge_frame({1, 0}, {1, 1}, {0, 0});
 double at(const Expr &restricted, double s, double time = 0) {
   return Evaluator(restricted)({s, 0, time});
 }
+// The typed alternatives; std::get also checks the classification.
+const DirichletEdge &dirichlet_form(const EdgeCondition &c) {
+  return std::get<DirichletEdge>(c.form);
+}
+const NaturalEdge &natural_form(const EdgeCondition &c) {
+  return std::get<NaturalEdge>(c.form);
+}
+
+void divisor_sign_sampling() {
+  // Shared by assembly and analysis: 0, 1/2, 1 and the edge rule, sorted.
+  const auto samples = edge_divisor_samples(2);
+  check(samples.size() == 5 && samples.front() == 0 && samples.back() == 1 &&
+            std::is_sorted(samples.begin(), samples.end()),
+        "Divisor samples");
+  check(divisor_keeps_strict_sign([](double s) { return 1 + s; }, samples),
+        "Positive divisor rejected");
+  check(divisor_keeps_strict_sign([](double s) { return -2 - s; }, samples),
+        "Negative divisor rejected");
+  check(!divisor_keeps_strict_sign([](double s) { return s - .3; }, samples),
+        "Sign change accepted");
+  check(!divisor_keeps_strict_sign([](double s) { return s; }, samples),
+        "Zero at an endpoint accepted");
+  // Sampled, not proven: a root strictly between samples is not seen.
+  check(divisor_keeps_strict_sign([](double s) { return (s - .3) * (s - .4); },
+                                  samples),
+        "Expected the documented sampling limitation");
+  check(std::string(edge_divisor_name<DirichletEdge>()) == "Dirichlet alpha" &&
+            std::string(edge_divisor_name<NaturalEdge>()) ==
+                "Natural flux multiplier",
+        "Divisor names are part of assembly messages");
+}
 
 void edge_frames() {
   near(bottom.length, 1, 1e-15);
@@ -27,30 +61,34 @@ void edge_frames() {
 
 void dirichlet_restricts_to_edge_parameter() {
   const auto c = classify_edge_condition({}, dirichlet(2 * (1 + x + y)), right);
-  check(c.dirichlet, "Dirichlet condition misclassified");
+  check(c.is_dirichlet(), "Dirichlet condition misclassified");
   // On the right edge x = 1 and y = s.
-  near(at(c.prescribed, 0), 4, 1e-14);
-  near(at(c.prescribed, .5), 5, 1e-14);
+  near(at(dirichlet_form(c).prescribed, 0), 4, 1e-14);
+  near(at(dirichlet_form(c).prescribed, .5), 5, 1e-14);
   // A scaled Dirichlet operator still prescribes value/alpha.
   const auto scaled = classify_edge_condition({}, robin(4, 0, 8), bottom);
-  check(scaled.dirichlet, "Zero-beta Robin should be Dirichlet");
-  near(at(scaled.prescribed, .3), 2, 1e-14);
+  check(scaled.is_dirichlet(), "Zero-beta Robin should be Dirichlet");
+  near(at(dirichlet_form(scaled).prescribed, .3), 2, 1e-14);
+  near(at(dirichlet_form(scaled).alpha, .3), 4, 1e-14);
+  check(std::string(edge_form_name(scaled.form)) == "Dirichlet",
+        "Dirichlet form name");
 }
 
 void neumann_and_robin_are_natural() {
   // Default equation is -Laplace(u), so q_n = du/dn and beta reduces to 1.
   const auto n = classify_edge_condition({}, neumann(3), bottom);
-  check(!n.dirichlet, "Neumann misclassified");
-  near(at(n.beta, .5), 1, 1e-14);
-  near(at(n.value, .5), 3, 1e-14);
+  check(!n.is_dirichlet(), "Neumann misclassified");
+  near(at(natural_form(n).beta, .5), 1, 1e-14);
+  near(at(natural_form(n).value, .5), 3, 1e-14);
+  check(std::string(edge_form_name(n.form)) == "Natural", "Natural form name");
   const auto r = classify_edge_condition({}, robin(2, 5, 7 * t), bottom);
-  check(!r.dirichlet, "Robin misclassified");
-  near(at(r.alpha, .2), 2, 1e-14);
-  near(at(r.beta, .2), 5, 1e-14);
-  near(at(r.value, .2, 2), 14, 1e-14);
+  check(!r.is_dirichlet(), "Robin misclassified");
+  near(at(natural_form(r).alpha, .2), 2, 1e-14);
+  near(at(natural_form(r).beta, .2), 5, 1e-14);
+  near(at(natural_form(r).value, .2, 2), 14, 1e-14);
   // Flux form: beta multiplies q_n directly.
   const auto f = classify_edge_condition({}, flux_robin(1, 4, 0), right);
-  near(at(f.beta, .5), 4, 1e-14);
+  near(at(natural_form(f).beta, .5), 4, 1e-14);
 }
 
 void diffusion_scales_normal_derivative() {
@@ -59,20 +97,22 @@ void diffusion_scales_normal_derivative() {
   Equation eq;
   eq.a_xx = -3;
   eq.a_yy = -3;
-  near(at(classify_edge_condition(eq, neumann(1), bottom).beta, .5), 1. / 3,
-       1e-14);
+  near(at(natural_form(classify_edge_condition(eq, neumann(1), bottom)).beta,
+          .5),
+       1. / 3, 1e-14);
   // The sign follows the operator: +3 Laplace(u) flips the natural flux.
   eq.a_xx = 3;
   eq.a_yy = 3;
-  near(at(classify_edge_condition(eq, neumann(1), bottom).beta, .5), -1. / 3,
-       1e-14);
+  near(at(natural_form(classify_edge_condition(eq, neumann(1), bottom)).beta,
+          .5),
+       -1. / 3, 1e-14);
 }
 
 void normals_are_substituted() {
   const auto c = classify_edge_condition({}, neumann(nx + 2 * ny), right);
-  near(at(c.value, .5), 1, 1e-14);
+  near(at(natural_form(c).value, .5), 1, 1e-14);
   const auto d = classify_edge_condition({}, neumann(nx + 2 * ny), bottom);
-  near(at(d.value, .5), -2, 1e-14);
+  near(at(natural_form(d).value, .5), -2, 1e-14);
 }
 
 void proportional_partial_derivatives_are_accepted() {
@@ -81,8 +121,8 @@ void proportional_partial_derivatives_are_accepted() {
   bc.beta_x = 1;
   bc.value = 1;
   const auto c = classify_edge_condition({}, bc, right);
-  check(!c.dirichlet, "u_x on a vertical edge should be natural");
-  near(at(c.beta, .5), 1, 1e-14);
+  check(!c.is_dirichlet(), "u_x on a vertical edge should be natural");
+  near(at(natural_form(c).beta, .5), 1, 1e-14);
 }
 
 void oblique_derivatives_are_rejected() {
@@ -99,8 +139,8 @@ void cancelled_derivatives_reduce_to_dirichlet() {
   bc.beta_normal = -1; // q_n - du/dn = 0 for -Laplace(u)
   bc.value = 6;
   const auto c = classify_edge_condition({}, bc, bottom);
-  check(c.dirichlet, "Cancelled derivative terms should leave Dirichlet");
-  near(at(c.prescribed, .5), 3, 1e-14);
+  check(c.is_dirichlet(), "Cancelled derivative terms should leave Dirichlet");
+  near(at(dirichlet_form(c).prescribed, .5), 3, 1e-14);
   bc.alpha = 0;
   expect_throws<std::invalid_argument>(
       [&] { classify_edge_condition({}, bc, bottom); }, "no nonzero operator");
@@ -114,8 +154,8 @@ void dynamic_dirichlet_is_rejected() {
       [&] { classify_edge_condition({}, bc, bottom); }, "Derivative-free");
   // With a flux term the same gamma is a dynamic natural condition.
   const auto c = classify_edge_condition({}, dynamic_robin(1, 1, 1, 0), bottom);
-  check(!c.dirichlet, "Dynamic Robin misclassified");
-  near(at(c.gamma, .5), 1, 1e-14);
+  check(!c.is_dirichlet(), "Dynamic Robin misclassified");
+  near(at(natural_form(c).gamma, .5), 1, 1e-14);
 }
 } // namespace
 
@@ -133,5 +173,6 @@ int main() {
        {"oblique_derivatives_are_rejected", oblique_derivatives_are_rejected},
        {"cancelled_derivatives_reduce_to_dirichlet",
         cancelled_derivatives_reduce_to_dirichlet},
-       {"dynamic_dirichlet_is_rejected", dynamic_dirichlet_is_rejected}});
+       {"dynamic_dirichlet_is_rejected", dynamic_dirichlet_is_rejected},
+       {"divisor_sign_sampling", divisor_sign_sampling}});
 }

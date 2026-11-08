@@ -55,4 +55,14 @@ inline WeakCoefficients<Expr> weak_form_coefficients(const Equation &eq) {
           eq.m1,
           eq.m2};
 }
+
+// Terms whose expression contains t. Conservative (t may cancel
+// numerically), and the single judgement behind both assembly caching and
+// analysis (ProblemProperties::time_dependent).
+inline WeakFlags weak_time_dependence(const WeakCoefficients<Expr> &terms) {
+  WeakFlags flags{};
+  for (std::size_t k = 0; k < weak::Count; ++k)
+    flags[k] = depends_on(terms[k], t);
+  return flags;
+}
 } // namespace pde2d::fem

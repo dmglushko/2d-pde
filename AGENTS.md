@@ -12,7 +12,7 @@ heading and which directions to keep open.
 | --- | --- |
 | `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
 | `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing, mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration. [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration and step control (`step_control.hpp`), problem analysis (`analysis.hpp`), decision records (`decision.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
 | `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
 | `examples/` | runnable programs (learning, meshing showcase, FEM showcase, long waves). Built as CTest smoke tests |
 | `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
@@ -57,6 +57,12 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   and OpenMP results must be bit-identical.
 - Symbolic (`SymEngine`) work happens only during preparation, never inside
   `parallel_for` bodies.
+- One judgement, one function: when analysis and the solve decide the same
+  thing (time dependence, divisor sign, time order, matrix symmetry), both
+  call one shared public function. Analysis properties and `Decision`s state
+  their `Evidence` (Proven / Sampled / Unknown) honestly.
+- Boundary forms are `EdgeForm` alternatives dispatched with `std::visit`
+  and a `static_assert` fallback; add an alternative, not a flag.
 
 ## Invariants that are easy to break
 

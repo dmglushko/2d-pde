@@ -4,6 +4,8 @@ using pde2d::discretization::square_mesh;
 #include "support/check.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <string>
+#include <utility>
 using namespace pde2d::fem;
 using pde2d_test::check;
 namespace {
@@ -118,6 +120,26 @@ void moving() {
         near(d.value, expected);
       }
     }
+  // The typed request and the compatible integer order select the same data.
+  for (const auto [order, derivative] :
+       {std::pair{0, DirichletDerivative::Value},
+        std::pair{1, DirichletDerivative::FirstDerivative},
+        std::pair{2, DirichletDerivative::SecondDerivative}}) {
+    const auto by_int = a.assemble(.4, order).dirichlet;
+    const auto by_enum = a.assemble(.4, derivative).dirichlet;
+    check(by_int.size() == by_enum.size() && !by_int.empty());
+    for (std::size_t k = 0; k < by_int.size(); ++k)
+      check(by_int[k].node == by_enum[k].node &&
+            by_int[k].value == by_enum[k].value);
+  }
+  bool out_of_range = false;
+  try {
+    a.assemble(0, 3);
+  } catch (const std::invalid_argument &e) {
+    out_of_range =
+        std::string(e.what()).find("must be in [0,2]") != std::string::npos;
+  }
+  check(out_of_range, "Integer derivative order range");
   // Time zero need not be in the domain of a time-dependent coefficient.
   p.equation.source = 1 / t;
   PreparedAssembly singular(mesh, p);

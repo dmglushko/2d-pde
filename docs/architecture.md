@@ -39,6 +39,7 @@ MeshResult ──export_mesh/import_mesh_result──▶ .pde2d file   (docs/for
 MeshResult ──refine_mesh──▶ MeshResult        (resumes from the stored boundary context)
 
 TriangleMesh + Problem ──PreparedAssembly──▶ AssembledSystem ──solve_stationary / evolve──▶ values, frames
+TriangleMesh + Problem ──analyze──▶ ProblemProperties   (each property: value + Evidence + reason)
 ```
 
 `AssembledSystem` and the sparse aliases live in the element-independent
@@ -46,7 +47,19 @@ TriangleMesh + Problem ──PreparedAssembly──▶ AssembledSystem ──sol
 integrators (`time_integration.hpp`) depend only on it. Both are strategies:
 `SolverOptions::backend` plugs in a `LinearSolverBackend` and
 `TimeOptions::integrator` a `TimeIntegrator`, with the enums as the built-in
-convenience selectors. Private implementation headers of both modules live in
+convenience selectors. The step sequence is a third strategy:
+`TimeOptions::step_controller` plugs in a `StepController`
+(`step_control.hpp`; default `UniformStepController`, the fixed `TimeGrid`).
+
+Preprocessing and adaptivity (see [vision.md](vision.md)) build on two
+seams. `analysis.hpp` reports properties of a problem (time order,
+symmetry, ellipticity, reaction sign, boundary forms, nullspace risk), each
+with an `Evidence` level (Proven, Sampled, Unknown); it calls the same
+functions the solve uses for the same judgement, so the two cannot
+disagree. `decision.hpp` records choices (`Decision`: subject, choice,
+basis, evidence, source) in `SolverReport::decisions` and
+`EvolutionMetadata::decisions`, printed by `write_report`. Today every
+recorded decision is user-selected; there is no automatic selection yet. Private implementation headers of both modules live in
 `detail/` subdirectories (`*_detail` namespaces).
 
 Boundary region tags connect the two halves: geometry regions become

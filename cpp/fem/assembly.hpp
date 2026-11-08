@@ -83,12 +83,10 @@ public:
       statistics.evaluators += edge.evaluator_count();
   }
 
-  AssembledSystem assemble(double time, int order) const {
+  AssembledSystem assemble(double time, DirichletDerivative derivative) const {
     if (!std::isfinite(time))
-      throw std::invalid_argument("Invalid FEM time or boundary tolerance");
-    if (order < 0 || order > 2)
-      throw std::invalid_argument(
-          "Dirichlet derivative order must be in [0,2]");
+      throw std::invalid_argument("Invalid FEM assembly time");
+    (void)dirichlet_derivative_order(derivative); // rejects invalid values
     // Workers only borrow prepared evaluators and write their own numeric slot.
     // Evaluator CSE is disabled, so calls do not write visitor scratch storage.
     const auto &elements = interior.elements;
@@ -99,7 +97,7 @@ public:
     const auto &edges = boundary.edges;
     std::vector<EdgeResult> results(edges.size());
     pde2d::parallel_for(edges.size(), options.execution, [&](std::size_t i) {
-      results[i] = boundary.evaluate(edges[i], time, order);
+      results[i] = boundary.evaluate(edges[i], time, derivative);
     });
     return scatter(mesh.nodes.size(), time, elements, blocks, edges, results,
                    options.boundary_tolerance);
@@ -115,11 +113,18 @@ public:
                    const Problem &problem, const AssemblyOptions &options = {})
       : data_(std::make_shared<const assembly_detail::PreparedData>(
             mesh, problem, options)) {}
-  // dirichlet_derivative_order selects the Dirichlet data: 0 = values,
-  // 1 = first time derivative, 2 = second (used to start Newmark).
-  AssembledSystem assemble(double time = 0,
-                           int dirichlet_derivative_order = 0) const {
-    return data_->assemble(time, dirichlet_derivative_order);
+  // `derivative` selects the Dirichlet data: the values, or their first or
+  // second time derivative (used to start Newmark).
+  AssembledSystem
+  assemble(double time = 0,
+           DirichletDerivative derivative = DirichletDerivative::Value) const {
+    return data_->assemble(time, derivative);
+  }
+  // Compatibility: integer order 0, 1 or 2.
+  AssembledSystem assemble(double time, int dirichlet_derivative_order) const {
+    if (!std::isfinite(time))
+      throw std::invalid_argument("Invalid FEM assembly time");
+    return assemble(time, dirichlet_derivative(dirichlet_derivative_order));
   }
   const discretization::TriangleMesh &mesh() const { return data_->mesh; }
   const Problem &problem() const { return data_->problem; }

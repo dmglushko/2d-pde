@@ -3,6 +3,8 @@
 // this header or link SymEngine/Eigen. See cpp/fem/README.md for the module
 // map.
 #include "expression.hpp"
+#include "evidence.hpp"
+#include "decision.hpp"
 #include "problem.hpp"
 #include "weak_form.hpp"
 #include "quadrature.hpp"
@@ -15,6 +17,8 @@
 #include "solver.hpp"
 #include "time_grid.hpp"
 #include "time_integration.hpp"
+#include "step_control.hpp"
 #include "evolution.hpp"
 #include "error_norms.hpp"
+#include "analysis.hpp"
 #include "report.hpp"

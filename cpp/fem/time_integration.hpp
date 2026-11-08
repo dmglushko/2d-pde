@@ -20,6 +20,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace pde2d::fem {
@@ -45,6 +47,40 @@ struct IntegratorState {
   Vector u, v;
 };
 
+// Dirichlet data of a time derivative at the start time. Callable with a
+// DirichletDerivative or, for compatibility, an integer order 0..2; it can be
+// set from a callable taking either.
+class DirichletDataCallback {
+  using Function =
+      std::function<std::vector<DirichletValue>(DirichletDerivative)>;
+  Function function_;
+
+public:
+  DirichletDataCallback() = default;
+  template <class F>
+    requires std::is_invocable_r_v<std::vector<DirichletValue>, F &,
+                                   DirichletDerivative>
+  DirichletDataCallback(F f) : function_(std::move(f)) {}
+  template <class F>
+    requires(!std::is_invocable_v<F &, DirichletDerivative> &&
+             std::is_invocable_r_v<std::vector<DirichletValue>, F &, int>)
+  DirichletDataCallback(F f)
+      : function_([f = std::move(f)](DirichletDerivative d) mutable {
+          return f(dirichlet_derivative_order(d));
+        }) {}
+  std::vector<DirichletValue> operator()(DirichletDerivative d) const {
+    if (!function_)
+      throw std::invalid_argument("Integrator service is not available");
+    return function_(d);
+  }
+  std::vector<DirichletValue> operator()(int order) const {
+    return (*this)(dirichlet_derivative(order));
+  }
+  explicit operator bool() const noexcept {
+    return static_cast<bool>(function_);
+  }
+};
+
 struct IntegratorServices {
   // Solve matrix*x = rhs subject to x[node] = value for every constraint.
   // time_step=false marks auxiliary solves (e.g. Newmark start-up), which are
@@ -52,9 +88,14 @@ struct IntegratorServices {
   std::function<Vector(const SparseMatrix &, const Vector &,
                        const std::vector<DirichletValue> &, bool time_step)>
       solve;
-  // Dirichlet data of time-derivative order 1 or 2 at the start time.
-  std::function<std::vector<DirichletValue>(int order)> start_dirichlet;
+  // Dirichlet data of the first or second time derivative at the start time.
+  DirichletDataCallback start_dirichlet;
   double boundary_tolerance = 1e-10;
+  // The system (Dirichlet values, not derivatives) at any finite time, e.g.
+  // a stage of a multistage scheme. evolve() serves it from the same cached
+  // PreparedAssembly as the step stamps and counts it in assembly_calls and
+  // assembly_seconds. Empty in drivers that do not provide it.
+  std::function<AssembledSystem(double time)> assemble{};
 };
 
 // Check that constrained entries of v agree with the prescribed data (relative
@@ -101,10 +142,11 @@ class FirstOrder : public TimeIntegrator {
 public:
   int order() const override { return 1; }
   void check(const AssembledSystem &s) const override {
-    if (s.second_mass.norm() != 0)
+    const int system_order = time_order(s);
+    if (system_order == 2)
       throw std::invalid_argument(
           "First-order integrator does not support second mass");
-    if (s.first_mass.norm() == 0)
+    if (system_order == 0)
       throw std::invalid_argument("First-order integrator requires nonzero "
                                   "first mass (stationary problem)");
   }
@@ -157,15 +199,17 @@ public:
   TimeMethod method() const override { return TimeMethod::Newmark; }
   int order() const override { return 2; }
   void check(const AssembledSystem &s) const override {
-    if (s.second_mass.norm() == 0)
+    if (time_order(s) != 2)
       throw std::invalid_argument("Newmark requires nonzero second mass");
   }
   void start(const AssembledSystem &old, IntegratorState &s,
              const IntegratorServices &services) override {
     // Differentiate the prescribed value AFTER boundary reduction. General
     // input may become Dirichlet through cancellation only on a selected edge.
-    auto velocity_data = services.start_dirichlet(1);
-    auto acceleration_data = services.start_dirichlet(2);
+    auto velocity_data =
+        services.start_dirichlet(DirichletDerivative::FirstDerivative);
+    auto acceleration_data =
+        services.start_dirichlet(DirichletDerivative::SecondDerivative);
     impose_compatible(s.v, velocity_data, services.boundary_tolerance,
                       "velocity");
     acceleration_ = services.solve(

@@ -12,6 +12,8 @@
 #include <cstddef>
 #include <map>
 #include <stdexcept>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace pde2d::fem::assembly_detail {
@@ -60,25 +62,32 @@ inline AssembledSystem scatter(std::size_t node_count, double time,
   for (std::size_t n = 0; n < edges.size(); ++n) {
     const auto &e = edges[n];
     const auto &a = boundary[n];
-    for (std::size_t i = 0; i < edge_nodes; ++i) {
-      if (e.dirichlet) {
-        double g = a.values[i];
-        auto [it, inserted] = prescribed.emplace(e.nodes[i], g);
-        if (!inserted &&
-            std::abs(it->second - g) >
-                boundary_tolerance *
-                    std::max({1., std::abs(it->second), std::abs(g)}))
-          throw std::invalid_argument("Contradictory corner Dirichlet values");
-      } else {
-        result.load[e.nodes[i]] =
-            checked(result.load[e.nodes[i]] + a.block.load[i]);
-        for (std::size_t j = 0; j < edge_nodes; ++j) {
-          const auto ij = LocalBlock::index(i, j);
-          add(stiffness, e.nodes[i], e.nodes[j], a.block.stiffness[ij]);
-          add(first, e.nodes[i], e.nodes[j], a.block.first[ij]);
-        }
-      }
-    }
+    std::visit(
+        [&]<class Form>(const Form &) {
+          for (std::size_t i = 0; i < edge_nodes; ++i) {
+            if constexpr (std::is_same_v<Form, PreparedDirichletEdge>) {
+              double g = a.values[i];
+              auto [it, inserted] = prescribed.emplace(e.nodes[i], g);
+              if (!inserted &&
+                  std::abs(it->second - g) >
+                      boundary_tolerance *
+                          std::max({1., std::abs(it->second), std::abs(g)}))
+                throw std::invalid_argument(
+                    "Contradictory corner Dirichlet values");
+            } else if constexpr (std::is_same_v<Form, PreparedNaturalEdge>) {
+              result.load[e.nodes[i]] =
+                  checked(result.load[e.nodes[i]] + a.block.load[i]);
+              for (std::size_t j = 0; j < edge_nodes; ++j) {
+                const auto ij = LocalBlock::index(i, j);
+                add(stiffness, e.nodes[i], e.nodes[j], a.block.stiffness[ij]);
+                add(first, e.nodes[i], e.nodes[j], a.block.first[ij]);
+              }
+            } else
+              static_assert(classification_detail::unhandled_form<Form>,
+                            "Scatter every prepared edge form");
+          }
+        },
+        e.form);
   }
   for (const auto &[node, value] : prescribed)
     result.dirichlet.push_back({node, value});

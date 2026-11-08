@@ -8,8 +8,12 @@
 #include "support/check.hpp"
 #include "support/check_eigen.hpp"
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 
 using pde2d::discretization::square_mesh;
 using pde2d_test::check;
@@ -65,6 +69,73 @@ public:
                           const IntegratorServices &services) override {
     ++*steps_;
     return inner_.advance(old, cur, h, s, services);
+  }
+};
+
+// Backward Euler that corrupts its output in a chosen way, for the driver's
+// output checks.
+enum class Fault { ShortStart, NanStart, ShortAdvance, NanVelocity };
+class Faulty final : public TimeIntegrator {
+  Fault fault_;
+
+public:
+  explicit Faulty(Fault fault) : fault_(fault) {}
+  int order() const override { return 1; }
+  void check(const AssembledSystem &) const override {}
+  void start(const AssembledSystem &, IntegratorState &s,
+             const IntegratorServices &) override {
+    if (fault_ == Fault::ShortStart)
+      s.v.resize(s.v.size() - 1);
+    if (fault_ == Fault::NanStart)
+      s.u[0] = std::nan("");
+  }
+  IntegratorState advance(const AssembledSystem &, const AssembledSystem &cur,
+                          double h, const IntegratorState &s,
+                          const IntegratorServices &services) override {
+    BackwardEulerIntegrator inner;
+    auto next = inner.advance(cur, cur, h, s, services);
+    if (fault_ == Fault::ShortAdvance)
+      next.u.resize(2); // the driver would index Dirichlet nodes beyond it
+    if (fault_ == Fault::NanVelocity)
+      next.v[next.v.size() - 1] = std::numeric_limits<double>::infinity();
+    return next;
+  }
+};
+
+// Implicit midpoint: K and F at the stage time t + h/2, obtained from the
+// driver's assembly service. (M + h/2 K) u1 = (M - h/2 K) u0 + h F.
+class Midpoint final : public TimeIntegrator {
+public:
+  std::shared_ptr<std::vector<AssembledSystem>> stages =
+      std::make_shared<std::vector<AssembledSystem>>();
+  std::string name() const override { return "Midpoint"; }
+  int order() const override { return 1; }
+  void check(const AssembledSystem &) const override {}
+  void start(const AssembledSystem &, IntegratorState &,
+             const IntegratorServices &services) override {
+    // Both spellings of the Dirichlet-derivative request reach the driver.
+    const auto by_enum =
+        services.start_dirichlet(DirichletDerivative::FirstDerivative);
+    const auto by_int = services.start_dirichlet(1);
+    if (by_enum.size() != by_int.size())
+      throw std::logic_error("start_dirichlet overloads disagree");
+    for (std::size_t k = 0; k < by_enum.size(); ++k)
+      if (by_enum[k].node != by_int[k].node ||
+          by_enum[k].value != by_int[k].value)
+        throw std::logic_error("start_dirichlet overloads disagree");
+  }
+  IntegratorState advance(const AssembledSystem &old,
+                          const AssembledSystem &cur, double h,
+                          const IntegratorState &s,
+                          const IntegratorServices &services) override {
+    auto stage = services.assemble(old.time + h / 2);
+    SparseMatrix a = stage.first_mass + (h / 2) * stage.stiffness;
+    Vector rhs = stage.first_mass * s.u - (h / 2) * (stage.stiffness * s.u) +
+                 h * stage.load;
+    Vector u = services.solve(a, rhs, cur.dirichlet, true);
+    Vector v = (u - s.u) / h;
+    stages->push_back(std::move(stage));
+    return {std::move(u), std::move(v)};
   }
 };
 
@@ -152,6 +223,73 @@ void wrapped_newmark() {
       [&] { evolve(mesh, p, {x * y * (1 - y)}, o); }, "initial velocity");
 }
 
+void malformed_output_is_rejected() {
+  const auto mesh = square_mesh(2);
+  Problem p;
+  p.equation.m1 = 1;
+  p.assign(dirichlet(x), {"bottom", "right", "top", "left"});
+  TimeOptions o;
+  o.end = .05;
+  o.step = .01;
+  const std::pair<Fault, const char *> cases[] = {
+      {Fault::ShortStart, "start() returned a state of the wrong size"},
+      {Fault::NanStart, "Nonfinite evolution output from time integrator "
+                        "start()"},
+      {Fault::ShortAdvance, "advance() returned a state of the wrong size"},
+      {Fault::NanVelocity, "Nonfinite evolution output from time integrator "
+                           "advance()"}};
+  for (const auto &[fault, message] : cases) {
+    o.integrator = [fault] { return std::make_unique<Faulty>(fault); };
+    std::size_t observed = 0;
+    o.observer = [&](const Frame &) { ++observed; };
+    expect_throws<std::runtime_error>([&] { evolve(mesh, p, {x}, o); },
+                                      message);
+    // Nothing malformed reaches the observer: at most the initial frame.
+    check(observed <= 1, "Malformed state was observed");
+  }
+}
+
+void stage_assembly_service() {
+  const auto mesh = square_mesh(3);
+  Problem p;
+  p.equation.m1 = 1 + x;
+  p.equation.c = 1 + t;
+  p.equation.source = sin(x + 3 * t);
+  p.assign(dirichlet(x * y * cos(t)), {"bottom", "left"});
+  p.assign(neumann(t), {"top", "right"});
+  TimeOptions o;
+  o.end = .1;
+  o.step = .025;
+  auto stages = std::make_shared<std::vector<AssembledSystem>>();
+  o.integrator = [stages] {
+    auto m = std::make_unique<Midpoint>();
+    m->stages = stages;
+    return m;
+  };
+  const auto e = evolve(mesh, p, {x * y}, o);
+  check(stages->size() == e.timings.time_steps, "One stage per step");
+  // Served from the same prepared assembly: identical to a one-shot
+  // assembly at the stage time.
+  for (std::size_t k = 0; k < stages->size(); ++k) {
+    const auto &stage = (*stages)[k];
+    const double time = e.frames[k].time + o.step / 2;
+    check(stage.time == time, "Stage time");
+    const auto fresh = assemble(mesh, p, time);
+    check(stage.load == fresh.load &&
+              SparseMatrix(stage.stiffness - fresh.stiffness).norm() == 0,
+          "Stage assembly differs from a one-shot assembly");
+  }
+  // Accounting: start + one stamp and one stage per step, plus the two
+  // start_dirichlet requests in Midpoint::start().
+  check(e.timings.assembly_calls == 2 * e.timings.time_steps + 3,
+        "Stage assemblies must be counted");
+  check(e.metadata.method_name == "Midpoint" &&
+            e.metadata.decisions.front().choice == "Midpoint" &&
+            e.metadata.decisions.front().basis ==
+                "user-selected (TimeOptions::integrator)",
+        "Integrator decision");
+}
+
 void invalid_integrators() {
   const auto mesh = square_mesh(2);
   Problem p;
@@ -169,8 +307,11 @@ void invalid_integrators() {
 } // namespace
 
 int main() {
-  return pde2d_test::run({{"theta_method", theta_method},
-                          {"theta_rate", theta_rate},
-                          {"wrapped_newmark", wrapped_newmark},
-                          {"invalid_integrators", invalid_integrators}});
+  return pde2d_test::run(
+      {{"theta_method", theta_method},
+       {"theta_rate", theta_rate},
+       {"wrapped_newmark", wrapped_newmark},
+       {"malformed_output_is_rejected", malformed_output_is_rejected},
+       {"stage_assembly_service", stage_assembly_service},
+       {"invalid_integrators", invalid_integrators}});
 }

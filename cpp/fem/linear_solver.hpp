@@ -12,6 +12,7 @@
 // timings and the reuse test. The built-in backends below are selected by
 // SolverOptions::method; SolverOptions::backend plugs in a user backend
 // without editing the library (see EXTENDING.md).
+#include "fem/decision.hpp"
 #include "fem/system.hpp"
 #include "fem/timing.hpp"
 #include <Eigen/IterativeLinearSolvers>
@@ -70,6 +71,8 @@ struct SolverReport {
   double relative_residual = std::numeric_limits<double>::infinity();
   std::string message;
   SolverTimings timings;
+  // The choices that produced this solve (solver_decisions()).
+  std::vector<Decision> decisions{};
 };
 struct LinearSolution {
   Vector values;
@@ -228,8 +231,7 @@ public:
   }
   std::string prepare(const SparseMatrix &matrix,
                       const SolverOptions &options) override {
-    const SparseMatrix skew = matrix - SparseMatrix(matrix.transpose());
-    if (skew.norm() > 1e-12 * matrix.norm())
+    if (!numerically_symmetric(matrix))
       return "ConjugateGradient requires a symmetric positive definite matrix";
     if (options.validation == SolverValidation::Checked) {
       Eigen::SimplicialLDLT<SparseMatrix> ldlt;
@@ -376,6 +378,23 @@ inline const char *preconditioner_name(Preconditioner p) {
   return "Unknown";
 }
 
+inline const char *solver_validation_name(SolverValidation validation) {
+  return validation == SolverValidation::Checked ? "Checked" : "AssumeValid";
+}
+
+// The user's linear-solver choices as decision records (decision.hpp).
+inline std::vector<Decision> solver_decisions(const SolverOptions &options) {
+  return {user_decision("linear solver", linear_solver_name(options),
+                        options.backend ? "SolverOptions::backend"
+                                        : "SolverOptions::method"),
+          user_decision("preconditioner",
+                        preconditioner_name(options.preconditioner),
+                        "SolverOptions::preconditioner"),
+          user_decision("solver validation",
+                        solver_validation_name(options.validation),
+                        "SolverOptions::validation")};
+}
+
 inline std::pair<SparseMatrix, Vector>
 constrain(const SparseMatrix &a, const Vector &b,
           const std::vector<DirichletValue> &constraints) {
@@ -477,6 +496,7 @@ public:
       throw std::invalid_argument("Invalid linear RHS");
     LinearSolution result{Vector::Zero(b.size()), {}};
     auto &r = result.report;
+    r.decisions = solver_decisions(options_);
     r.timings.rhs_solves = 1;
     const double bn = b.stableNorm();
     r.residual_norm = bn;

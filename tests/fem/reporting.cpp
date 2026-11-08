@@ -194,5 +194,78 @@ void reports() {
             formatted(failed).find("failure sentinel") != std::string::npos,
         "Failed report missing status");
 }
+// Decision records: today only the user's explicit choices, recorded the
+// same way in solver reports and evolution metadata and printed by both.
+void decisions() {
+  SparseMatrix a(2, 2);
+  a.setIdentity();
+  SolverOptions o;
+  o.method = LinearSolver::ConjugateGradient;
+  o.preconditioner = Preconditioner::Identity;
+  const auto solution = solve_linear(a, Vector::Ones(2), o);
+  const auto &d = solution.report.decisions;
+  check(d.size() == 3, "Solver decisions");
+  check(d[0].subject == "linear solver" && d[0].choice == "ConjugateGradient" &&
+            d[0].basis == "user-selected (SolverOptions::method)" &&
+            d[0].source == DecisionSource::User &&
+            d[0].evidence == Evidence::Unknown,
+        "Linear solver decision");
+  check(d[1].subject == "preconditioner" && d[1].choice == "Identity",
+        "Preconditioner decision");
+  check(d[2].subject == "solver validation" && d[2].choice == "Checked",
+        "Validation decision");
+  const auto text = formatted(solution);
+  check(text.find("decision: linear solver=ConjugateGradient "
+                  "basis=\"user-selected (SolverOptions::method)\" "
+                  "evidence=Unknown source=User") != std::string::npos,
+        "Solver report must print its decisions");
+
+  const auto mesh = square_mesh(2);
+  Problem p;
+  p.equation.m1 = 1;
+  p.assign(dirichlet(0), {"bottom", "right", "top", "left"});
+  TimeOptions options;
+  options.end = .02;
+  options.solver = o;
+  const auto e = evolve(mesh, p, {0}, options);
+  std::vector<std::string> subjects;
+  for (const auto &decision : e.metadata.decisions)
+    subjects.push_back(decision.subject);
+  check(subjects == std::vector<std::string>{"time integrator", "time steps",
+                                             "linear solver", "preconditioner",
+                                             "solver validation"},
+        "Evolution decisions");
+  check(e.metadata.decisions[0].choice == "BackwardEuler" &&
+            e.metadata.decisions[0].basis ==
+                "user-selected (TimeOptions::method)",
+        "Time integrator decision");
+  check(!e.reports.empty() &&
+            e.reports.front().decisions[0].choice == "ConjugateGradient",
+        "Step reports carry the solver decisions");
+  const auto summary = formatted(e);
+  for (const char *token : {"decision: time integrator=BackwardEuler",
+                            "decision: time steps=Uniform(step=0.01)",
+                            "decision: preconditioner=Identity"})
+    check(summary.find(token) != std::string::npos,
+          "Evolution summary must print its decisions");
+  // A user backend is named by its factory and recorded as such.
+  o.backend = make_linear_solver_backend(
+      "Mine",
+      [](const SolverOptions &) -> std::unique_ptr<LinearSolverBackend> {
+        throw std::invalid_argument("not created in this test");
+      });
+  const auto custom = solver_decisions(o);
+  check(custom[0].choice == "Mine" &&
+            custom[0].basis == "user-selected (SolverOptions::backend)",
+        "Backend decision");
+  const auto one =
+      formatted(Decision{"mesh", "graded", "estimated error", Evidence::Sampled,
+                         DecisionSource::Automatic});
+  check(one.find("decision: mesh=graded basis=\"estimated error\" "
+                 "evidence=Sampled source=Automatic") != std::string::npos,
+        "Single decision report");
+}
 } // namespace
-int main() { return pde2d_test::run({{"reports", reports}}); }
+int main() {
+  return pde2d_test::run({{"reports", reports}, {"decisions", decisions}});
+}

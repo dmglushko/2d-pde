@@ -40,6 +40,18 @@ struct PreparedElement {
 using OppositeVertices =
     std::map<std::pair<std::size_t, std::size_t>, std::size_t>;
 
+// Built from the element list; shared with analysis (analysis.hpp), which
+// needs the same outward edge normals.
+inline OppositeVertices
+opposite_vertices(const discretization::TriangleMesh &mesh) {
+  OppositeVertices opposite;
+  for (const auto &element : mesh.elements)
+    for (std::size_t k = 0; k < LocalBlock::nodes; ++k)
+      opposite[std::minmax(element[k], element[(k + 1) % 3])] =
+          element[(k + 2) % 3];
+  return opposite;
+}
+
 // Work counters reported through AssemblyStatistics.
 struct InteriorCounts {
   std::size_t physical_quadrature_points = 0, constant_evaluations = 0,
@@ -58,25 +70,20 @@ public:
   void compile(const Equation &equation) {
     validate_interior_equation(equation);
     const auto expressions = weak_form_coefficients(equation);
-    for (std::size_t k = 0; k < weak::Count; ++k) {
-      coefficients.emplace_back(expressions[k]);
-      dynamic[k] = depends_on(expressions[k], t);
-    }
+    for (const auto &expression : expressions)
+      coefficients.emplace_back(expression);
+    dynamic = weak_time_dependence(expressions);
   }
 
   // Prepare every element (after compile()).
   OppositeVertices prepare(const discretization::TriangleMesh &mesh,
                            int quadrature_degree) {
     const auto triangle_rule = triangle_quadrature(quadrature_degree);
-    OppositeVertices opposite;
     for (const auto &element : mesh.elements) {
       const auto a = mesh.nodes[element[0]], b = mesh.nodes[element[1]],
                  c = mesh.nodes[element[2]];
       PreparedElement e{element, p1::triangle_geometry(a, b, c), {}, {}};
       const double twice_area = e.geometry.twice_area;
-      for (std::size_t k = 0; k < LocalBlock::nodes; ++k)
-        opposite[std::minmax(element[k], element[(k + 1) % 3])] =
-            element[(k + 2) % 3];
       for (const auto &q : triangle_rule) {
         const auto &phi = q.barycentric;
         PhysicalPoint point{{phi[0] * a.x + phi[1] * b.x + phi[2] * c.x,
@@ -101,7 +108,7 @@ public:
       e.constant = block(e, 0, fixed);
       elements.push_back(std::move(e));
     }
-    return opposite;
+    return opposite_vertices(mesh);
   }
 
   // Contribution of the `enabled` terms at `time`.

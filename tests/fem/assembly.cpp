@@ -200,8 +200,16 @@ void dirichlet_and_errors() {
   expect_throws([&] { assemble(mesh, p); });
   p = zero_flux();
   expect_throws(
-      [&] { assemble(mesh, p, std::numeric_limits<double>::infinity()); });
-  expect_throws([&] { assemble(mesh, p, 0, AssemblyOptions{2, -1}); });
+      [&] { assemble(mesh, p, std::numeric_limits<double>::infinity()); },
+      "Invalid FEM assembly time");
+  expect_throws(
+      [&] {
+        PreparedAssembly(mesh, p).assemble(
+            std::numeric_limits<double>::quiet_NaN(), 1);
+      },
+      "Invalid FEM assembly time");
+  expect_throws([&] { assemble(mesh, p, 0, AssemblyOptions{2, -1}); },
+                "Invalid FEM time or boundary tolerance");
   expect_throws([&] { assemble(mesh, p, 0, AssemblyOptions{-1}); });
 }
 void boundary_restriction_regressions() {
