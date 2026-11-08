@@ -45,10 +45,11 @@ inline ProblemProperties analyze(const Problem &problem) {
   using namespace analysis_detail;
   auto p = interior_properties(problem.equation, {});
   RobinTerms robin;
-  bool dirichlet = false, unknown = false;
+  bool dirichlet = false, unknown = false, oblique = false;
   for (const auto &assignment : problem.boundaries)
     for (const auto &region : assignment.regions) {
-      auto r = region_without_mesh(region, assignment.condition, robin);
+      auto r = region_without_mesh(region, problem.equation,
+                                   assignment.condition, robin, oblique);
       dirichlet = dirichlet || (r.form.value == BoundaryForm::Dirichlet &&
                                 r.form.evidence == Evidence::Proven);
       unknown = unknown || r.form.evidence != Evidence::Proven ||
@@ -64,6 +65,10 @@ inline ProblemProperties analyze(const Problem &problem) {
                        "boundary forms depend on the edges"};
   else
     p.has_dirichlet = {false, Evidence::Proven, "every condition is natural"};
+  if (oblique && p.symmetric.value)
+    p.symmetric = {false, Evidence::Unknown,
+                   "a boundary condition may be oblique on some edges "
+                   "(nonsymmetric tangential term); analyze with a mesh"};
   finish_nullspace(p, robin);
   return p;
 }
@@ -94,10 +99,12 @@ inline ProblemProperties analyze(const Problem &problem,
     }
   }
   RobinTerms robin;
+  std::size_t tangential_edges = 0;
   std::vector<BoundaryRegionProperties> regions;
   for (std::size_t r = 0; r < binding.regions.size(); ++r)
     regions.push_back(accumulate_region(binding.regions[r], classified[r],
-                                        edge_samples, options, robin));
+                                        edge_samples, options, robin,
+                                        tangential_edges));
   std::size_t dirichlet_edges = 0;
   bool rejected = false;
   for (auto &region : regions) {
@@ -115,6 +122,14 @@ inline ProblemProperties analyze(const Problem &problem,
     p.has_dirichlet = {false, Evidence::Proven,
                        "every boundary edge is "
                        "natural"};
+  // The tangential term of oblique edges is nonsymmetric (its pair entries
+  // differ by the edge mean of tau/beta); not sampled here, hence Unknown.
+  if (tangential_edges > 0 && p.symmetric.value)
+    p.symmetric = {false, Evidence::Unknown,
+                   std::to_string(tangential_edges) +
+                       " oblique boundary edges add a nonsymmetric "
+                       "tangential-derivative term; interior: " +
+                       p.symmetric.reason};
   finish_nullspace(p, robin);
   return p;
 }
@@ -127,9 +142,10 @@ analyze_boundary_region(std::string region,
                         const AnalysisOptions &options = {}) {
   analysis_detail::validate(options);
   analysis_detail::RobinTerms robin;
+  std::size_t tangential_edges = 0;
   return analysis_detail::accumulate_region(
       std::move(region), edges, edge_divisor_samples(options.quadrature_degree),
-      options, robin);
+      options, robin, tangential_edges);
 }
 
 // One assembled system, with the judgements the integrators and the

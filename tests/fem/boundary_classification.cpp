@@ -132,6 +132,89 @@ void oblique_derivatives_are_rejected() {
       [&] { classify_edge_condition({}, bc, bottom); }, "oblique");
 }
 
+const ObliqueEdge &oblique_form(const EdgeCondition &c) {
+  return std::get<ObliqueEdge>(c.form);
+}
+
+// du/dn + r du/ds with s = (-ny, nx), the counterclockwise tangent.
+BoundaryCondition normal_plus_tangential(Expr r) {
+  BoundaryCondition bc;
+  bc.beta_normal = 1;
+  bc.beta_x = -r * ny;
+  bc.beta_y = r * nx;
+  return bc;
+}
+
+void oblique_derivatives_are_decomposed() {
+  // -Laplace u: q_n = du/dn. On the bottom edge s = (1, 0), so
+  // du/dn + 0.5 du/ds = q_n + 0.5 du/ds: beta = 1, tau = 0.5.
+  const auto c =
+      classify_edge_condition({}, normal_plus_tangential(.5), bottom);
+  check(!c.is_dirichlet() && std::string(edge_form_name(c.form)) == "Oblique",
+        "Tangential data should give the oblique form");
+  near(at(oblique_form(c).beta, .3), 1, 1e-14);
+  near(at(oblique_form(c).tau, .3), .5, 1e-14);
+  near(at(oblique_form(c).conormal, .3), 1, 1e-14);
+  check(std::string(edge_divisor_name<ObliqueEdge>()) ==
+                "Oblique flux multiplier" &&
+            &edge_divisor(oblique_form(c)) == &oblique_form(c).beta,
+        "Oblique divisor name is part of assembly messages");
+  // A variable tangential coefficient is restricted like any other: on the
+  // right edge x = 1, y = s and s = (0, 1).
+  const auto v =
+      classify_edge_condition({}, normal_plus_tangential(1 + y), right);
+  near(at(oblique_form(v).tau, .5), 1.5, 1e-14);
+}
+
+void anisotropic_normal_derivative_is_oblique() {
+  // A = diag(-2, -3), so c = -A n = (2 nx, 3 ny). On the axis-aligned edges
+  // n is an eigenvector: du/dn is proportional to q_n (natural form).
+  Equation eq;
+  eq.a_xx = -2;
+  eq.a_yy = -3;
+  near(
+      at(natural_form(classify_edge_condition(eq, neumann(1), right)).beta, .5),
+      .5, 1e-14);
+  near(at(natural_form(classify_edge_condition(eq, neumann(1), bottom)).beta,
+          .5),
+       1. / 3, 1e-14);
+  // On the diagonal from (1,0) to (0,1), n = (1,1)/sqrt 2 and
+  // n.c = 5/2: D = n = beta c + tau s with beta = 1/(5/2) = 0.4 and
+  // tau = det(c, n)/(n.c) = -1/2 / (5/2) = -0.2 (s = (-1,1)/sqrt 2).
+  const p1::EdgeFrame diagonal = p1::edge_frame({1, 0}, {0, 1}, {0, 0});
+  const auto c = classify_edge_condition(eq, neumann(1), diagonal);
+  near(at(oblique_form(c).beta, .5), .4, 1e-14);
+  near(at(oblique_form(c).tau, .5), -.2, 1e-14);
+  near(at(oblique_form(c).conormal, .5), 2.5, 1e-14);
+  near(at(oblique_form(c).value, .5), 1, 1e-14);
+  // s follows the outward normal, not the order of the edge's nodes.
+  const p1::EdgeFrame reversed = p1::edge_frame({0, 1}, {1, 0}, {0, 0});
+  const auto r = classify_edge_condition(eq, neumann(1), reversed);
+  near(at(oblique_form(r).tau, .5), -.2, 1e-14);
+  // A flux term adds to beta only: beta_flux q_n + du/dn.
+  auto bc = neumann(1);
+  bc.beta_flux = 2;
+  const auto f = classify_edge_condition(eq, bc, diagonal);
+  near(at(oblique_form(f).beta, .5), 2.4, 1e-14);
+  near(at(oblique_form(f).tau, .5), -.2, 1e-14);
+}
+
+void degenerate_oblique_edges_are_rejected() {
+  // a_xx = 0, a_xy = 1, a_yy = -1: on the right edge -A n = (0, -1/2) is
+  // tangential, so q_n cannot be isolated.
+  Equation eq;
+  eq.a_xx = 0;
+  eq.a_xy = 1;
+  expect_throws<std::invalid_argument>(
+      [&] { classify_edge_condition(eq, neumann(0), right); }, "conormal");
+  // A tangential derivative with a flux term that cancels its normal part.
+  auto bc = normal_plus_tangential(1);
+  bc.beta_flux = -1;
+  expect_throws<std::invalid_argument>(
+      [&] { classify_edge_condition({}, bc, bottom); },
+      "tangential to the edge");
+}
+
 void cancelled_derivatives_reduce_to_dirichlet() {
   BoundaryCondition bc;
   bc.alpha = 2;
@@ -171,6 +254,12 @@ int main() {
        {"proportional_partial_derivatives_are_accepted",
         proportional_partial_derivatives_are_accepted},
        {"oblique_derivatives_are_rejected", oblique_derivatives_are_rejected},
+       {"oblique_derivatives_are_decomposed",
+        oblique_derivatives_are_decomposed},
+       {"anisotropic_normal_derivative_is_oblique",
+        anisotropic_normal_derivative_is_oblique},
+       {"degenerate_oblique_edges_are_rejected",
+        degenerate_oblique_edges_are_rejected},
        {"cancelled_derivatives_reduce_to_dirichlet",
         cancelled_derivatives_reduce_to_dirichlet},
        {"dynamic_dirichlet_is_rejected", dynamic_dirichlet_is_rejected},

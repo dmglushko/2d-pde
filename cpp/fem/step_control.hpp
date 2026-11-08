@@ -20,11 +20,14 @@
 // the retry: the same index from the same previous stamp, typically with a
 // smaller h. An accepted trial is committed and reported to accepted().
 // Rejection needs a transactional integrator (TimeIntegrator::transactional).
-// Controllers must terminate: the driver does not cap retries.
+// The driver caps retries: more than TimeOptions::max_consecutive_rejections
+// rejected trials in a row (default default_max_consecutive_rejections)
+// throw std::runtime_error ("rejected N consecutive trial steps").
 #include "fem/time_grid.hpp"
 #include "fem/time_integration.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <functional>
 #include <limits>
 #include <locale>
@@ -34,6 +37,11 @@
 #include <string>
 
 namespace pde2d::fem {
+// Default bound on consecutive rejected trials of one step. Halving h 100
+// times shrinks it by 2^-100, far below any useful step, so a controller
+// that hits it is not converging.
+inline constexpr std::size_t default_max_consecutive_rejections = 100;
+
 // The rounding bound between a step's h and its stamp difference:
 //
 //   |h - (time - previous)| <= 32 eps (max(|time|, |previous|, end - start) +

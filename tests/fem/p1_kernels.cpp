@@ -174,6 +174,35 @@ ClassifiedEdge natural_edge(Expr alpha, Expr gamma, Expr value, Expr beta) {
   return {EdgeCondition{NaturalEdge{alpha, gamma, value, beta}}, unit_edge};
 }
 
+ClassifiedEdge oblique_edge(Expr beta, Expr tau, Expr conormal) {
+  return {EdgeCondition{ObliqueEdge{1, 0, 0, beta, tau, conormal}}, unit_edge};
+}
+
+void oblique_region_accumulation() {
+  {
+    const std::vector<ClassifiedEdge> edges{oblique_edge(1, .5, 2),
+                                            natural_edge(1, 0, 0, 1)};
+    const auto r = analyze_boundary_region("slope", edges);
+    check(r.form.value == BoundaryForm::Mixed && r.oblique_edges == 1 &&
+              r.natural_edges == 1,
+          "Oblique and natural edges are counted apart");
+    check(r.divisor_keeps_sign.value &&
+              r.divisor_keeps_sign.evidence == Evidence::Proven,
+          "Constant oblique divisors are proven");
+  }
+  {
+    // The conormal component is checked first, under its own name.
+    const std::vector<ClassifiedEdge> edges{oblique_edge(1, .5, x - .5)};
+    const auto r = analyze_boundary_region("degenerate", edges);
+    check(r.form.value == BoundaryForm::Oblique &&
+              !r.divisor_keeps_sign.value &&
+              r.divisor_keeps_sign.reason ==
+                  "Oblique conormal component vanishes or changes sign on "
+                  "boundary at t=0",
+          "Conormal sign change found");
+  }
+}
+
 void region_accumulation() {
   // Restricted expressions use x as the edge coordinate s in [0, 1].
   {
@@ -286,6 +315,7 @@ int main() {
        {"cotangent_formula", cotangent_formula},
        {"edge_kernel", edge_kernel},
        {"region_accumulation", region_accumulation},
+       {"oblique_region_accumulation", oblique_region_accumulation},
        {"region_accumulation_matches_analyze",
         region_accumulation_matches_analyze}});
 }

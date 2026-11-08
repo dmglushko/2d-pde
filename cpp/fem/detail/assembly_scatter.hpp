@@ -2,7 +2,8 @@
 // Private part of PreparedAssembly (assembly.hpp): serial scatter of local
 // element and edge contributions into the global system. The fixed
 // element-then-edge order also fixes Eigen's duplicate summation order, so
-// serial and parallel evaluation give bit-identical matrices.
+// serial and parallel evaluation give bit-identical matrices. Boundary edges
+// are scattered by their form's unit (detail/edge_forms/).
 #include "fem/detail/assembly_edges.hpp"
 #include "fem/detail/assembly_elements.hpp"
 #include "fem/system.hpp"
@@ -12,7 +13,6 @@
 #include <cstddef>
 #include <map>
 #include <stdexcept>
-#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -38,10 +38,7 @@ inline AssembledSystem scatter(std::size_t node_count, double time,
                     edge_nodes * edge_nodes * edges.size());
   first.reserve(stiffness.capacity());
   second.reserve(element_nodes * element_nodes * elements.size());
-  auto add = [](auto &v, std::size_t i, std::size_t j, double a) {
-    if (checked(a) != 0)
-      v.emplace_back(i, j, a);
-  };
+  const auto add = edge_form_detail::add_entry;
   for (std::size_t n = 0; n < elements.size(); ++n) {
     const auto &e = elements[n];
     const auto &a = blocks[n];
@@ -58,37 +55,16 @@ inline AssembledSystem scatter(std::size_t node_count, double time,
       }
     }
   }
+  // Each edge form's unit scatters its own contribution, in mesh edge order.
   std::map<Eigen::Index, double> prescribed;
-  for (std::size_t n = 0; n < edges.size(); ++n) {
-    const auto &e = edges[n];
-    const auto &a = boundary[n];
+  edge_form_detail::ScatterTarget target{stiffness, first, result.load,
+                                         prescribed, boundary_tolerance};
+  for (std::size_t n = 0; n < edges.size(); ++n)
     std::visit(
-        [&]<class Form>(const Form &) {
-          for (std::size_t i = 0; i < edge_nodes; ++i) {
-            if constexpr (std::is_same_v<Form, PreparedDirichletEdge>) {
-              double g = a.values[i];
-              auto [it, inserted] = prescribed.emplace(e.nodes[i], g);
-              if (!inserted &&
-                  std::abs(it->second - g) >
-                      boundary_tolerance *
-                          std::max({1., std::abs(it->second), std::abs(g)}))
-                throw std::invalid_argument(
-                    "Contradictory corner Dirichlet values");
-            } else if constexpr (std::is_same_v<Form, PreparedNaturalEdge>) {
-              result.load[e.nodes[i]] =
-                  checked(result.load[e.nodes[i]] + a.block.load[i]);
-              for (std::size_t j = 0; j < edge_nodes; ++j) {
-                const auto ij = LocalBlock::index(i, j);
-                add(stiffness, e.nodes[i], e.nodes[j], a.block.stiffness[ij]);
-                add(first, e.nodes[i], e.nodes[j], a.block.first[ij]);
-              }
-            } else
-              static_assert(classification_detail::unhandled_form<Form>,
-                            "Scatter every prepared edge form");
-          }
+        [&]<class Prepared>(const Prepared &) {
+          unit_of<Prepared>::scatter(boundary[n], edges[n].nodes, target);
         },
-        e.form);
-  }
+        edges[n].form);
   for (const auto &[node, value] : prescribed)
     result.dirichlet.push_back({node, value});
   result.stiffness.setFromTriplets(stiffness.begin(), stiffness.end());

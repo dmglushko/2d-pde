@@ -288,6 +288,54 @@ void mixed_and_rejected_regions() {
                                        "Missing boundary assignment");
 }
 
+void oblique_regions_are_reported() {
+  // du/dn + 0.5 du/ds on the bottom (s = (-ny, nx)), plain Neumann under
+  // anisotropic diffusion on the right (oblique only where n is not an
+  // eigenvector of A: never on an axis-aligned edge), Dirichlet elsewhere.
+  const auto mesh = square_mesh(3);
+  Problem p;
+  p.equation.a_xx = -2;
+  p.equation.a_yy = -1;
+  p.equation.c = 1;
+  BoundaryCondition bc = neumann(0);
+  bc.beta_x = -.5 * ny;
+  bc.beta_y = .5 * nx;
+  p.assign(bc, {"bottom"});
+  p.assign(neumann(0), {"right"});
+  p.assign(dirichlet(0), {"top", "left"});
+  const auto a = analyze(p, mesh);
+  const auto &bottom = a.boundaries[0];
+  expect(bottom.form, BoundaryForm::Oblique, Evidence::Proven,
+         "Oblique region form");
+  check(bottom.oblique_edges == bottom.edges && bottom.edges == 3 &&
+            bottom.natural_edges == 0,
+        "Oblique edge counts");
+  check(bottom.form.reason.find("well-posedness") != std::string::npos,
+        "The region says well-posedness is not analyzed");
+  expect(bottom.divisor_keeps_sign, true, Evidence::Proven,
+         "Constant oblique divisors");
+  expect(a.boundaries[1].form, BoundaryForm::Natural, Evidence::Proven,
+         "Axis-aligned anisotropic Neumann stays natural");
+  // The interior is self-adjoint, the oblique boundary term is not.
+  expect(a.symmetric, false, Evidence::Unknown, "Oblique edges and symmetry");
+  check(!numerically_symmetric(assemble(mesh, p).stiffness),
+        "Assembled oblique stiffness is nonsymmetric");
+  std::ostringstream text;
+  write_report(text, a);
+  for (const char *token : {"form=Oblique", "oblique_edges=3"})
+    check(text.str().find(token) != std::string::npos,
+          "Analysis report missing oblique field");
+  // Mesh-free: the tangential data may be oblique, the plain Neumann data
+  // under isotropic diffusion never are.
+  expect(analyze(p).symmetric, false, Evidence::Unknown,
+         "Mesh-free oblique symmetry");
+  Problem isotropic;
+  isotropic.assign(neumann(0), {"bottom"});
+  isotropic.assign(dirichlet(0), {"right", "top", "left"});
+  expect(analyze(isotropic).symmetric, true, Evidence::Proven,
+         "Isotropic Neumann is never oblique");
+}
+
 void mesh_free_boundary_forms() {
   Problem p;
   p.assign(dirichlet(x), {"bottom"});
@@ -320,5 +368,6 @@ int main() {
         time_dependence_matches_assembly_caching},
        {"boundary_divisor_matches_assembly", boundary_divisor_matches_assembly},
        {"mixed_and_rejected_regions", mixed_and_rejected_regions},
+       {"oblique_regions_are_reported", oblique_regions_are_reported},
        {"mesh_free_boundary_forms", mesh_free_boundary_forms}});
 }

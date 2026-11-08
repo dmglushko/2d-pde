@@ -34,6 +34,7 @@
 #include <memory>
 #include <cmath>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -75,6 +76,9 @@ struct TimeOptions {
   // A user step sequence on [start, end]. When set, evolve() calls it once
   // and ignores `step`; otherwise steps are uniform (UniformStepController).
   StepControllerFactory step_controller{};
+  // At most this many trials in a row may be rejected; one more throws
+  // std::runtime_error. 0 forbids rejections. Counts reset on acceptance.
+  std::size_t max_consecutive_rejections = default_max_consecutive_rejections;
 };
 struct EvolutionMetadata {
   // Selected policy, not an observation of actual OpenMP team sizes. Zero
@@ -105,7 +109,8 @@ inline SolvePlan plan_from_user(const TimeOptions &options) {
   return plan_from_user(options.assembly, options.solver,
                         TimePlan{options.method, options.start, options.end,
                                  options.step, options.integrator,
-                                 options.step_controller});
+                                 options.step_controller,
+                                 options.max_consecutive_rejections});
 }
 inline EvolutionOutput output_options(const TimeOptions &options) {
   return {options.frame_stride, options.store_reports, options.observer};
@@ -300,6 +305,7 @@ inline Evolution evolve(const discretization::TriangleMesh &mesh,
   };
   observe_and_store(time.start, 0);
   double reached = time.start;
+  std::size_t consecutive_rejections = 0;
   while (const auto step = controller->next()) {
     evolution_detail::check_step(*step, result.timings.time_steps + 1, reached,
                                  time.start, time.end);
@@ -321,8 +327,16 @@ inline Evolution evolve(const discretization::TriangleMesh &mesh,
       integrator->reject();
       pending.clear();
       ++result.timings.rejected_steps;
+      if (++consecutive_rejections > time.max_consecutive_rejections)
+        throw std::runtime_error(
+            "Step controller " + controller->name() + " rejected " +
+            std::to_string(consecutive_rejections) +
+            " consecutive trial steps at step " + std::to_string(step->index) +
+            " (more than TimeOptions::max_consecutive_rejections = " +
+            std::to_string(time.max_consecutive_rejections) + ")");
       continue;
     }
+    consecutive_rejections = 0;
     integrator->accept();
     controller->accepted(outcome);
     for (auto &report : pending)

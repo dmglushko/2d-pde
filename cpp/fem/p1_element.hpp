@@ -118,6 +118,8 @@ inline void accumulate_element_point(LocalBlock &out,
 }
 
 // Add one natural-boundary quadrature point at edge coordinate s in [0,1].
+// Shared by the natural and oblique edge forms (detail/edge_forms/); a
+// form-specific kernel lives in that form's unit.
 // Inputs are already divided by the flux multiplier beta: alpha/beta adds to
 // stiffness, gamma/beta to the first mass and value/beta to the load.
 inline void accumulate_edge_point(LocalBlock &out, double s, double w,

@@ -14,6 +14,8 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 using pde2d::discretization::square_mesh;
@@ -271,6 +273,74 @@ void step_size_must_agree_with_stamps() {
   const auto ok = with({{1, .03, .03}, {2, .07, .04}, {3, .1, .03}})();
   check(ok.timings.time_steps == 3, "Consistent list accepted");
 }
+// Rejects every trial: without the retry cap evolve() would never return.
+class AlwaysReject final : public StepController {
+  TimeGrid grid_;
+  std::optional<TimeStep> step_;
+  std::shared_ptr<Counts> counts_;
+
+public:
+  AlwaysReject(double start, double end, double step,
+               std::shared_ptr<Counts> counts)
+      : grid_(start, end, step), counts_(std::move(counts)) {}
+  std::string name() const override { return "AlwaysReject"; }
+  std::optional<TimeStep> next() override {
+    if (!step_)
+      step_ = grid_.next();
+    return step_;
+  }
+  StepVerdict judge(const StepOutcome &) override {
+    ++counts_->trials;
+    ++counts_->rejected;
+    return StepVerdict::Reject;
+  }
+};
+
+void consecutive_rejections_are_capped() {
+  Setup s(TimeMethod::BackwardEuler);
+  check(s.options.max_consecutive_rejections ==
+                default_max_consecutive_rejections &&
+            plan_from_user(s.options).time->max_consecutive_rejections ==
+                default_max_consecutive_rejections,
+        "Default cap in the options and the plan");
+  auto counts = std::make_shared<Counts>();
+  s.options.step_controller = [&] {
+    return std::make_unique<AlwaysReject>(s.options.start, s.options.end,
+                                          s.options.step, counts);
+  };
+  expect_throws<std::runtime_error>(
+      [&] { evolve(s.mesh, s.problem, s.initial, s.options); },
+      "AlwaysReject rejected 101 consecutive trial steps at step 1");
+  // The cap is exceeded by exactly one trial: the default allows 100.
+  check(counts->trials == default_max_consecutive_rejections + 1 &&
+            counts->accepted == 0,
+        "Trials before the cap");
+  // A configured cap; 0 forbids every rejection.
+  for (std::size_t cap : {std::size_t{0}, std::size_t{3}}) {
+    *counts = {};
+    s.options.max_consecutive_rejections = cap;
+    expect_throws<std::runtime_error>(
+        [&] { evolve(s.mesh, s.problem, s.initial, s.options); },
+        "max_consecutive_rejections = " + std::to_string(cap));
+    check(counts->trials == cap + 1, "Configured cap");
+  }
+  // The count restarts after each accepted step: RetrySame rejects every
+  // step once, which a cap of 1 allows and a cap of 0 does not.
+  s.options.max_consecutive_rejections = 1;
+  s.options.step_controller = [&] {
+    return std::make_unique<RetrySame>(s.options.start, s.options.end,
+                                       s.options.step, counts);
+  };
+  *counts = {};
+  const auto retried = evolve(s.mesh, s.problem, s.initial, s.options);
+  check(retried.timings.rejected_steps == retried.timings.time_steps &&
+            retried.timings.time_steps == 10,
+        "One rejection per step is within a cap of 1");
+  s.options.max_consecutive_rejections = 0;
+  expect_throws<std::runtime_error>(
+      [&] { evolve(s.mesh, s.problem, s.initial, s.options); },
+      "consecutive trial steps");
+}
 } // namespace
 
 int main() {
@@ -281,5 +351,7 @@ int main() {
         rejected_doubled_step_matches_the_fine_run},
        {"rejection_needs_a_transactional_integrator",
         rejection_needs_a_transactional_integrator},
-       {"step_size_must_agree_with_stamps", step_size_must_agree_with_stamps}});
+       {"step_size_must_agree_with_stamps", step_size_must_agree_with_stamps},
+       {"consecutive_rejections_are_capped",
+        consecutive_rejections_are_capped}});
 }

@@ -143,16 +143,51 @@ Convenient builders:
 | `flux_robin(alpha,beta,g)` | `alpha*u+beta*q_n=g` |
 | `dynamic_flux_robin(gamma,alpha,beta,g)` | `gamma*u_t+alpha*u+beta*q_n=g` |
 
-The representation is broader than the supported weak boundary treatment.
-Dirichlet and flux Robin, including dynamic flux Robin, are supported. Normal
-Robin is supported when it can be converted to the assembled natural flux.
-Unsupported oblique derivative conditions fail explicitly. General input does
-not imply that every boundary problem is well posed or supported numerically.
+Every edge's condition is reduced to one of three forms. Write the derivative
+terms as one vector, `D·∇u` with `D = β_q c + β_n n + (β_x, β_y)` and the
+conormal `c = -A n` (so `q_n = c·∇u`), and let `s = (-n_y, n_x)` be the unit
+tangent of the straight edge, oriented counterclockwise (the domain on its
+left), whatever the order of the edge's nodes:
+
+| Form | When | Weak treatment |
+| --- | --- | --- |
+| Dirichlet | `D` reduces to zero on the edge | `u = g/α` is imposed at the nodes |
+| Natural | `D` is exactly parallel to `c` (e.g. `du/dn` for isotropic `A`) | `q_n = (g - αu - γu_t)/β`: symmetric edge terms |
+| Oblique | `D` is not parallel to `c` | `D·∇u = β q_n + τ du/ds`; the extra term `(τ/β) du/ds` is assembled |
+
+The oblique form covers general oblique-derivative conditions, such as
+`du/dn + r du/ds = g` (write `beta_x = -r*ny`, `beta_y = r*nx`), and plain
+`du/dn` data under anisotropic or cross diffusion, where the normal derivative
+is not the natural flux. On each edge `β = n·D / n·c` and
+`τ = det(c, D) / n·c`. Two quantities must keep one strict sign on the edge:
+the normal component of the conormal, `n·c = -nᵀAn` (always positive for an
+elliptic `A`), and `β`, which vanishes exactly when `D` is tangential. A
+purely tangential condition (`D·n = 0`, an ODE along the boundary) is rejected
+("the derivative is tangential to the edge"). On a straight P1 edge `du/ds` is
+constant, so the tangential term is a nonsymmetric 2×2 block that couples the
+two edge nodes; the assembled stiffness is then nonsymmetric, so use SparseLU
+or GMRES rather than conjugate gradients. The weak form adds no terms at
+corners: each edge uses its own normal and tangent. Oblique-derivative
+problems are not well posed in general, and the library does not check it:
+`analyze` reports such regions as `BoundaryForm::Oblique`, says so in the
+region's `form.reason`, and marks the problem `symmetric=false` with Unknown
+evidence. With a smooth solution and an obliqueness that varies smoothly along
+the boundary, P1 converges at second order in L2 (see
+`tests/fem/oblique_conditions.cpp`). Where the oblique direction jumps at a
+corner, the dual problem can have a corner singularity: on the unit square
+we measured L2 rates down to about 1.5 for some 45° jumps (not for others;
+it depends on the corner and the sign of the jump), while the H1 rate stayed
+first order. The derivation is in
+`cpp/fem/detail/edge_forms/oblique.hpp`.
+
+General input does not imply that every boundary problem is well posed.
 Equivalence checks cancel symbolic identities before substituting rounded
 normals, then restrict expressions to each straight edge before the exact-zero
-test. They do not accept approximate proportionality. Divided
-Robin multipliers must stay nonzero on that edge; sampled zeros and sign changes
-are rejected. These checks cannot prove nonvanishing for arbitrary symbolic
+test. They do not accept approximate proportionality: data that are only
+nearly parallel to the flux are treated as oblique, never projected. Divided
+multipliers (`α` for Dirichlet, `β` for natural and oblique, `n·c` for
+oblique) must stay nonzero on that edge; sampled zeros and sign changes are
+rejected. These checks cannot prove nonvanishing for arbitrary symbolic
 functions, so that remains a requirement on the supplied data.
 
 Boundary `gamma*u_t` adds a boundary integral to the first-derivative matrix.
@@ -177,7 +212,9 @@ b_y-\partial_y a_{yy}-\tfrac12\partial_x a_{xy}.
 
 SymEngine differentiates these coefficient expressions. A condition
 `alpha*u+gamma*u_t+beta*q_n=g` adds `alpha/beta` to the boundary stiffness,
-`gamma/beta` to boundary `M1`, and `g/beta` to the boundary load.
+`gamma/beta` to boundary `M1`, and `g/beta` to the boundary load. An oblique
+condition `alpha*u+gamma*u_t+beta*q_n+tau*du/ds=g` adds the same terms plus
+`(tau/beta) du/ds` tested against each basis function to the stiffness.
 `assemble(mesh,problem,time,options)` returns unconstrained matrices and a list
 of Dirichlet values. `constrain` eliminates both constrained rows and columns
 and adjusts the load, preserving symmetry when the original matrix is symmetric.
@@ -290,8 +327,10 @@ come from `TimeGrid` (`fem/time_grid.hpp`) unless `time.step_controller` sets a
 `StepController` (`fem/step_control.hpp`). Every step is first a trial: a
 controller's `judge()` may reject it, the trial is discarded (no frame, no
 observer call, counted in `timings.rejected_steps`) and `next()` proposes the
-retry. A step's `h` must equal its stamp difference up to rounding
-(`step_size_consistent`). A user scheme runs through
+retry. More than `time.max_consecutive_rejections` (default 100) rejected
+trials in a row throw `std::runtime_error`, so a controller that never accepts
+cannot loop forever. A step's `h` must equal its stamp difference up to
+rounding (`step_size_consistent`). A user scheme runs through
 `evolve` without library changes: set `time.integrator=[]{ return
 std::make_unique<MyIntegrator>(); };` (called once per evolution; `method` is
 then ignored, and reports use `TimeIntegrator::name()`). See

@@ -8,6 +8,7 @@
 // definite, as for the default a_xx = a_yy = -1 (that is, -Laplace u), and
 // the reaction c is coercive when c >= 0.
 #include "fem/boundary_classification.hpp"
+#include "fem/boundary_form.hpp"
 #include "fem/evidence.hpp"
 #include "fem/p1_element.hpp"
 #include "fem/weak_form.hpp"
@@ -43,9 +44,7 @@ enum class Definiteness {
   NegativeSemidefinite,
   Indefinite
 };
-// Of all edges of one boundary region (EdgeForm per edge). Rejected: the
-// condition cannot be classified on some edge (reason holds the message).
-enum class BoundaryForm { Dirichlet, Natural, Mixed, Rejected };
+// BoundaryForm and boundary_form_name: boundary_form.hpp.
 
 inline const char *sign_name(Sign sign) {
   switch (sign) {
@@ -81,27 +80,18 @@ inline const char *definiteness_name(Definiteness d) {
   }
   return "Invalid";
 }
-inline const char *boundary_form_name(BoundaryForm form) {
-  switch (form) {
-  case BoundaryForm::Dirichlet:
-    return "Dirichlet";
-  case BoundaryForm::Natural:
-    return "Natural";
-  case BoundaryForm::Mixed:
-    return "Mixed";
-  case BoundaryForm::Rejected:
-    return "Rejected";
-  }
-  return "Invalid";
-}
-
 struct BoundaryRegionProperties {
   std::string region;
   // Edge counts (zero without a mesh).
   std::size_t edges = 0, dirichlet_edges = 0, natural_edges = 0;
+  // Edges with a general oblique-derivative condition (ObliqueEdge). Their
+  // tangential term makes the stiffness nonsymmetric, and well-posedness of
+  // oblique problems is not analyzed: `form.reason` says so.
+  std::size_t oblique_edges = 0;
   Property<BoundaryForm> form;
-  // The Dirichlet alpha / natural flux multiplier keeps one strict sign on
-  // every edge, checked exactly as assembly checks it.
+  // Every divisor of the edge forms (Dirichlet alpha, natural flux
+  // multiplier, oblique conormal component and flux multiplier) keeps one
+  // strict sign on every edge, checked exactly as assembly checks it.
   Property<bool> divisor_keeps_sign;
   // t occurs in the (restricted) condition.
   Property<bool> time_dependent;
@@ -115,7 +105,8 @@ struct ProblemProperties {
   Property<WeakFlags> time_dependent;
   // b - div A == 0: the interior operator is self-adjoint, so stiffness
   // matrices are symmetric (natural boundary terms and Dirichlet lifting
-  // keep that).
+  // keep that). Oblique boundary edges add a nonsymmetric tangential term:
+  // then false (Unknown unless the interior is already nonsymmetric).
   Property<bool> symmetric;
   Property<Definiteness> diffusion;
   Property<Sign> reaction;

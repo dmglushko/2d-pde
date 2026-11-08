@@ -4,24 +4,32 @@
 //
 //   DirichletEdge:  u = value/alpha                         (beta reduces to 0)
 //   NaturalEdge:    beta q_n + alpha u + gamma u_t = value  (beta != 0)
+//   ObliqueEdge:    beta q_n + tau du/ds + alpha u + gamma u_t = value
 //
-// where q_n = -n.A grad u is the natural flux of the equation. A condition
-// written with du/dn or u_x/u_y terms is accepted only when that derivative
-// vector is exactly (symbolically, after restriction to the edge)
-// proportional to the flux vector -A n; its projection is then added to beta.
-// Oblique conditions that are not proportional are rejected. A future
-// oblique form becomes a new EdgeForm alternative; every std::visit over
-// EdgeForm (here, in detail/assembly_edges.hpp and in
-// detail/analysis_regions.hpp) then fails to compile until it handles it.
+// where q_n = -n.A grad u is the natural flux of the equation and s the
+// counterclockwise unit tangent of the edge. A condition written with du/dn
+// or u_x/u_y terms is natural when that derivative vector is exactly
+// (symbolically, after restriction to the edge) proportional to the flux
+// vector -A n; its projection is then added to beta. Otherwise it is
+// oblique: the total derivative vector is decomposed into a flux and a
+// tangential part (derivation in detail/edge_forms/oblique.hpp), which needs
+// a nonzero normal component of the conormal and of the derivative vector;
+// purely tangential derivatives are rejected.
+//
+// Each form is one unit in detail/edge_forms/ (interface.hpp): its name,
+// divisors, preparation, evaluation, scatter and analysis hook. A new form is
+// a new unit plus its EdgeForm entry (forms.hpp); EXTENDING.md lists the
+// steps.
 //
 // Classification is pure: no mesh, no quadrature, no evaluation. Restricted
 // expressions are written in the edge parameter s in [0,1], carried by the
 // symbol `x` (point = a + s (b - a)); y, nx and ny are eliminated.
 //
-// The divisor of each form (Dirichlet alpha, natural beta) must keep one
-// strict sign on the edge. That is checked numerically at the edge samples
-// below (Evidence::Sampled), by assembly and analysis through the same
-// function.
+// The divisors of each form (Dirichlet alpha, natural beta, oblique conormal
+// component and beta) must keep one strict sign on the edge. That is checked
+// numerically at the edge samples (edge_divisor_samples, Evidence::Sampled),
+// by assembly and analysis through the same function.
+#include "detail/edge_forms/forms.hpp"
 #include "p1_element.hpp"
 #include "problem.hpp"
 #include "quadrature.hpp"
@@ -33,32 +41,6 @@
 #include <vector>
 
 namespace pde2d::fem {
-// SymEngine substitution is simultaneous: x on the right is the new edge
-// coordinate s, not the original world coordinate. Restrict BEFORE deciding
-// equivalence or choosing a nonzero flux component for division.
-inline Expr restrict_to_edge(const Expr &e, const p1::EdgeFrame &edge) {
-  const auto a = edge.a, b = edge.b;
-  return SymEngine::expand(
-      e.subs({{nx.get_basic(), Expr(edge.normal_x).get_basic()},
-              {ny.get_basic(), Expr(edge.normal_y).get_basic()},
-              {x.get_basic(), (Expr(a.x) + (b.x - a.x) * x).get_basic()},
-              {y.get_basic(), (Expr(a.y) + (b.y - a.y) * x).get_basic()}}));
-}
-
-// u = prescribed on the edge; alpha and value are the restricted coefficients
-// of  alpha u = value  (alpha is the divisor that must keep its sign).
-struct DirichletEdge {
-  Expr alpha, value;
-  Expr prescribed; // value/alpha
-};
-// Restricted coefficients of  beta q_n + alpha u + gamma u_t = value
-// (beta is the divisor that must keep its sign).
-struct NaturalEdge {
-  Expr alpha, gamma, value, beta;
-};
-// One alternative per supported boundary form.
-using EdgeForm = std::variant<DirichletEdge, NaturalEdge>;
-
 struct EdgeCondition {
   EdgeForm form;
   bool is_dirichlet() const noexcept {
@@ -69,61 +51,50 @@ struct EdgeCondition {
 namespace classification_detail {
 template <class> inline constexpr bool unhandled_form = false;
 }
-// Report name of a form and of its divisor, the restricted expression that
-// must keep one strict sign on the edge (used in error messages). Templates
-// so that prepared (non-symbolic) data can name its form without
-// constructing expressions.
+// Report name of a form and of its (first) divisor, the restricted
+// expression that must keep one strict sign on the edge (used in error
+// messages). Templates so that prepared (non-symbolic) data can name its form
+// without constructing expressions. Each comes from the form's unit.
 template <class Form> constexpr const char *edge_form_name() {
-  if constexpr (std::is_same_v<Form, DirichletEdge>)
-    return "Dirichlet";
-  else if constexpr (std::is_same_v<Form, NaturalEdge>)
-    return "Natural";
-  else
-    static_assert(classification_detail::unhandled_form<Form>,
-                  "Name every EdgeForm alternative");
+  return edge_form_detail::Unit<Form>::name;
 }
 template <class Form> constexpr const char *edge_divisor_name() {
-  if constexpr (std::is_same_v<Form, DirichletEdge>)
-    return "Dirichlet alpha";
-  else if constexpr (std::is_same_v<Form, NaturalEdge>)
-    return "Natural flux multiplier";
-  else
-    static_assert(classification_detail::unhandled_form<Form>,
-                  "Name the divisor of every EdgeForm alternative");
+  return edge_form_detail::Unit<Form>::divisor_name;
 }
 inline const char *edge_form_name(const EdgeForm &form) {
   return std::visit(
       []<class Form>(const Form &) { return edge_form_name<Form>(); }, form);
 }
-inline const Expr &edge_divisor(const DirichletEdge &form) {
-  return form.alpha;
-}
-inline const Expr &edge_divisor(const NaturalEdge &form) { return form.beta; }
-
-// Edge coordinates where the divisor is sampled: both endpoints, the midpoint
-// and every point of the edge rule of `quadrature_degree`, sorted.
-inline std::vector<double> edge_divisor_samples(int quadrature_degree) {
-  std::vector<double> samples{0, .5, 1};
-  for (const auto &q : edge_quadrature(quadrature_degree))
-    samples.push_back(q.coordinate);
-  std::sort(samples.begin(), samples.end());
-  return samples;
+template <class Form>
+  requires edge_form_detail::EdgeFormUnit<Form>
+const Expr &edge_divisor(const Form &form) {
+  return edge_form_detail::Unit<Form>::divisor(form);
 }
 
-// True when divisor(s) is nonzero with one sign at every sample, evaluated in
-// sample order. Evidence::Sampled: arbitrary functions may have unsampled
-// roots between samples. Exceptions from `divisor` propagate.
-template <class Divisor>
-bool divisor_keeps_strict_sign(Divisor &&divisor,
-                               std::span<const double> samples) {
-  double previous = divisor(samples.front());
-  for (double s : samples) {
-    const double current = divisor(s);
-    if (current == 0 || std::signbit(current) != std::signbit(previous))
-      return false;
-    previous = current;
+// The derivative vectors of a condition, symbolic in nx and ny: the
+// conormal c = -A n (q_n = c.grad u) and the other derivative terms
+// d = beta_normal n + (beta_x, beta_y). The condition is natural on an edge
+// where d is parallel to c, and oblique where it is not.
+struct DerivativeVectors {
+  Expr flux_x, flux_y, extra_x, extra_y;
+  // det(d, c), expanded before any normal is inserted: symbolically zero
+  // means d is parallel to c on every edge.
+  Expr determinant() const {
+    return SymEngine::expand(extra_x * flux_y - extra_y * flux_x);
   }
-  return true;
+};
+inline DerivativeVectors derivative_vectors(const Equation &eq,
+                                            const BoundaryCondition &bc) {
+  return {-nx * eq.a_xx - ny * eq.a_xy / 2, -nx * eq.a_xy / 2 - ny * eq.a_yy,
+          bc.beta_normal * nx + bc.beta_x, bc.beta_normal * ny + bc.beta_y};
+}
+// True unless the condition is natural or Dirichlet on every edge, whatever
+// its normal: d != 0 and det(d, c) is not symbolically zero. The mesh-free
+// judgement of analyze(problem); classify_edge_condition decides per edge.
+inline bool may_be_oblique(const Equation &eq, const BoundaryCondition &bc) {
+  const auto v = derivative_vectors(eq, bc);
+  return (!is_zero(v.extra_x) || !is_zero(v.extra_y)) &&
+         !is_zero(v.determinant());
 }
 
 inline EdgeCondition classify_edge_condition(const Equation &eq,
@@ -133,10 +104,11 @@ inline EdgeCondition classify_edge_condition(const Equation &eq,
   Expr alpha = on_edge(bc.alpha);
   Expr gamma = on_edge(bc.gamma);
   Expr value = on_edge(bc.value);
-  const Expr symbolic_flux_x = -nx * eq.a_xx - ny * eq.a_xy / 2;
-  const Expr symbolic_flux_y = -nx * eq.a_xy / 2 - ny * eq.a_yy;
-  const Expr symbolic_extra_x = bc.beta_normal * nx + bc.beta_x;
-  const Expr symbolic_extra_y = bc.beta_normal * ny + bc.beta_y;
+  const auto vectors = derivative_vectors(eq, bc);
+  const Expr &symbolic_flux_x = vectors.flux_x;
+  const Expr &symbolic_flux_y = vectors.flux_y;
+  const Expr &symbolic_extra_x = vectors.extra_x;
+  const Expr &symbolic_extra_y = vectors.extra_y;
   const Expr flux_x = on_edge(symbolic_flux_x);
   const Expr flux_y = on_edge(symbolic_flux_y);
   const Expr extra_x = on_edge(symbolic_extra_x);
@@ -146,15 +118,19 @@ inline EdgeCondition classify_edge_condition(const Equation &eq,
     // Cancel symbolic identities before inserting rounded edge normals.
     // Otherwise even n and 10*n can acquire a nonzero determinant from
     // floating-point multiplication. Still restrict to this edge before
-    // the exact-zero decision; do not admit approximate oblique data.
-    const Expr determinant =
-        on_edge(SymEngine::expand(symbolic_extra_x * symbolic_flux_y -
-                                  symbolic_extra_y * symbolic_flux_x));
-    if (!is_zero(determinant) || (is_zero(flux_x) && is_zero(flux_y)))
+    // the exact-zero decision; approximately proportional data are oblique,
+    // never projected onto the flux.
+    const Expr determinant = on_edge(vectors.determinant());
+    if (is_zero(flux_x) && is_zero(flux_y))
       throw std::invalid_argument(
           "Unsupported oblique/normal derivative boundary condition: "
           "derivative vector is not algebraically proportional to natural "
-          "flux");
+          "flux (the natural flux vanishes on the edge)");
+    if (!is_zero(determinant))
+      return {edge_form_detail::Unit<ObliqueEdge>::decompose(
+          std::move(alpha), std::move(gamma), std::move(value), beta,
+          symbolic_flux_x, symbolic_flux_y, symbolic_extra_x, symbolic_extra_y,
+          determinant, edge)};
     // Project only AFTER proving exact proportionality. This quotient
     // avoids a removable 0/0 where one component vanishes but the flux
     // vector does not.

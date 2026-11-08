@@ -21,6 +21,7 @@
 #include "fem/linear_solver.hpp"
 #include "fem/step_control.hpp"
 #include "fem/time_integration.hpp"
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <utility>
@@ -35,6 +36,8 @@ struct TimePlan {
   TimeIntegratorFactory integrator{};
   // A user step sequence; when set it replaces `step`.
   StepControllerFactory step_controller{};
+  // Bound on consecutive rejected trials (see TimeOptions).
+  std::size_t max_consecutive_rejections = default_max_consecutive_rejections;
 };
 
 struct SolvePlan {

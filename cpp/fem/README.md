@@ -21,7 +21,8 @@ PreparedAssembly(mesh, problem)                 assembly.hpp
    ├─ bind_boundary (same binding as analysis)  boundary_assignment.hpp
    ├─ weak_form_coefficients(equation)          weak_form.hpp
    ├─ classify_edge_condition → EdgeForm        boundary_classification.hpp
-   │    (DirichletEdge | NaturalEdge; sampled divisor sign check)
+   │    (DirichletEdge | NaturalEdge | ObliqueEdge; sampled divisor signs)
+   │    one unit per form: prepare/evaluate/scatter/judge  detail/edge_forms/
    └─ P1 geometry + local kernels               p1_element.hpp, quadrature.hpp
    ▼
    ├─ interior elements, boundary edges, scatter detail/assembly_*.hpp
@@ -83,13 +84,17 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `weak_form.hpp` | named weak-form coefficients (`weak::Term`), `weak_time_dependence` | problem |
 | `quadrature.hpp` | triangle and edge rules by exactness degree | — |
 | `p1_element.hpp` | P1 gradients, edge frames/normals, local kernels | weak_form |
-| `boundary_classification.hpp` | general BC → `EdgeForm` (`DirichletEdge` or `NaturalEdge`), pure symbolic; shared sampled divisor sign check | p1_element, problem, quadrature |
+| `boundary_classification.hpp` | general BC → `EdgeForm` (`DirichletEdge`, `NaturalEdge` or `ObliqueEdge`), pure symbolic; `derivative_vectors`, `may_be_oblique`; form and divisor names from each form's unit | detail/edge_forms, p1_element, problem |
+| `boundary_form.hpp` | `BoundaryForm` report category (Dirichlet, Natural, Mixed, Rejected, Oblique) and its name | — |
+| `detail/edge_forms/interface.hpp` | `restrict_to_edge`, `edge_divisor_samples`, `divisor_keeps_strict_sign` (public); private: the unit interface `Unit<Form>` (`EdgeFormUnit` concept), `EdgeSite`, `EdgeResult`, `ScatterTarget`, `EdgeJudgement` | p1_element, quadrature, system, boundary_form |
+| `detail/edge_forms/{dirichlet,natural,oblique}.hpp` | one unit per form: the public form struct and its name, divisors, prepared data, per-time evaluation, scatter and analysis judgement. `oblique.hpp` holds the oblique derivation | interface (oblique: natural) |
+| `detail/edge_forms/forms.hpp` | `EdgeForm` variant; `static_assert` that every alternative has its unit; `PreparedEdgeForm` | the units |
 | `boundary_assignment.hpp` | `bind_boundary`: validated region → condition binding and the frame (length, outward normal) of every boundary edge; shared by assembly and analysis | p1_element, problem |
 | `system.hpp` | `SparseMatrix`, `Vector`, `DirichletValue`, `DirichletDerivative`, `AssembledSystem`, `time_order`, `numerically_symmetric` | Eigen |
 | `assembly.hpp` | `AssemblyOptions`, `PreparedAssembly`, validation, parallel evaluation | all above, system |
 | `detail/assembly_elements.hpp` | private: interior coefficients, quadrature points, element blocks | p1_element, weak_form |
-| `detail/assembly_edges.hpp` | private: edge classification of the bound edges, named edge evaluators, edge blocks | boundary_assignment, boundary_classification |
-| `detail/assembly_scatter.hpp` | private: deterministic serial scatter | system |
+| `detail/assembly_edges.hpp` | private: classification and preparation of the bound edges, per-time evaluation, all through the form units | boundary_assignment, boundary_classification, edge_forms |
+| `detail/assembly_scatter.hpp` | private: deterministic serial scatter (edges through their units) | system, edge_forms |
 | `linear_solver.hpp` | Dirichlet lifting, `SolverOptions`, `LinearSolverBackend` (+ built-in LU/CG/GMRES, preconditioners, `solve_with_guess`), `PreparedLinearSolver`, initial guesses (`InitialGuess`), reuse, `solver_decisions` | system, timing, decision |
 | `plan.hpp` | `SolvePlan` (assembly, solver, `TimePlan`, decisions), `plan_from_user`, `time_decisions` | assembly, linear_solver, step_control |
 | `record.hpp` | `RunRecord` (plan, execution, workload, work, `EvidenceSummary`), `summarize_evidence` | plan, execution |
@@ -97,13 +102,13 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `interpolation.hpp` | nodal interpolation of a field (rejects normals); `Field` (Expr or nodal Vector), `validate_field`, `nodal_values` | system, expression |
 | `time_grid.hpp` | time stamps and step sizes | — |
 | `time_integration.hpp` | `TimeIntegrator` interface (transactional `trial`/`accept`/`reject`), `IntegratorServices`, schemes, `TimeIntegratorFactory` | system |
-| `step_control.hpp` | `StepController` interface (`judge` → `StepVerdict`), `UniformStepController` (TimeGrid), `step_size_consistent` rounding bound | time_grid, time_integration |
+| `step_control.hpp` | `StepController` interface (`judge` → `StepVerdict`), `UniformStepController` (TimeGrid), `step_size_consistent` rounding bound, `default_max_consecutive_rejections` | time_grid, time_integration |
 | `evolution.hpp` | `evolve()` driver (options or plan + `EvolutionOutput`), trial/accept/reject loop, frames, observer, accounting, output/step checks, decisions, record | all above |
 | `timing.hpp` | timing structs, `timing::Accumulate` | — |
-| `analysis_types.hpp` | `AnalysisOptions`, `Sign`, `Definiteness`, `BoundaryForm`, `ProblemProperties`, `BoundaryRegionProperties`, `SystemProperties`, `ClassifiedEdge` | evidence, weak_form, boundary_classification |
+| `analysis_types.hpp` | `AnalysisOptions`, `Sign`, `Definiteness`, `ProblemProperties`, `BoundaryRegionProperties` (incl. `oblique_edges`), `SystemProperties`, `ClassifiedEdge` | evidence, weak_form, boundary_classification, boundary_form |
 | `analysis.hpp` | `analyze()` → `ProblemProperties` / `SystemProperties` with evidence; `analyze_boundary_region` | analysis_types, boundary_assignment, detail/analysis_* |
 | `detail/analysis_interior.hpp` | private: constant signs, sampled signs and definiteness, interior properties | analysis_types, weak_form, quadrature |
-| `detail/analysis_regions.hpp` | private: mesh-free region judgement, per-region accumulation, Robin terms, nullspace | analysis_types, boundary_classification |
+| `detail/analysis_regions.hpp` | private: mesh-free region judgement, per-region accumulation of the units' judgements, Robin and tangential terms, nullspace | analysis_types, boundary_classification, edge_forms |
 | `report.hpp` | text summaries of solves, evolutions, run records, decisions and analyses | evolution, solver, record, analysis |
 | `error_norms.hpp` | prepared L2/H1 error norms (rejects normals) | system, quadrature |
 | `estimation.hpp` | `ErrorEstimator` interface, `GradientRecoveryEstimator` (ZZ, H1 seminorm), `estimate_error`, Dörfler `mark_bulk` | p1_element, problem, system |
@@ -137,7 +142,12 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
   workload, work counters and evidence summary as structured fields.
 - **Steps are transactional.** Only accepted trials change integrator state,
   produce frames or reach the observer; the default controller accepts
-  every trial, so the default path is unchanged.
+  every trial, so the default path is unchanged. More than
+  `TimeOptions::max_consecutive_rejections` rejections in a row throw.
+- **One unit per boundary form.** Generic code (classification names,
+  assembly, scatter, analysis) reaches a form only through
+  `edge_form_detail::Unit<Form>`; `forms.hpp` fails to compile for an
+  `EdgeForm` alternative without its unit.
 - **Estimators report, they do not decide.** `estimate_error` returns
   indicators and a global value; marking and refinement are separate calls
   the user (or a future automatic loop, recording a `Decision`) makes.

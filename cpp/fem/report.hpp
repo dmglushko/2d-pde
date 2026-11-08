@@ -193,7 +193,8 @@ inline std::ostream &write_report(std::ostream &out,
     for (const auto &r : p.boundaries) {
       s << "  region " << r.region << ": edges=" << r.edges
         << " dirichlet_edges=" << r.dirichlet_edges
-        << " natural_edges=" << r.natural_edges << '\n';
+        << " natural_edges=" << r.natural_edges
+        << " oblique_edges=" << r.oblique_edges << '\n';
       property(s, "  form", r.form,
                [](BoundaryForm v) { return boundary_form_name(v); });
       property(s, "  divisor_keeps_sign", r.divisor_keeps_sign, boolean);

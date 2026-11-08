@@ -98,6 +98,12 @@ an evidence summary; `MeshResult` already carries its `MeshOptions` and
 internals. Private implementation headers of both modules live in
 `detail/` subdirectories (`*_detail` namespaces).
 
+Each boundary edge form (Dirichlet, natural, oblique) is one unit in
+`cpp/fem/detail/edge_forms/`: its name, divisors, preparation, per-time
+evaluation, scatter and analysis judgement. Classification picks the form;
+assembly, scatter and analysis call the unit through one interface, and an
+`EdgeForm` alternative without its unit does not compile.
+
 Boundary region tags connect the two halves: geometry regions become
 `TriangleMesh::boundary_tags`, and `Problem::assign(condition, {"region"})`
 attaches boundary conditions to them. Every tagged region needs exactly one

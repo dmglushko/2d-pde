@@ -65,8 +65,11 @@ std::make_unique<MyController>(...); };`; `evolve()` then ignores
   propose the retry (same index; typically a smaller h from the same
   previous stamp). Rejected trials publish no frames or observer calls and
   their step reports are dropped, but their work is counted
-  (`EvolutionTimings::rejected_steps`, assemblies, solves). The driver does
-  not cap retries, so a controller must terminate.
+  (`EvolutionTimings::rejected_steps`, assemblies, solves). The driver caps
+  retries: more than `TimeOptions::max_consecutive_rejections` (default
+  `default_max_consecutive_rejections` = 100; 0 forbids rejections)
+  rejected trials in a row throw `std::runtime_error`. The count restarts
+  at every accepted step.
 - `accepted(StepOutcome)` sees each accepted step with the states before
   and after it.
 - `name()` appears in `EvolutionMetadata::decisions` ("time steps").
@@ -204,29 +207,49 @@ The weak form is linear in the coefficients of `weak::Term`.
 
 `classify_edge_condition` (`boundary_classification.hpp`) reduces every
 `BoundaryCondition` on one edge to an `EdgeForm` alternative
-(`DirichletEdge` or `NaturalEdge`). It is pure, so test it directly with an
-`EdgeFrame`, without a mesh.
+(`DirichletEdge`, `NaturalEdge` or `ObliqueEdge`). It is pure, so test it
+directly with an `EdgeFrame`, without a mesh.
 
 - A new *factory* for an existing form (e.g. a convenience constructor) only
   needs a function in `problem.hpp`.
-- A genuinely new *form* (e.g. oblique derivatives that are not
-  proportional to the flux) is a new alternative:
-  1. a struct with its restricted coefficients, added to `EdgeForm`, and
-     cases in `edge_form_name<Form>()` / `edge_divisor_name<Form>()` plus an
-     `edge_divisor` overload if it divides by something;
-  2. return it from `classify_edge_condition` instead of the rejection;
-  3. a prepared counterpart in `detail/assembly_edges.hpp`
-     (`PreparedEdgeForm`, with `using Form = ...` and a `for_each` over its
-     evaluators, which `AssemblyStatistics::evaluators` counts), its
-     `prepare` overload and its branch in `PreparedBoundary::evaluate`;
-  4. its branch in the scatter (`detail/assembly_scatter.hpp`);
-  5. a local kernel in `p1_element.hpp`;
-  6. its branch in the analysis region accumulator
-     (`detail/analysis_regions.hpp`).
-  Every dispatch is a `std::visit` ending in a `static_assert`, so the
-  build fails until all of these handle the new alternative.
-- Divisors are checked with `divisor_keeps_strict_sign` on
-  `edge_divisor_samples`; reuse it so analysis and assembly agree.
+- A genuinely new *form* is one unit, one variant entry and its tests.
+  Everything the form does lives in one header
+  `detail/edge_forms/<form>.hpp`; generic code (names, assembly, scatter,
+  analysis) calls it only through `edge_form_detail::Unit<Form>`. The
+  interface is documented in `detail/edge_forms/interface.hpp`; copy
+  `natural.hpp` or `oblique.hpp` as a template:
+  1. the public struct of restricted coefficients (namespace `pde2d::fem`)
+     and `template <> struct Unit<MyEdge>` with `name`, `divisor_name`,
+     `category` (an existing `BoundaryForm` report category, or a new value
+     at the end of `boundary_form.hpp` plus its count in
+     `BoundaryRegionProperties`), `divisor()`, a `Prepared` struct
+     (`using Form = MyEdge`, `for_each` over its evaluators, which
+     `AssemblyStatistics::evaluators` counts), `prepare()` (compile
+     evaluators, cache time-independent parts), `evaluate()` (complete
+     local contribution at one time, read-only), `scatter()` (serial, fixed
+     order) and `judge()` (divisors to sample, time-dependent coefficients,
+     Robin and tangential terms for analysis);
+  2. include it in `detail/edge_forms/forms.hpp` and append the struct to
+     `EdgeForm`. A `static_assert` there (the `EdgeFormUnit` concept) fails
+     until the unit is complete;
+  3. return it from `classify_edge_condition`, at the point where the data
+     select it;
+  4. tests: classification on `EdgeFrame`s, an exact or manufactured
+     solution with a convergence rate, the local block against a hand
+     computation (e.g. assembled minus a reference form, see
+     `tests/fem/oblique_conditions.cpp`), time-dependent coefficients
+     against the same problem with `t` substituted, and the analysis report
+     (`tests/fem/analysis.cpp`, synthetic `ClassifiedEdge`s in
+     `tests/fem/p1_kernels.cpp`).
+- Divisors are checked with `EdgeSite::require_divisor_sign` in assembly and
+  listed in `judge()` for analysis; both use `divisor_keeps_strict_sign` on
+  `edge_divisor_samples`, so analysis and assembly agree. A form may have
+  several divisors (the oblique form checks its conormal component, then its
+  flux multiplier); check them in the same order in both places.
+- A natural-type form (one that solves the condition for `q_n`) can reuse
+  `natural_type_block` / `natural_type_evaluate` (`natural.hpp`) and add its
+  own terms through the `Extra` hooks, as `oblique.hpp` does. With the
+  default hooks the arithmetic is exactly that of `NaturalEdge`.
 
 ## A different element type (P2, quadrilaterals, systems)
 

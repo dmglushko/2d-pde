@@ -1,4 +1,5 @@
 #include "fem/assembly.hpp"
+#include "fem/analysis.hpp"
 #include "discretization/square_mesh.hpp"
 using pde2d::discretization::square_mesh;
 #include "support/check.hpp"
@@ -165,19 +166,36 @@ void dirichlet_and_errors() {
   bad = mesh;
   bad.boundary_edges[0] = {0, 2};
   expect_throws([&] { assemble(bad, p); });
+  // Anisotropic diffusion: du/dn is proportional to the flux only where n is
+  // an eigenvector of A (the axis-aligned edges). On the diagonal it is a
+  // general oblique condition (formerly rejected as "not algebraically
+  // proportional"), never projected onto the flux.
   p = zero_flux();
   p.boundaries[0].condition = neumann(0);
   p.equation.a_xx = -2;
   p.equation.a_yy = -3;
-  expect_throws([&] { assemble(mesh, p); }, "not algebraically proportional");
+  {
+    const auto a = analyze(p, mesh);
+    check(a.boundaries.size() == 3 &&
+              a.boundaries[0].form.value == BoundaryForm::Natural &&
+              a.boundaries[1].form.value == BoundaryForm::Oblique &&
+              a.boundaries[1].oblique_edges == 1 &&
+              a.boundaries[2].form.value == BoundaryForm::Natural,
+          "Anisotropic Neumann is oblique only on the diagonal");
+    check(!numerically_symmetric(assemble(mesh, p).stiffness),
+          "The oblique tangential term is nonsymmetric");
+  }
   // Off-diagonal diffusion makes even an axis-aligned normal derivative oblique
-  // relative to flux. This must fail before trying to integrate that boundary.
+  // relative to flux.
   p = zero_flux();
   p.equation.a_xy = -1;
   p.boundaries[0].regions = {"diagonal", "left"};
   p.assign(neumann(0), {"bottom"});
-  expect_throws([&] { assemble(mesh, p); }, "not algebraically proportional");
-  // General oblique derivative not aligned with flux must not be projected.
+  check(analyze(p, mesh).boundaries.back().form.value == BoundaryForm::Oblique,
+        "Cross diffusion makes du/dn oblique on the bottom edge");
+  check(!numerically_symmetric(assemble(mesh, p).stiffness),
+        "The oblique bottom edge assembles a tangential term");
+  // A purely tangential derivative has no normal component: still rejected.
   p = zero_flux();
   p.boundaries[0].condition = {};
   p.boundaries[0].condition.beta_x = 1;
@@ -274,17 +292,29 @@ void slanted_normal_boundaries() {
       near((normal.load - flux.load).norm(), 0);
     }
   }
-  // No numeric tolerance should admit an actually oblique condition, even
-  // with a tiny tangential component or only on the interior of an edge.
+  // No numeric tolerance may project an actually oblique condition onto the
+  // flux, even with a tiny tangential component or only on the interior of
+  // an edge: such data are classified oblique (formerly rejected).
   Problem p;
   p.equation.a_xx = p.equation.a_yy = -10;
   auto bc = neumann(0);
   bc.beta_x = 1e-14;
   p.assign(bc, {"b"});
-  expect_throws([&] { assemble(mesh, p); }, "not algebraically proportional");
+  {
+    const auto r = analyze(p, mesh).boundaries.front();
+    check(r.form.value == BoundaryForm::Oblique && r.oblique_edges == 3,
+          "Tiny tangential data must stay oblique on every slanted edge");
+  }
   p.boundaries[0].condition = neumann(0);
   p.equation.a_yy = -11;
-  expect_throws([&] { assemble(mesh, p); }, "not algebraically proportional");
+  {
+    // n = (0,-1) on the bottom edge is an eigenvector of A; the other two
+    // edges are oblique.
+    const auto r = analyze(p, mesh).boundaries.front();
+    check(r.form.value == BoundaryForm::Mixed && r.natural_edges == 1 &&
+              r.oblique_edges == 2,
+          "Slightly anisotropic Neumann data must stay oblique");
+  }
 }
 } // namespace
 int main() {
