@@ -2,7 +2,9 @@
 
 Curve mathematics lives in `curve_segment.hpp`. Shared length integration and
 length-fraction inversion live in `curve_length.hpp`; meshing policy remains in
-`boundary_discretization.hpp` and `triangulate.hpp`. SVG and PDE2D_MESH adapters
+`boundary_discretization.hpp` and `triangulate.hpp` (with its private
+`detail/ear_clipping.hpp`, `detail/cdt_topology.hpp` and
+`detail/curved_boundary.hpp`). SVG and PDE2D_MESH adapters
 remain separate from the mathematical curve objects. The concrete types remain
 aggregates, so existing brace initialization continues to work.
 
@@ -89,6 +91,7 @@ operation boundary: persisted subdivision results can carry combinations that
 are not valid requests to `generate_mesh`.
 
 When adding an algorithm, implement its dispatch and execution compatibility in
-`triangulate.hpp`, update both format readers and UI choices, and add algorithm
+`triangulate.hpp` (topology operations belong in `detail/cdt_topology.hpp`,
+curve-aware boundary updates in `detail/curved_boundary.hpp`), update both format readers and UI choices, and add algorithm
 combination tests. With the current two algorithms and three boundary policies,
 this explicit dispatch is preferable to a polymorphic strategy hierarchy.

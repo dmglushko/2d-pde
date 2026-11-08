@@ -9,10 +9,13 @@
 // reuse) to the driver through IntegratorServices, so the same integrator runs
 // unchanged under evolve() and under a test's uncached reference driver.
 //
-// Adding a scheme: implement TimeIntegrator, add a TimeMethod value, and
-// return it from make_time_integrator (and name it in report.hpp).
-#include "assembly.hpp"
+// A user scheme needs no library change: implement TimeIntegrator and pass a
+// factory in TimeOptions::integrator (evolution.hpp). A built-in scheme also
+// gets a TimeMethod value, a case in make_time_integrator and a name in
+// time_method_name.
+#include "fem/system.hpp"
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -20,7 +23,22 @@
 #include <vector>
 
 namespace pde2d::fem {
-enum class TimeMethod { BackwardEuler, CrankNicolson, Newmark };
+// Custom marks integrators supplied through TimeOptions::integrator.
+enum class TimeMethod { BackwardEuler, CrankNicolson, Newmark, Custom };
+
+inline const char *time_method_name(TimeMethod method) {
+  switch (method) {
+  case TimeMethod::BackwardEuler:
+    return "BackwardEuler";
+  case TimeMethod::CrankNicolson:
+    return "CrankNicolson";
+  case TimeMethod::Newmark:
+    return "Newmark";
+  case TimeMethod::Custom:
+    return "Custom";
+  }
+  return "Unknown";
+}
 
 // Displacement and velocity at one time stamp.
 struct IntegratorState {
@@ -58,7 +76,10 @@ inline void impose_compatible(Vector &v,
 class TimeIntegrator {
 public:
   virtual ~TimeIntegrator() = default;
-  virtual TimeMethod method() const = 0;
+  // Built-in schemes return their TimeMethod; user schemes may keep Custom.
+  virtual TimeMethod method() const { return TimeMethod::Custom; }
+  // Name used in reports and EvolutionMetadata::method_name.
+  virtual std::string name() const { return time_method_name(method()); }
   // 1: needs u at the start; 2: also needs u_t.
   virtual int order() const = 0;
   // Reject systems this scheme cannot integrate.
@@ -179,6 +200,9 @@ inline std::unique_ptr<TimeIntegrator> make_time_integrator(TimeMethod method) {
     return std::make_unique<CrankNicolsonIntegrator>();
   case TimeMethod::Newmark:
     return std::make_unique<NewmarkIntegrator>();
+  case TimeMethod::Custom:
+    throw std::invalid_argument(
+        "TimeMethod::Custom requires TimeOptions::integrator");
   }
   throw std::invalid_argument("Unsupported time method");
 }

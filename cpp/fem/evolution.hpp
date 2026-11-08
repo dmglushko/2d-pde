@@ -3,7 +3,8 @@
 //
 //   Problem          spatial equation + boundary conditions (problem.hpp)
 //   InitialConditions u (and u_t for second-order problems) at options.start
-//   TimeOptions       scheme, interval/step, assembly/solver options, output
+//   TimeOptions       scheme (built-in TimeMethod or a user TimeIntegrator),
+//                     interval/step, assembly/solver options, output
 //
 //   Evolution e = evolve(mesh, problem, {u0, v0}, options);
 //
@@ -11,15 +12,17 @@
 // while the constrained matrix is unchanged), output frames, the optional
 // observer and work/timing accounting. The numerical recurrence of each scheme
 // lives in time_integration.hpp and the step sequence in time_grid.hpp.
-#include "assembly.hpp"
-#include "interpolation.hpp"
-#include "solver.hpp"
-#include "time_grid.hpp"
-#include "time_integration.hpp"
-#include "timing.hpp"
+#include "fem/assembly.hpp"
+#include "fem/interpolation.hpp"
+#include "fem/linear_solver.hpp"
+#include "fem/solver.hpp"
+#include "fem/time_grid.hpp"
+#include "fem/time_integration.hpp"
+#include "fem/timing.hpp"
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace pde2d::fem {
 struct InitialConditions {
@@ -33,6 +36,8 @@ struct Frame {
   Vector values;
   Vector velocity;
 };
+// Creates the integrator of one evolution (integrators may keep state).
+using TimeIntegratorFactory = std::function<std::unique_ptr<TimeIntegrator>()>;
 struct TimeOptions {
   TimeMethod method = TimeMethod::BackwardEuler;
   double start = 0, end = 1, step = .01;
@@ -43,6 +48,8 @@ struct TimeOptions {
   bool store_reports = true;
   // Called for every time stamp, retained or not.
   std::function<void(const Frame &)> observer{};
+  // A user scheme. When set, evolve() calls it once and ignores `method`.
+  TimeIntegratorFactory integrator{};
 };
 struct EvolutionMetadata {
   // Selected policy, not an observation of actual OpenMP team sizes. Zero
@@ -54,6 +61,8 @@ struct EvolutionMetadata {
   TimeMethod method = TimeMethod::BackwardEuler;
   SolverOptions solver;
   double start = 0, end = 0, step = 0;
+  // TimeIntegrator::name() of the integrator that ran.
+  std::string method_name{};
 };
 struct Evolution {
   std::vector<Frame> frames;
@@ -112,13 +121,23 @@ inline Evolution evolve(const discretization::TriangleMesh &mesh,
                      options.end,
                      options.step};
   TimeGrid grid(options.start, options.end, options.step);
-  const auto integrator = make_time_integrator(options.method);
+  const std::unique_ptr<TimeIntegrator> integrator =
+      options.integrator ? options.integrator()
+                         : make_time_integrator(options.method);
+  if (!integrator)
+    throw std::invalid_argument(
+        "Time integrator factory returned no integrator");
+  result.metadata.method = integrator->method();
+  result.metadata.method_name = integrator->name();
   if (options.frame_stride == 0)
     throw std::invalid_argument("Frame stride must be positive");
   solver_detail::validate(options.solver);
   if (integrator->order() == 2 && !initial.velocity)
     throw std::invalid_argument(
         "Second-order evolution requires an initial velocity");
+  require_symbols(initial.value, field_symbols, "Initial value");
+  if (initial.velocity)
+    require_symbols(*initial.velocity, field_symbols, "Initial velocity");
 
   std::unique_ptr<PreparedAssembly> assembly;
   std::unique_ptr<PreparedLinearSolver> prepared;

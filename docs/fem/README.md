@@ -92,7 +92,11 @@ multiply derivatives directly: `m1*u_t` does not mean `(m1*u)_t`.
 `Expr` is an actual SymEngine expression. Use `x,y,t` and mathematical functions
 to construct formulas in C++; use `diff(expr,x)` for a symbolic derivative.
 Boundary expressions may additionally use `nx,ny`, the outward normal of the
-straight mesh edge. `Evaluator` prepares an expression for repeated numerical
+straight mesh edge. Normals exist only on boundary edges: interior
+coefficients, `interpolate`, initial conditions and exact solutions for error
+norms reject `nx,ny` with an `std::invalid_argument` (for example "Initial
+value cannot depend on boundary normals (nx)"). `require_symbols(expr,
+field_symbols, what)` performs the same check for your own contexts. `Evaluator` prepares an expression for repeated numerical
 evaluation while retaining its symbolic tree. Unknown free symbols and
 nonfinite evaluations are rejected. No user-provided opaque callback is needed.
 
@@ -188,7 +192,25 @@ quadrature cannot compensate for an under-resolved mesh or nonsmooth data.
 ## Linear solvers and time integration
 
 `SolverOptions::method` selects `SparseLU` (default), `ConjugateGradient`, or
-`GMRES`. Solver reports use the actual residual of the solved algebraic system.
+`GMRES`. `SolverOptions::preconditioner` selects the preconditioner of the
+iterative methods: `Default` (the diagonal/Jacobi preconditioner, unchanged
+behavior), `Identity`, `Diagonal`, `IncompleteCholesky` (CG only) or
+`IncompleteLUT` (GMRES only), the latter two with Eigen's default parameters.
+SparseLU accepts only `Default`; unsupported combinations throw. A user backend
+can replace the built-in methods without editing the library:
+
+```cpp
+SolverOptions solver;
+solver.backend=make_linear_solver_backend("MyBackend",
+    [](const SolverOptions&){ return std::make_unique<MyBackend>(); });
+```
+
+`MyBackend` implements `LinearSolverBackend` (`prepare` once per matrix,
+`solve` per right-hand side; see `fem/linear_solver.hpp` and
+[cpp/fem/EXTENDING.md](../../cpp/fem/EXTENDING.md)). Validation, the rank
+check, the true-residual check, timings and factorization reuse stay shared,
+and the same options work for `solve_linear`, `solve_stationary` and
+`TimeOptions::solver`. Solver reports use the actual residual of the solved algebraic system.
 An algebraic residual measures how accurately the discrete equations were
 solved; it does not measure PDE approximation error. The gallery reports both
 residuals and continuous exact-solution errors.
@@ -248,8 +270,11 @@ omitted. First-order schemes need only `value`; a given `velocity` only fills
 the initial frame's `Frame::velocity` (0 when omitted).
 
 Each scheme is a `TimeIntegrator` (`fem/time_integration.hpp`). Step stamps
-come from `TimeGrid` (`fem/time_grid.hpp`). See
-[cpp/fem/EXTENDING.md](../../cpp/fem/EXTENDING.md) to add a scheme.
+come from `TimeGrid` (`fem/time_grid.hpp`). A user scheme runs through
+`evolve` without library changes: set `time.integrator=[]{ return
+std::make_unique<MyIntegrator>(); };` (called once per evolution; `method` is
+then ignored, and reports use `TimeIntegrator::name()`). See
+[cpp/fem/EXTENDING.md](../../cpp/fem/EXTENDING.md).
 
 Backward Euler and Crank–Nicolson handle first-order evolution. Newmark uses
 average acceleration (`beta=1/4`, `gamma=1/2`) and supports both `m2*u_tt` and

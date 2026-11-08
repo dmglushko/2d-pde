@@ -9,3 +9,5 @@ pde2d_add_cpp_test(NAME discretization SOURCE discretization.cpp
 pde2d_add_cpp_test(NAME region_editing SOURCE region_editing.cpp FIXTURE_ARG)
 pde2d_add_cpp_test(NAME svg SOURCE svg.cpp LIBXML2 FIXTURE_ARG)
 pde2d_add_cpp_test(NAME geometry_svg_index SOURCE geometry_svg_index.cpp LIBXML2 FIXTURE_ARG)
+# White-box tests of private (mesh_detail) helpers; see AGENTS.md "Tests".
+pde2d_add_cpp_test(NAME mesh_topology_internal SOURCE internal/mesh_topology.cpp)

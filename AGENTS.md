@@ -11,9 +11,9 @@ heading and which directions to keep open.
 | Path | Contents |
 | --- | --- |
 | `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
-| `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing, mesh validation, `.pde2d` and SVG IO. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | equations, boundary conditions, assembly, solvers, time integration. [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
-| `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests), `support/` (shared helpers). Registered in `tests/**/CMakeLists.txt` |
+| `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing, mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
+| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration. [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
 | `examples/` | runnable programs (learning, meshing showcase, FEM showcase, long waves). Built as CTest smoke tests |
 | `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
 | `tools/` | mesh viewer (`mesh_viewer/`), `plot_mesh.py`, `render_solutions.mjs`, independent references (`reference/`), `format.sh`, `test*.sh` |
@@ -38,8 +38,13 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
 ## Conventions
 
 - Namespaces: `pde2d` (execution), `pde2d::discretization`, `pde2d::fem`.
-  `*_detail` namespaces are private: tests and examples must use public API.
-  Benchmarks are the only exception.
+  `*_detail` namespaces and `cpp/*/detail/` headers are private: tests and
+  examples must use public API. Exceptions: benchmarks, and white-box tests in
+  `tests/<module>/internal/` (e.g. `tests/discretization/internal/`), which
+  must state what they check that the public API cannot observe.
+- Extension seams that need no library edit: `SolverOptions::backend`
+  (`LinearSolverBackend`) and `TimeOptions::integrator` (`TimeIntegrator`).
+  The enums `LinearSolver`/`TimeMethod` select the built-ins.
 - Dependencies point downward: `fem` may include `discretization`, never the
   reverse. Only `svg_geometry.hpp` needs libxml2.
 - Style: clang-format (LLVM, 80 columns). FEM and meshing free functions use
@@ -74,8 +79,12 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
 
 - Put a new test in the module directory and register it in that directory's
   `CMakeLists.txt` with `pde2d_add_cpp_test(NAME ... SOURCE ... [FEM] [LIBXML2] ...)`.
+  White-box tests of `*_detail` code go in `tests/<module>/internal/` with an
+  `_internal` test name; prefer a public-API check whenever behavior is
+  observable.
 - Use `tests/support/check.hpp` (`check`, `near`, `expect_throws`, `run`).
-  Use `check_eigen.hpp` for vectors. Use `discretization/square_mesh.hpp` for
+  Use `check_eigen.hpp` for vectors and `cdt.hpp` (`independent_cdt`) for
+  meshes. Use `discretization/square_mesh.hpp` for
   structured meshes and `fem/error_norms.hpp` for L2/H1 errors.
 - Oracles: exact or manufactured solutions, convergence rates, invariants, or
   independent implementations (`tools/reference/`, `tests/support/error_norms_reference.hpp`).

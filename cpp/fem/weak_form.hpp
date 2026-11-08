@@ -41,9 +41,7 @@ using WeakFlags = WeakCoefficients<bool>;
 inline void validate_interior_equation(const Equation &eq) {
   for (const auto *e : {&eq.a_xx, &eq.a_xy, &eq.a_yy, &eq.b_x, &eq.b_y, &eq.c,
                         &eq.source, &eq.m1, &eq.m2})
-    if (depends_on(*e, nx) || depends_on(*e, ny))
-      throw std::invalid_argument(
-          "Interior coefficients cannot depend on boundary normals");
+    require_symbols(*e, field_symbols, "Interior coefficients");
 }
 
 inline WeakCoefficients<Expr> weak_form_coefficients(const Equation &eq) {

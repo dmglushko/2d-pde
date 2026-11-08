@@ -41,6 +41,14 @@ MeshResult ──refine_mesh──▶ MeshResult        (resumes from the stored
 TriangleMesh + Problem ──PreparedAssembly──▶ AssembledSystem ──solve_stationary / evolve──▶ values, frames
 ```
 
+`AssembledSystem` and the sparse aliases live in the element-independent
+`cpp/fem/system.hpp`; linear solvers (`linear_solver.hpp`) and time
+integrators (`time_integration.hpp`) depend only on it. Both are strategies:
+`SolverOptions::backend` plugs in a `LinearSolverBackend` and
+`TimeOptions::integrator` a `TimeIntegrator`, with the enums as the built-in
+convenience selectors. Private implementation headers of both modules live in
+`detail/` subdirectories (`*_detail` namespaces).
+
 Boundary region tags connect the two halves: geometry regions become
 `TriangleMesh::boundary_tags`, and `Problem::assign(condition, {"region"})`
 attaches boundary conditions to them. Every tagged region needs exactly one
@@ -62,8 +70,12 @@ condition.
 `tests/` mirrors the modules (`tests/core`, `tests/discretization`, `tests/fem`,
 `tests/tools`); shared helpers are in `tests/support`. Each C++ test is a
 standalone executable built on `tests/support/check.hpp` and registered
-explicitly in `tests/CMakeLists.txt`, which states its dependencies (FEM,
-libxml2, fixture files). Tests use public APIs. Oracles are exact or
+explicitly in its module directory's `CMakeLists.txt` (e.g.
+`tests/fem/CMakeLists.txt`) with `pde2d_add_cpp_test`, defined in
+`tests/CMakeLists.txt`, which states its dependencies (FEM, libxml2, fixture
+files). Tests use public APIs; the only exception is `tests/<module>/internal/`,
+which holds white-box tests of private data structures (currently the CDT
+topology and broad phase). Oracles are exact or
 manufactured solutions, independent reference implementations
 (`tools/reference/`, scikit-fem) or invariants; tests must not re-implement
 the algorithm under test.

@@ -31,7 +31,11 @@ interval bounds, format adapters, and stable serialization IDs.
 
 `generate_mesh(CurveGeometry | Boundary | DiscretizedBoundary, MeshOptions = {})`
 returns `MeshResult`: `.mesh`, optional `.boundary_context`, `.options`, and
-`.report`. Include `triangulate.hpp` for the meshing entry points.
+`.report`. Include `triangulate.hpp` for the meshing entry points. Its private
+helpers (`mesh_detail`) live in `detail/`: `ear_clipping.hpp` (seed
+triangulation), `cdt_topology.hpp` (incremental constrained Delaunay topology,
+flips, splits, longest-edge queue, `cdt_verified`) and `curved_boundary.hpp`
+(splitting source intervals and rebuilding on analytical curves).
 
 `discretize_boundary(geometry, BoundaryOptions = {}, bool preserve_regions = true)`
 returns `DiscretizedBoundary { boundary, context }`. Analytical source curves and

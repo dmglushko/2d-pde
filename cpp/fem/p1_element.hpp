@@ -11,6 +11,7 @@
 #include "weak_form.hpp"
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
 
 namespace pde2d::fem {
@@ -24,8 +25,13 @@ inline double checked(double v) {
 // Local 3x3 matrices (row = test function, column = trial function) and load.
 // Boundary edges reuse the storage with only the leading 2x2 block in use.
 struct LocalBlock {
-  std::array<double, 9> stiffness{}, first{}, second{};
-  std::array<double, 3> load{};
+  static constexpr std::size_t nodes = 3;
+  std::array<double, nodes * nodes> stiffness{}, first{}, second{};
+  std::array<double, nodes> load{};
+  // Row-major position of (test i, trial j) in the matrix arrays.
+  static constexpr std::size_t index(std::size_t i, std::size_t j) {
+    return nodes * i + j;
+  }
 };
 
 // Constant gradients of the three barycentric basis functions.

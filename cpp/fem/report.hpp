@@ -1,5 +1,5 @@
 #pragma once
-#include "evolution.hpp"
+#include "fem/evolution.hpp"
 #include <iomanip>
 #include <locale>
 #include <ostream>
@@ -7,28 +7,6 @@
 
 namespace pde2d::fem {
 namespace report_detail {
-inline const char *name(TimeMethod method) {
-  switch (method) {
-  case TimeMethod::BackwardEuler:
-    return "BackwardEuler";
-  case TimeMethod::CrankNicolson:
-    return "CrankNicolson";
-  case TimeMethod::Newmark:
-    return "Newmark";
-  }
-  return "Unknown";
-}
-inline const char *name(LinearSolver method) {
-  switch (method) {
-  case LinearSolver::SparseLU:
-    return "SparseLU";
-  case LinearSolver::ConjugateGradient:
-    return "ConjugateGradient";
-  case LinearSolver::GMRES:
-    return "GMRES";
-  }
-  return "Unknown";
-}
 inline void solver_timings(std::ostream &out, const SolverTimings &t) {
   out << "  solver work: preparations=" << t.preparations
       << " rank_checks=" << t.rank_checks
@@ -73,8 +51,11 @@ inline std::ostream &write_report(std::ostream &out,
   return report_detail::write(out, [&](std::ostream &s) {
     const auto &m = evolution.metadata;
     const auto &t = evolution.timings;
-    s << "FEM evolution: method=" << report_detail::name(m.method)
-      << " solver=" << report_detail::name(m.solver.method) << " validation="
+    s << "FEM evolution: method="
+      << (m.method_name.empty() ? time_method_name(m.method) : m.method_name)
+      << " solver=" << linear_solver_name(m.solver)
+      << " preconditioner=" << preconditioner_name(m.solver.preconditioner)
+      << " validation="
       << (m.solver.validation == SolverValidation::Checked ? "Checked"
                                                            : "AssumeValid")
       << '\n'

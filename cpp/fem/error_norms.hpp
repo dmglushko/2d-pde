@@ -1,8 +1,13 @@
 #pragma once
-#include "fem/assembly.hpp"
-#include "fem/quadrature.hpp"
+#include "discretization/mesh_validation.hpp"
 #include "execution.hpp"
+#include "fem/expression.hpp"
+#include "fem/quadrature.hpp"
+#include "fem/system.hpp"
+#include <array>
 #include <cmath>
+#include <stdexcept>
+#include <vector>
 
 namespace pde2d::fem {
 
@@ -12,6 +17,7 @@ struct ErrorNorms {
 
 // Own the geometry, rule and compiled exact fields. Calls borrow evaluators;
 // workers never construct or copy symbolic expressions (including RCPs).
+// The exact solution is a field in x, y and t; boundary normals are rejected.
 class PreparedErrorNorms {
   struct Point {
     EvaluationPoint location;
@@ -25,13 +31,17 @@ class PreparedErrorNorms {
   };
   std::size_t node_count_;
   Evaluator u_, ux_, uy_;
+  static const Expr &exact_field(const Expr &exact) {
+    require_symbols(exact, field_symbols, "Exact solution");
+    return exact;
+  }
   std::vector<Element> elements_;
 
 public:
   PreparedErrorNorms(const discretization::TriangleMesh &mesh,
                      const Expr &exact, int degree = 8)
-      : node_count_(mesh.nodes.size()), u_(exact), ux_(diff(exact, x)),
-        uy_(diff(exact, y)) {
+      : node_count_(mesh.nodes.size()), u_(exact_field(exact)),
+        ux_(diff(exact, x)), uy_(diff(exact, y)) {
     discretization::validate_mesh_geometry(mesh);
     const auto rule = triangle_quadrature(degree);
     elements_.reserve(mesh.elements.size());
