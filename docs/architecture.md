@@ -19,6 +19,7 @@ Current structure of the project. Module-level detail lives next to the code:
                             │
  cpp/execution.hpp  ────────┘  ExecutionOptions, parallel_for (OpenMP opt-in)
  cpp/provenance.hpp           Fingerprint, StrategyDescriptor, library_version
+ cpp/json.hpp                 JsonValue, json_number, parse_json (records of both modules)
 ```
 
 Dependencies point downward only. `cpp/discretization` must never include
@@ -37,6 +38,9 @@ CurveGeometry ──discretize_boundary──▶ DiscretizedBoundary ──gener
    (analytical curves, regions;          (polygon with holes                  .mesh  : TriangleMesh
     outer loop + holes)                   + curve context)
                                                                                .report: guarantees met?
+MeshResult.record: MeshRunRecord {operation, fingerprints, options, version,
+     work (steps, flips, rebuilds), quality (angles, lengths, target ratio), time}
+     ──write_json (mesh_record_json.hpp)──▶ "pde2d.mesh_run_record"
 MeshResult ──export_mesh/import_mesh_result──▶ .pde2d file   (docs/formats/pde2d-mesh.md)
 MeshResult ──refine_mesh──▶ MeshResult        (resumes from the stored boundary context)
 MeshResult + marked elements ──refine_mesh──▶ MeshResult   (report.marked: what was bisected)
@@ -56,8 +60,10 @@ problem [+ mesh] ──make_analysis_record──▶ AnalysisRecord (properties 
 MeshOptions ──mesh_plan_from_user──▶ MeshPlan {options, decisions}   (SolvePlan::mesh)
 SolvePlan ──PreparedStationary.solve(t[, guess]) / solve_stationary──▶ StationarySolution
 SolvePlan + InitialConditions (Expr or nodal Vector) ──evolve──▶ Evolution
-results carry RunRecord {plan, inputs (fingerprints, mesh provenance), strategies,
-                         versions, execution, workload, work, evidence, timings}
+results carry RunRecord {plan, inputs (fingerprints, mesh provenance with the
+                         MeshRunRecord), stationary solve (guess fingerprint,
+                         iterations, residual), strategies, versions, execution,
+                         workload, work, evidence, timings}
 RunRecord ──write_json──▶ versioned JSON ──read_run_record_json / diff_records
 
 Adaptive loop (stationary), by hand or as adapt(result, problem, plan, AdaptOptions):
@@ -70,8 +76,16 @@ Adaptive loop (stationary), by hand or as adapt(result, problem, plan, AdaptOpti
   plan.analysis refreshed and plan.mesh updated for each refined mesh
   adapt ──▶ AdaptiveHistory {iterations: RunRecord, transfer, estimate summary,
                              marking, refinement report, Decisions; stop; final state}
+        (and AdaptiveSettings: tolerance, budget, warm start, transfer, ...)
         ──write_json (adaptivity_json.hpp)──▶ versioned JSON
 Restart (transient): last frame ──transfer_field──▶ InitialConditions{Vector} ──evolve
+Adaptive loop (transient), adapt_evolution(result, problem, initial, plan, options):
+  windows of plan.time: evolve ──▶ estimate (last frame) ──▶ mark ──▶ refine
+     ──transfer_field + Dirichlet data at the restart time──▶ nodal restart ──▶ evolve
+  ──▶ EvolutionAdaptiveHistory {settings, windows: RunRecord, restart, estimate, ...}
+Reference problems (fem/reference/problems.hpp: geometry, problem, exact solution)
+  ──compare_plans(reference, mesh plan, {plans}) / compare_mesh_plans──▶
+  PlanComparison {per plan: RunRecord, L2/H1 errors, work, timings} ──▶ JSON
 Time steps: StepController.next ──▶ trial (TimeIntegrator.trial) ──judge──▶
      accept (commit, frame, observer) | reject (discard, next() proposes a retry)
 ```
@@ -177,7 +191,25 @@ The adaptive driver `adapt` (`fem/adaptivity.hpp`) is an optional
 composition of the public solve, estimate, mark, refine and transfer
 components; it adds no numerics (the hand-composed loop is its bit-for-bit
 test oracle) and records each iteration and its marking and refinement
-decisions in an `AdaptiveHistory`.
+decisions in an `AdaptiveHistory`, together with the settings it ran with.
+`adapt_evolution` does the same for evolutions, window by window, with a
+nodal restart on each refined mesh.
+
+Meshing keeps its own record: `MeshResult::record` (`MeshRunRecord`,
+declared in `discretization/mesh_types.hpp`, filled by the meshing entry
+points, serialized by `discretization/mesh_record_json.hpp`) holds the
+operation, fingerprints, options, version, work counters, quality
+statistics and time of the call that produced the mesh. It lives in
+discretization so geometry-only users have it; the FEM run record embeds it
+in its mesh provenance. Both serialize with the core JSON document
+`cpp/json.hpp`.
+
+Reference problems (`fem/reference/`) make "better is measured" concrete:
+a small library of problems with exact solutions and `compare_plans` /
+`compare_mesh_plans`, which run plans with the public solve calls and
+report each one's errors next to its run record and work. They live in a
+public subdirectory of the FEM module because they need the solver; nothing
+in the solve path depends on them.
 
 ## Build configurations
 
@@ -220,8 +252,9 @@ The intended direction is in [vision.md](vision.md).
 
 - CDT refinement has no minimum-angle guarantee. Marked refinement only refines (no coarsening or node
   movement), the only built-in estimator is gradient recovery and the only
-  built-in marking strategy is Dörfler (`BulkMarking`). The adaptive driver
-  is stationary only.
+  built-in marking strategy is Dörfler (`BulkMarking`). The transient
+  driver refines between fixed time windows only (no re-solve of a window,
+  no coarsening, uniform steps).
 - FEM is scalar, linear and P1. Extension points are in
   [cpp/fem/EXTENDING.md](../cpp/fem/EXTENDING.md) and
   [cpp/discretization/EXTENDING.md](../cpp/discretization/EXTENDING.md).

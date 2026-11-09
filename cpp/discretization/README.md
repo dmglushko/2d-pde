@@ -44,7 +44,7 @@ from this table.
 | `curve_geometry.hpp` | Editable analytical boundary with regions and loops | `CurveGeometry` (`setRegions`, `renameRegion`, `splitRegion`, `splitCurve`, `moveCurve`, `curveIdAt`, `regionGroups`, `length`), `CurveId`, `CurveRegion`, `BoundaryCurve` |
 | `geometry.hpp` | Built-in shapes | `CircleGeometry`, `EllipseGeometry`, `RectangleGeometry`, `RectangleWithSemicircleGeometry`, `RegularPolygonGeometry`, `PolygonGeometry`, `AnnulusGeometry` |
 | `size_criterion.hpp` | Public refinement criteria (what makes an edge too long, which is split first) | `SizePriority`, `SizeCriterion`, `SizeField`, `RefinementCriterion` (size, Fixed-conflict message, split hook, descriptor), `constant_size_criterion`, `size_field_criterion`, `local_size_target`, `strictest_of` |
-| `mesh_types.hpp` | Meshing options and results; wire IDs | `InteriorAlgorithm`, `BoundaryTreatment`, `BoundaryOptions`, `RefinementOptions` (`size_field`, `criterion`), `MeshOptions`, `InteriorAlgorithmCapabilities`, `MeshReport`, `MarkedRefinementReport`, `MeshResult`, `BoundaryContext`, `interior_algorithm_name`, `boundary_treatment_name`, `validateMeshOptionValues` |
+| `mesh_types.hpp` | Meshing options and results; wire IDs | `InteriorAlgorithm`, `BoundaryTreatment`, `BoundaryOptions`, `RefinementOptions` (`size_field`, `criterion`), `MeshOptions`, `InteriorAlgorithmCapabilities`, `MeshReport`, `MarkedRefinementReport`, `MeshResult` (with `record`), `MeshRunRecord`, `MeshOperation`, `MeshWork`, `MeshQuality`, `BoundaryContext`, `interior_algorithm_name`, `boundary_treatment_name`, `mesh_operation_name`, `validateMeshOptionValues` |
 | `predicates.hpp` | Exact geometric predicates (filtered, exact binary64 fallback; needs Boost) | `predicates::orient`, `predicates::incircle`, `predicates::intersects`, `predicates::on_segment` |
 | `spatial_index.hpp` | Box broad phase used by validation and point location | `mesh_detail::Box`, `mesh_detail::BoxIndex` |
 | `mesh_validation.hpp` | Polygon and mesh validation, boundary loops | `validate_polygon`, `validate_mesh_geometry`, `boundary_loops`, `boundary_points` |
@@ -53,6 +53,8 @@ from this table.
 | `triangulate.hpp` | Meshing entry points | `generate_mesh`, `refine_mesh` (size or marked), `subdivide_mesh`, `is_constrained_delaunay`, `interior_algorithm_capabilities` |
 | `point_location.hpp` | Locating points in a mesh | `PointLocator`, `PointLocation`, `PointLocationOptions`, `locate_point` |
 | `mesh_fingerprint.hpp` | Deterministic mesh fingerprints for records | `mesh_fingerprint` |
+| `mesh_record.hpp` | Mesh run records: quality statistics and record completion (the meshing entry points fill `MeshResult::record`) | `mesh_quality`, `finish_mesh_run_record` |
+| `mesh_record_json.hpp` | Versioned JSON of mesh run records (schema `pde2d.mesh_run_record`, version 1), the mesh options and report encodings shared with FEM run records (core JSON in `cpp/json.hpp`) | `to_json(MeshRunRecord)`, `write_json`, `read_mesh_run_record_json`, `mesh_options_json`, `mesh_report_json`, `descriptor_json` |
 | `curve_io.hpp` | Wire IDs and codecs of curve kinds in `.pde2d` files | `curve_io::Codec` (permanent IDs) |
 | `mesh_io.hpp` | `.pde2d` export and import (format versions 1 to 5) | `export_mesh`, `import_mesh_result`, `import_mesh` |
 | `svg_geometry.hpp` | SVG import and export of analytical geometry (needs libxml2) | `importSvg`, `exportSvg`, `SvgOptions`, `SvgScaleMode` |
@@ -397,6 +399,36 @@ boundary edges and tags in storage order, equal on every platform. FEM run
 records use it to identify the mesh of a solve. `interior_algorithm_name` and
 `boundary_treatment_name` (`mesh_types.hpp`) give report names of the
 options' enums.
+
+## Mesh run records
+
+Every meshing call returns a `MeshResult` whose `record`
+(`MeshRunRecord`, `mesh_types.hpp`) says how it was made:
+
+- `operation` (`generate`, `refine`, `marked refine`, `subdivide`,
+  `import`; `none` for a hand-built result), the `mesh_fingerprint` of the
+  produced mesh and, for refinements, of the refined one
+  (`source_fingerprint`);
+- the `options` of the call (size fields and refinement criteria by their
+  descriptors in JSON) and the library version;
+- `work` (`MeshWork`): refinement steps, inserted vertices (one per step),
+  boundary splits, Delaunay edge flips (curve rebuilds included),
+  `RefineOnCurves` rebuilds and the interior vertices they reinserted or
+  dropped. Counting never changes a mesh;
+- `quality` (`MeshQuality`, `mesh_quality`): node, element and boundary
+  edge counts, smallest and largest angle, shortest and longest edge, and
+  the largest edge length over its local target when the options have a
+  constant target or a size field (unset for a user criterion);
+- `total_seconds`, the only field that differs between identical calls.
+
+`write_json(out, result.record)` (`mesh_record_json.hpp`) writes
+`"schema": "pde2d.mesh_run_record"`, `"schema_version": 1`, `operation`,
+`fingerprint`, `source_fingerprint`, `versions`, `options`, `work`,
+`quality` and `timings`, with the conventions of the FEM run records
+(classic locale, `max_digits10`, `null` for absent values);
+`read_mesh_run_record_json` checks the schema. FEM run records embed it
+under `mesh.provenance.run`. The record is request-time data: `.pde2d`
+files do not store it, and an imported result's record has no work.
 
 ## Export and resume
 

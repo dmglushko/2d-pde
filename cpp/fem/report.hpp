@@ -98,7 +98,26 @@ inline void record(std::ostream &out, const RunRecord &r) {
       << " solver_preparations=" << w.solver_preparations
       << " solver_reuses=" << w.solver_reuses << " time_steps=" << w.time_steps
       << " rejected_steps=" << w.rejected_steps << '\n'
-      << "  record evidence: proven=" << r.evidence.proven
+      << "  record solver work: iterations=" << w.solver_iterations << '\n';
+  if (const auto &s = r.stationary_solve) {
+    out << "  record solve: initial_guess="
+        << initial_guess_name(s->initial_guess);
+    if (s->guess)
+      out << " guess=" << s->guess->kind << ':' << s->guess->fingerprint;
+    out << " iterations=" << s->iterations << " converged=" << s->converged
+        << " relative_residual=" << s->relative_residual << '\n';
+  }
+  if (r.mesh.provenance) {
+    const auto &m = r.mesh.provenance->run;
+    out << "  record mesh run: operation="
+        << discretization::mesh_operation_name(m.operation)
+        << " refinement_steps=" << m.work.refinement_steps
+        << " edge_flips=" << m.work.edge_flips
+        << " curved_rebuilds=" << m.work.curved_rebuilds
+        << " min_angle=" << m.quality.min_angle_degrees
+        << " max_angle=" << m.quality.max_angle_degrees << '\n';
+  }
+  out << "  record evidence: proven=" << r.evidence.proven
       << " sampled=" << r.evidence.sampled << " unknown=" << r.evidence.unknown
       << " weakest=" << evidence_name(r.evidence.weakest) << '\n';
 }

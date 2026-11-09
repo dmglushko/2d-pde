@@ -494,7 +494,11 @@ missed its size target; that mesh is not solved on). The initial
 composed by hand give the same meshes and values bit for bit
 (`tests/fem/adaptive_loop.cpp` checks this).
 
-`AdaptiveHistory` holds the final `mesh`, `solution` and `estimate`, the
+`AdaptiveHistory` holds the `settings` it ran with (`AdaptiveSettings`:
+estimator and marker names, descriptors and whether they were the defaults,
+`max_iterations`, `tolerance`, the requested `refinement` options,
+`warm_start`, `transfer` options, `time`, `accept_unsatisfied_refinement`
+and the planners' names), the final `mesh`, `solution` and `estimate`, the
 `stop` reason and message, and one `AdaptiveIteration` per solve: its
 `RunRecord` (plan, mesh fingerprint and provenance with the refinement
 report that produced the mesh), solver iterations and initial-guess use,
@@ -502,8 +506,11 @@ the `TransferRecord` that seeded it (source and target nodes, extrapolated
 nodes, largest outside distance), an `EstimateSummary` (estimator name and
 descriptor, global estimate, elements, largest and mean indicator) and,
 unless it was the last, a `MarkingRecord` (strategy name, descriptor,
-marked and total elements), the `MeshReport` of the refined mesh (with
-`MarkedRefinementReport` counters) and its `Decision`s (with planners, a
+marked and total elements), the `MeshOptions` refine_mesh was called with
+(`refinement_options`, kept even when the refined mesh missed its size
+target and was never solved on), the `MeshReport` of the refined mesh (with
+`MarkedRefinementReport` counters), the refined result's mesh run record
+(`refinement_run`) and its `Decision`s (with planners, a
 `SolvePlanner` decision first and a `MeshPlanner` decision before the
 refinement):
 `DecisionSubject::Marking` (choice `Bulk(fraction=0.6)`, or
@@ -513,14 +520,117 @@ refinement):
 
 `write_json(out, history)` (`fem/adaptivity_json.hpp`) writes
 `"schema": "pde2d.adaptive_history"`, `"schema_version": 1`, then `stop`
-(`reason`, `message`), `iterations` (each: `index`, `record` = the full
+(`reason`, `message`), `settings` (`estimator` and `marker` with `name`,
+`descriptor`, `default`; `max_iterations`, `tolerance`, `refinement`,
+`warm_start`, `transfer` (`max_outside_distance`, `execution`), `time`,
+`accept_unsatisfied_refinement`, `solve_planner`, `mesh_planner`),
+`iterations` (each: `index`, `record` = the full
 run record document, `solver` (`iterations`, `initial_guess`), `transfer`,
-`estimate`, `marking`, `refinement`, `decisions`) and `final`
+`estimate`, `marking`, `refinement`, `refinement_options`,
+`refinement_run` (a mesh run record document), `decisions`) and `final`
 (`mesh_fingerprint`, `nodes`, `elements`, `estimate`), with the run-record
 conventions (absent values `null`, `max_digits10` numbers).
 `read_adaptive_history_json` checks the schema; `diff_records` compares two
 histories leaf by leaf and ignores nested `timings`. Indicators and nodal
 values are not written.
+
+## Transient adaptive loop
+
+`adapt_evolution` (`fem/adaptivity.hpp`) composes the same components for
+an evolution. It splits the plan's interval into `windows` equal windows
+(`adaptive_window_times`) and, per window: `evolve` on the current mesh,
+`estimate_error` of the last frame at the window's end, then (except after
+the last window, and only while the estimate exceeds `tolerance` when one
+is set) mark, `refine_mesh` and move the last frame to the new mesh with
+`transfer_field` as a nodal restart (`InitialConditions` with nodal
+`Field`s; the velocity too when the initial conditions have one). The
+restart's Dirichlet nodes are set to the problem's Dirichlet data (and its
+time derivative) at the restart time, from `PreparedAssembly` on the new
+mesh: interpolated boundary values would fail `evolve`'s compatibility
+check.
+
+```cpp
+EvolutionAdaptOptions options;
+options.windows = 6;
+options.marker = std::make_shared<BulkMarking>(0.6);
+auto history = adapt_evolution(mesh_result, problem, initial, plan, options);
+history.evolution.frames.back();          // final state on history.mesh
+write_json(out, history);                 // "pde2d.evolution_adaptive_history"
+```
+
+| `EvolutionAdaptOptions` field | Default | Meaning |
+| --- | --- | --- |
+| `windows` | 4 | equal windows of `[plan.time->start, plan.time->end]` |
+| `estimator`, `marker` | gradient recovery, `BulkMarking{0.5}` | as in `AdaptOptions` |
+| `tolerance` | 0 | refine after a window only when its estimate exceeds this (0: always) |
+| `refinement` | each result's own options | `MeshOptions` of the marked refinement |
+| `transfer` | `{}` | `TransferOptions` of the restart |
+| `accept_unsatisfied_refinement` | false | evolve on a refined mesh that missed its size target; otherwise it is discarded and the next window stays on the current mesh |
+| `output` | `{}` | `EvolutionOutput` of every window's `evolve` |
+
+The plan must have time settings and uniform steps (a step controller
+throws "adapt_evolution needs uniform time steps"); each window runs the
+plan with that window's `start` and `end`, `plan.mesh` updated as in
+`adapt` and `plan.analysis` refreshed for every new mesh. No planners run.
+`EvolutionAdaptiveHistory` holds the `settings`, one `EvolutionWindow` per
+window (bounds, the window's `RunRecord`, the `RestartRecord` that started
+it: transfers, Dirichlet nodes and the largest correction of a transferred
+value; the end-of-window `EstimateSummary`, `MarkingRecord`, requested
+refinement options, `MeshReport`, mesh run record, whether the refinement
+was accepted, and the `Marking`/`Refinement` decisions) and the final `mesh`,
+`evolution` (of the last window) and `estimate`. The driver adds no
+numerics: `tests/fem/transient_adaptivity.cpp` composes the loop by hand and
+compares bit for bit, and shows on the `heat_moving_peak` reference problem
+that the adapted error ends well below the unadapted coarse mesh's, at about
+the accuracy of a uniform mesh with more nodes.
+
+## Reference problems and plan comparisons
+
+`fem/reference/problems.hpp` is a small library of complete problems with
+exact or manufactured solutions (`ReferenceProblem`: `name`, `geometry`
+with named regions, `problem`, `transient` (initial conditions and window)
+for time-dependent ones, `exact` u(x, y, t), `notes` and suggested `mesh`
+options). `reference_problems()` returns all of them;
+`find_reference_problem(name)` one. Names are stable:
+
+| Name | What it tests |
+| --- | --- |
+| `l_shape_corner` | Laplace on the L-shaped domain, u = r^(2/3) sin(2θ/3): corner singularity, H1 rate 2/3 on uniform meshes |
+| `boundary_layer` | −εΔu + u_x + u_y = f, ε = 0.05: boundary layers at x = 1 and y = 1, nonsymmetric |
+| `variable_anisotropic_diffusion` | variable anisotropic diffusion with a mixed term, Dirichlet and conormal flux conditions |
+| `oblique_square` | −Δu + u = f with an oblique-derivative condition on three sides |
+| `annulus_mixed` | Poisson on an annulus: Dirichlet outside, Robin on the hole |
+| `heat_moving_peak` | u_t − Δu = f with a moving Gaussian peak and time-dependent Dirichlet data, t ∈ [0, 0.6] |
+| `wave_standing` | u_tt − Δu = 0, standing wave with initial velocity, t ∈ [0, 0.5] |
+
+`fem/reference/compare.hpp` runs plans on one of them and measures the
+error for the work spent:
+
+```cpp
+auto reference = find_reference_problem("annulus_mixed");
+auto c = compare_plans(reference, mesh_plan_from_user(reference.mesh),
+                       {lu_plan, cg_plan});
+c.entries[1].errors.l2;            // L2 and H1-seminorm error (error_norms)
+c.entries[1].work.solver_iterations;
+c.entries[1].record;               // the full RunRecord
+auto m = compare_mesh_plans(reference, {coarse, fine}, plan);
+write_json(out, c);                // "pde2d.plan_comparison", version 1
+```
+
+`compare_plans` meshes the geometry once with the mesh plan and solves with
+every plan; `compare_mesh_plans` meshes with every mesh plan and solves with
+one plan. Each solve gets the mesh plan it ran on as `plan.mesh` (and a
+mesh-bound analysis refreshed), so its record describes what ran.
+Stationary problems are compared at t = 0, transient ones at the end of the
+reference window, which the plan's `start` and `end` must match exactly.
+Each `ComparisonEntry` has its `index`, a `label` (`comparison_label`), the
+`RunRecord`, `errors` (`l2`, `h1_seminorm`, `time`), `work` (nodes,
+elements, assembly calls, linear solves, solver preparations and
+iterations, time steps, mesh refinement steps and edge flips) and `timings`
+(mesh and solve seconds). The JSON writes `reference`, `notes`, `kind`
+(`solve plans` or `mesh plans`) and `entries` (each with the same groups and
+the full run record under `record`); `read_plan_comparison_json` checks the
+schema and `diff_records` skips the timings.
 
 ## Optional parallel execution and verification
 
@@ -576,8 +686,14 @@ what is needed to reproduce and compare a run, as fields:
   order) and, for evolutions, the initial value and velocity
   (`field_fingerprint`, expression or nodal);
 - mesh provenance (`MeshOptions`, `MeshReport`, whether a boundary context was
-  kept) when the solve was given a `MeshResult`;
-- the stationary evaluation time;
+  kept, and the mesh run record of the meshing call, `run`: operation,
+  fingerprints, options, version, work counters, quality statistics and
+  time; see `cpp/discretization/README.md`) when the solve was given a
+  `MeshResult`;
+- the stationary evaluation time, and for a stationary solve
+  `stationary_solve`: the initial-guess use, the fingerprint of the guess
+  as passed (`field_fingerprint`, kind `nodal`), the iterations, whether it
+  converged and the final residual norms;
 - `strategies`: what ran for the time integrator, step sequence, linear solver,
   size field, refinement criterion and the solve and mesh planners, each `built-in` (the options rebuild it), `described` (a
   `StrategyDescriptor` names it and its parameters) or `not replayable` (a
@@ -586,15 +702,19 @@ what is needed to reproduce and compare a run, as fields:
 - versions: library version and git commit at configure time
   (`pde2d::library_version()`, "unknown" and empty outside CMake or git),
   Eigen and SymEngine;
-- execution policy and OpenMP availability, workload, work counters, an
+- execution policy and OpenMP availability, workload, work counters (with
+  `solver_iterations`, summed over every linear solve), an
   evidence summary of the decisions, and the total wall-clock time
   (`timings.total_seconds`, the only field that differs between identical
   runs).
 
 `write_json(out,record)` (`fem/record_json.hpp`) writes a versioned JSON
 document: `"schema": "pde2d.run_record"`, `"schema_version": 1`, then
-`versions`, `replayable`, `problem`, `mesh` (`fingerprint`, `provenance`),
-`workload`, `stationary_time`, `initial`, `plan` (`assembly`, `solver`,
+`versions`, `replayable`, `problem`, `mesh` (`fingerprint`, `provenance`
+with `run`, a mesh run record document), `workload`, `stationary_time`,
+`initial`, `stationary_solve` (`initial_guess`, `guess`, `outcome`:
+`iterations`, `converged`, `residual_norm`, `relative_residual`), `plan`
+(`assembly`, `solver`,
 `time`, `decisions`, `mesh` (with its `planner`), `analysis` (with
 `problem_fingerprint` and `mesh_fingerprint`), `planner`), `strategies`,
 `execution`, `work`,
@@ -614,7 +734,11 @@ for (const auto &d : pde2d::fem::diff_records(old_record, new_record))
 
 `diff_records` compares two records or parsed documents leaf by leaf (paths
 such as `plan.decisions[2].choice`) and ignores `timings` (also nested, as
-in adaptive histories) unless `{.ignore_timings = false}`. Mesh options in
+in adaptive histories and mesh run records) unless
+`{.ignore_timings = false}`. It also skips `outcome` objects (what a solve
+produced from its inputs: iterations and residuals) unless
+`{.ignore_outcomes = false}`, so by default a diff compares inputs, settings
+and work and a changed input shows as its fingerprint. Mesh options in
 records include `refinement.criterion` (whether a user refinement criterion
 was set) and `refinement.criterion_descriptor`.
 

@@ -122,6 +122,8 @@ inline Vector solve_step(const SparseMatrix &a, const Vector &b,
   }();
   result.timings.solver += solution.report.timings;
   ++result.timings.linear_solves;
+  result.timings.solver_iterations +=
+      static_cast<std::size_t>(std::max(0, solution.report.iterations));
   if (!solution.report.converged)
     throw std::runtime_error("Evolution solve: " + solution.report.message);
   if (pending)
@@ -330,7 +332,7 @@ inline Evolution run(const discretization::TriangleMesh &mesh,
   record = record_detail::make(
       std::move(record_plan), record_detail::workload(mesh), mesh_print,
       {t.assembly_calls, t.linear_solves, t.solver.preparations,
-       t.solver_reuses, t.time_steps, t.rejected_steps});
+       t.solver_reuses, t.time_steps, t.rejected_steps, t.solver_iterations});
   if (mesh_result)
     set_mesh_provenance(record, *mesh_result);
   record.problem_fingerprint = problem_print;

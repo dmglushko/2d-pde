@@ -13,6 +13,7 @@
 // locale and max_digits10 digits (json.hpp), so a parsed record has exactly
 // the doubles of the run. Strategy factories are not serialized: the
 // "strategies" array names what ran and whether it is replayable.
+#include "discretization/mesh_record_json.hpp"
 #include "fem/analysis_types.hpp"
 #include "fem/boundary_form.hpp"
 #include "fem/json.hpp"
@@ -43,15 +44,7 @@ inline JsonValue execution(const pde2d::ExecutionOptions &e) {
   return v;
 }
 inline JsonValue descriptor(const std::optional<pde2d::StrategyDescriptor> &d) {
-  if (!d)
-    return JsonValue::null();
-  auto v = JsonValue::object();
-  v.set("name", json_string(d->name));
-  auto parameters = JsonValue::object();
-  for (const auto &p : d->parameters)
-    parameters.set(p.name, json_string(p.value));
-  v.set("parameters", std::move(parameters));
-  return v;
+  return discretization::descriptor_json(d);
 }
 inline JsonValue decisions(const std::vector<Decision> &list) {
   auto v = JsonValue::array();
@@ -66,53 +59,13 @@ inline JsonValue decisions(const std::vector<Decision> &list) {
   }
   return v;
 }
+// The mesh encodings are discretization's (mesh_record_json.hpp), so a
+// mesh run record and a run record's provenance agree key for key.
 inline JsonValue mesh_options(const discretization::MeshOptions &o) {
-  auto boundary = JsonValue::object();
-  boundary.set("max_edge_length", json_number(o.boundary.max_edge_length));
-  boundary.set("max_curve_deviation",
-               json_number(o.boundary.max_curve_deviation));
-  boundary.set("preserve_corners", json_bool(o.boundary.preserve_corners));
-  auto refinement = JsonValue::object();
-  refinement.set("max_edge_length", json_number(o.refinement.max_edge_length));
-  refinement.set("max_steps", json_number(o.refinement.max_steps));
-  refinement.set("size_field",
-                 json_bool(static_cast<bool>(o.refinement.size_field)));
-  refinement.set("size_field_descriptor",
-                 descriptor(o.refinement.size_field_descriptor));
-  refinement.set("criterion", json_bool(o.refinement.criterion.has_value()));
-  refinement.set("criterion_descriptor",
-                 o.refinement.criterion
-                     ? descriptor(o.refinement.criterion->descriptor)
-                     : JsonValue::null());
-  auto v = JsonValue::object();
-  v.set("algorithm",
-        json_string(discretization::interior_algorithm_name(o.algorithm)));
-  v.set("boundary_treatment",
-        json_string(
-            discretization::boundary_treatment_name(o.boundary_treatment)));
-  v.set("preserve_regions", json_bool(o.preserve_regions));
-  v.set("boundary", std::move(boundary));
-  v.set("refinement", std::move(refinement));
-  return v;
+  return discretization::mesh_options_json(o);
 }
 inline JsonValue mesh_report(const discretization::MeshReport &r) {
-  auto v = JsonValue::object();
-  v.set("size_satisfied", json_bool(r.size_satisfied));
-  v.set("delaunay_verified", json_bool(r.delaunay_verified));
-  v.set("refinement_steps", json_number(r.refinement_steps));
-  v.set("message", json_string(r.message));
-  if (r.marked) {
-    const auto &m = *r.marked;
-    auto marked = JsonValue::object();
-    marked.set("marked_elements", json_number(m.marked_elements));
-    marked.set("marked_edges", json_number(m.marked_edges));
-    marked.set("bisected_edges", json_number(m.bisected_edges));
-    marked.set("absorbed_edges", json_number(m.absorbed_edges));
-    marked.set("unrefinable_elements", json_number(m.unrefinable_elements));
-    v.set("marked", std::move(marked));
-  } else
-    v.set("marked", JsonValue::null());
-  return v;
+  return discretization::mesh_report_json(r);
 }
 template <class T, class Name>
 JsonValue property(const Property<T> &p, Name &&name) {
@@ -292,6 +245,7 @@ inline JsonValue to_json(const RunRecord &r) {
     provenance.set("options", mesh_options(p->options));
     provenance.set("report", mesh_report(p->report));
     provenance.set("boundary_context", json_bool(p->boundary_context));
+    provenance.set("run", discretization::to_json(p->run));
     mesh.set("provenance", std::move(provenance));
   } else
     mesh.set("provenance", JsonValue::null());
@@ -310,6 +264,20 @@ inline JsonValue to_json(const RunRecord &r) {
     v.set("initial", std::move(initial));
   } else
     v.set("initial", JsonValue::null());
+  if (const auto &s = r.stationary_solve) {
+    auto solve = JsonValue::object();
+    solve.set("initial_guess",
+              json_string(initial_guess_name(s->initial_guess)));
+    solve.set("guess", s->guess ? field(*s->guess) : JsonValue::null());
+    auto outcome = JsonValue::object();
+    outcome.set("iterations", json_number(s->iterations));
+    outcome.set("converged", json_bool(s->converged));
+    outcome.set("residual_norm", json_number(s->residual_norm));
+    outcome.set("relative_residual", json_number(s->relative_residual));
+    solve.set("outcome", std::move(outcome));
+    v.set("stationary_solve", std::move(solve));
+  } else
+    v.set("stationary_solve", JsonValue::null());
   v.set("plan", plan(r.plan));
   auto strategies = JsonValue::array();
   for (const auto &s : r.strategies) {
@@ -333,6 +301,7 @@ inline JsonValue to_json(const RunRecord &r) {
   work.set("solver_reuses", json_number(w.solver_reuses));
   work.set("time_steps", json_number(w.time_steps));
   work.set("rejected_steps", json_number(w.rejected_steps));
+  work.set("solver_iterations", json_number(w.solver_iterations));
   v.set("work", std::move(work));
   auto evidence = JsonValue::object();
   evidence.set("proven", json_number(r.evidence.proven));
@@ -381,6 +350,11 @@ struct RecordDiffOptions {
   // (also nested, as in the run records of an adaptive history:
   // "iterations[0].record.timings.total_seconds").
   bool ignore_timings = true;
+  // Skip "outcome" objects: what a solve produced from its inputs
+  // (iterations, residuals of "stationary_solve.outcome"). They are
+  // reproducible, but a changed input changes them, so by default a diff
+  // compares inputs, settings and work; set false to compare outcomes too.
+  bool ignore_outcomes = true;
 };
 // Leaves that differ, in the order of `left`, then leaves only `right` has.
 inline std::vector<RecordDifference>
@@ -389,11 +363,14 @@ diff_records(const JsonValue &left, const JsonValue &right,
   std::vector<std::pair<std::string, std::string>> a, b;
   record_json_detail::flatten(left, "", a);
   record_json_detail::flatten(right, "", b);
+  const auto group = [](const std::string &path, const std::string &key) {
+    return path == key || path.starts_with(key + '.') ||
+           path.ends_with('.' + key) ||
+           path.find('.' + key + '.') != std::string::npos;
+  };
   const auto ignored = [&](const std::string &path) {
-    return options.ignore_timings &&
-           (path == "timings" || path.starts_with("timings.") ||
-            path.ends_with(".timings") ||
-            path.find(".timings.") != std::string::npos);
+    return (options.ignore_timings && group(path, "timings")) ||
+           (options.ignore_outcomes && group(path, "outcome"));
   };
   std::map<std::string, std::string> rhs(b.begin(), b.end());
   std::vector<RecordDifference> differences;

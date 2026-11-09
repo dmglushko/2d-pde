@@ -44,3 +44,5 @@
 #include "analysis.hpp"
 #include "planner.hpp"
 #include "report.hpp"
+#include "reference/problems.hpp"
+#include "reference/compare.hpp"

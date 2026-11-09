@@ -4,6 +4,7 @@
 // edges, pending legalization work and a lazily invalidated longest-edge heap
 // for size refinement; cdt_verified() is the independent read-only check.
 #include "../geometry_base.hpp"
+#include "../mesh_types.hpp"
 #include "../mesh_validation.hpp"
 #include "../predicates.hpp"
 #include "../size_criterion.hpp"
@@ -59,6 +60,9 @@ public:
   std::priority_queue<SizeEntry> sizes;
   SizeCriterion criterion;
   std::set<std::pair<double, double>> coordinates;
+  // Work counters of the meshing call (MeshRunRecord::work), when set.
+  // Counting never changes the mesh.
+  MeshWork *work = nullptr;
   void queue_size(Edge e) {
     auto g = ++generation;
     generations[e] = g;
@@ -165,6 +169,8 @@ public:
         continue;
       if (++flips > limit)
         throw std::runtime_error("Delaunay legalization work budget exhausted");
+      if (work)
+        ++work->edge_flips;
       const auto own = owners.at(edge);
       auto i = *own.begin(), j = *std::next(own.begin()), c = opposite(i, edge),
            d = opposite(j, edge);

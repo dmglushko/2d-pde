@@ -281,7 +281,51 @@ rule is an `AdaptiveStop` value with a stable name in
 order and a case in that test. A new per-iteration field goes into
 `AdaptiveIteration` and its key into `adaptivity_json.hpp` (adding a key
 keeps `adaptive_history_schema_version`; renaming or removing one bumps it)
-and docs/fem/README.md.
+and docs/fem/README.md. A new `AdaptOptions` field also belongs in
+`AdaptiveSettings` (`settings_of`) and its JSON, so a history says how it
+was produced.
+
+The transient driver `adapt_evolution` follows the same rule: it composes
+`evolve`, `estimate_error`, a `MarkingStrategy`, `refine_mesh`,
+`transfer_field` and the Dirichlet data of `PreparedAssembly` at the
+restart time, and `tests/fem/transient_adaptivity.cpp` composes the same
+loop by hand as its oracle. Keep the restart nodal (`InitialConditions`
+with nodal `Field`s) and the windows uniform-step (`adaptive_window_times`);
+a step controller spanning windows would need its own restart contract.
+A new per-window field goes into `EvolutionWindow`, its key into
+`adaptivity_json.hpp` (schema `pde2d.evolution_adaptive_history`) and
+docs/fem/README.md ("Transient adaptive loop").
+
+## A reference problem
+
+Reference problems (`reference/problems.hpp`) are the yardstick automatic
+choices are measured against (docs/vision.md). A new one is a function
+returning a `ReferenceProblem` and an entry in `reference_problems()`:
+
+- Give it a stable `name` (comparison documents refer to it) and `notes`
+  saying what it tests that the others do not.
+- Build the geometry from `discretization::CurveGeometry` with the region
+  names its conditions use, and suggest coarse `mesh` options that meet
+  their size target.
+- The exact solution is a field in x, y, t. Manufacture the source from the
+  strong form (`reference_detail::strong_source`) or, better, state a closed
+  form; boundary values may use `nx`, `ny` (the outward normal).
+  Expressions are restricted to straight edges symbolically: avoid forms
+  SymEngine rewrites on a branch, such as `atan2` of two equal arguments
+  (see `reference_l_shape_corner`).
+- Transient problems set `transient` (initial conditions, with a velocity
+  for second order, and the window).
+- `tests/fem/reference_problems.cpp` checks every problem automatically:
+  the strong-form residual by finite differences, the boundary conditions on
+  the source curves, the initial data, and convergence under halving the
+  mesh size. Add a case there only for a property specific to the problem
+  (like the L-shape's H1 rate).
+
+`compare_plans` and `compare_mesh_plans` (`reference/compare.hpp`) only run
+public meshing and solve calls and measure them; keep new comparisons that
+way (a comparison never changes a numerical result) and add new work or
+error fields to `ComparisonEntry` and its JSON keys (schema
+`pde2d.plan_comparison`).
 
 ## A linear solver backend or preconditioner
 

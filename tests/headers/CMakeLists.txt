@@ -2,17 +2,20 @@
 # header (included twice, so a missing include guard fails too), all linked
 # into one executable, so a non-inline definition in a header fails at link
 # time. Headers are discovered by globbing on purpose: a new public header is
-# covered without registration. Private detail/ headers are not checked.
+# covered without registration, also in a public subdirectory such as
+# cpp/fem/reference/. Private detail/ headers are not checked.
 # FEM headers need PDE2D_BUILD_FEM, svg_geometry.hpp needs LibXml2.
 set(pde2d_header_globs "${PROJECT_SOURCE_DIR}/cpp/*.hpp"
   "${PROJECT_SOURCE_DIR}/cpp/discretization/*.hpp")
 if(PDE2D_BUILD_FEM)
-  list(APPEND pde2d_header_globs "${PROJECT_SOURCE_DIR}/cpp/fem/*.hpp")
+  list(APPEND pde2d_header_globs "${PROJECT_SOURCE_DIR}/cpp/fem/*.hpp"
+    "${PROJECT_SOURCE_DIR}/cpp/fem/*/*.hpp")
 endif()
 set(pde2d_header_sources)
 set(pde2d_header_count 0)
 foreach(pattern IN LISTS pde2d_header_globs)
   file(GLOB headers CONFIGURE_DEPENDS "${pattern}")
+  list(FILTER headers EXCLUDE REGEX "/detail/")
   list(SORT headers)
   foreach(header IN LISTS headers)
     file(RELATIVE_PATH relative "${PROJECT_SOURCE_DIR}/cpp" "${header}")

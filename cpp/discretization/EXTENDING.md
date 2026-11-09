@@ -143,6 +143,12 @@ other code compares `MeshOptions::algorithm` with an enum value. Steps:
    name if needed, and add tests: `interior_algorithm_capabilities` values,
    the excluded requests' messages and meshes of every boundary treatment
    (see `tests/discretization/refinement_criterion.cpp`).
+5. Work counters: the generic loop and `Topology` count refinement steps,
+   flips and rebuilds into `MeshResult::record.work` (`MeshWork`); a unit
+   with its own topology work sets `Topology::work` (or counts into
+   `result.record.work`) the same way. Counting must never change the mesh.
+   The public entry points in `triangulate.hpp` complete the record
+   (`finish_mesh_run_record`); a new entry point does the same.
 
 ## Refinement: size criteria and boundary policies
 

@@ -54,6 +54,7 @@ MeshResult refine_with(MeshResult result, const MeshOptions &options,
   Policy::prepare(result, criterion);
   RefinementState state{result, std::make_unique<Topology>(result.mesh),
                         criterion, delaunay};
+  state.topology->work = &result.record.work;
   if (delaunay)
     state.topology->legalize();
   if (criterion.active())
@@ -91,6 +92,7 @@ MeshResult refine_with(MeshResult result, const MeshOptions &options,
       auto index =
           static_cast<std::size_t>(it - result.mesh.boundary_edges.begin());
       Policy::split_boundary(state, longest, index, mid);
+      ++result.record.work.boundary_splits;
     } else {
       state.topology->split(longest, mid);
       if (delaunay)
@@ -99,7 +101,9 @@ MeshResult refine_with(MeshResult result, const MeshOptions &options,
     if (criterion.split_hook)
       criterion.split_hook(a, b);
     ++result.report.refinement_steps;
+    ++result.record.work.inserted_vertices;
   }
+  result.record.work.refinement_steps = result.report.refinement_steps;
   result.report.delaunay_verified = delaunay;
   validate_mesh_geometry(result.mesh);
   return result;
@@ -115,6 +119,7 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
                               options.boundary.preserve_corners);
   result.options = options;
   result.report = {};
+  result.record = {};
   restore_region_tags(result, options);
   return with_boundary_policy(
       options.boundary_treatment, [&](auto policy) -> MeshResult {

@@ -14,6 +14,8 @@
 #include "detail/interior_algorithms.hpp"
 #include "detail/refinement_loop.hpp"
 #include "detail/refinement_policy.hpp"
+#include "mesh_fingerprint.hpp"
+#include "mesh_record.hpp"
 #include "size_criterion.hpp"
 #include <algorithm>
 #include <memory>
@@ -37,10 +39,27 @@ interior_algorithm_capabilities(InteriorAlgorithm algorithm) {
   return mesh_detail::with_interior_algorithm(
       algorithm, [](auto unit) { return decltype(unit)::capabilities; });
 }
+namespace mesh_detail {
+// The result of a meshing call with its record (mesh_record.hpp).
+inline MeshResult recorded(MeshResult result, MeshOperation operation,
+                           std::string source,
+                           mesh_record_detail::Clock::time_point started) {
+  finish_mesh_run_record(result, operation, std::move(source),
+                         mesh_record_detail::seconds_since(started));
+  return result;
+}
+} // namespace mesh_detail
+// Every meshing call returns a MeshResult whose `record` (MeshRunRecord,
+// mesh_types.hpp) names the operation, the fingerprints of the produced and
+// the refined mesh, the options, the library version, the work counters,
+// quality statistics and wall-clock time.
 [[nodiscard]] inline MeshResult
 generate_mesh(const DiscretizedBoundary &boundary,
               const MeshOptions &options = {}) {
-  return mesh_detail::generate_with_algorithm(boundary, options);
+  const auto started = mesh_record_detail::Clock::now();
+  return mesh_detail::recorded(
+      mesh_detail::generate_with_algorithm(boundary, options),
+      MeshOperation::Generate, {}, started);
 }
 [[nodiscard]] inline MeshResult generate_mesh(const Boundary &boundary,
                                               const MeshOptions &options = {}) {
@@ -48,18 +67,26 @@ generate_mesh(const DiscretizedBoundary &boundary,
 }
 [[nodiscard]] inline MeshResult generate_mesh(const CurveGeometry &geometry,
                                               const MeshOptions &options = {}) {
+  const auto started = mesh_record_detail::Clock::now();
   mesh_detail::validate_options(options);
-  return generate_mesh(
-      discretize_boundary(geometry, options.boundary, options.preserve_regions),
-      options);
+  // The record's time includes boundary sampling.
+  return mesh_detail::recorded(
+      mesh_detail::generate_with_algorithm(
+          discretize_boundary(geometry, options.boundary,
+                              options.preserve_regions),
+          options),
+      MeshOperation::Generate, {}, started);
 }
 [[nodiscard]] inline MeshResult
 refine_mesh(const TriangleMesh &mesh, const MeshOptions &options = {},
             std::optional<BoundaryContext> context = std::nullopt) {
+  const auto started = mesh_record_detail::Clock::now();
   mesh_detail::require_refinement(options.algorithm, false);
-  return mesh_detail::refine_with_algorithm(
-      MeshResult{mesh, std::move(context), options, {}}, options,
-      mesh_detail::size_criterion(options.refinement), false);
+  return mesh_detail::recorded(
+      mesh_detail::refine_with_algorithm(
+          MeshResult{mesh, std::move(context), options, {}}, options,
+          mesh_detail::size_criterion(options.refinement), false),
+      MeshOperation::Refine, mesh_fingerprint(mesh), started);
 }
 [[nodiscard]] inline MeshResult refine_mesh(const MeshResult &previous,
                                             const MeshOptions &options) {
@@ -78,6 +105,7 @@ refine_mesh(const TriangleMesh &mesh, const MeshOptions &options = {},
 [[nodiscard]] inline MeshResult
 refine_mesh(const MeshResult &previous, const std::vector<std::size_t> &marked,
             const MeshOptions &options) {
+  const auto started = mesh_record_detail::Clock::now();
   mesh_detail::require_refinement(options.algorithm, true);
   validate_mesh_geometry(previous.mesh);
   auto state = mesh_detail::select_marked_edges(previous.mesh, marked,
@@ -116,7 +144,8 @@ refine_mesh(const MeshResult &previous, const std::vector<std::size_t> &marked,
                                 : result.report.message + "; " + note;
   }
   result.report.marked = report;
-  return result;
+  return mesh_detail::recorded(std::move(result), MeshOperation::MarkedRefine,
+                               mesh_fingerprint(previous.mesh), started);
 }
 [[nodiscard]] inline MeshResult
 subdivide_mesh(const TriangleMesh &mesh, const MeshOptions &options = {},
@@ -124,7 +153,10 @@ subdivide_mesh(const TriangleMesh &mesh, const MeshOptions &options = {},
   if (options.boundary_treatment == BoundaryTreatment::RefineOnCurves)
     throw std::invalid_argument("Subdivision preserves the polygon; curve "
                                 "updates require Delaunay refinement");
-  return mesh_detail::refine_result(
-      MeshResult{mesh, std::move(context), options, {}}, options, true);
+  const auto started = mesh_record_detail::Clock::now();
+  return mesh_detail::recorded(
+      mesh_detail::refine_result(
+          MeshResult{mesh, std::move(context), options, {}}, options, true),
+      MeshOperation::Subdivide, mesh_fingerprint(mesh), started);
 }
 } // namespace pde2d::discretization

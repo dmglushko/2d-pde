@@ -30,6 +30,7 @@
 #include "fem/plan.hpp"
 #include "fem/record.hpp"
 #include "fem/timing.hpp"
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -129,6 +130,17 @@ class PreparedStationary {
       set_mesh_provenance(result.record, *provenance_);
     result.record.problem_fingerprint = problem_fingerprint_;
     result.record.stationary_time = time;
+    result.record.work.solver_iterations =
+        static_cast<std::size_t>(std::max(0, result.report.iterations));
+    const auto &r = result.report;
+    StationarySolveRecord solve{r.initial_guess, std::nullopt,
+                                r.iterations,    r.converged,
+                                r.residual_norm, r.relative_residual};
+    if (guess) {
+      const Field given(*guess);
+      solve.guess = FieldRecord{field_kind(given), field_fingerprint(given)};
+    }
+    result.record.stationary_solve = std::move(solve);
     result.record.timings.total_seconds = result.report.timings.total_seconds;
     return result;
   }

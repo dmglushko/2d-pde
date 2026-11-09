@@ -1,6 +1,8 @@
 # Documentation check: every public header of cpp/discretization and cpp/fem
-# (top level; detail/ is private) must be named, in backticks, in its
-# module README (`cpp/<module>/README.md`, the header map). Fails with the
+# (any directory but detail/, which is private; a header in a public
+# subdirectory such as cpp/fem/reference/ is named with its relative path,
+# `reference/problems.hpp`) must be named, in backticks, in its module
+# README (`cpp/<module>/README.md`, the header map). Fails with the
 # list of missing headers.
 #
 #   cmake -DPDE2D_ROOT=<repository> -P tests/tools/readme_headers.cmake
@@ -15,8 +17,9 @@ foreach(module IN ITEMS discretization fem)
     message(FATAL_ERROR "Missing module README: cpp/${module}/README.md")
   endif()
   file(READ "${readme_path}" readme)
-  file(GLOB headers RELATIVE "${PDE2D_ROOT}/cpp/${module}"
+  file(GLOB_RECURSE headers RELATIVE "${PDE2D_ROOT}/cpp/${module}"
        "${PDE2D_ROOT}/cpp/${module}/*.hpp")
+  list(FILTER headers EXCLUDE REGEX "(^|/)detail/")
   list(SORT headers)
   foreach(header IN LISTS headers)
     math(EXPR checked "${checked} + 1")

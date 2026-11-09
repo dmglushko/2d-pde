@@ -76,6 +76,9 @@ struct WorkloadRecord {
 struct WorkRecord {
   std::size_t assembly_calls = 0, linear_solves = 0, solver_preparations = 0,
               solver_reuses = 0, time_steps = 0, rejected_steps = 0;
+  // Iterations of the linear solves, summed (SolverReport::iterations;
+  // direct backends report their own count, SparseLU 0).
+  std::size_t solver_iterations = 0;
 };
 
 // The library (pde2d::library_version) and the numerical dependencies it
@@ -94,9 +97,12 @@ struct MeshProvenance {
   discretization::MeshReport report{};
   // The result kept its boundary context (refinable along the curves).
   bool boundary_context = false;
+  // The meshing call that produced the result (MeshResult::record): its
+  // operation, fingerprints, options, version, work, quality and time.
+  discretization::MeshRunRecord run{};
 };
 inline MeshProvenance mesh_provenance(const discretization::MeshResult &r) {
-  return {r.options, r.report, r.boundary_context.has_value()};
+  return {r.options, r.report, r.boundary_context.has_value(), r.record};
 }
 struct MeshRecord {
   std::string fingerprint{}; // discretization::mesh_fingerprint
@@ -110,6 +116,17 @@ struct FieldRecord {
 struct InitialRecord {
   FieldRecord value{};
   std::optional<FieldRecord> velocity{};
+};
+// How the linear solve of a stationary run started and ended: the initial
+// guess it was given (field_fingerprint of the nodal vector as passed,
+// before its Dirichlet rows are set) and whether the backend used it, the
+// iterations and the final true residual (SolverReport).
+struct StationarySolveRecord {
+  InitialGuess initial_guess = InitialGuess::None;
+  std::optional<FieldRecord> guess{};
+  int iterations = 0;
+  bool converged = false;
+  double residual_norm = 0, relative_residual = 0;
 };
 
 // Whether a record rebuilds a strategy: from the options alone (built-in),
@@ -167,6 +184,8 @@ struct RunRecord {
   std::optional<double> stationary_time{};
   // Initial fields of an evolution.
   std::optional<InitialRecord> initial{};
+  // The linear solve of a stationary run (guess, iterations, residual).
+  std::optional<StationarySolveRecord> stationary_solve{};
   // In DecisionSubject order.
   std::vector<StrategyRecord> strategies{};
   TimingRecord timings{};
