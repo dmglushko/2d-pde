@@ -1,7 +1,7 @@
 #pragma once
 // TimeMethod::Newmark. Average acceleration (beta = 1/4, gamma = 1/2), solved
 // for the new acceleration. Dirichlet displacement data become acceleration
-// constraints. The acceleration of a trial stays provisional until accept().
+// constraints.
 #include "fem/detail/time_schemes/interface.hpp"
 #include <utility>
 
@@ -18,8 +18,7 @@ struct NewmarkScheme : UnitBase<NewmarkScheme> {
 
 class NewmarkIntegrator final : public time_scheme_detail::BuiltinScheme<
                                     time_scheme_detail::NewmarkScheme> {
-  Vector acceleration_, trial_acceleration_;
-  bool pending_ = false;
+  Vector acceleration_;
 
 public:
   void check(const AssembledSystem &s) const override {
@@ -40,24 +39,9 @@ public:
         old.second_mass, old.load - old.stiffness * s.u - old.first_mass * s.v,
         acceleration_data, false);
   }
-  bool transactional() const override { return true; }
-  IntegratorState advance(const AssembledSystem &previous,
-                          const AssembledSystem &current, double h,
-                          const IntegratorState &s,
+  IntegratorState advance(const AssembledSystem &, const AssembledSystem &cur,
+                          double h, const IntegratorState &s,
                           const IntegratorServices &services) override {
-    auto next = trial(previous, current, h, s, services);
-    accept();
-    return next;
-  }
-  void accept() override {
-    if (pending_)
-      acceleration_ = std::move(trial_acceleration_);
-    pending_ = false;
-  }
-  void reject() override { pending_ = false; }
-  IntegratorState trial(const AssembledSystem &, const AssembledSystem &cur,
-                        double h, const IntegratorState &s,
-                        const IntegratorServices &services) override {
     const Vector predicted_u = s.u + h * s.v + (h * h / 4) * acceleration_;
     const Vector predicted_v = s.v + (h / 2) * acceleration_;
     SparseMatrix a = cur.second_mass + (h / 2) * cur.first_mass +
@@ -70,8 +54,7 @@ public:
     Vector next_acceleration = services.solve(a, rhs, data, true);
     IntegratorState next{predicted_u + (h * h / 4) * next_acceleration,
                          predicted_v + (h / 2) * next_acceleration};
-    trial_acceleration_ = std::move(next_acceleration);
-    pending_ = true;
+    acceleration_ = std::move(next_acceleration);
     return next;
   }
 };

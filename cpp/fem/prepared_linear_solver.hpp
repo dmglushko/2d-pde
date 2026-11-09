@@ -104,7 +104,6 @@ private:
       throw std::invalid_argument("Invalid initial guess");
     LinearSolution result{Vector::Zero(b.size()), {}};
     auto &r = result.report;
-    r.decisions = solver_decisions(options_);
     r.timings.rhs_solves = 1;
     const double bn = b.stableNorm();
     r.residual_norm = bn;

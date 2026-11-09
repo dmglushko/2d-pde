@@ -6,16 +6,15 @@
 //   CrankNicolson   first order, CrankNicolsonIntegrator
 //   Newmark         second order (needs u_t), NewmarkIntegrator
 //
-// Each unit states the scheme's name, order, factory and descriptor once;
-// time_method_name, time_method_order, time_method_descriptor and
-// make_time_integrator below read them through the single dispatch
+// Each unit states the scheme's name, order and factory once;
+// time_method_name, time_method_order and make_time_integrator below read
+// them through the single dispatch
 // (time_scheme_detail::with_time_method). A user scheme needs no library
 // change: implement TimeIntegrator and pass a factory in
 // TimeOptions::integrator (evolution.hpp). EXTENDING.md has the recipe for a
 // built-in one.
 #include "fem/detail/time_schemes/schemes.hpp"
 #include "fem/time_integrator.hpp"
-#include "provenance.hpp"
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -35,16 +34,6 @@ inline std::optional<int> time_method_order(TimeMethod method) {
   return time_scheme_detail::with_time_method(
       method, []<class Unit>(Unit) { return std::optional<int>(Unit::order); },
       [] { return std::optional<int>(); });
-}
-// The descriptor run records show for a built-in scheme; nullopt for Custom.
-inline std::optional<pde2d::StrategyDescriptor>
-time_method_descriptor(TimeMethod method) {
-  return time_scheme_detail::with_time_method(
-      method,
-      []<class Unit>(Unit) {
-        return std::optional<pde2d::StrategyDescriptor>(Unit::descriptor());
-      },
-      [] { return std::optional<pde2d::StrategyDescriptor>(); });
 }
 
 inline std::unique_ptr<TimeIntegrator> make_time_integrator(TimeMethod method) {

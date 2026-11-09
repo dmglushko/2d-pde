@@ -6,11 +6,10 @@
 //   for (const auto &edge : b.edges)  // mesh.boundary_edges order
 //     classify_edge_condition(b.equation, b.condition(edge), edge.frame);
 //
-// Assembly (PreparedAssembly) and analysis (analyze(problem, mesh)) both start
-// from this one binding, so they accept and reject the same assignments and
-// see the same outward normals. The binding owns a snapshot of the equation
-// and of one condition per assignment, and edges refer to them by index: it
-// stays valid (and unchanged) when the Problem is changed or destroyed.
+// Assembly (PreparedAssembly) starts from this binding. The binding owns a
+// snapshot of the equation and of one condition per assignment, and edges refer
+// to them by index: it stays valid (and unchanged) when the Problem is changed
+// or destroyed.
 //
 // Rules, with the exception messages tests match: every boundary edge has a
 // nonempty region tag; every assigned region exists in the mesh ("Absent

@@ -1,14 +1,13 @@
 #pragma once
 // Private (mesh_detail) part of triangulate.hpp: the generic refinement loop.
-// refine_with() splits the highest-priority edge failing the criterion
-// (size_criterion.hpp) until none is left; the boundary policy of the
-// BoundaryTreatment (refinement_policy.hpp) decides everything that depends
-// on the boundary. refine_result() validates a request and dispatches the
-// policy. Interior algorithms (interior_algorithms.hpp) call it; it does no
+// refine_with() splits the longest edge exceeding
+// RefinementOptions::max_edge_length until none is left; the boundary policy
+// of the BoundaryTreatment (refinement_policy.hpp) decides everything that
+// depends on the boundary. refine_result() validates a request and dispatches
+// the policy. Interior algorithms (interior_algorithms.hpp) call it; it does no
 // algorithm dispatch itself.
 #include "../boundary_context.hpp"
 #include "../boundary_discretization.hpp"
-#include "../size_criterion.hpp"
 #include "cdt_topology.hpp"
 #include "curved_boundary.hpp"
 #include "ear_clipping.hpp"
@@ -44,28 +43,28 @@ inline void restore_region_tags(MeshResult &result,
     }
   }
 }
-// The generic loop: split the highest-priority edge failing the criterion
-// until none is left, the step budget runs out or coordinates stop
-// resolving. Policy decides everything that depends on the boundary
-// treatment.
+// The generic loop: split the longest edge exceeding the target (first
+// lexicographic edge on ties) until none is left, the step budget runs out or
+// coordinates stop resolving. Policy decides everything that depends on the
+// boundary treatment.
 template <class Policy>
 MeshResult refine_with(MeshResult result, const MeshOptions &options,
-                       bool delaunay, const RefinementCriterion &criterion) {
-  Policy::prepare(result, criterion);
-  RefinementState state{result, std::make_unique<Topology>(result.mesh),
-                        criterion, delaunay};
-  state.topology->work = &result.record.work;
+                       bool delaunay) {
+  const double h = options.refinement.max_edge_length;
+  Policy::prepare(result, h);
+  RefinementState state{result, std::make_unique<Topology>(result.mesh), h,
+                        delaunay};
   if (delaunay)
     state.topology->legalize();
-  if (criterion.active())
-    if (auto conflict = Policy::conflict(result, criterion)) {
+  if (h > 0)
+    if (auto conflict = Policy::conflict(result, h)) {
       result.report.size_satisfied = false;
       result.report.delaunay_verified = delaunay;
       result.report.message = *conflict;
       return result;
     }
-  state.topology->initialize_size(criterion.size);
-  for (int step = 0; criterion.active(); ++step) {
+  state.topology->initialize_size(h);
+  for (int step = 0; h > 0; ++step) {
     auto candidate = state.topology->longest();
     if (!candidate)
       break;
@@ -92,25 +91,19 @@ MeshResult refine_with(MeshResult result, const MeshOptions &options,
       auto index =
           static_cast<std::size_t>(it - result.mesh.boundary_edges.begin());
       Policy::split_boundary(state, longest, index, mid);
-      ++result.record.work.boundary_splits;
     } else {
       state.topology->split(longest, mid);
       if (delaunay)
         state.topology->legalize(false);
     }
-    if (criterion.split_hook)
-      criterion.split_hook(a, b);
     ++result.report.refinement_steps;
-    ++result.record.work.inserted_vertices;
   }
-  result.record.work.refinement_steps = result.report.refinement_steps;
   result.report.delaunay_verified = delaunay;
   validate_mesh_geometry(result.mesh);
   return result;
 }
 inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
-                                bool subdivision,
-                                const RefinementCriterion &criterion) {
+                                bool subdivision) {
   validate_options(options);
   validate_mesh_geometry(result.mesh);
   if (result.boundary_context)
@@ -119,19 +112,12 @@ inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
                               options.boundary.preserve_corners);
   result.options = options;
   result.report = {};
-  result.record = {};
   restore_region_tags(result, options);
   return with_boundary_policy(
       options.boundary_treatment, [&](auto policy) -> MeshResult {
         using Policy = decltype(policy);
         Policy::validate(result);
-        return refine_with<Policy>(std::move(result), options, !subdivision,
-                                   criterion);
+        return refine_with<Policy>(std::move(result), options, !subdivision);
       });
-}
-inline MeshResult refine_result(MeshResult result, const MeshOptions &options,
-                                bool subdivision) {
-  return refine_result(std::move(result), options, subdivision,
-                       size_criterion(options.refinement));
 }
 } // namespace pde2d::discretization::mesh_detail

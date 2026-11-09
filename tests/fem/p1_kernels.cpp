@@ -1,22 +1,15 @@
 // Local P1 kernels (p1_element.hpp) against hand-integrated element and edge
-// matrices, and the region accumulation of analysis
-// (analyze_boundary_region) on synthetic classified edges.
+// matrices.
 //
 // Oracles: the reference-triangle stiffness 1/2 [[2,-1,-1],[-1,1,0],[-1,0,1]],
 // the P1 mass |T|/12 (1 + delta_ij), the cotangent formula for the Laplace
 // stiffness of a general triangle, the integral of phi_i (|T|/3), the edge
-// mass L/6 [[2,1],[1,2]] and the edge load L/2. Region properties are known
-// by construction of the synthetic edges.
-#include "fem/analysis.hpp"
-#include "fem/boundary_assignment.hpp"
+// mass L/6 [[2,1],[1,2]] and the edge load L/2.
 #include "fem/p1_element.hpp"
 #include "fem/quadrature.hpp"
-#include "discretization/square_mesh.hpp"
 #include "support/check.hpp"
 #include <array>
 #include <cmath>
-#include <string>
-#include <vector>
 
 using namespace pde2d::fem;
 using pde2d::discretization::Point2;
@@ -165,146 +158,6 @@ void edge_kernel() {
   check(out.load[2] == 0, "Only the leading 2x2 block is used");
 }
 
-// Synthetic edges on the unit segment of the x axis, outward normal (0,-1).
-const p1::EdgeFrame unit_edge = p1::edge_frame({0, 0}, {1, 0}, {0, 1});
-ClassifiedEdge dirichlet_edge(Expr alpha, Expr value) {
-  return {EdgeCondition{DirichletEdge{alpha, value, value / alpha}}, unit_edge};
-}
-ClassifiedEdge natural_edge(Expr alpha, Expr gamma, Expr value, Expr beta) {
-  return {EdgeCondition{NaturalEdge{alpha, gamma, value, beta}}, unit_edge};
-}
-
-ClassifiedEdge oblique_edge(Expr beta, Expr tau, Expr conormal) {
-  return {EdgeCondition{ObliqueEdge{1, 0, 0, beta, tau, conormal}}, unit_edge};
-}
-
-void oblique_region_accumulation() {
-  {
-    const std::vector<ClassifiedEdge> edges{oblique_edge(1, .5, 2),
-                                            natural_edge(1, 0, 0, 1)};
-    const auto r = analyze_boundary_region("slope", edges);
-    check(r.form.value == BoundaryForm::Mixed && r.oblique_edges == 1 &&
-              r.natural_edges == 1,
-          "Oblique and natural edges are counted apart");
-    check(r.divisor_keeps_sign.value &&
-              r.divisor_keeps_sign.evidence == Evidence::Proven,
-          "Constant oblique divisors are proven");
-  }
-  {
-    // The conormal component is checked first, under its own name.
-    const std::vector<ClassifiedEdge> edges{oblique_edge(1, .5, x - .5)};
-    const auto r = analyze_boundary_region("degenerate", edges);
-    check(r.form.value == BoundaryForm::Oblique &&
-              !r.divisor_keeps_sign.value &&
-              r.divisor_keeps_sign.reason ==
-                  "Oblique conormal component vanishes or changes sign on "
-                  "boundary at t=0",
-          "Conormal sign change found");
-  }
-}
-
-void region_accumulation() {
-  // Restricted expressions use x as the edge coordinate s in [0, 1].
-  {
-    const std::vector<ClassifiedEdge> edges{dirichlet_edge(1, x),
-                                            dirichlet_edge(2, 0)};
-    const auto r = analyze_boundary_region("wall", edges);
-    check(r.region == "wall" && r.edges == 2 && r.dirichlet_edges == 2 &&
-              r.natural_edges == 0,
-          "Dirichlet region counts");
-    check(r.form.value == BoundaryForm::Dirichlet &&
-              r.form.evidence == Evidence::Proven,
-          "Dirichlet region form");
-    check(r.divisor_keeps_sign.value &&
-              r.divisor_keeps_sign.evidence == Evidence::Proven,
-          "Constant divisors are proven");
-    check(!r.time_dependent.value &&
-              r.time_dependent.evidence == Evidence::Proven,
-          "No time dependence");
-  }
-  {
-    // beta = 1 + x is positive but not constant: sampled at every edge sample
-    // of both edges.
-    const std::vector<ClassifiedEdge> edges{dirichlet_edge(1, 0),
-                                            natural_edge(0, 0, sin(t), 1 + x)};
-    const auto r = analyze_boundary_region("mixed", edges);
-    check(r.form.value == BoundaryForm::Mixed && r.dirichlet_edges == 1 &&
-              r.natural_edges == 1,
-          "Mixed region");
-    check(r.divisor_keeps_sign.value &&
-              r.divisor_keeps_sign.evidence == Evidence::Sampled &&
-              r.divisor_keeps_sign.reason ==
-                  "divisors sampled at " +
-                      std::to_string(edge_divisor_samples(2).size() * 2) +
-                      " points",
-          "Sampled divisor sign");
-    check(r.time_dependent.value, "t occurs in the natural value");
-  }
-  {
-    // beta = x - 1/2 changes sign on the edge; the first failure is kept.
-    AnalysisOptions options;
-    options.sample_times = {0, 1};
-    const std::vector<ClassifiedEdge> edges{natural_edge(1, 0, 0, x - .5)};
-    const auto r = analyze_boundary_region("flux", edges, options);
-    check(r.form.value == BoundaryForm::Natural, "Natural region");
-    check(!r.divisor_keeps_sign.value &&
-              r.divisor_keeps_sign.evidence == Evidence::Sampled &&
-              r.divisor_keeps_sign.reason ==
-                  "Natural flux multiplier vanishes or changes sign on "
-                  "boundary at t=0",
-          "Sign change found at the first sample time");
-  }
-  {
-    const std::vector<ClassifiedEdge> edges{
-        dirichlet_edge(1, 0),
-        {std::string("rejected for a reason"), unit_edge}};
-    const auto r = analyze_boundary_region("bad", edges);
-    check(r.edges == 2 && r.form.value == BoundaryForm::Rejected &&
-              r.form.evidence == Evidence::Proven &&
-              r.form.reason == "rejected for a reason" &&
-              r.divisor_keeps_sign.evidence == Evidence::Unknown,
-          "Rejected region");
-  }
-}
-
-void region_accumulation_matches_analyze() {
-  // analyze(problem, mesh) forms each region from the same binding and
-  // classification; feeding those edges directly gives the same result.
-  const auto mesh = pde2d::discretization::square_mesh(3);
-  Problem p;
-  p.assign(dirichlet(x * y), {"bottom", "left"});
-  p.assign(flux_robin(1 + x, 2 + y * y, t), {"top"});
-  p.assign(neumann(1), {"right"});
-  const auto properties = analyze(p, mesh);
-  const auto binding = bind_boundary(mesh, p);
-  check(binding.regions ==
-                std::vector<std::string>{"bottom", "left", "top", "right"} &&
-            binding.edges.size() == mesh.boundary_edges.size(),
-        "Binding regions and edges");
-  for (std::size_t r = 0; r < binding.regions.size(); ++r) {
-    std::vector<ClassifiedEdge> edges;
-    for (const auto &e : binding.edges)
-      if (e.region == r)
-        edges.push_back(
-            {classify_edge_condition(p.equation, binding.condition(e), e.frame),
-             e.frame});
-    const auto direct = analyze_boundary_region(binding.regions[r], edges);
-    const auto &expected = properties.boundaries[r];
-    check(direct.region == expected.region && direct.edges == expected.edges &&
-              direct.dirichlet_edges == expected.dirichlet_edges &&
-              direct.natural_edges == expected.natural_edges &&
-              direct.form.value == expected.form.value &&
-              direct.form.reason == expected.form.reason &&
-              direct.divisor_keeps_sign.value ==
-                  expected.divisor_keeps_sign.value &&
-              direct.divisor_keeps_sign.evidence ==
-                  expected.divisor_keeps_sign.evidence &&
-              direct.divisor_keeps_sign.reason ==
-                  expected.divisor_keeps_sign.reason &&
-              direct.time_dependent.value == expected.time_dependent.value,
-          "Direct region analysis differs from analyze()");
-  }
-}
 } // namespace
 
 int main() {
@@ -313,9 +166,5 @@ int main() {
        {"reference_stiffness_and_mass", reference_stiffness_and_mass},
        {"drift_and_load", drift_and_load},
        {"cotangent_formula", cotangent_formula},
-       {"edge_kernel", edge_kernel},
-       {"region_accumulation", region_accumulation},
-       {"oblique_region_accumulation", oblique_region_accumulation},
-       {"region_accumulation_matches_analyze",
-        region_accumulation_matches_analyze}});
+       {"edge_kernel", edge_kernel}});
 }

@@ -41,8 +41,7 @@ struct AssembledSystem {
 };
 
 // Highest time derivative with a nonzero mass matrix: 2 (second_mass), 1
-// (first_mass) or 0 (stationary). The time integrators' check() and
-// analyze(const AssembledSystem &) use this one judgement.
+// (first_mass) or 0 (stationary), as the time integrators' check() uses it.
 inline int time_order(const AssembledSystem &system) {
   if (system.second_mass.norm() != 0)
     return 2;
@@ -50,8 +49,8 @@ inline int time_order(const AssembledSystem &system) {
 }
 
 // Relative skew-symmetric part at most `relative_tolerance`:
-// ||A - A^T||_F <= relative_tolerance ||A||_F. The ConjugateGradient backend
-// and analyze(const AssembledSystem &) share this judgement.
+// ||A - A^T||_F <= relative_tolerance ||A||_F, as the ConjugateGradient
+// backend checks it.
 inline constexpr double symmetry_tolerance = 1e-12;
 inline bool
 numerically_symmetric(const SparseMatrix &matrix,

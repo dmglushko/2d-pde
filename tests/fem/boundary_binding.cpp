@@ -7,7 +7,6 @@
 #include "fem/assembly.hpp"
 #include "fem/boundary_assignment.hpp"
 #include "fem/boundary_classification.hpp"
-#include "fem/fingerprint.hpp"
 #include "support/check.hpp"
 #include <memory>
 #include <optional>
@@ -30,9 +29,7 @@ void same_binding(const BoundaryBinding &a, const BoundaryBinding &b) {
   check(a.regions == b.regions && a.edges.size() == b.edges.size() &&
             a.conditions.size() == b.conditions.size(),
         "Shape");
-  check(expression_text(a.equation.source) ==
-            expression_text(b.equation.source),
-        "Equation snapshot");
+  check(a.equation.source == b.equation.source, "Equation snapshot");
   for (std::size_t k = 0; k < a.edges.size(); ++k) {
     const auto &ea = a.edges[k];
     const auto &eb = b.edges[k];
@@ -48,9 +45,7 @@ void same_binding(const BoundaryBinding &a, const BoundaryBinding &b) {
     check(ca.is_dirichlet() == cb.is_dirichlet() &&
               ca.form.index() == cb.form.index(),
           "Classification");
-    check(expression_text(a.condition(ea).value) ==
-              expression_text(b.condition(eb).value),
-          "Condition snapshot");
+    check(a.condition(ea).value == b.condition(eb).value, "Condition snapshot");
   }
 }
 

@@ -43,18 +43,13 @@ from this table.
 | `curve_length.hpp` | Arc length and its inversion | `curveLength`, `curveParameterAtLengthFraction` |
 | `curve_geometry.hpp` | Editable analytical boundary with regions and loops | `CurveGeometry` (`setRegions`, `renameRegion`, `splitRegion`, `splitCurve`, `moveCurve`, `curveIdAt`, `regionGroups`, `length`), `CurveId`, `CurveRegion`, `BoundaryCurve` |
 | `geometry.hpp` | Built-in shapes | `CircleGeometry`, `EllipseGeometry`, `RectangleGeometry`, `RectangleWithSemicircleGeometry`, `RegularPolygonGeometry`, `PolygonGeometry`, `AnnulusGeometry` |
-| `size_criterion.hpp` | Public refinement criteria (what makes an edge too long, which is split first) | `SizePriority`, `SizeCriterion`, `SizeField`, `RefinementCriterion` (size, Fixed-conflict message, split hook, descriptor), `constant_size_criterion`, `size_field_criterion`, `local_size_target`, `strictest_of` |
-| `mesh_types.hpp` | Meshing options and results; wire IDs | `InteriorAlgorithm`, `BoundaryTreatment`, `BoundaryOptions`, `RefinementOptions` (`size_field`, `criterion`), `MeshOptions`, `InteriorAlgorithmCapabilities`, `MeshReport`, `MarkedRefinementReport`, `MeshResult` (with `record`), `MeshRunRecord`, `MeshOperation`, `MeshWork`, `MeshQuality`, `BoundaryContext`, `interior_algorithm_name`, `boundary_treatment_name`, `mesh_operation_name`, `validateMeshOptionValues` |
+| `mesh_types.hpp` | Meshing options and results; wire IDs | `InteriorAlgorithm`, `BoundaryTreatment`, `BoundaryOptions`, `RefinementOptions`, `MeshOptions`, `InteriorAlgorithmCapabilities`, `MeshReport`, `MeshResult`, `BoundaryContext`, `interior_algorithm_name`, `validateMeshOptionValues` |
 | `predicates.hpp` | Exact geometric predicates (filtered, exact binary64 fallback; needs Boost) | `predicates::orient`, `predicates::incircle`, `predicates::intersects`, `predicates::on_segment` |
-| `spatial_index.hpp` | Box broad phase used by validation and point location | `mesh_detail::Box`, `mesh_detail::BoxIndex` |
+| `spatial_index.hpp` | Box broad phase used by validation and ear clipping | `mesh_detail::Box`, `mesh_detail::BoxIndex` |
 | `mesh_validation.hpp` | Polygon and mesh validation, boundary loops | `validate_polygon`, `validate_mesh_geometry`, `boundary_loops`, `boundary_points` |
 | `boundary_context.hpp` | Consistency of a mesh with its analytical boundary context | `validate_boundary_context` |
 | `boundary_discretization.hpp` | Sampling analytical boundaries into polygons with source intervals | `discretize_boundary`, `DiscretizedBoundary` |
-| `triangulate.hpp` | Meshing entry points | `generate_mesh`, `refine_mesh` (size or marked), `subdivide_mesh`, `is_constrained_delaunay`, `interior_algorithm_capabilities` |
-| `point_location.hpp` | Locating points in a mesh | `PointLocator`, `PointLocation`, `PointLocationOptions`, `locate_point` |
-| `mesh_fingerprint.hpp` | Deterministic mesh fingerprints for records | `mesh_fingerprint` |
-| `mesh_record.hpp` | Mesh run records: quality statistics and record completion (the meshing entry points fill `MeshResult::record`) | `mesh_quality`, `finish_mesh_run_record` |
-| `mesh_record_json.hpp` | Versioned JSON of mesh run records (schema `pde2d.mesh_run_record`, version 1), the mesh options and report encodings shared with FEM run records (core JSON in `cpp/json.hpp`) | `to_json(MeshRunRecord)`, `write_json`, `read_mesh_run_record_json`, `mesh_options_json`, `mesh_report_json`, `descriptor_json` |
+| `triangulate.hpp` | Meshing entry points | `generate_mesh`, `refine_mesh`, `subdivide_mesh`, `is_constrained_delaunay`, `interior_algorithm_capabilities` |
 | `curve_io.hpp` | Wire IDs and codecs of curve kinds in `.pde2d` files | `curve_io::Codec` (permanent IDs) |
 | `mesh_io.hpp` | `.pde2d` export and import (format versions 1 to 5) | `export_mesh`, `import_mesh_result`, `import_mesh` |
 | `svg_geometry.hpp` | SVG import and export of analytical geometry (needs libxml2) | `importSvg`, `exportSvg`, `SvgOptions`, `SvgScaleMode` |
@@ -64,8 +59,8 @@ Private headers in `detail/`: `ear_clipping.hpp` (seed triangulation with
 hole bridges), `cdt_topology.hpp` (incremental constrained Delaunay
 topology, the size queue, `cdt_verified`), `curved_boundary.hpp`
 (splitting source intervals, rebuilding on curves), `refinement_policy.hpp`
-(options to criterion, marked selection, one policy per
-`BoundaryTreatment`), `refinement_loop.hpp` (the generic refinement loop)
+(one policy per `BoundaryTreatment`), `refinement_loop.hpp` (the
+refinement loop)
 and `interior_algorithms.hpp` (one unit per `InteriorAlgorithm` with its
 capabilities, the only dispatch).
 
@@ -76,9 +71,7 @@ returns `MeshResult`: `.mesh`, optional `.boundary_context`, `.options`, and
 `.report`. Include `triangulate.hpp` for the meshing entry points; their
 private helpers are listed under [Headers](#headers). The meshing functions
 returning `MeshResult` are `[[nodiscard]]`: a result must be inspected
-(`report.size_satisfied`), and FEM entry points that take a `MeshResult`
-refuse an unsatisfied one unless it is wrapped in
-`pde2d::fem::accept_unsatisfied(result)`.
+(`report.size_satisfied`).
 
 `discretize_boundary(geometry, BoundaryOptions = {}, bool preserve_regions = true)`
 returns `DiscretizedBoundary { boundary, context }`. Analytical source curves and
@@ -93,9 +86,7 @@ A raw `Boundary` has no analytical context.
 | `boundary.preserve_corners` | `false` | Protect geometric corners during sampling. Region junctions remain protected when regions are preserved. |
 | `boundary.max_edge_length` | `1.0` | Initial analytical boundary length bound. |
 | `boundary.max_curve_deviation` | `0.02` | Initial absolute curve-to-chord deviation bound. |
-| `refinement.max_edge_length` | `0.0` | Maximum triangle-edge length target; zero disables it. |
-| `refinement.size_field` | empty | Optional `SizeField` (`double(Point2)`): a local length target. Not serialized. |
-| `refinement.size_field_descriptor` | empty | Optional `pde2d::StrategyDescriptor` naming the size field for run records and mesh plans; without it a size field is "not replayable". Not serialized. |
+| `refinement.max_edge_length` | `0.0` | Maximum triangle-edge length target; zero disables refinement. |
 | `refinement.max_steps` | `10000` | Maximum midpoint insertion steps; zero allows none. |
 
 Length/deviation constraints must be finite and nonnegative; zero disables each
@@ -104,68 +95,16 @@ zero. `max_steps` is nonnegative. Boundary tolerances control initial sampling;
 the refinement target controls all triangle edges.
 
 Ear clipping triangulates the sampled polygon without interior refinement.
-Selecting ear clipping with a positive interior target, a size field or a
-refinement criterion throws. What each algorithm supports is declared, not
-implied: `interior_algorithm_capabilities(algorithm)` returns
-`InteriorAlgorithmCapabilities` (size targets, size fields, criteria,
-refinement, marked refinement, constrained Delaunay output, required
-context), and the compatibility errors come from them.
-CDT starts with ear clipping and fully legalizes eligible interior edges under
-the constrained Delaunay criterion. Size refinement inserts the midpoint of
-the edge that fails its target worst and legalizes again. It is not classical
-circumcenter quality refinement: there is no minimum-angle control or
-guarantee, and no smoothing.
-
-### Graded meshes: size fields
-
-`refinement.size_field` gives a spatially varying target. An edge `(a, b)`
-meets it when `|b - a| <= min(h(a), h((a+b)/2), h(b))` (times `1 + 1e-12`);
-with a positive `max_edge_length` as well, the smaller target applies.
-Without a field, edges are ranked by length; with one, by length divided by
-the local target (ties by length), so a constant field gives exactly the
-scalar result. Field values must be finite and positive, otherwise
-refinement throws `Size field must return a finite positive length`.
-`report.size_satisfied` states whether every edge met its local target; a
-Fixed boundary edge that exceeds it returns `false` with "Fixed boundary edge
-exceeds the local size target". The field is a request-time option:
-`export_mesh` writes only the scalar options, so an imported result has an
-empty field (see [the format](../../docs/formats/pde2d-mesh.md)).
-
-```cpp
-options.boundary_treatment = BoundaryTreatment::RefineOnCurves;
-options.refinement.size_field = [](Point2 p) { return 0.05 + 0.3 * p.x; };
-auto graded = generate_mesh(shape, options);
-```
-
-### Refinement criteria
-
-`size_criterion.hpp` makes the size test public. A `RefinementCriterion`
-holds a `SizeCriterion` (`std::optional<SizePriority>(Point2 a, Point2 b)`:
-`nullopt` accepts the edge, otherwise its splitting priority `{tier, value,
-length}`, higher first), the report message for a Fixed boundary edge that
-fails it, an optional split hook and a `pde2d::StrategyDescriptor` naming it
-for run records. Set it as `RefinementOptions::criterion` to refine by a rule
-of your own, for example a problem-aware target or an anisotropic length:
-
-```cpp
-RefinementCriterion wide;   // refine edges whose x extent exceeds 0.1
-wide.size = [](Point2 a, Point2 b) -> std::optional<SizePriority> {
-  double dx = std::abs(b.x - a.x);
-  if (dx > 0.1) return SizePriority{0, dx / 0.1, std::hypot(dx, b.y - a.y)};
-  return std::nullopt;
-};
-wide.descriptor = pde2d::StrategyDescriptor{"XExtent", {{"hx", "0.1"}}};
-options.refinement.criterion = wide;
-```
-
-A criterion replaces `max_edge_length` and `size_field` (setting either as
-well throws "A refinement criterion replaces max_edge_length and
-size_field"); combine them in the criterion with `constant_size_criterion`,
-`size_field_criterion` and `strictest_of`. A criterion equal to a built-in
-target (`RefinementCriterion{constant_size_criterion(h)}`) gives the same
-mesh bit for bit. It must be deterministic. Marked refinement enforces it
-after the marked bisections. Like the size field it is request-time and not
-written to `.pde2d` files.
+Selecting ear clipping with a positive interior target throws. What each
+algorithm supports is declared, not implied:
+`interior_algorithm_capabilities(algorithm)` returns
+`InteriorAlgorithmCapabilities` (size target, refinement, constrained
+Delaunay output, required context), and the compatibility errors come from
+them. CDT starts with ear clipping and fully legalizes eligible interior edges
+under the constrained Delaunay criterion. Size refinement inserts a
+longest-edge midpoint and legalizes again. It is not classical circumcenter
+quality refinement: there is no minimum-angle control or guarantee,
+smoothing, or local size field.
 
 | Boundary treatment | During size refinement |
 | --- | --- |
@@ -179,43 +118,6 @@ carries forward boundary context; pass the desired options explicitly.
 `subdivide_mesh(TriangleMesh, MeshOptions = {}, optional<BoundaryContext> = nullopt)`
 performs straight polygon subdivision without Delaunay legalization. Curve mode
 is unsupported for subdivision.
-
-### Marked refinement
-
-`refine_mesh(MeshResult, std::vector<std::size_t> marked, MeshOptions)`
-refines the marked triangles (indices into `result.mesh.elements`, for
-example from `pde2d::fem::mark_bulk`). Each marked triangle selects its
-longest edge and the edge is bisected with the CDT machinery, so the
-neighbour across it is split too and the mesh stays conforming and Delaunay.
-The boundary treatment decides boundary edges: `Fixed` selects the longest
-interior edge instead (a triangle with only boundary edges is unrefinable),
-`SplitPolygonEdges` splits the chord, `RefineOnCurves` puts the new vertex on
-the source curve. Region tags and the boundary context carry over. Interior
-selections are processed before boundary ones; a selected edge that an
-earlier insertion flips away (or a curved rebuild retriangulates) is
-*absorbed*, because its triangle already changed. A size target in the
-options is enforced afterwards. `report.marked` (`MarkedRefinementReport`,
-not serialized) counts marked triangles, selected, bisected and absorbed
-edges and unrefinable triangles; `report.size_satisfied` is false if a
-triangle was unrefinable, the budget ran out or the size target was missed.
-The input should be a constrained Delaunay mesh (as `generate_mesh` and
-`refine_mesh` return); otherwise the initial legalization may absorb
-selections.
-
-### Point location
-
-`point_location.hpp`: `PointLocator(mesh, PointLocationOptions{})` builds a
-box index over the triangles; `locate(p)` returns
-`std::optional<PointLocation>` with `element`, `barycentric` (relative to
-`mesh.elements[element]` in vertex order), `inside` and `distance`.
-Containment uses exact predicates, with no tolerance; points on shared
-edges or vertices go to the lowest-index triangle. Points outside the closed
-mesh are accepted only within `max_outside_distance` (default 0) of the
-boundary: they get the triangle owning the nearest boundary edge and its
-unclamped barycentric coordinates (linear extrapolation, exact for affine
-fields), `inside = false` and the distance. Farther points give
-`std::nullopt`. `locate_point(mesh, p, options)` is the one-shot form. The
-FEM module's `transfer_field` builds on it.
 
 Always inspect `report.size_satisfied` and `report.message`. A fixed-boundary
 conflict returns `false` with an explanation. Exhausting `max_steps` returns a
@@ -274,17 +176,14 @@ Boundary raw{outer_points, outer_tags, {{hole_points, hole_tags}}};
   clips the resulting weakly simple ring. CDT legalization and refinement
   start from that seed; every loop's edges are constrained, bridges are
   ordinary interior edges. `Fixed`, `SplitPolygonEdges` and `RefineOnCurves`
-  treat hole edges like outer edges, so size targets, size fields and marked
-  refinement put new hole vertices on the hole curves. Curve rebuilds
+  treat hole edges like outer edges, so size refinement puts new hole
+  vertices on the hole curves. Curve rebuilds
   traverse each loop separately.
 - **Mesh boundary.** `TriangleMesh::boundary_edges` lists the edges of every
   loop; generated meshes list them loop by loop, outer first.
   `boundary_loops(mesh)` returns the loops as boundary-edge index lists
   (outer loop first: the one through the lexicographically least boundary
   vertex; holes by lowest edge index).
-- **Point location** treats a hole as outside the mesh: a point in a hole
-  gets `std::nullopt`, or with `max_outside_distance` the triangle of the
-  nearest (hole) boundary edge. `transfer_field` works unchanged.
 - **Files.** Meshes with holes are written as version 5 of the format (below);
   one-loop meshes keep versions 4 and 2.
 
@@ -390,45 +289,6 @@ run at a curve's mathematical parameter, not an arc-length fraction.
 `mergeRegions(first, count, name)` retains consecutive-range semantics without
 wraparound. Use name-based merging for arbitrary groups and wraparound.
 
-
-## Fingerprints
-
-`mesh_fingerprint(mesh)` (`mesh_fingerprint.hpp`) is a deterministic
-16-hex-digit fingerprint of the node coordinates (bit patterns), elements,
-boundary edges and tags in storage order, equal on every platform. FEM run
-records use it to identify the mesh of a solve. `interior_algorithm_name` and
-`boundary_treatment_name` (`mesh_types.hpp`) give report names of the
-options' enums.
-
-## Mesh run records
-
-Every meshing call returns a `MeshResult` whose `record`
-(`MeshRunRecord`, `mesh_types.hpp`) says how it was made:
-
-- `operation` (`generate`, `refine`, `marked refine`, `subdivide`,
-  `import`; `none` for a hand-built result), the `mesh_fingerprint` of the
-  produced mesh and, for refinements, of the refined one
-  (`source_fingerprint`);
-- the `options` of the call (size fields and refinement criteria by their
-  descriptors in JSON) and the library version;
-- `work` (`MeshWork`): refinement steps, inserted vertices (one per step),
-  boundary splits, Delaunay edge flips (curve rebuilds included),
-  `RefineOnCurves` rebuilds and the interior vertices they reinserted or
-  dropped. Counting never changes a mesh;
-- `quality` (`MeshQuality`, `mesh_quality`): node, element and boundary
-  edge counts, smallest and largest angle, shortest and longest edge, and
-  the largest edge length over its local target when the options have a
-  constant target or a size field (unset for a user criterion);
-- `total_seconds`, the only field that differs between identical calls.
-
-`write_json(out, result.record)` (`mesh_record_json.hpp`) writes
-`"schema": "pde2d.mesh_run_record"`, `"schema_version": 1`, `operation`,
-`fingerprint`, `source_fingerprint`, `versions`, `options`, `work`,
-`quality` and `timings`, with the conventions of the FEM run records
-(classic locale, `max_digits10`, `null` for absent values);
-`read_mesh_run_record_json` checks the schema. FEM run records embed it
-under `mesh.provenance.run`. The record is request-time data: `.pde2d`
-files do not store it, and an imported result's record has no work.
 
 ## Export and resume
 

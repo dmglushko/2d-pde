@@ -15,9 +15,9 @@ The [100-second wave examples](long-waves.md) use a larger 10-by-10 square:
 a localized source with fixed Dirichlet edges, and a source-free Neumann wave.
 They include energy/work checks and a recorded execution-time breakdown.
 
-Start with [../concepts.md](../concepts.md): the five concepts of the
-minimal path and when the optional layers (plans, analysis, records,
-adaptivity, comparisons) are worth learning.
+[examples/fem/minimal.cpp](../../examples/fem/minimal.cpp) is the shortest
+complete program: geometry, mesh, problem, a stationary solve and an
+evolution, checked against an exact solution.
 
 ## Build and reproduce
 
@@ -172,10 +172,8 @@ constant, so the tangential term is a nonsymmetric 2×2 block that couples the
 two edge nodes; the assembled stiffness is then nonsymmetric, so use SparseLU
 or GMRES rather than conjugate gradients. The weak form adds no terms at
 corners: each edge uses its own normal and tangent. Oblique-derivative
-problems are not well posed in general, and the library does not check it:
-`analyze` reports such regions as `BoundaryForm::Oblique`, says so in the
-region's `form.reason`, and marks the problem `symmetric=false` with Unknown
-evidence. With a smooth solution and an obliqueness that varies smoothly along
+problems are not well posed in general, and the library does not check it.
+With a smooth solution and an obliqueness that varies smoothly along
 the boundary, P1 converges at second order in L2 (see
 `tests/fem/oblique_conditions.cpp`). Where the oblique direction jumps at a
 corner, the dual problem can have a corner singularity: on the unit square
@@ -313,13 +311,13 @@ the initial frame's `Frame::velocity` (0 when omitted).
 
 Each of `value` and `velocity` is a `Field`: an expression in `x`, `y`, `t`
 (interpolated at the nodes) or a `Vector` with one finite value per mesh node.
-Nodal values restart an evolution, for example on a refined mesh:
+Nodal values restart an evolution from an earlier frame:
 
 ```cpp
-auto earlier=evolve(coarse,problem,initial,time);
-auto moved=transfer_field(coarse,earlier.frames.back().values,fine).values;
+auto earlier=evolve(mesh,problem,initial,time);
+const auto &last=earlier.frames.back();
 time.start=time.end; time.end=4;
-auto later=evolve(fine,problem,InitialConditions{moved},time);
+auto later=evolve(mesh,problem,InitialConditions{last.values,last.velocity},time);
 ```
 
 A wrong size or a nonfinite entry throws ("Initial value must have one finite
@@ -328,17 +326,11 @@ Newmark restarted from nodal `value` and `velocity` recomputes its
 acceleration from the equation.
 
 Each scheme is a `TimeIntegrator` (`fem/time_integration.hpp`). Step stamps
-come from `TimeGrid` (`fem/time_grid.hpp`) unless `time.step_controller` sets a
-`StepController` (`fem/step_control.hpp`). Every step is first a trial: a
-controller's `judge()` may reject it, the trial is discarded (no frame, no
-observer call, counted in `timings.rejected_steps`) and `next()` proposes the
-retry. More than `time.max_consecutive_rejections` (default 100) rejected
-trials in a row throw `std::runtime_error`, so a controller that never accepts
-cannot loop forever. A step's `h` must equal its stamp difference up to
-rounding (`step_size_consistent`). A user scheme runs through
+come from `TimeGrid` (`fem/time_grid.hpp`). A user scheme runs through
 `evolve` without library changes: set `time.integrator=[]{ return
 std::make_unique<MyIntegrator>(); };` (called once per evolution; `method` is
-then ignored, and reports use `TimeIntegrator::name()`). See
+then ignored, and reports and `Evolution::metadata.integrator` use
+`TimeIntegrator::name()`). See
 [cpp/fem/EXTENDING.md](../../cpp/fem/EXTENDING.md).
 
 Backward Euler and Crank–Nicolson handle first-order evolution. Newmark uses
@@ -365,269 +357,24 @@ reevaluates time-dependent data. `PreparedLinearSolver` reuses rank checking and
 factorization while the actual constrained matrix and solver options are equal;
 changing either forces preparation. `evolve` uses both automatically.
 
-## Repeated stationary solves, initial guesses and plans
+## Repeated stationary solves and initial guesses
 
 `PreparedStationary(mesh,problem,assembly,solver)` (`fem/solver.hpp`) keeps the
 prepared assembly and the last prepared linear solver, so repeated solves (a
-time-dependent source sampled at several times, a parameter loop, an adaptive
-loop's solves on one mesh) prepare once. `statistics()` counts solves,
+time-dependent source sampled at several times, a parameter loop) prepare
+once. `statistics()` counts solves,
 assemblies, preparations and reuses. `solve_stationary` is the one-shot
 wrapper and returns the same values.
 
 ```cpp
 PreparedStationary stationary(fine,problem,{},cg);
-auto solution=stationary.solve(0,moved);    // initial guess, e.g. transferred
+auto solution=stationary.solve(0,guess);    // initial guess, one per node
 ```
 
 An initial guess (`solve(time,guess)`, `solve_stationary(...,guess)`,
 `solve_linear(a,b,options,guess)`, `PreparedLinearSolver::solve(b,guess)`)
 starts the iterative backends (CG, GMRES); direct backends ignore it.
 `SolverReport::initial_guess` says `None`, `Used` or `Ignored`.
-
-A `SolvePlan` (`fem/plan.hpp`) bundles assembly options, solver options, time
-settings (`TimePlan`) and the decisions explaining them. `plan_from_user(assembly,solver)`
-and `plan_from_user(time_options)` record today's user choices; the overloads
-`solve_stationary(mesh,problem,plan)`, `PreparedStationary(mesh,problem,plan)`
-and `evolve(mesh,problem,initial,plan,output)` give the same results as the
-option-based calls. Nothing chooses settings automatically yet; a planner
-(`SolvePlanner`, `fem/planner.hpp`) returns a `SolvePlan`, and `UserPlanner`
-is the identity. A `MeshPlanner` can also plan before the first mesh exists:
-`plan_mesh(geometry, problem, planner, mesh_plan_from_user(options))` returns
-a `PlannedMesh` (the `MeshResult` and the `MeshPlan` that made it; put the
-plan in `SolvePlan::mesh`). The planner sees the geometry and its sampled
-boundary in its `PlanningContext`.
-
-Each `Decision` has a typed subject (`DecisionSubject::LinearSolver`,
-`TimeSteps`, `Quadrature`, ...; `decision_subject_name` prints it). Override a
-setting with a setter, which changes the option and its decision together:
-
-```cpp
-auto plan=plan_from_user(assembly,solver);
-plan.set_linear_solver(LinearSolver::ConjugateGradient)
-    .set_preconditioner(Preconditioner::IncompleteCholesky);
-plan.set_quadrature_degree(4,{"source has degree 3",Evidence::Proven,
-                              DecisionSource::Automatic});  // a chooser's basis
-```
-
-Every solve validates the plan at entry (`validate_decisions`): a decision that
-no longer matches its option, for example after `plan.solver.method=GMRES`
-without the setter, throws `"Stale decision: linear solver records "SparseLU"
-but the options give "GMRES""`; duplicate subjects and mesh subjects in a
-solve plan throw too (`"Decision subject mesh size does not belong to a
-solve plan (owner Mesh; use SolvePlan::mesh)"`). Every subject has an owner
-(`decision_subject_owner`: Solve, Time, Mesh or Adapt) and each plan has one
-binding table (`solve_plan_bindings`, `mesh_plan_bindings`) from which its
-user decisions, setters and validation all come; `plan.update(subject,
-change, why)` changes any bound option with its decision. `TimeOptions` is a
-`TimePlan` plus `EvolutionOutput` plus assembly and solver options, so every
-time setting is declared once.
-
-A `MeshPlan` (`fem/mesh_plan.hpp`, `mesh_plan_from_user(mesh_options)`) is
-the meshing counterpart: `MeshOptions` with decisions for the mesh algorithm,
-boundary treatment, mesh size and size field (and a refinement criterion
-when `RefinementOptions::criterion` is set), with setters
-(`set_interior_algorithm`, `set_boundary_treatment`, `set_max_edge_length`,
-`set_size_field(field, descriptor)`, `set_refinement_criterion`) and
-`update`. Put it in `plan.mesh`; a solve given the `MeshResult`
-(`solve_stationary(result,problem,plan)`, `evolve(result,...)`) checks it
-against `result.options`.
-
-`plan.analysis` holds the analysis a planner based its decisions on, bound to
-its inputs: `make_analysis_record(problem[, mesh][, options])`
-(`fem/analysis.hpp`) records the properties with the problem fingerprint, the
-mesh fingerprint (when it sampled a mesh) and the sampling options, and is
-the only way to make one. Solves, evolutions and `adapt` throw `"Stale
-analysis: ..."` when the plan's analysis was made for another problem or
-mesh; `refresh_analysis(plan, problem, mesh)` recomputes it with its own
-options.
-
-A solve given a `MeshResult` also checks its report: meshing can return a
-mesh that misses its size target (`report.size_satisfied == false`), and
-`PreparedStationary`, `solve_stationary`, `evolve` and `adapt` then throw
-`MeshResult misses its size target (<report.message>); check
-report.size_satisfied or pass accept_unsatisfied(result)`. Pass
-`accept_unsatisfied(result)` (`fem/mesh_acceptance.hpp`) to solve on it
-anyway; the record keeps the unsatisfied report. `TriangleMesh` overloads do
-not check.
-
-## Adaptive loop
-
-Adaptivity is optional: every component is usable on its own —
-`PreparedStationary` (solve, warm started from a guess), `estimate_error`
-(an `ErrorEstimator`, default the gradient-recovery estimator), a
-`MarkingStrategy` (`fem/marking.hpp`; `BulkMarking` is Dörfler marking with
-`mark_bulk`), a `MeshAdaptation` (`fem/mesh_adaptation.hpp`; the default
-`MarkedBisection` is `discretization::refine_mesh(result, marked, options)`)
-and `transfer_field`. Two drivers (`fem/adaptivity.hpp`) run them, with one
-`AdaptOptions` and one `AdaptiveHistory`:
-
-```cpp
-AdaptOptions options;
-options.marker = std::make_shared<BulkMarking>(0.6); // unset: BulkMarking{0.5}
-options.max_iterations = 8;          // mesh changes after the first solve
-options.tolerance = 1e-3;            // stop once estimate.global <= tolerance
-options.transfer.max_outside_distance = 0.02;   // curved boundary
-auto history = adapt(mesh_result, problem, plan, options);
-auto &u = history.solution->values;  // on history.mesh.mesh
-
-options.windows = 6;                 // transient: equal windows of plan.time
-auto moving = adapt_evolution(mesh_result, problem, initial, plan, options);
-moving.evolution->frames.back();     // final state on moving.mesh
-```
-
-| `AdaptOptions` field | Default | Meaning |
-| --- | --- | --- |
-| `estimator` | gradient recovery (plan's execution) | `std::shared_ptr<const ErrorEstimator>` |
-| `marker` | `BulkMarking{0.5}` | `std::shared_ptr<const MarkingStrategy>` |
-| `adaptation` | `MarkedBisection` | `std::shared_ptr<const MeshAdaptation>`: how the marked mesh changes |
-| `planners` | unset (plans as given) | `PlannerSet{mesh, solve}`: `solve` runs before every solve or window, `mesh` after marking (its options change the mesh) |
-| `tolerance` | 0 (off) | `adapt`: stop once the global estimate is at most this; `adapt_evolution`: change the mesh after a window only above it |
-| `refinement` | each result's own options | `MeshOptions` the mesh is changed with |
-| `transfer` | `{}` | `TransferOptions` of every `transfer_field` |
-| `accept_unsatisfied_refinement` | false | use a changed mesh that missed its size target; otherwise `adapt` stops and `adapt_evolution` discards it |
-| `max_iterations`, `warm_start`, `time` | 10, true, 0 | `adapt` only: mesh changes after the first solve, seed each solve with the transferred solution, solve time |
-| `windows`, `output` | 4, `{}` | `adapt_evolution` only: number of windows, `EvolutionOutput` of every window |
-
-Both drivers run one shared step after a solve or window
-(`fem/adaptivity_core.hpp`): estimate, mark, plan the mesh (mesh planner),
-change the mesh (`MeshAdaptation`, checked by `apply_mesh_adaptation`: its
-record must describe the returned mesh), transfer, then refresh the plan
-for the new mesh: a mesh-bound `plan.analysis` is recomputed, `plan.mesh`
-(when set) is replaced by the mesh plan of the refinement options when they
-differ from it (or by the mesh planner's plan), and the solve planner, if
-any, plans the next solve with that mesh and the previous `AdaptiveStep`
-(`PlanningContext::previous`). Planners' plans are validated ("Solve
-planner <name> returned an invalid plan: ...") and recorded: `plan.planner`,
-the run record's strategies and a `SolvePlanner`/`MeshPlanner` decision of
-the step.
-
-`adapt` stops, checked after every solve and estimate in this order, with
-`AdaptiveStop::ToleranceReached`, `MaxIterations`, `NothingMarked` (the
-strategy marked no element) or `UnsatisfiedRefinement` (the changed mesh
-missed its size target; that mesh is not solved on). `adapt_evolution`
-splits the plan's interval into `windows` equal windows
-(`adaptive_window_times`), evolves each on the current mesh, estimates its
-last frame at the window's end, and except after the last window (stop
-`EndReached`) runs the shared step; the moved last frame (and velocity,
-when the initial conditions have one) becomes a nodal restart whose
-Dirichlet nodes are set to the problem's Dirichlet data (and its time
-derivative) at the restart time, from `PreparedAssembly` on the new mesh.
-Without a change (within tolerance, nothing marked, a discarded mesh) the
-next window restarts on the same mesh. The plan must have time settings and
-uniform steps ("adapt_evolution needs uniform time steps"). The initial
-`MeshResult` must meet its size target or be passed as
-`accept_unsatisfied(result)`. The drivers add no numerics: the same calls
-composed by hand give the same meshes and values bit for bit
-(`tests/fem/adaptive_loop.cpp`, `transient_adaptivity.cpp`).
-
-`AdaptiveHistory` holds the `options` it ran with (estimator, marker and
-adaptation set to what ran), the final `mesh`, `estimate` and `solution`
-(`adapt`) or `evolution` (`adapt_evolution`), the `stop` reason and message,
-and one `AdaptiveStep` per solve or window: its `RunRecord` (plan, mesh
-fingerprint and provenance, the stationary solve's initial guess and
-iterations, or the window's initial fields), `time` (of the estimate; the
-window's end) and `window_start` (windows only), the `TransferRecord`s that
-seeded it (`transfer`, `velocity_transfer`: source and target nodes,
-extrapolated nodes, largest outside distance, and on a restart the reset
-Dirichlet nodes and the largest correction), an `EstimateRecord`
-(estimator name and descriptor, global estimate, elements, largest and mean
-indicator) and, when it marked, a `MarkingRecord` (strategy name,
-descriptor, marked and total elements), a `MeshAdaptationRecord`
-(strategy, descriptor, `MeshReport` with `MarkedRefinementReport` counters,
-the mesh run record with the options the mesh was changed with, kept even
-when the mesh was not used, and `accepted`) and its `Decision`s (with
-planners, a `SolvePlanner` decision first and a `MeshPlanner` decision
-before the change): `DecisionSubject::Marking` (choice
-`Bulk(fraction=0.6)`, or `<name> (not replayable)` without a descriptor)
-and `DecisionSubject::Refinement` (choice `<adaptation name> (<algorithm>,
-<boundary treatment>)`, e.g. `marked longest-edge bisection
-(ConstrainedDelaunay, Fixed)`).
-
-`write_json(out, history)` (`fem/adaptivity_json.hpp`) writes
-`"schema": "pde2d.adaptive_history"`, `"schema_version": 2` (version 2
-merged the stationary and the former `pde2d.evolution_adaptive_history`
-documents), `kind` (`stationary` or `transient`), `stop` (`reason`,
-`message`), `settings` (`estimator`, `marker`, `adaptation`,
-`solve_planner`, `mesh_planner` with `name` and `descriptor` (planners
-`null` when unset); `tolerance`, `refinement`, `transfer`
-(`max_outside_distance`, `execution`), `accept_unsatisfied_refinement`;
-stationary: `max_iterations`, `warm_start`, `time`; transient: `windows`,
-`start`, `end`, `step`), `steps` (each: `index`, `window_start`, `time`,
-`record` = the full run record document, `transfer`, `velocity_transfer`,
-`estimate`, `marking`, `adaptation` (`strategy`, `descriptor`, `report`,
-`run` = a mesh run record document, `accepted`), `decisions`) and `final`
-(`mesh_fingerprint`, `nodes`, `elements`, `time`, `estimate`), with the
-run-record conventions (absent values `null`, `max_digits10` numbers).
-`read_adaptive_history_json` checks the schema; `diff_records` compares two
-histories leaf by leaf and ignores nested `timings`. Indicators and nodal
-values are not written.
-
-## Reference problems and plan comparisons
-
-`fem/reference/problems.hpp` is a small library of complete problems with
-exact or manufactured solutions (`ReferenceProblem`: `name`, `geometry`
-with named regions, `problem`, `transient` (initial conditions and window)
-for time-dependent ones, `exact` u(x, y, t), `notes` and suggested `mesh`
-options). `reference_problems()` returns all of them;
-`find_reference_problem(name)` one. Names are stable:
-
-| Name | What it tests |
-| --- | --- |
-| `l_shape_corner` | Laplace on the L-shaped domain, u = r^(2/3) sin(2θ/3): corner singularity, H1 rate 2/3 on uniform meshes |
-| `boundary_layer` | −εΔu + u_x + u_y = f, ε = 0.05: boundary layers at x = 1 and y = 1, nonsymmetric |
-| `variable_anisotropic_diffusion` | variable anisotropic diffusion with a mixed term, Dirichlet and conormal flux conditions |
-| `oblique_square` | −Δu + u = f with an oblique-derivative condition on three sides |
-| `annulus_mixed` | Poisson on an annulus: Dirichlet outside, Robin on the hole |
-| `heat_moving_peak` | u_t − Δu = f with a moving Gaussian peak and time-dependent Dirichlet data, t ∈ [0, 0.6] |
-| `wave_standing` | u_tt − Δu = 0, standing wave with initial velocity, t ∈ [0, 0.5] |
-
-`fem/reference/compare.hpp` runs plans on one of them and measures the
-error for the work spent:
-
-```cpp
-auto reference = find_reference_problem("annulus_mixed");
-auto c = compare_plans(reference, mesh_plan_from_user(reference.mesh),
-                       {lu_plan, cg_plan});
-c.entries[1].errors.l2;            // L2 and H1-seminorm error (error_norms)
-c.entries[1].work.solver_iterations;
-c.entries[1].record;               // the full RunRecord
-auto m = compare_mesh_plans(reference, {coarse, fine}, plan);
-auto p = compare_planners(reference, {{mesh_planner, nullptr}}, plan);
-p.entries[1].relative->l2;         // error relative to the identity baseline
-write_json(out, c);                // "pde2d.plan_comparison", version 1
-```
-
-`compare_plans` meshes the geometry once with the mesh plan and solves with
-every plan; `compare_mesh_plans` meshes with every mesh plan and solves with
-one plan. Each solve gets the mesh plan it ran on as `plan.mesh` (and a
-mesh-bound analysis refreshed), so its record describes what ran.
-Stationary problems are compared at t = 0, transient ones at the end of the
-reference window, which the plan's `start` and `end` must match exactly.
-Each `ComparisonEntry` has its `index`, a `label` (`comparison_label`), the
-`RunRecord`, `errors` (`l2`, `h1_seminorm`, `time`), `work` (nodes,
-elements, assembly calls, linear solves, solver preparations and
-iterations, time steps, mesh refinement steps and edge flips) and `timings`
-(mesh, planning and solve seconds).
-
-`compare_planners(reference, {PlannerSet...}, defaults)` judges planners:
-entry 0 is always the identity `UserPlanner` (label `User (baseline)`),
-then one entry per set (an unset planner is the identity). Each entry plans
-and meshes with `plan_mesh` (geometry and sampled boundary in the
-`PlanningContext`), plans the solve on that mesh with `run_planner` and
-solves, so an entry equals the plain comparison of the plans its planners
-chose. Meshing starts from `defaults.mesh` (unset: the reference's
-suggested options). Each entry also has `planner_decisions` (the decisions
-the planners changed, mesh plan first), `timings.planning_seconds` (the
-planners' own time, without meshing), `timings.relative_seconds` and
-`relative` (`ComparisonRelative`: L2 and H1 errors, nodes, linear solves
-and solver iterations divided by the baseline's; 1 when both are 0, inf
-when only the baseline's is); `PlanComparison::baseline` is 0.
-
-The JSON writes `reference`, `notes`, `kind` (`solve plans`, `mesh plans`
-or `planners`), `entries` (each with the same groups, `planner_decisions`,
-`relative` and the full run record under `record`) and `baseline`;
-`read_plan_comparison_json` checks the schema and `diff_records` skips the
-timings.
 
 ## Optional parallel execution and verification
 
@@ -664,80 +411,9 @@ format a summary. Include `fem/report.hpp` (also exported by `fem/fem.hpp`):
 #include <iostream>
 
 pde2d::fem::write_report(std::cout, motion);          // pde2d::fem::Evolution
-pde2d::fem::write_report(std::cout, solution);        // StationarySolution or LinearSolution
+pde2d::fem::write_report(std::cout, solution);        // pde2d::fem::LinearSolution
 pde2d::fem::write_report(std::cout, solution.report); // pde2d::fem::SolverReport
-pde2d::fem::write_report(std::cout, motion.record);   // pde2d::fem::RunRecord
 ```
-
-### Run records
-
-`StationarySolution::record` and `Evolution::record` (`fem/record.hpp`) carry
-what is needed to reproduce and compare a run, as fields:
-
-- the plan that ran, with its decisions, mesh plan and analysis (if any);
-- the inputs, by deterministic fingerprint (`pde2d::Fingerprint`, FNV-1a 64,
-  explicit little-endian encoding): the mesh (`mesh_fingerprint`: node bit
-  patterns, elements, boundary edges, tags), the problem
-  (`problem_fingerprint`: the canonical SymEngine string of every `Equation`
-  field, then each assignment's regions and condition fields, in assignment
-  order) and, for evolutions, the initial value and velocity
-  (`field_fingerprint`, expression or nodal);
-- mesh provenance (`MeshOptions`, `MeshReport`, whether a boundary context was
-  kept, and the mesh run record of the meshing call, `run`: operation,
-  fingerprints, options, version, work counters, quality statistics and
-  time; see `cpp/discretization/README.md`) when the solve was given a
-  `MeshResult`;
-- the stationary evaluation time, and for a stationary solve
-  `stationary_solve`: the initial-guess use, the fingerprint of the guess
-  as passed (`field_fingerprint`, kind `nodal`), the iterations, whether it
-  converged and the final residual norms;
-- `strategies`: what ran for the time integrator, step sequence, linear solver,
-  size field, refinement criterion and the solve and mesh planners, each `built-in` (the options rebuild it), `described` (a
-  `StrategyDescriptor` names it and its parameters) or `not replayable` (a
-  factory without descriptor); `record.replayable()` is true when all are
-  built-in;
-- versions: library version and git commit at configure time
-  (`pde2d::library_version()`, "unknown" and empty outside CMake or git),
-  Eigen and SymEngine;
-- execution policy and OpenMP availability, workload, work counters (with
-  `solver_iterations`, summed over every linear solve), an
-  evidence summary of the decisions, and the total wall-clock time
-  (`timings.total_seconds`, the only field that differs between identical
-  runs).
-
-`write_json(out,record)` (`fem/record_json.hpp`) writes a versioned JSON
-document: `"schema": "pde2d.run_record"`, `"schema_version": 1`, then
-`versions`, `replayable`, `problem`, `mesh` (`fingerprint`, `provenance`
-with `run`, a mesh run record document), `workload`, `stationary_time`,
-`initial`, `stationary_solve` (`initial_guess`, `guess`, `outcome`:
-`iterations`, `converged`, `residual_norm`, `relative_residual`), `plan`
-(`assembly`, `solver`,
-`time`, `decisions`, `mesh` (with its `planner`), `analysis` (with
-`problem_fingerprint` and `mesh_fingerprint`), `planner`), `strategies`,
-`execution`, `work`,
-`evidence` and `timings`. Absent optional values are `null`. Numbers use the
-classic locale and `max_digits10` digits, so parsed doubles are the run's bit
-for bit; non-finite values are the strings `"nan"`, `"inf"`, `"-inf"`. Adding
-a key keeps the schema version; renaming or removing one increments it.
-
-```cpp
-std::ofstream file("run.json");
-pde2d::fem::write_json(file, solution.record);
-std::ifstream in("run.json");
-auto document = pde2d::fem::read_run_record_json(in);   // checks the schema
-for (const auto &d : pde2d::fem::diff_records(old_record, new_record))
-  std::cout << d.path << ": " << d.left << " -> " << d.right << '\n';
-```
-
-`diff_records` compares two records or parsed documents leaf by leaf (paths
-such as `plan.decisions[2].choice`) and ignores `timings` (also nested, as
-in adaptive histories and mesh run records) unless
-`{.ignore_timings = false}`. It also skips `outcome` objects (what a solve
-produced from its inputs: iterations and residuals) unless
-`{.ignore_outcomes = false}`, so by default a diff compares inputs, settings
-and work and a changed input shows as its fingerprint. Mesh options in
-records include `refinement.criterion` (whether a user refinement criterion
-was set) and `refinement.criterion_descriptor`.
 
 These overloads return `std::ostream&`, emit one summary without per-step output,
 and preserve the caller's formatting flags, precision, fill, width and locale.
@@ -757,10 +433,10 @@ initial acceleration solves for Newmark, although per-step reports do not.
 Observers still receive the initial state and every accepted step independently
 of frame stride; callback exceptions propagate to the caller.
 
-`Evolution::record` records mesh node, element and boundary-edge counts,
-quadrature degree, time method/interval/step,
-solver options, OpenMP build availability, and the selected `execution` policy.
-Its `execution.threads` is
+`Evolution::metadata` records mesh node, element and boundary-edge counts,
+quadrature degree, time method/interval/step, the name of the integrator that
+ran, solver options, OpenMP build availability, and the selected `execution`
+policy. Its `execution.threads` is
 the requested count (zero means runtime default), **not** measured team size.
 Small loops, nested execution and runtime limits may cause serial or smaller
 teams. The formatter labels this distinction explicitly. The default selected

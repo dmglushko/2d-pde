@@ -1,11 +1,10 @@
 // Multiply connected domains: geometry with holes, nesting validation,
 // meshing (ear clipping with bridges, CDT, curve refinement), mesh
-// validation, point location and the version 5 file format. Oracles: polygon
+// validation and the version 5 file format. Oracles: polygon
 // areas by the shoelace formula, exact circle radii, Euler characteristics,
 // the independent CDT verifier and byte-identical re-export.
 #include "discretization/geometry.hpp"
 #include "discretization/mesh_io.hpp"
-#include "discretization/point_location.hpp"
 #include "discretization/triangulate.hpp"
 #include "support/cdt.hpp"
 #include "support/check.hpp"
@@ -294,34 +293,13 @@ void curve_refinement_on_holes() {
   // The polygon area converges to the annulus area.
   const double exact = std::numbers::pi * (R * R - rin * rin);
   check(std::abs(mesh_area(r.mesh) - exact) < 0.01 * exact);
-  // Size field graded towards the hole keeps new vertices on the curves.
-  auto graded = o;
-  graded.refinement.max_edge_length = 0;
-  graded.refinement.size_field = [](Point2 p) {
-    return 0.03 + 0.2 * (std::hypot(p.x - 0.25, p.y + 0.5) - 0.35);
-  };
-  auto fine = refine_mesh(r, graded);
+  // Refining further keeps new vertices on the curves.
+  auto finer = o;
+  finer.refinement.max_edge_length = 0.06;
+  auto fine = refine_mesh(r, finer);
   check(fine.report.size_satisfied, fine.report.message);
   on_circles(fine);
   check(fine.mesh.nodes.size() > r.mesh.nodes.size());
-  // Marked refinement of the triangles touching the hole.
-  std::set<std::size_t> hole_nodes;
-  for (auto e : boundary_loops(r.mesh)[1])
-    hole_nodes.insert(r.mesh.boundary_edges[e].first);
-  std::vector<std::size_t> marked;
-  for (std::size_t i = 0; i < r.mesh.elements.size(); ++i)
-    for (auto v : r.mesh.elements[i])
-      if (hole_nodes.contains(v)) {
-        marked.push_back(i);
-        break;
-      }
-  auto marked_options = o;
-  marked_options.refinement.max_edge_length = 0;
-  auto bisected = refine_mesh(r, marked, marked_options);
-  check(bisected.report.size_satisfied, bisected.report.message);
-  check(bisected.report.marked->bisected_edges > 0);
-  check(bisected.mesh.nodes.size() > r.mesh.nodes.size());
-  on_circles(bisected);
 }
 
 void mesh_validation_with_holes() {
@@ -362,31 +340,6 @@ void mesh_validation_with_holes() {
   check(refined.report.size_satisfied, refined.report.message);
   check_topology(refined.mesh, 2);
   near(mesh_area(refined.mesh), 8, 1e-12);
-}
-
-void point_location_on_annulus() {
-  auto mesh = framed_square();
-  PointLocator locator(mesh);
-  check(!locator.locate({1.5, 1.5}), "The hole is outside the mesh");
-  check(!locator.locate({1.5, 1.2}));
-  auto inside = locator.locate({0.5, 1.5});
-  check(inside && inside->inside, "Points in the band are located");
-  auto on_hole_edge = locator.locate({1.5, 1});
-  check(on_hole_edge && on_hole_edge->inside, "Hole edges belong to the mesh");
-  PointLocator tolerant(mesh, {0.3});
-  auto near_hole = tolerant.locate({1.5, 1.2});
-  check(near_hole && !near_hole->inside, "Extrapolated from a hole edge");
-  near(near_hole->distance, 0.2, 1e-15);
-  // The owner of the hole edge (4, 5) is triangle (0, 5, 4).
-  check(near_hole->element == 1);
-  // Barycentric extrapolation reproduces affine fields.
-  const auto &t = mesh.elements[near_hole->element];
-  double value = 0;
-  for (int k = 0; k < 3; ++k)
-    value += near_hole->barycentric[k] *
-             (2 * mesh.nodes[t[k]].x - mesh.nodes[t[k]].y);
-  near(value, 2 * 1.5 - 1.2, 1e-14);
-  check(!tolerant.locate({1.5, 1.5}), "The hole center is too far");
 }
 
 std::string read_file(const std::string &path) {
@@ -529,7 +482,6 @@ int main(int argc, char **argv) {
        {"meshing_with_holes", meshing_with_holes},
        {"curve_refinement_on_holes", curve_refinement_on_holes},
        {"mesh_validation_with_holes", mesh_validation_with_holes},
-       {"point_location_on_annulus", point_location_on_annulus},
        {"version5_format", [] {
           check(!fixture_dir.empty(), "Supply private fixture directory");
           version5_format();

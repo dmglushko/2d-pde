@@ -53,7 +53,6 @@ struct DirichletData {
 template <> struct Unit<DirichletEdge> {
   static constexpr const char *name = "Dirichlet";
   static constexpr const char *divisor_name = "Dirichlet alpha";
-  static constexpr BoundaryForm category = BoundaryForm::Dirichlet;
   static const Expr &divisor(const DirichletEdge &form) { return form.alpha; }
 
   struct Prepared {
@@ -120,14 +119,6 @@ template <> struct Unit<DirichletEdge> {
                   std::max({1., std::abs(it->second), std::abs(g)}))
         throw std::invalid_argument("Contradictory corner Dirichlet values");
     }
-  }
-
-  static EdgeJudgement judge(const DirichletEdge &form) {
-    return {category,
-            {{divisor_name, &form.alpha}},
-            {&form.alpha, &form.value},
-            nullptr,
-            nullptr};
   }
 };
 } // namespace pde2d::fem::edge_form_detail

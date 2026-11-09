@@ -7,12 +7,10 @@
 #include "../mesh_types.hpp"
 #include "../mesh_validation.hpp"
 #include "../predicates.hpp"
-#include "../size_criterion.hpp"
 #include "../spatial_index.hpp"
 #include <algorithm>
 #include <array>
 #include <deque>
-#include <functional>
 #include <map>
 #include <optional>
 #include <queue>
@@ -36,9 +34,6 @@ inline bool in_triangle(Point2 p, Point2 a, Point2 b, Point2 c) {
          predicates::orient(c, a, p) >= 0;
 }
 
-// SizePriority, SizeCriterion and constant_size_criterion are public
-// (size_criterion.hpp): every size criterion plugs into the queue below.
-
 class Topology {
 public:
   TriangleMesh &mesh;
@@ -48,39 +43,35 @@ public:
   std::map<Edge, std::size_t> generations;
   std::size_t generation = 0;
   struct SizeEntry {
-    SizePriority priority;
+    double length;
     Edge edge;
     std::size_t generation;
     bool operator<(const SizeEntry &b) const {
-      if (priority != b.priority)
-        return priority < b.priority;
-      return edge > b.edge; // first lexicographic edge wins equal priorities
+      if (length != b.length)
+        return length < b.length;
+      return edge > b.edge; // first lexicographic edge wins equal lengths
     }
   };
   std::priority_queue<SizeEntry> sizes;
-  SizeCriterion criterion;
+  double target = 0;
   std::set<std::pair<double, double>> coordinates;
-  // Work counters of the meshing call (MeshRunRecord::work), when set.
-  // Counting never changes the mesh.
-  MeshWork *work = nullptr;
   void queue_size(Edge e) {
     auto g = ++generation;
     generations[e] = g;
-    if (criterion)
-      if (auto p = criterion(mesh.nodes[e.first], mesh.nodes[e.second]))
-        sizes.push({*p, e, g});
+    if (target > 0) {
+      double d = distance(mesh.nodes[e.first], mesh.nodes[e.second]);
+      if (d > target * (1 + 1e-12))
+        sizes.push({d, e, g});
+    }
   }
-  void initialize_size(SizeCriterion c) {
-    criterion = std::move(c);
+  // Constant target h; zero or negative disables size queueing.
+  void initialize_size(double h) {
+    target = h;
     sizes = {};
     for (const auto &[e, own] : owners) {
       (void)own;
       queue_size(e);
     }
-  }
-  // Constant target h; zero or negative disables size queueing.
-  void initialize_size(double h) {
-    initialize_size(constant_size_criterion(h));
   }
   std::optional<Edge> longest() {
     while (!sizes.empty()) {
@@ -169,8 +160,6 @@ public:
         continue;
       if (++flips > limit)
         throw std::runtime_error("Delaunay legalization work budget exhausted");
-      if (work)
-        ++work->edge_flips;
       const auto own = owners.at(edge);
       auto i = *own.begin(), j = *std::next(own.begin()), c = opposite(i, edge),
            d = opposite(j, edge);

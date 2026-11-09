@@ -6,13 +6,12 @@
 // alternative (forms.hpp). Everything a form does after that lives in ONE
 // unit, the specialization edge_form_detail::Unit<Form> in its own header
 // next to this one (dirichlet.hpp, natural.hpp, oblique.hpp). Generic code
-// (classification names, PreparedAssembly's boundary, the serial scatter and
-// the region analysis) only calls through this interface:
+// (classification names, PreparedAssembly's boundary and the serial scatter)
+// only calls through this interface:
 //
 //   template <> struct Unit<MyEdge> {
 //     static constexpr const char *name;          // edge_form_name
 //     static constexpr const char *divisor_name;  // edge_divisor_name
-//     static constexpr BoundaryForm category;     // analysis report category
 //     static const Expr &divisor(const MyEdge &); // edge_divisor
 //     struct Prepared {                           // numeric data only
 //       using Form = MyEdge;
@@ -28,8 +27,6 @@
 //     // Serial scatter of that contribution in a fixed order.
 //     static void scatter(const EdgeResult &, const EdgeNodes &,
 //                         ScatterTarget &);
-//     // What region analysis learns from the edge.
-//     static EdgeJudgement judge(const MyEdge &);
 //   };
 //
 // EdgeFormUnit checks this shape. forms.hpp static_asserts it for every
@@ -37,8 +34,7 @@
 // compile.
 //
 // Also here (public, namespace pde2d::fem): edge restriction and the sampled
-// divisor sign contract shared by classification, assembly and analysis.
-#include "fem/boundary_form.hpp"
+// divisor sign contract shared by classification and assembly.
 #include "fem/expression.hpp"
 #include "fem/p1_element.hpp"
 #include "fem/quadrature.hpp"
@@ -79,7 +75,7 @@ inline std::vector<double> edge_divisor_samples(int quadrature_degree) {
 }
 
 // True when divisor(s) is nonzero with one sign at every sample, evaluated in
-// sample order. Evidence::Sampled: arbitrary functions may have unsampled
+// sample order. A sampled check: arbitrary functions may have unsampled
 // roots between samples. Exceptions from `divisor` propagate.
 template <class Divisor>
 bool divisor_keeps_strict_sign(Divisor &&divisor,
@@ -115,8 +111,8 @@ struct EdgeSite {
   EvaluationPoint at(double s, double time) const {
     return EvaluationPoint{s, 0, time, normal_x, normal_y};
   }
-  // Endpoint/midpoint/quadrature sign sampling, shared with analysis. This is
-  // not a proof that arbitrary symbolic functions have no unsampled roots.
+  // Endpoint/midpoint/quadrature sign sampling. This is not a proof that
+  // arbitrary symbolic functions have no unsampled roots.
   void require_divisor_sign(const char *name, const Evaluator &divisor,
                             double time) const {
     if (!divisor_keeps_strict_sign(
@@ -174,25 +170,6 @@ inline void scatter_block(const LocalBlock &block, const EdgeNodes &nodes,
   }
 }
 
-// A restricted expression that must keep one strict sign on the edge.
-struct NamedDivisor {
-  const char *name;
-  const Expr *expression;
-};
-// What region analysis (detail/analysis_regions.hpp) learns from one
-// classified edge. Pointers refer into the judged form.
-struct EdgeJudgement {
-  BoundaryForm category;
-  // Checked in this order at every sample time, exactly as assembly does.
-  std::vector<NamedDivisor> divisors;
-  // Restricted coefficients whose t dependence makes the edge time dependent.
-  std::vector<const Expr *> coefficients;
-  // Robin coefficient of a natural-type edge (nullspace judgement), or null.
-  const Expr *robin = nullptr;
-  // Coefficient of a nonsymmetric tangential-derivative term, or null.
-  const Expr *tangential = nullptr;
-};
-
 template <class Form>
 concept EdgeFormUnit =
     requires(const Form &form, const p1::EdgeFrame &frame, const EdgeSite &site,
@@ -202,7 +179,6 @@ concept EdgeFormUnit =
       sizeof(Unit<Form>);
       { Unit<Form>::name } -> std::convertible_to<const char *>;
       { Unit<Form>::divisor_name } -> std::convertible_to<const char *>;
-      { Unit<Form>::category } -> std::convertible_to<BoundaryForm>;
       { Unit<Form>::divisor(form) } -> std::same_as<const Expr &>;
       requires std::same_as<typename Unit<Form>::Prepared::Form, Form>;
       {
@@ -212,6 +188,5 @@ concept EdgeFormUnit =
         Unit<Form>::evaluate(prepared, site, time, DirichletDerivative::Value)
       } -> std::same_as<EdgeResult>;
       Unit<Form>::scatter(result, nodes, target);
-      { Unit<Form>::judge(form) } -> std::same_as<EdgeJudgement>;
     };
 } // namespace pde2d::fem::edge_form_detail

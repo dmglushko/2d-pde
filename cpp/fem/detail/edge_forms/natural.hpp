@@ -120,7 +120,6 @@ EdgeResult natural_type_evaluate(const EdgeCoefficients &coefficients,
 template <> struct Unit<NaturalEdge> {
   static constexpr const char *name = "Natural";
   static constexpr const char *divisor_name = "Natural flux multiplier";
-  static constexpr BoundaryForm category = BoundaryForm::Natural;
   static const Expr &divisor(const NaturalEdge &form) { return form.beta; }
 
   struct Prepared {
@@ -156,14 +155,6 @@ template <> struct Unit<NaturalEdge> {
   static void scatter(const EdgeResult &result, const EdgeNodes &nodes,
                       ScatterTarget &target) {
     scatter_block(result.block, nodes, target);
-  }
-
-  static EdgeJudgement judge(const NaturalEdge &form) {
-    return {category,
-            {{divisor_name, &form.beta}},
-            {&form.alpha, &form.gamma, &form.value, &form.beta},
-            &form.alpha,
-            nullptr};
   }
 };
 } // namespace pde2d::fem::edge_form_detail

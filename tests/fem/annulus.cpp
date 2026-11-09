@@ -1,16 +1,13 @@
 // FEM on a multiply connected domain (annulus). Oracles: a manufactured
 // stationary solution with Dirichlet data on the outer circle and a Robin
 // condition on the hole (outward normal pointing into the hole), measured
-// second-order L2 convergence; normals checked against the circle geometry;
-// analysis properties known by construction; exact transfer of affine fields.
+// second-order L2 convergence; normals checked against the circle geometry.
 #include "discretization/geometry.hpp"
 #include "discretization/triangulate.hpp"
-#include "fem/analysis.hpp"
 #include "fem/boundary_assignment.hpp"
 #include "fem/error_norms.hpp"
 #include "fem/interpolation.hpp"
 #include "fem/solver.hpp"
-#include "fem/transfer.hpp"
 #include "support/check.hpp"
 #include <cmath>
 #include <iostream>
@@ -94,54 +91,11 @@ void hole_normals_point_into_the_hole() {
   check(inner == boundary_loops(mesh)[1].size(), "Inner edges are the hole");
 }
 
-void analysis_per_region_on_both_loops() {
-  const auto mesh = annulus_mesh(0.2).mesh;
-  const auto loops = boundary_loops(mesh);
-  auto a = analyze(dirichlet_outside_robin_inside(), mesh);
-  check(a.boundaries.size() == 2);
-  check(a.boundaries[0].region == "outer" &&
-            a.boundaries[0].form.value == BoundaryForm::Dirichlet &&
-            a.boundaries[0].dirichlet_edges == loops[0].size() &&
-            a.boundaries[0].edges == loops[0].size(),
-        "Dirichlet on the outer loop");
-  check(a.boundaries[1].region == "inner" &&
-            a.boundaries[1].form.value == BoundaryForm::Natural &&
-            a.boundaries[1].natural_edges == loops[1].size(),
-        "Robin (natural) on the hole");
-  check(a.has_dirichlet.value && !a.constant_nullspace.value);
-  // Pure Neumann on both loops leaves the constants in the nullspace.
-  Problem neumann_only;
-  neumann_only.assign(neumann(0), {"outer", "inner"});
-  auto n = analyze(neumann_only, mesh);
-  check(!n.has_dirichlet.value && n.constant_nullspace.value,
-        "Constants are a nullspace with natural conditions on every loop");
-  // Dirichlet on the hole alone fixes the constant as well.
-  Problem inner_dirichlet;
-  inner_dirichlet.assign(neumann(0), {"outer"});
-  inner_dirichlet.assign(dirichlet(1), {"inner"});
-  check(!analyze(inner_dirichlet, mesh).constant_nullspace.value);
-}
-
-void affine_transfer_between_annulus_meshes() {
-  const Expr affine = 1 + 2 * x - 3 * y;
-  const auto coarse = annulus_mesh(0.25).mesh, fine = annulus_mesh(0.08).mesh;
-  // New outer-circle nodes lie just outside the coarse chords; new hole
-  // nodes lie inside the coarse mesh.
-  auto moved = transfer_field(coarse, interpolate(coarse, affine), fine,
-                              TransferOptions{0.01});
-  check(moved.extrapolated_nodes > 0, "Outer boundary nodes extrapolate");
-  check((moved.values - interpolate(fine, affine)).lpNorm<Eigen::Infinity>() <
-            1e-12,
-        "Affine fields transfer exactly");
-}
 } // namespace
 
 int main() {
   return pde2d_test::run(
       {{"manufactured_convergence_on_annulus",
         manufactured_convergence_on_annulus},
-       {"hole_normals_point_into_the_hole", hole_normals_point_into_the_hole},
-       {"analysis_per_region_on_both_loops", analysis_per_region_on_both_loops},
-       {"affine_transfer_between_annulus_meshes",
-        affine_transfer_between_annulus_meshes}});
+       {"hole_normals_point_into_the_hole", hole_normals_point_into_the_hole}});
 }

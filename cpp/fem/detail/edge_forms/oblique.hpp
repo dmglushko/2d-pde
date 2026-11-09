@@ -71,8 +71,7 @@
 // int r u du/ds is skew only for constant r on a closed boundary path (it
 // equals -1/2 int r_s u^2 plus endpoint terms otherwise), so the form may
 // lose coercivity, and the nonsymmetric matrix rules out the conjugate
-// gradient solver. Analysis reports the edges as BoundaryForm::Oblique and
-// does not claim well-posedness (detail/analysis_regions.hpp).
+// gradient solver. Nothing here claims well-posedness.
 #include "fem/detail/edge_forms/natural.hpp"
 
 namespace pde2d::fem {
@@ -106,7 +105,6 @@ template <> struct Unit<ObliqueEdge> {
   static constexpr const char *name = "Oblique";
   static constexpr const char *divisor_name = "Oblique flux multiplier";
   static constexpr const char *conormal_name = "Oblique conormal component";
-  static constexpr BoundaryForm category = BoundaryForm::Oblique;
   static const Expr &divisor(const ObliqueEdge &form) { return form.beta; }
 
   // Classification (boundary_classification.hpp): the decomposition above
@@ -208,15 +206,6 @@ template <> struct Unit<ObliqueEdge> {
   static void scatter(const EdgeResult &result, const EdgeNodes &nodes,
                       ScatterTarget &target) {
     scatter_block(result.block, nodes, target);
-  }
-
-  static EdgeJudgement judge(const ObliqueEdge &form) {
-    return {category,
-            {{conormal_name, &form.conormal}, {divisor_name, &form.beta}},
-            {&form.alpha, &form.gamma, &form.value, &form.beta, &form.tau,
-             &form.conormal},
-            &form.alpha,
-            &form.tau};
   }
 };
 } // namespace pde2d::fem::edge_form_detail

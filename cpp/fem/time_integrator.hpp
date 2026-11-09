@@ -10,23 +10,15 @@
 // reuse) to the driver through IntegratorServices, so the same integrator runs
 // unchanged under evolve() and under a test's uncached reference driver.
 //
-// Steps are transactional: evolve() calls trial() for a candidate step and
-// then accept() or reject() (a StepController may reject it, step_control.hpp).
-// A trial must not commit internal state; Newmark keeps its new acceleration
-// provisional until accept(). advance() is trial() followed by accept(), for
-// drivers that never reject.
-//
 // The built-in schemes are units in detail/time_schemes/ (one per
 // TimeMethod); time_integration.hpp includes them and is the header to use.
 // A user scheme implements TimeIntegrator and is passed as a factory in
 // TimeOptions::integrator (evolution.hpp); it needs no library change.
 #include "fem/system.hpp"
-#include "provenance.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -83,17 +75,9 @@ public:
   virtual ~TimeIntegrator() = default;
   // Built-in schemes return their TimeMethod; user schemes may keep Custom.
   virtual TimeMethod method() const { return TimeMethod::Custom; }
-  // Name used in reports, decisions and the run record's strategies.
-  // Built-in schemes return their unit's name; override it in a user scheme.
+  // Name used in reports. Built-in schemes return their unit's name;
+  // override it in a user scheme.
   virtual std::string name() const { return "Custom"; }
-  // Stable description (name + parameters) for run records, when the scheme
-  // comes from a factory (TimeOptions::integrator). Without one the record
-  // says the integrator is "not replayable". Built-in schemes return theirs.
-  virtual std::optional<pde2d::StrategyDescriptor> descriptor() const {
-    if (method() == TimeMethod::Custom)
-      return std::nullopt;
-    return pde2d::StrategyDescriptor{name()};
-  }
   // 1: needs u at the start; 2: also needs u_t.
   virtual int order() const = 0;
   // Reject systems this scheme cannot integrate.
@@ -102,31 +86,13 @@ public:
   // was made compatible with its Dirichlet data.
   virtual void start(const AssembledSystem &, IntegratorState &,
                      const IntegratorServices &) {}
-  // Advance from `previous` (stamp t) to `current` (stamp t+h) and commit
+  // Advance from `previous` (stamp t) to `current` (stamp t+h), updating
   // any internal state. The driver re-imposes Dirichlet displacement on the
   // returned u afterwards.
   virtual IntegratorState advance(const AssembledSystem &previous,
                                   const AssembledSystem &current, double h,
                                   const IntegratorState &state,
                                   const IntegratorServices &services) = 0;
-
-  // Transactional stepping. True when trial() leaves internal state
-  // untouched until accept(), so a rejected trial can be discarded. The
-  // default (false) suits schemes written before trials existed: evolve()
-  // then refuses a controller's rejection instead of continuing from a
-  // corrupted state. Stateless schemes may simply return true.
-  virtual bool transactional() const { return false; }
-  // The candidate state of one step, same arguments as advance(). The
-  // default calls advance(), which is correct for stateless schemes.
-  virtual IntegratorState trial(const AssembledSystem &previous,
-                                const AssembledSystem &current, double h,
-                                const IntegratorState &state,
-                                const IntegratorServices &services) {
-    return advance(previous, current, h, state, services);
-  }
-  // Commit or discard the internal state of the last trial().
-  virtual void accept() {}
-  virtual void reject() {}
 };
 
 // Creates the integrator of one evolution (integrators may keep state).

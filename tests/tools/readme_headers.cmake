@@ -1,9 +1,8 @@
 # Documentation check: every public header of cpp/discretization and cpp/fem
 # (any directory but detail/, which is private; a header in a public
-# subdirectory such as cpp/fem/reference/ is named with its relative path,
-# `reference/problems.hpp`) must be named, in backticks, in its module
-# README (`cpp/<module>/README.md`, the header map). Fails with the
-# list of missing headers.
+# subdirectory is named with its relative path, e.g. `sub/nested.hpp`) must
+# be named, in backticks, in its module README (`cpp/<module>/README.md`, the
+# header map). Fails with the list of missing headers.
 #
 #   cmake -DPDE2D_ROOT=<repository> -P tests/tools/readme_headers.cmake
 if(NOT PDE2D_ROOT)

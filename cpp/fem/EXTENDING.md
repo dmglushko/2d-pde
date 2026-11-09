@@ -9,12 +9,9 @@ preparation, deterministic serial scatter, explicit exceptions.
 A user scheme needs no library change. Implement `TimeIntegrator` in your
 own code and pass a factory: `options.integrator = [] { return
 std::make_unique<MyScheme>(); };`. `evolve()` calls it once per evolution and
-ignores `options.method`; reports and the run record's strategies use
+ignores `options.method`; reports and `Evolution::metadata.integrator` use
 `name()` (override it; the default is "Custom", and `method()` defaults to
-`TimeMethod::Custom`). Override
-`descriptor()` so the record can say what ran (see "A strategy
-descriptor"). See
-`tests/fem/custom_integrator.cpp`.
+`TimeMethod::Custom`). See `tests/fem/custom_integrator.cpp`.
 
 1. Implement `TimeIntegrator`:
    - `order()`: 1 if the scheme needs only `u` at the start, 2 if it also
@@ -33,333 +30,25 @@ descriptor"). See
    - Return `u` and `v` with one finite entry per mesh node. `evolve()`
      checks this after `start()` and `advance()` and throws
      `std::runtime_error` otherwise.
-   - Transactional steps: `evolve()` calls `trial()` (default: `advance()`)
-     and then `accept()` or `reject()`. A scheme with internal state keeps
-     the new state provisional in `trial()` and commits it in `accept()`
-     (see `NewmarkIntegrator`: the trial acceleration), keeps `advance()` as
-     `trial()` + `accept()` for drivers that never reject, and returns true
-     from `transactional()`. A stateless scheme only needs
-     `transactional() == true`. With the default `false`, `evolve()` throws
-     when a controller rejects a trial.
 2. Only for a built-in scheme: one unit, as for boundary edge forms and
    interior algorithms. Copy `detail/time_schemes/crank_nicolson.hpp`:
    - a unit struct in `time_scheme_detail` deriving from
      `UnitBase<Self>` with `using Integrator = MyIntegrator;`,
-     `static constexpr TimeMethod method`, `name` (stable: decisions, run
-     records and tests use it) and `order`; `make()` and `descriptor()` come
-     from `UnitBase` (override them for parameters);
+     `static constexpr TimeMethod method`, `name` (stable: reports and
+     tests use it) and `order`; `make()` comes from `UnitBase`;
    - the public integrator class deriving from
      `time_scheme_detail::BuiltinScheme<Unit[, FirstOrder]>`, which supplies
-     `method()`, `name()`, `order()` and `descriptor()` from the unit
-     (`FirstOrder` adds the first-order `check()` and `transactional()`);
+     `method()`, `name()` and `order()` from the unit (`FirstOrder` adds
+     the first-order `check()`);
    - a `TimeMethod` value before `Custom`, the include in
      `detail/time_schemes/schemes.hpp` and the unit appended to `Units` in
      enum order. The `static_assert` there (`TimeSchemeUnit`, ids in order,
      `Custom` last) fails until the three agree. `time_method_name`,
-     `time_method_order`, `time_method_descriptor` and
-     `make_time_integrator` then know the scheme; no switch to edit.
+     `time_method_order` and `make_time_integrator` then know the scheme;
+     no switch to edit.
 3. Tests (`tests/fem/`): a manufactured-solution convergence-rate test for
    the scheme's order, and an equivalence test that drives the integrator
    through an uncached reference driver (see the reusable-evolution test).
-
-## A step controller (adaptive time stepping)
-
-The step sequence is a strategy (`step_control.hpp`). Implement
-`StepController` and set `options.step_controller = [] { return
-std::make_unique<MyController>(...); };`; `evolve()` then ignores
-`options.step`. No change to `evolution.hpp` is needed.
-
-- `next()` returns `TimeStep{index, time, h}` or nothing at the end. The
-  driver checks: consecutive indices from 1, strictly increasing finite
-  stamps not after `TimeOptions::end`, finite `h > 0`, and the last stamp is
-  exactly `end` (otherwise `std::invalid_argument`).
-- `h` must equal `time` minus the previous stamp up to rounding:
-  `step_size_consistent(step, previous, start, end)` is the documented bound
-  (32 eps times the larger of the stamps and the interval length, plus h).
-- `judge(StepOutcome)` sees every trial with the state before it and the
-  trial state, which is where a temporal error estimator would look. Return
-  `StepVerdict::Reject` to discard the trial; the next `next()` call must
-  propose the retry (same index; typically a smaller h from the same
-  previous stamp). Rejected trials publish no frames or observer calls and
-  their step reports are dropped, but their work is counted
-  (`EvolutionTimings::rejected_steps`, assemblies, solves). The driver caps
-  retries: more than `TimeOptions::max_consecutive_rejections` (default
-  `default_max_consecutive_rejections` = 100; 0 forbids rejections)
-  rejected trials in a row throw `std::runtime_error`. The count restarts
-  at every accepted step.
-- `accepted(StepOutcome)` sees each accepted step with the states before
-  and after it.
-- `name()` appears in the run record's decisions ("time steps");
-  `descriptor()` makes the controller described rather than "not
-  replayable" in the record.
-- Tests: a non-uniform sequence against a hand-computed recurrence on an
-  exact semidiscrete solution, and the default path bit-identical (see
-  `tests/fem/step_control.cpp`); for rejection, retried and halved trials
-  against plain runs (`tests/fem/step_rejection.cpp`). A changing `h` changes the step matrix, so
-  assert factorization counts as relations on the runs of equal `h`.
-
-## An analysis property
-
-`analysis.hpp` reports properties of a `Problem` as `Property<T>` (value,
-`Evidence`, reason).
-
-1. Add the field to `ProblemProperties` (or `SystemProperties` for a
-   judgement on an assembled matrix) in `analysis_types.hpp` and fill it in
-   `interior_properties` (`detail/analysis_interior.hpp`), the region
-   accumulator (`detail/analysis_regions.hpp`) or
-   `analyze(const AssembledSystem &)` (`analysis.hpp`). Boundary edges come
-   from `bind_boundary`, the same binding assembly uses.
-2. Evidence: `Proven` only for exact symbolic facts (constants, symbolic
-   zeros, classification), `Sampled` for checks at quadrature points, edge
-   samples, sample times or one assembled matrix, `Unknown` otherwise.
-   Always say why in `reason`.
-3. If the solve already makes the same judgement, move it into one public
-   function and call it from both places (see `weak_time_dependence`,
-   `divisor_keeps_strict_sign`, `time_order`, `numerically_symmetric`).
-   Never copy the check.
-4. Print it in `write_report(std::ostream &, const ProblemProperties &)`.
-5. Tests (`tests/fem/analysis.cpp`): a problem whose property is known by
-   construction, and the consequence the solver draws from it (singular
-   solve, CG rejection, assembly exception, caching counters). A region
-   property can also be tested on synthetic `ClassifiedEdge`s with
-   `analyze_boundary_region` (`tests/fem/p1_kernels.cpp`).
-
-## A decision record
-
-`Decision` (`decision.hpp`) records a typed subject (`DecisionSubject`),
-choice, basis, evidence and source. Each plan kind has one binding table,
-and everything about a setting's decision derives from its row:
-
-| Plan | Table | Rows live in |
-| --- | --- | --- |
-| `SolvePlan` | `solve_plan_bindings` | `time_plan_bindings`, `assembly_plan_bindings` (`plan.hpp`), `solver_option_bindings` (`linear_solver_types.hpp`, lifted) |
-| `MeshPlan` | `mesh_plan_bindings` | `mesh_plan.hpp` |
-
-A new setting with a decision:
-
-1. Append a `DecisionSubject` value and its row in `decision_subject_table`
-   (`decision.hpp`: stable name, used by reports and run record JSON, and
-   its `DecisionOwner`: Solve, Time, Mesh or Adapt). A `static_assert`
-   checks the table is complete and in enum order.
-2. Add one `DecisionBinding` row next to the options it reads: the option
-   field(s) named in a user decision's basis, the choice text read from the
-   options (`std::format("{}")` for numbers, so every change of the option
-   changes the text; `nullopt` only when a factory-made strategy names the
-   choice after it runs) and whether the user's options record it
-   (`plan_from_user` / `mesh_plan_from_user`; existing decision lists are
-   asserted by tests, so return `false` for optional settings). The
-   `binds_exactly` `static_assert` fails until every subject the plan owns
-   has exactly one row.
-3. Optionally a named setter: `return update(DecisionSubject::X,
-   [&](SolvePlan &p) { p.assembly.x = value; }, why);`. Without one, callers
-   use `plan.update(...)` directly. Never edit an option without its
-   decision: solves throw "Stale decision" at entry.
-4. Add the raw edit to the lists in `tests/fem/decision_bindings.cpp`, which
-   fail for a row without one.
-
-The plan's decisions are copied into every stationary `SolverReport` and
-into `Evolution::record.plan.decisions`; `write_report` prints them and
-`write_json` serializes them. A choice made by a strategy object
-(integrator or step controller factory) stays empty in the plan and is
-named by `evolve()` from `name()` (a list of `StrategyRecord`s passed to
-`validate_decisions`); a nonempty choice must equal that name. Adapt-owned
-subjects (marking, refinement, planners) are recorded in
-`AdaptiveStep::decisions` and refused by both plans.
-
-## A strategy descriptor (reproducible custom strategies)
-
-Factories (`TimeOptions::integrator`, `step_controller`,
-`SolverOptions::backend`, `RefinementOptions::size_field`) cannot be
-replayed from a run record. Give each custom strategy a
-`pde2d::StrategyDescriptor` (`cpp/provenance.hpp`): a stable name and its
-parameters as text (`std::format("{}", value)` for numbers), enough for a
-reader to rebuild it.
-
-- Integrator / step controller / error estimator: override
-  `descriptor()` on the object (`TimeIntegrator`, `StepController`,
-  `ErrorEstimator`); built-in schemes and `UniformStepController` already
-  return theirs.
-- Linear solver backend: override `LinearSolverBackendFactory::descriptor()`
-  or pass one to `make_linear_solver_backend(name, creator, descriptor)`.
-- Size field: set `RefinementOptions::size_field_descriptor` next to the
-  field. A refinement criterion (`RefinementOptions::criterion`) carries
-  its own `RefinementCriterion::descriptor`; it is recorded under
-  `DecisionSubject::RefinementCriterion`.
-- Marking strategy and mesh adaptation: override `descriptor()` on the
-  `MarkingStrategy` or `MeshAdaptation`; adaptive histories record them in
-  each step's marking and adaptation.
-
-`RunRecord::strategies` then says `described` with the descriptor; without
-one it says `not replayable` and `record.replayable()` is false. Tests: the
-record's strategy entry and its JSON (`tests/fem/run_records.cpp`).
-
-## An automatic chooser (planner)
-
-Not implemented; the seams are `SolvePlanner` and `MeshPlanner`
-(`planner.hpp`), whose identity is `UserPlanner`. A planner is a function
-from the problem, its analysis (`ProblemProperties`), default plan and a
-`PlanningContext` (before the first mesh the geometry and its sampled
-boundary; then the mesh; inside the adaptive drivers also the previous
-`AdaptiveStep` and the step index) to a plan:
-
-1. Implement `name()`, `descriptor()` (so records can say what planned) and
-   `plan(problem, properties, defaults, context)`.
-2. Start from `defaults` and change each setting it chooses with a setter or
-   `update` and a `Rationale`: `plan.set_linear_solver(
-   LinearSolver::ConjugateGradient, {"operator proven symmetric",
-   properties.symmetric.evidence, DecisionSource::Automatic})`. A mesh
-   planner uses the `MeshPlan` setters; `set_size_field` and
-   `set_refinement_criterion` require a descriptor.
-3. Store what it was based on: `plan.analysis = make_analysis_record(problem,
-   mesh, options)` binds the properties to the problem and mesh
-   fingerprints, so a solve on other inputs refuses them.
-4. Run it with `run_planner(planner, problem, properties, defaults,
-   context)`, which validates the plan ("Solve planner <name> returned an
-   invalid plan: ...") and records the planner in `plan.planner` and the run
-   record's strategies; or `plan_mesh(geometry, problem, planner,
-   defaults)` to plan and generate the first mesh; or pass it to `adapt()`
-   or `adapt_evolution()` as `AdaptOptions::planners.solve` / `.mesh`,
-   which calls it before every solve or window / mesh change and records
-   it per step.
-
-The user overrides a planner by calling setters on the returned plan before
-`solve_stationary(mesh, problem, plan)`, `PreparedStationary` or
-`evolve(mesh, problem, initial, plan, output)` (pass the `MeshResult` to
-check the mesh plan against it). Judge a planner against `UserPlanner` on
-reference problems (docs/vision.md, "Better is measured"), comparing records
-with `diff_records`, or with `compare_planners(reference, {PlannerSet...},
-defaults)`, which always includes the identity baseline and reports the
-planner's decisions, its cost and the error and work relative to the
-baseline. Tests: a planner whose choice is known, run inside `adapt()`
-(`tests/fem/planners.cpp`) and `adapt_evolution()`
-(`tests/fem/transient_adaptivity.cpp`) against the hand-composed loop with
-the same plans, and in `compare_planners` against the plain comparison of
-the plans it chose (`tests/fem/reference_problems.cpp`).
-
-## An error estimator
-
-`estimation.hpp` defines `ErrorEstimator`: `name()` and
-`estimate(mesh, problem, solution, time)` returning `ErrorEstimate`
-(`indicators`, one nonnegative value per element in element order, and
-`global`, conventionally `sqrt(sum eta_T^2)`). Pass it to
-`estimate_error(..., estimator)`, which checks the result's size and
-finiteness ("returned invalid indicators"). No library change is needed.
-
-- State what norm the estimate measures and what it assumes, in the class
-  comment (the built-in ZZ estimator: H1 seminorm, smooth solutions,
-  ignores problem data).
-- Parallel loops write per-element slots and accumulate serially in element
-  order (see `GradientRecoveryEstimator`), so serial and OpenMP results stay
-  bit-identical. Prepare symbolic data (for a residual estimator: the source
-  and coefficients as `Evaluator`s) before the loop.
-- A residual estimator needs element residuals and flux jumps across
-  interior edges; reuse `weak_form_coefficients`, `p1::triangle_geometry`
-  and the quadrature rules rather than re-deriving them.
-- Tests (`tests/fem/estimation.cpp`): effectivity against the exact error
-  of a manufactured solution over several refinements, concentration of the
-  indicators where the exact element errors are largest, and serial/OpenMP
-  equality.
-
-## A marking strategy
-
-`marking.hpp` defines `MarkingStrategy`: `name()`, `descriptor()` and
-`mark(estimate, mesh)` returning ascending, distinct element indices.
-`BulkMarking` (Dörfler, `mark_bulk`) is the default. No library change is
-needed: pass `AdaptOptions::marker = std::make_shared<MyMarking>(...)` to
-`adapt()`, or call `mark_elements(strategy, estimate, mesh)` (which checks
-the indices) and feed the result to
-`discretization::refine_mesh(result, marked, options)` yourself.
-
-- Deterministic: the same estimate gives the same marks (break ties by
-  element index, as `mark_bulk` does).
-- Override `descriptor()` so the "marking" decision of every adaptive
-  step is replayable; without one the choice says "<name> (not
-  replayable)".
-- Tests: the marked set against a hand-computed one on small indicator
-  vectors, and an `adapt()` run whose steps record the strategy
-  (`tests/fem/adaptive_loop.cpp`).
-
-## A mesh adaptation strategy
-
-`mesh_adaptation.hpp` defines `MeshAdaptation`: `name()`, `descriptor()`
-and `apply(mesh, marked, options)` returning the new `MeshResult`. The
-default `MarkedBisection` is `refine_mesh(result, marked, options)`. No
-library change is needed: set `AdaptOptions::adaptation`. Both drivers call
-it through `apply_mesh_adaptation`, which refuses a result whose record does
-not describe its mesh (operation unset, other fingerprint) and, for a
-strategy other than the built-in one, an invalid mesh
-(`validate_mesh_geometry`).
-
-- Return a result of the meshing entry points (`refine_mesh`,
-  `generate_mesh`), so its report and `MeshRunRecord` are complete; keep
-  the boundary context when the next change needs it.
-- Report honestly: `report.size_satisfied` false makes `adapt` stop and
-  `adapt_evolution` discard the mesh unless
-  `accept_unsatisfied_refinement`.
-- Coarsening and node movement are not in the library; they plug in here
-  (the transfer and the plan refresh already handle any new mesh).
-- Tests: a strategy in the test (`RefineWithNeighbours`,
-  `tests/fem/adaptive_loop.cpp`) against the hand-composed loop that calls
-  the same meshing functions, and a tampered result rejected.
-
-## The adaptive drivers
-
-`adaptivity_core.hpp` holds the one adaptive step both drivers run
-(`adaptivity_detail::Loop::change_mesh`: mark, plan the mesh, change it,
-transfer, refresh plan.mesh and plan.analysis) and the solve planner call
-(`plan_solve`); `adapt_stationary.hpp` and `adapt_evolution.hpp` add only
-their loop (solve with warm start and stopping rules; windows, nodal
-restart and Dirichlet data). They compose public components and add no
-numerics; keep it that way, so the hand-composed loops in
-`tests/fem/adaptive_loop.cpp` and `transient_adaptivity.cpp` stay their
-bit-for-bit oracles. Put a change to the step in the core, never in one
-driver.
-
-- A new stopping rule is an `AdaptiveStop` value with a stable name in
-  `adaptive_stop_name`, a check in the driver in the documented order and a
-  case in that driver's test.
-- A new per-step field goes into `AdaptiveStep` (`adaptivity_types.hpp`;
-  windows-only data stays optional there), its key into
-  `adaptivity_json.hpp` (adding a key keeps
-  `adaptive_history_schema_version`; renaming or removing one bumps it) and
-  docs/fem/README.md ("Adaptive loop").
-- A new `AdaptOptions` field is in the history automatically
-  (`AdaptiveHistory::options`); add its key to the `settings` JSON. Mark
-  fields read by one driver only in their comment.
-- Keep the transient restart nodal (`InitialConditions` with nodal
-  `Field`s) and the windows uniform-step (`adaptive_window_times`); a step
-  controller spanning windows would need its own restart contract.
-
-## A reference problem
-
-Reference problems (`reference/problems.hpp`) are the yardstick automatic
-choices are measured against (docs/vision.md). A new one is a function
-returning a `ReferenceProblem` and an entry in `reference_problems()`:
-
-- Give it a stable `name` (comparison documents refer to it) and `notes`
-  saying what it tests that the others do not.
-- Build the geometry from `discretization::CurveGeometry` with the region
-  names its conditions use, and suggest coarse `mesh` options that meet
-  their size target.
-- The exact solution is a field in x, y, t. Manufacture the source from the
-  strong form (`reference_detail::strong_source`) or, better, state a closed
-  form; boundary values may use `nx`, `ny` (the outward normal).
-  Expressions are restricted to straight edges symbolically: avoid forms
-  SymEngine rewrites on a branch, such as `atan2` of two equal arguments
-  (see `reference_l_shape_corner`).
-- Transient problems set `transient` (initial conditions, with a velocity
-  for second order, and the window).
-- `tests/fem/reference_problems.cpp` checks every problem automatically:
-  the strong-form residual by finite differences, the boundary conditions on
-  the source curves, the initial data, and convergence under halving the
-  mesh size. Add a case there only for a property specific to the problem
-  (like the L-shape's H1 rate).
-
-`compare_plans` and `compare_mesh_plans` (`reference/compare.hpp`) only run
-public meshing and solve calls and measure them; keep new comparisons that
-way (a comparison never changes a numerical result) and add new work or
-error fields to `ComparisonEntry` and its JSON keys (schema
-`pde2d.plan_comparison`).
 
 ## A linear solver backend or preconditioner
 
@@ -372,8 +61,6 @@ tolerances, true-residual check, timings, `matches()` reuse) and the private
 Eigen backends in `detail/eigen_backends.hpp`. A backend owns only
 `prepare(matrix, options)` (return `""` or a failure message) and
 `solve(rhs, relative_tolerance)` (values, iterations, optional failure).
-Headers that only describe settings (plans, records) include only the
-contracts.
 
 - **Initial guess:** an iterative backend overrides
   `solve_with_guess(rhs, tolerance, guess)` and sets
@@ -404,9 +91,9 @@ contracts.
 The weak form is linear in the coefficients of `weak::Term`.
 
 1. Add the term to `Equation` (`problem.hpp`) and document its sign.
-2. Add a `weak::Term` entry (`weak_terms.hpp`) and its expression in
-   `weak_form_coefficients`
-   (integrate by parts there if needed, and record the derivation in the
+2. Add a `weak::Term` entry and its expression in `weak_form_coefficients`
+   (`weak_form.hpp`;
+   integrate by parts there if needed, and record the derivation in the
    header comment).
 3. Use it in `p1::accumulate_element_point` and extend `p1::active_blocks`
    if it writes a new matrix. Assembly caches it automatically when it is
@@ -426,21 +113,18 @@ directly with an `EdgeFrame`, without a mesh.
   needs a function in `problem.hpp`.
 - A genuinely new *form* is one unit, one variant entry and its tests.
   Everything the form does lives in one header
-  `detail/edge_forms/<form>.hpp`; generic code (names, assembly, scatter,
-  analysis) calls it only through `edge_form_detail::Unit<Form>`. The
+  `detail/edge_forms/<form>.hpp`; generic code (names, assembly, scatter)
+  calls it only through `edge_form_detail::Unit<Form>`. The
   interface is documented in `detail/edge_forms/interface.hpp`; copy
   `natural.hpp` or `oblique.hpp` as a template:
   1. the public struct of restricted coefficients (namespace `pde2d::fem`)
      and `template <> struct Unit<MyEdge>` with `name`, `divisor_name`,
-     `category` (an existing `BoundaryForm` report category, or a new value
-     at the end of `boundary_form.hpp` plus its count in
-     `BoundaryRegionProperties`), `divisor()`, a `Prepared` struct
+     `divisor()`, a `Prepared` struct
      (`using Form = MyEdge`, `for_each` over its evaluators, which
      `AssemblyStatistics::evaluators` counts), `prepare()` (compile
      evaluators, cache time-independent parts), `evaluate()` (complete
-     local contribution at one time, read-only), `scatter()` (serial, fixed
-     order) and `judge()` (divisors to sample, time-dependent coefficients,
-     Robin and tangential terms for analysis);
+     local contribution at one time, read-only) and `scatter()` (serial,
+     fixed order);
   2. include it in `detail/edge_forms/forms.hpp` and append the struct to
      `EdgeForm`. A `static_assert` there (the `EdgeFormUnit` concept) fails
      until the unit is complete;
@@ -450,14 +134,11 @@ directly with an `EdgeFrame`, without a mesh.
      solution with a convergence rate, the local block against a hand
      computation (e.g. assembled minus a reference form, see
      `tests/fem/oblique_conditions.cpp`), time-dependent coefficients
-     against the same problem with `t` substituted, and the analysis report
-     (`tests/fem/analysis.cpp`, synthetic `ClassifiedEdge`s in
-     `tests/fem/p1_kernels.cpp`).
-- Divisors are checked with `EdgeSite::require_divisor_sign` in assembly and
-  listed in `judge()` for analysis; both use `divisor_keeps_strict_sign` on
-  `edge_divisor_samples`, so analysis and assembly agree. A form may have
+     against the same problem with `t` substituted.
+- Divisors are checked with `EdgeSite::require_divisor_sign` in assembly
+  (`divisor_keeps_strict_sign` on `edge_divisor_samples`). A form may have
   several divisors (the oblique form checks its conormal component, then its
-  flux multiplier); check them in the same order in both places.
+  flux multiplier).
 - A natural-type form (one that solves the condition for `q_n`) can reuse
   `natural_type_block` / `natural_type_evaluate` (`natural.hpp`) and add its
   own terms through the `Extra` hooks, as `oblique.hpp` does. With the

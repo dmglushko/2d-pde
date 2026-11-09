@@ -28,7 +28,7 @@ const NaturalEdge &natural_form(const EdgeCondition &c) {
 }
 
 void divisor_sign_sampling() {
-  // Shared by assembly and analysis: 0, 1/2, 1 and the edge rule, sorted.
+  // 0, 1/2, 1 and the edge rule, sorted.
   const auto samples = edge_divisor_samples(2);
   check(samples.size() == 5 && samples.front() == 0 && samples.back() == 1 &&
             std::is_sorted(samples.begin(), samples.end()),

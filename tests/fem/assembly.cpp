@@ -1,8 +1,8 @@
 #include "fem/assembly.hpp"
-#include "fem/analysis.hpp"
 #include "discretization/square_mesh.hpp"
 using pde2d::discretization::square_mesh;
 #include "support/check.hpp"
+#include "support/edge_forms.hpp"
 #include <Eigen/Dense>
 #include <iostream>
 #include <limits>
@@ -175,12 +175,9 @@ void dirichlet_and_errors() {
   p.equation.a_xx = -2;
   p.equation.a_yy = -3;
   {
-    const auto a = analyze(p, mesh);
-    check(a.boundaries.size() == 3 &&
-              a.boundaries[0].form.value == BoundaryForm::Natural &&
-              a.boundaries[1].form.value == BoundaryForm::Oblique &&
-              a.boundaries[1].oblique_edges == 1 &&
-              a.boundaries[2].form.value == BoundaryForm::Natural,
+    const auto a = pde2d_test::region_forms(mesh, p);
+    check(a.size() == 3 && a[0].natural == a[0].edges && a[1].oblique == 1 &&
+              a[1].edges == 1 && a[2].natural == a[2].edges,
           "Anisotropic Neumann is oblique only on the diagonal");
     check(!numerically_symmetric(assemble(mesh, p).stiffness),
           "The oblique tangential term is nonsymmetric");
@@ -191,7 +188,7 @@ void dirichlet_and_errors() {
   p.equation.a_xy = -1;
   p.boundaries[0].regions = {"diagonal", "left"};
   p.assign(neumann(0), {"bottom"});
-  check(analyze(p, mesh).boundaries.back().form.value == BoundaryForm::Oblique,
+  check(pde2d_test::region_forms(mesh, p).back().oblique == 1,
         "Cross diffusion makes du/dn oblique on the bottom edge");
   check(!numerically_symmetric(assemble(mesh, p).stiffness),
         "The oblique bottom edge assembles a tangential term");
@@ -302,8 +299,8 @@ void slanted_normal_boundaries() {
   bc.beta_x = 1e-14;
   p.assign(bc, {"b"});
   {
-    const auto r = analyze(p, mesh).boundaries.front();
-    check(r.form.value == BoundaryForm::Oblique && r.oblique_edges == 3,
+    const auto r = pde2d_test::region_forms(mesh, p).front();
+    check(r.oblique == 3,
           "Tiny tangential data must stay oblique on every slanted edge");
   }
   p.boundaries[0].condition = neumann(0);
@@ -311,9 +308,8 @@ void slanted_normal_boundaries() {
   {
     // n = (0,-1) on the bottom edge is an eigenvector of A; the other two
     // edges are oblique.
-    const auto r = analyze(p, mesh).boundaries.front();
-    check(r.form.value == BoundaryForm::Mixed && r.natural_edges == 1 &&
-              r.oblique_edges == 2,
+    const auto r = pde2d_test::region_forms(mesh, p).front();
+    check(r.natural == 1 && r.oblique == 2,
           "Slightly anisotropic Neumann data must stay oblique");
   }
 }

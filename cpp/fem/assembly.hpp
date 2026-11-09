@@ -12,14 +12,12 @@
 // scatters in a fixed element/edge order so results are deterministic.
 //
 // Boundary regions are bound to conditions by bind_boundary
-// (boundary_assignment.hpp), shared with analysis. The private pieces live
-// in detail/: interior elements
-// (assembly_elements.hpp), boundary edges (assembly_edges.hpp) and the serial
-// scatter (assembly_scatter.hpp). The element-independent result types are in
-// system.hpp, the options (AssemblyOptions) in assembly_options.hpp.
+// (boundary_assignment.hpp). The private pieces live in detail/: interior
+// elements (assembly_elements.hpp), boundary edges (assembly_edges.hpp) and
+// the serial scatter (assembly_scatter.hpp). The element-independent result
+// types are in system.hpp.
 #include "discretization/mesh_validation.hpp"
 #include "execution.hpp"
-#include "fem/assembly_options.hpp"
 #include "fem/detail/assembly_edges.hpp"
 #include "fem/detail/assembly_elements.hpp"
 #include "fem/detail/assembly_scatter.hpp"
@@ -32,6 +30,11 @@
 #include <vector>
 
 namespace pde2d::fem {
+struct AssemblyOptions {
+  int quadrature_degree = 2;
+  double boundary_tolerance = 1e-10;
+  pde2d::ExecutionOptions execution{};
+};
 // Immutable preparation counters. Per-assembly interior evaluations count
 // successful full calls; boundary validation/evaluation is deliberately
 // separate.

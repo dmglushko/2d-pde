@@ -5,8 +5,8 @@ length-fraction inversion live in `curve_length.hpp`; meshing policy remains in
 `boundary_discretization.hpp` and `triangulate.hpp` (with its private
 `detail/ear_clipping.hpp`, `detail/cdt_topology.hpp`,
 `detail/curved_boundary.hpp`, `detail/refinement_policy.hpp`,
-`detail/refinement_loop.hpp` and `detail/interior_algorithms.hpp`); size
-criteria are public in `size_criterion.hpp`. Every public header is listed
+`detail/refinement_loop.hpp` and `detail/interior_algorithms.hpp`). Every
+public header is listed
 in the [README header map](README.md#headers) (checked by
 `tests/tools/readme_headers.cmake`). SVG and PDE2D_MESH adapters
 remain separate from the mathematical curve objects. The concrete types remain
@@ -123,71 +123,41 @@ other code compares `MeshOptions::algorithm` with an enum value. Steps:
    renumber), its report name in `interior_algorithm_name` and its case in
    `validInteriorAlgorithm`.
 2. Write the unit: `id`; `capabilities` (`InteriorAlgorithmCapabilities`:
-   `supports_size_target`, `supports_size_field`, `supports_size_criterion`,
-   `supports_refinement`, `supports_marked_refinement`,
-   `constrained_delaunay`, `requires_boundary_context`);
+   `supports_size_target`, `supports_refinement`, `constrained_delaunay`,
+   `requires_boundary_context`);
    `size_refinement_unsupported` and `refinement_unsupported`, the messages
    of requests its capabilities exclude (tests match them, keep them
    stable); `generate(seeded, options)` from `seeded_result` (the
-   ear-clipped polygon); and `refine(result, options, criterion)` when it
-   supports refinement. A unit that refines should run the generic loop
-   (`refine_result`, `detail/refinement_loop.hpp`) so every size criterion
-   and boundary policy works unchanged; topology operations belong in
+   ear-clipped polygon); and `refine(result, options)` when it supports
+   refinement. A unit that refines should run the refinement loop
+   (`refine_result`, `detail/refinement_loop.hpp`) so every boundary policy
+   works unchanged; topology operations belong in
    `detail/cdt_topology.hpp`, curve-aware boundary updates in
    `detail/curved_boundary.hpp`.
 3. Add its case to `with_interior_algorithm`; the `InteriorAlgorithmUnit`
    concept fails to compile for an incomplete unit (a unit declaring
    `supports_refinement` must have `refine`).
 4. Update both format readers and the viewer's ID registry
-   (`tools/mesh_viewer/mesh.js`, `tools/plot_mesh.py`), the FEM mesh plan
-   name if needed, and add tests: `interior_algorithm_capabilities` values,
-   the excluded requests' messages and meshes of every boundary treatment
-   (see `tests/discretization/refinement_criterion.cpp`).
-5. Work counters: the generic loop and `Topology` count refinement steps,
-   flips and rebuilds into `MeshResult::record.work` (`MeshWork`); a unit
-   with its own topology work sets `Topology::work` (or counts into
-   `result.record.work`) the same way. Counting must never change the mesh.
-   The public entry points in `triangulate.hpp` complete the record
-   (`finish_mesh_run_record`); a new entry point does the same.
+   (`tools/mesh_viewer/mesh.js`, `tools/plot_mesh.py`), and add tests:
+   `interior_algorithm_capabilities` values, the excluded requests' messages
+   and meshes of every boundary treatment (see
+   `tests/discretization/mesh_refinement_cdt.cpp`).
 
-## Refinement: size criteria and boundary policies
+## Refinement: the loop and boundary policies
 
-`detail/refinement_loop.hpp` runs one generic loop, `refine_with<Policy>`:
-build the topology, legalize, ask the policy for a boundary conflict, then
-repeatedly split the highest-priority edge that fails the size criterion
-until none is left, the step budget runs out or midpoints stop resolving.
-Two seams plug into it: size criteria (public, `size_criterion.hpp`) and
-boundary policies (`detail/refinement_policy.hpp`):
+`detail/refinement_loop.hpp` runs one loop, `refine_with<Policy>`: build the
+topology, legalize, ask the policy for a boundary conflict, then repeatedly
+split the longest edge exceeding `RefinementOptions::max_edge_length` (ties
+go to the first lexicographic edge; `Topology`'s size queue in
+`detail/cdt_topology.hpp`) until none is left, the step budget runs out or
+midpoints stop resolving.
 
-- **Size criteria.** A `SizeCriterion` maps an edge's endpoints to
-  `std::nullopt` (accepted) or a `SizePriority {tier, value, length}`
-  (higher first; ties go to the first lexicographic edge).
-  `RefinementCriterion` adds the Fixed-conflict message, an optional
-  `split_hook` called after every split and a `StrategyDescriptor` for
-  records. Built in: the constant target (`constant_size_criterion`,
-  `{0, length, length}`, the historical order), a `SizeField`
-  (`size_field_criterion`, `{0, length / target, length}`) and marked edges
-  (tiers 2 and 1, falling back to the size criterion; private
-  `marked_criterion`). A user criterion, for example a problem-aware target
-  or an anisotropic metric, needs no library edit: set
-  `RefinementOptions::criterion` (it replaces `max_edge_length` and
-  `size_field`; compose them with `strictest_of`). `size_criterion(options)`
-  in `detail/refinement_policy.hpp` turns options into the criterion; keep
-  the constant-target path unchanged so existing results stay
-  bit-identical.
-- **Boundary policies.** One struct per `BoundaryTreatment`
-  (`FixedBoundary`, `SplitPolygonBoundary`, `CurveBoundary`) holds
-  everything that treatment decides: `validate` (required context),
-  `prepare` (curve mode first moves chord vertices onto the curves),
-  `conflict` (Fixed: a boundary edge failing the criterion makes the request
-  impossible) and `split_boundary`. `with_boundary_policy` is the only
-  dispatch. A new treatment needs a wire ID in `mesh_types.hpp`, its case in
-  `validBoundaryTreatment` and `with_boundary_policy`, the format readers and
-  viewer registry, and tests comparing it with the existing treatments.
-
-Request-time options such as the size field and the refinement criterion
-are not serialized
-(`docs/formats/pde2d-mesh.md`). A new option that cannot be written must be
-documented the same way rather than silently dropped. Tests:
-`tests/discretization/size_field.cpp` (graded meshes; constant field equals
-the scalar path bit for bit) and `marked_refinement.cpp`.
+One struct per `BoundaryTreatment` (`FixedBoundary`, `SplitPolygonBoundary`,
+`CurveBoundary`, `detail/refinement_policy.hpp`) holds everything that
+treatment decides: `validate` (required context), `prepare` (curve mode first
+moves chord vertices onto the curves), `conflict` (Fixed: a boundary edge
+longer than the target makes the request impossible) and `split_boundary`.
+`with_boundary_policy` is the only dispatch. A new treatment needs a wire ID
+in `mesh_types.hpp`, its case in `validBoundaryTreatment` and
+`with_boundary_policy`, the format readers and viewer registry, and tests
+comparing it with the existing treatments.

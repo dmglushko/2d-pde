@@ -1,6 +1,6 @@
-// The minimal path (docs/concepts.md): geometry -> mesh -> Problem ->
-// solve / evolve. Nothing here builds a plan, a record or a decision; the
-// solves make them from their options and attach them to the results.
+// The shortest complete FEM program: geometry -> mesh -> Problem ->
+// solve_stationary / evolve, checked against an exact solution. A CTest smoke
+// test (example_fem_minimal).
 #include "discretization/geometry.hpp"
 #include "discretization/triangulate.hpp"
 #include "fem/error_norms.hpp"
@@ -26,7 +26,7 @@ int main() {
   Problem problem;
   problem.equation.source = -4;
   problem.assign(dirichlet(exact), {"bottom", "right", "top", "left"});
-  const auto solution = solve_stationary(mesh, problem);
+  const auto solution = solve_stationary(mesh.mesh, problem);
   std::cout << "stationary: nodes " << mesh.mesh.nodes.size() << ", L2 error "
             << error_norms(mesh.mesh, solution.values, exact).l2 << '\n';
 
@@ -37,7 +37,8 @@ int main() {
   time.method = TimeMethod::CrankNicolson;
   time.end = 0.1;
   time.step = 0.01;
-  const auto evolution = evolve(mesh, heat, InitialConditions{exact}, time);
+  const auto evolution =
+      evolve(mesh.mesh, heat, InitialConditions{exact}, time);
   const double error =
       error_norms(mesh.mesh, evolution.frames.back().values, exact, time.end)
           .l2;

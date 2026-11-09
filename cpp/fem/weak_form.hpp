@@ -10,15 +10,32 @@
 // conditions supply (see boundary_classification.hpp).
 //
 // The weak form is linear in the nine coefficients below, which is what lets
-// assembly cache every time-independent contribution separately. The term
-// names (weak::Term, WeakFlags) are in weak_terms.hpp.
+// assembly cache every time-independent contribution separately.
 #include "problem.hpp"
-#include "weak_terms.hpp"
 #include <array>
 #include <cstddef>
 #include <stdexcept>
 
 namespace pde2d::fem {
+namespace weak {
+// Indices into WeakCoefficients. Order is part of no public format, but the
+// local kernels in p1_element.hpp use these names, never raw numbers.
+enum Term : std::size_t {
+  DiffusionXX, // A_xx = a_xx
+  DiffusionXY, // A_xy = A_yx = a_xy / 2
+  DiffusionYY, // A_yy = a_yy
+  DriftX,      // b_x - (div A)_x
+  DriftY,      // b_y - (div A)_y
+  Reaction,    // c
+  Source,      // right-hand side f
+  FirstMass,   // m1 (multiplies u_t)
+  SecondMass,  // m2 (multiplies u_tt)
+  Count
+};
+} // namespace weak
+
+template <class T> using WeakCoefficients = std::array<T, weak::Count>;
+using WeakFlags = WeakCoefficients<bool>;
 
 // Interior coefficients cannot reference boundary normals.
 inline void validate_interior_equation(const Equation &eq) {
@@ -40,8 +57,7 @@ inline WeakCoefficients<Expr> weak_form_coefficients(const Equation &eq) {
 }
 
 // Terms whose expression contains t. Conservative (t may cancel
-// numerically), and the single judgement behind both assembly caching and
-// analysis (ProblemProperties::time_dependent).
+// numerically); assembly caches every other term.
 inline WeakFlags weak_time_dependence(const WeakCoefficients<Expr> &terms) {
   WeakFlags flags{};
   for (std::size_t k = 0; k < weak::Count; ++k)

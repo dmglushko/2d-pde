@@ -10,11 +10,11 @@
 #include "discretization/geometry.hpp"
 #include "discretization/square_mesh.hpp"
 #include "discretization/triangulate.hpp"
-#include "fem/analysis.hpp"
 #include "fem/assembly.hpp"
 #include "fem/error_norms.hpp"
 #include "fem/solver.hpp"
 #include "support/check.hpp"
+#include "support/edge_forms.hpp"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -79,11 +79,10 @@ void square_convergence() {
   const Expr r = .5 * (1 + x * y);
   p.assign(oblique(p.equation, exact, 1, .3, r), {"bottom", "right", "top"});
   p.assign(dirichlet(exact), {"left"});
-  // Analysis on the coarsest mesh: the oblique regions are reported.
-  const auto a = analyze(p, square_mesh(4));
+  // On the coarsest mesh every edge of the oblique regions is oblique.
+  const auto a = pde2d_test::region_forms(square_mesh(4), p);
   for (std::size_t k : {0, 1, 2})
-    check(a.boundaries[k].form.value == BoundaryForm::Oblique &&
-              a.boundaries[k].oblique_edges == 4,
+    check(a[k].oblique == 4 && a[k].edges == 4,
           "Oblique regions of the manufactured problem");
   std::vector<ErrorNorms> errors;
   for (int n : {4, 8, 16, 32}) {
@@ -237,10 +236,6 @@ void nonsymmetry_is_seen_by_the_solver() {
   p.equation.source = -2 + exact;
   p.assign(oblique(p.equation, exact, 1, 0, Expr(.5)), {"bottom"});
   p.assign(dirichlet(exact), {"right", "top", "left"});
-  const auto a = analyze(p, mesh);
-  check(!a.symmetric.value && a.symmetric.evidence == Evidence::Unknown &&
-            a.symmetric.reason.find("oblique") != std::string::npos,
-        "Analysis: oblique edges break symmetry");
   check(!numerically_symmetric(assemble(mesh, p).stiffness),
         "Assembled oblique stiffness is nonsymmetric");
   SolverOptions cg;
@@ -270,12 +265,6 @@ void degenerate_edges_are_rejected() {
   expect_throws<std::invalid_argument>(
       [&] { assemble(mesh, p); },
       "Oblique flux multiplier vanishes or changes sign");
-  const auto r = analyze(p, mesh).boundaries.front();
-  check(r.form.value == BoundaryForm::Oblique && !r.divisor_keeps_sign.value &&
-            r.divisor_keeps_sign.evidence == Evidence::Sampled &&
-            r.divisor_keeps_sign.reason.find("Oblique flux multiplier") !=
-                std::string::npos,
-        "Analysis samples the oblique divisor as assembly does");
 }
 } // namespace
 

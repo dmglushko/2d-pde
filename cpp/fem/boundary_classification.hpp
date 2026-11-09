@@ -17,7 +17,7 @@
 // purely tangential derivatives are rejected.
 //
 // Each form is one unit in detail/edge_forms/ (interface.hpp): its name,
-// divisors, preparation, evaluation, scatter and analysis hook. A new form is
+// divisors, preparation, evaluation and scatter. A new form is
 // a new unit plus its EdgeForm entry (forms.hpp); EXTENDING.md lists the
 // steps.
 //
@@ -27,8 +27,8 @@
 //
 // The divisors of each form (Dirichlet alpha, natural beta, oblique conormal
 // component and beta) must keep one strict sign on the edge. That is checked
-// numerically at the edge samples (edge_divisor_samples, Evidence::Sampled),
-// by assembly and analysis through the same function.
+// numerically at the edge samples (edge_divisor_samples): a sampled check,
+// not a proof.
 #include "detail/edge_forms/forms.hpp"
 #include "p1_element.hpp"
 #include "problem.hpp"
@@ -88,15 +88,6 @@ inline DerivativeVectors derivative_vectors(const Equation &eq,
   return {-nx * eq.a_xx - ny * eq.a_xy / 2, -nx * eq.a_xy / 2 - ny * eq.a_yy,
           bc.beta_normal * nx + bc.beta_x, bc.beta_normal * ny + bc.beta_y};
 }
-// True unless the condition is natural or Dirichlet on every edge, whatever
-// its normal: d != 0 and det(d, c) is not symbolically zero. The mesh-free
-// judgement of analyze(problem); classify_edge_condition decides per edge.
-inline bool may_be_oblique(const Equation &eq, const BoundaryCondition &bc) {
-  const auto v = derivative_vectors(eq, bc);
-  return (!is_zero(v.extra_x) || !is_zero(v.extra_y)) &&
-         !is_zero(v.determinant());
-}
-
 inline EdgeCondition classify_edge_condition(const Equation &eq,
                                              const BoundaryCondition &bc,
                                              const p1::EdgeFrame &edge) {

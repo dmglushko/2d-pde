@@ -5,14 +5,12 @@
 //
 //   linear_solver_types.hpp     SolverOptions, LinearSolver, Preconditioner,
 //                               reports, LinearSolverBackend (+ factory),
-//                               report names, solver_option_bindings
-//                               (decision rows), solver_decisions
+//                               report names
 //   constraints.hpp             constrain(A, b, dirichlet): Dirichlet lifting
 //   prepared_linear_solver.hpp  PreparedLinearSolver, solve_linear
 //   detail/eigen_backends.hpp   private built-in Eigen backends
 //
-// Headers that only need the contracts (plans, run records) include
-// linear_solver_types.hpp.
+// Headers that only need the contracts include linear_solver_types.hpp.
 #include "fem/constraints.hpp"
 #include "fem/linear_solver_types.hpp"
 #include "fem/prepared_linear_solver.hpp"

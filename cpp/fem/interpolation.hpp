@@ -27,8 +27,8 @@ inline Vector interpolate(const discretization::TriangleMesh &mesh,
 }
 
 // A scalar field on the mesh nodes: an expression in x, y, t (interpolated
-// when needed) or one value per node, e.g. a solution moved to a refined
-// mesh by transfer_field (transfer.hpp).
+// when needed) or one value per node, e.g. the last frame of an earlier
+// evolution.
 using Field = std::variant<Expr, Vector>;
 
 // Reject a field that cannot give one finite value per node of `mesh`.

@@ -161,20 +161,15 @@ inline void rebuild_curved(MeshResult &result) {
   TriangleMesh replacement = seed_mesh(polygon);
   next.polygon_snapshot = boundary_points(polygon);
   Topology topology(replacement);
-  auto &work = result.record.work;
-  topology.work = &work;
-  ++work.curved_rebuilds;
   std::size_t removed = 0;
   for (std::size_t i = 0; i < m.nodes.size(); ++i)
     if (!boundary_vertices.contains(i)) {
       auto p = m.nodes[i];
-      if (inside_polygon(p, polygon, true)) {
+      if (inside_polygon(p, polygon, true))
         topology.insert(p);
-        ++work.reinserted_vertices;
-      } else
+      else
         ++removed;
     }
-  work.removed_vertices += removed;
   topology.legalize();
   m = std::move(replacement);
   ctx = std::move(next);

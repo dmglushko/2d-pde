@@ -27,10 +27,4 @@ using PreparedEdgeForm = PreparedForms<EdgeForm>::type;
 
 // The unit of a form or of its prepared data.
 template <class Prepared> using unit_of = Unit<typename Prepared::Form>;
-
-// Unit<Form>::judge of the alternative held by `form`.
-inline EdgeJudgement judge(const EdgeForm &form) {
-  return std::visit(
-      []<class Form>(const Form &f) { return Unit<Form>::judge(f); }, form);
-}
 } // namespace pde2d::fem::edge_form_detail
