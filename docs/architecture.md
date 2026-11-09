@@ -18,6 +18,7 @@ Current structure of the project. Module-level detail lives next to the code:
  cpp/discretization/ ───────┤  geometry, curves, meshing, mesh IO   core
                             │
  cpp/execution.hpp  ────────┘  ExecutionOptions, parallel_for (OpenMP opt-in)
+ cpp/provenance.hpp           Fingerprint, StrategyDescriptor, library_version
 ```
 
 Dependencies point downward only. `cpp/discretization` must never include
@@ -42,14 +43,17 @@ MeshResult + marked elements ──refine_mesh──▶ MeshResult   (report.mar
 RefinementOptions: max_edge_length and/or size_field h(x,y)  (size field is request-time, not in files)
 TriangleMesh ──PointLocator──▶ element + barycentric        (outside rule: max_outside_distance)
 
-TriangleMesh + Problem ──bind_boundary──▶ BoundaryBinding (regions, edge frames)
+TriangleMesh + Problem ──bind_boundary──▶ BoundaryBinding (owned snapshot: regions, conditions, edge frames)
      │                                      shared by assembly and analysis
      ├──analyze──▶ ProblemProperties   (each property: value + Evidence + reason)
      └──PreparedAssembly──▶ AssembledSystem
-options ──plan_from_user──▶ SolvePlan {assembly, solver, time, decisions}
+options ──plan_from_user──▶ SolvePlan {assembly, solver, time, decisions, mesh, analysis}
+MeshOptions ──mesh_plan_from_user──▶ MeshPlan {options, decisions}   (SolvePlan::mesh)
 SolvePlan ──PreparedStationary.solve(t[, guess]) / solve_stationary──▶ StationarySolution
 SolvePlan + InitialConditions (Expr or nodal Vector) ──evolve──▶ Evolution
-results carry RunRecord {plan, execution, workload, work, evidence}
+results carry RunRecord {plan, inputs (fingerprints, mesh provenance), strategies,
+                         versions, execution, workload, work, evidence, timings}
+RunRecord ──write_json──▶ versioned JSON ──read_run_record_json / diff_records
 
 Adaptive loop (stationary):
   solve_stationary ──▶ values ──estimate_error──▶ ErrorEstimate {indicators, global}
@@ -92,16 +96,28 @@ seams. `analysis.hpp` reports properties of a problem (time order,
 symmetry, ellipticity, reaction sign, boundary forms, nullspace risk), each
 with an `Evidence` level (Proven, Sampled, Unknown); it calls the same
 functions the solve uses for the same judgement, so the two cannot
-disagree. `decision.hpp` records choices (`Decision`: subject, choice,
-basis, evidence, source) in `SolverReport::decisions` and
-`EvolutionMetadata::decisions`, printed by `write_report`. The settings and
-their decisions travel together as a `SolvePlan` (`plan.hpp`), the one
-output type of a future automatic chooser and the one place to override
-it. Today every recorded decision is user-selected (`plan_from_user`);
-there is no automatic selection yet. Top-level results carry a `RunRecord`
-(`record.hpp`) with the plan, execution policy, workload, work counters and
-an evidence summary; `MeshResult` already carries its `MeshOptions` and
-`MeshReport`. Analysis and assembly both start from `bind_boundary`
+disagree. `decision.hpp` records choices (`Decision`: typed
+`DecisionSubject`, choice, basis, evidence, source) in
+`SolverReport::decisions` and the run record, printed by `write_report`.
+The settings and their decisions travel together as a `SolvePlan`
+(`plan.hpp`), the one output type of a future automatic chooser and the one
+place to override it: setters change an option and its decision together,
+and every solve validates at entry that each decision still matches its
+option ("Stale decision"). `MeshPlan` (`fem/mesh_plan.hpp`) does the same
+for `MeshOptions`; it lives in `fem` because decisions do, so
+discretization stays independent. Today every recorded decision is
+user-selected (`plan_from_user`, `mesh_plan_from_user`); there is no
+automatic selection yet. Top-level results carry a `RunRecord`
+(`record.hpp`) with the plan (and its mesh plan and analysis), input
+fingerprints (mesh, problem, initial fields), mesh provenance when the
+solve got a `MeshResult`, the strategies that ran and whether they are
+replayable, library/dependency versions, execution policy, workload, work
+counters and an evidence summary. `record_json.hpp` writes it as
+versioned JSON and diffs two records. Fingerprints and strategy
+descriptors come from `cpp/provenance.hpp`, shared by both modules
+(`discretization::mesh_fingerprint`, `RefinementOptions::size_field_descriptor`);
+the library version comes from a header CMake generates at configure time
+(`cmake/pde2d_version.hpp.in`). Analysis and assembly both start from `bind_boundary`
 (`boundary_assignment.hpp`), so analysis no longer reaches into assembly
 internals. Private implementation headers of both modules live in
 `detail/` subdirectories (`*_detail` namespaces).

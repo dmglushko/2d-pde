@@ -1,6 +1,7 @@
 #pragma once
 
 #include "curve_geometry.hpp"
+#include "provenance.hpp"
 #include <functional>
 #include <optional>
 
@@ -31,6 +32,10 @@ struct RefinementOptions {
   // Optional graded target. With max_edge_length > 0 as well, each edge must
   // meet both (the smaller target applies). Either one enables refinement.
   SizeField size_field{};
+  // What `size_field` is, for run records and mesh plans (a callable cannot
+  // be compared or serialized). Without it a size field is recorded as "not
+  // replayable". Request-time like the field itself: files do not store it.
+  std::optional<pde2d::StrategyDescriptor> size_field_descriptor{};
 };
 inline bool size_refinement_requested(const RefinementOptions &o) {
   return o.max_edge_length > 0 || static_cast<bool>(o.size_field);
@@ -42,6 +47,27 @@ struct MeshOptions {
   BoundaryOptions boundary{};
   RefinementOptions refinement{};
 };
+// Report names of the enum values (not wire IDs; those are the numbers).
+inline const char *interior_algorithm_name(InteriorAlgorithm value) {
+  switch (value) {
+  case InteriorAlgorithm::EarClipping:
+    return "EarClipping";
+  case InteriorAlgorithm::ConstrainedDelaunay:
+    return "ConstrainedDelaunay";
+  }
+  return "Unknown";
+}
+inline const char *boundary_treatment_name(BoundaryTreatment value) {
+  switch (value) {
+  case BoundaryTreatment::Fixed:
+    return "Fixed";
+  case BoundaryTreatment::SplitPolygonEdges:
+    return "SplitPolygonEdges";
+  case BoundaryTreatment::RefineOnCurves:
+    return "RefineOnCurves";
+  }
+  return "Unknown";
+}
 // Shared value validation. Execution-specific compatibility (for example,
 // ear clipping versus refinement) belongs to the requested operation.
 inline bool validInteriorAlgorithm(InteriorAlgorithm value) {

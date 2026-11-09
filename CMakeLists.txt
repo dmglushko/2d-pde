@@ -2,13 +2,39 @@ cmake_minimum_required(VERSION 3.20)
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
 endif()
-project(pde2d LANGUAGES CXX)
+project(pde2d VERSION 0.1.0 LANGUAGES CXX)
+
+# Library version for run records (cpp/provenance.hpp): the project version
+# and, when the sources are a git checkout, the commit at configure time.
+# CMake re-runs after a commit or checkout (the git HEAD log is a configure
+# dependency), so the generated header follows the checked-out commit.
+set(PDE2D_GIT_SHA "")
+find_package(Git QUIET)
+if(GIT_FOUND)
+  execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    OUTPUT_VARIABLE pde2d_git_sha OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE pde2d_git_status ERROR_QUIET)
+  if(pde2d_git_status EQUAL 0)
+    set(PDE2D_GIT_SHA "${pde2d_git_sha}")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --absolute-git-dir
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+      OUTPUT_VARIABLE pde2d_git_dir OUTPUT_STRIP_TRAILING_WHITESPACE
+      RESULT_VARIABLE pde2d_git_status ERROR_QUIET)
+    foreach(file IN ITEMS HEAD logs/HEAD)
+      if(pde2d_git_status EQUAL 0 AND EXISTS "${pde2d_git_dir}/${file}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${pde2d_git_dir}/${file}")
+      endif()
+    endforeach()
+  endif()
+endif()
+configure_file(cmake/pde2d_version.hpp.in "${PROJECT_BINARY_DIR}/generated/pde2d_version.hpp" @ONLY)
 
 include(CTest)
 option(PDE2D_ENABLE_OPENMP "Enable explicitly selected OpenMP CPU kernels" OFF)
 add_library(pde2d_execution INTERFACE)
 target_compile_features(pde2d_execution INTERFACE cxx_std_23)
-target_include_directories(pde2d_execution INTERFACE "${PROJECT_SOURCE_DIR}/cpp")
+target_include_directories(pde2d_execution INTERFACE "${PROJECT_SOURCE_DIR}/cpp" "${PROJECT_BINARY_DIR}/generated")
 if(PDE2D_ENABLE_OPENMP)
   find_package(OpenMP REQUIRED COMPONENTS CXX)
   target_link_libraries(pde2d_execution INTERFACE OpenMP::OpenMP_CXX)

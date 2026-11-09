@@ -236,9 +236,11 @@ void run_records() {
         "Evolution decisions");
 
   const std::vector<Decision> mixed{
-      {"a", "1", "", Evidence::Proven, DecisionSource::Automatic},
-      {"b", "2", "", Evidence::Sampled, DecisionSource::Automatic},
-      user_decision("c", "3", "Option")};
+      {DecisionSubject::LinearSolver, "1", "", Evidence::Proven,
+       DecisionSource::Automatic},
+      {DecisionSubject::Preconditioner, "2", "", Evidence::Sampled,
+       DecisionSource::Automatic},
+      user_decision(DecisionSubject::Quadrature, "3", "Option")};
   const auto summary = summarize_evidence(mixed);
   check(summary.proven == 1 && summary.sampled == 1 && summary.unknown == 1 &&
             summary.weakest == Evidence::Unknown,

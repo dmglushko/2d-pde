@@ -20,10 +20,12 @@
 // gets a TimeMethod value, a case in make_time_integrator and a name in
 // time_method_name.
 #include "fem/system.hpp"
+#include "provenance.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -127,6 +129,14 @@ public:
   virtual TimeMethod method() const { return TimeMethod::Custom; }
   // Name used in reports and EvolutionMetadata::method_name.
   virtual std::string name() const { return time_method_name(method()); }
+  // Stable description (name + parameters) for run records, when the scheme
+  // comes from a factory (TimeOptions::integrator). Without one the record
+  // says the integrator is "not replayable". Built-in schemes return theirs.
+  virtual std::optional<pde2d::StrategyDescriptor> descriptor() const {
+    if (method() == TimeMethod::Custom)
+      return std::nullopt;
+    return pde2d::StrategyDescriptor{name()};
+  }
   // 1: needs u at the start; 2: also needs u_t.
   virtual int order() const = 0;
   // Reject systems this scheme cannot integrate.

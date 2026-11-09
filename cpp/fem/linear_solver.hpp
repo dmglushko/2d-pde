@@ -15,6 +15,7 @@
 // without editing the library (see EXTENDING.md).
 #include "fem/decision.hpp"
 #include "fem/system.hpp"
+#include "provenance.hpp"
 #include "fem/timing.hpp"
 #include <Eigen/IterativeLinearSolvers>
 #include <Eigen/SparseCholesky>
@@ -27,6 +28,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -144,6 +146,11 @@ public:
   virtual ~LinearSolverBackendFactory() = default;
   // Name used in reports.
   virtual std::string name() const = 0;
+  // Stable description (name + parameters) for run records. Without one the
+  // record says the backend is "not replayable".
+  virtual std::optional<pde2d::StrategyDescriptor> descriptor() const {
+    return std::nullopt;
+  }
   // A fresh backend for one matrix. Throw std::invalid_argument for options
   // the backend does not support.
   virtual std::unique_ptr<LinearSolverBackend>
@@ -152,18 +159,26 @@ public:
 
 using LinearSolverBackendCreator =
     std::function<std::unique_ptr<LinearSolverBackend>(const SolverOptions &)>;
-// A factory from a report name and a creation function.
+// A factory from a report name, a creation function and, optionally, the
+// descriptor run records show for it.
 inline std::shared_ptr<const LinearSolverBackendFactory>
-make_linear_solver_backend(std::string name,
-                           LinearSolverBackendCreator create) {
+make_linear_solver_backend(
+    std::string name, LinearSolverBackendCreator create,
+    std::optional<pde2d::StrategyDescriptor> descriptor = std::nullopt) {
   class Factory final : public LinearSolverBackendFactory {
     std::string name_;
     LinearSolverBackendCreator create_;
+    std::optional<pde2d::StrategyDescriptor> descriptor_;
 
   public:
-    Factory(std::string name, LinearSolverBackendCreator create)
-        : name_(std::move(name)), create_(std::move(create)) {}
+    Factory(std::string name, LinearSolverBackendCreator create,
+            std::optional<pde2d::StrategyDescriptor> descriptor)
+        : name_(std::move(name)), create_(std::move(create)),
+          descriptor_(std::move(descriptor)) {}
     std::string name() const override { return name_; }
+    std::optional<pde2d::StrategyDescriptor> descriptor() const override {
+      return descriptor_;
+    }
     std::unique_ptr<LinearSolverBackend>
     create(const SolverOptions &options) const override {
       auto backend = create_(options);
@@ -175,7 +190,8 @@ make_linear_solver_backend(std::string name,
   };
   if (!create)
     throw std::invalid_argument("Linear solver backend needs a creator");
-  return std::make_shared<const Factory>(std::move(name), std::move(create));
+  return std::make_shared<const Factory>(std::move(name), std::move(create),
+                                         std::move(descriptor));
 }
 
 namespace solver_detail {
@@ -432,13 +448,14 @@ inline const char *solver_validation_name(SolverValidation validation) {
 
 // The user's linear-solver choices as decision records (decision.hpp).
 inline std::vector<Decision> solver_decisions(const SolverOptions &options) {
-  return {user_decision("linear solver", linear_solver_name(options),
+  return {user_decision(DecisionSubject::LinearSolver,
+                        linear_solver_name(options),
                         options.backend ? "SolverOptions::backend"
                                         : "SolverOptions::method"),
-          user_decision("preconditioner",
+          user_decision(DecisionSubject::Preconditioner,
                         preconditioner_name(options.preconditioner),
                         "SolverOptions::preconditioner"),
-          user_decision("solver validation",
+          user_decision(DecisionSubject::SolverValidation,
                         solver_validation_name(options.validation),
                         "SolverOptions::validation")};
 }

@@ -91,9 +91,10 @@ inline ProblemProperties analyze(const Problem &problem,
   for (const auto &edge : binding.edges) {
     auto &region = classified[edge.region];
     try {
-      region.push_back({classify_edge_condition(problem.equation,
-                                                *edge.condition, edge.frame),
-                        edge.frame});
+      region.push_back(
+          {classify_edge_condition(binding.equation, binding.condition(edge),
+                                   edge.frame),
+           edge.frame});
     } catch (const std::invalid_argument &error) {
       region.push_back({std::string(error.what()), edge.frame});
     }

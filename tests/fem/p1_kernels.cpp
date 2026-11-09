@@ -286,7 +286,7 @@ void region_accumulation_matches_analyze() {
     for (const auto &e : binding.edges)
       if (e.region == r)
         edges.push_back(
-            {classify_edge_condition(p.equation, *e.condition, e.frame),
+            {classify_edge_condition(p.equation, binding.condition(e), e.frame),
              e.frame});
     const auto direct = analyze_boundary_region(binding.regions[r], edges);
     const auto &expected = properties.boundaries[r];

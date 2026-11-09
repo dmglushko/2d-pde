@@ -4,12 +4,13 @@
 //
 //   BoundaryBinding b = bind_boundary(mesh, problem);
 //   for (const auto &edge : b.edges)  // mesh.boundary_edges order
-//     classify_edge_condition(problem.equation, *edge.condition, edge.frame);
+//     classify_edge_condition(b.equation, b.condition(edge), edge.frame);
 //
 // Assembly (PreparedAssembly) and analysis (analyze(problem, mesh)) both start
 // from this one binding, so they accept and reject the same assignments and
-// see the same outward normals. The binding points into `problem`: keep the
-// Problem alive (and unchanged) while it is used.
+// see the same outward normals. The binding owns a snapshot of the equation
+// and of one condition per assignment, and edges refer to them by index: it
+// stays valid (and unchanged) when the Problem is changed or destroyed.
 //
 // Rules, with the exception messages tests match: every boundary edge has a
 // nonempty region tag; every assigned region exists in the mesh ("Absent
@@ -35,14 +36,23 @@ struct BoundaryEdgeBinding {
   std::size_t edge;                 // index into mesh.boundary_edges
   std::array<std::size_t, 2> nodes; // endpoints, in mesh.boundary_edges order
   std::size_t region;               // index into BoundaryBinding::regions
-  const BoundaryCondition *condition;
+  // Index into BoundaryBinding::conditions (= into Problem::boundaries).
+  std::size_t assignment;
   p1::EdgeFrame frame; // from nodes[0] to nodes[1], outward normal
 };
 struct BoundaryBinding {
+  // Snapshot of Problem::equation at binding time.
+  Equation equation{};
+  // Snapshot of each Problem::boundaries[k].condition, in assignment order.
+  std::vector<BoundaryCondition> conditions{};
   // Assigned regions in the order of Problem::boundaries and their regions.
   std::vector<std::string> regions;
   // One entry per boundary edge, in mesh order.
   std::vector<BoundaryEdgeBinding> edges;
+
+  const BoundaryCondition &condition(const BoundaryEdgeBinding &edge) const {
+    return conditions.at(edge.assignment);
+  }
 };
 
 namespace boundary_detail {
@@ -72,17 +82,18 @@ inline BoundaryBinding bind_boundary(const discretization::TriangleMesh &mesh,
   if (present.contains(""))
     throw std::invalid_argument("Empty boundary region tag");
   BoundaryBinding binding;
-  std::map<std::string, std::pair<std::size_t, const BoundaryCondition *>>
-      assigned;
-  for (const auto &assignment : problem.boundaries) {
+  binding.equation = problem.equation;
+  // Region name -> (region index, assignment index).
+  std::map<std::string, std::pair<std::size_t, std::size_t>> assigned;
+  for (std::size_t k = 0; k < problem.boundaries.size(); ++k) {
+    const auto &assignment = problem.boundaries[k];
     if (assignment.regions.empty())
       throw std::invalid_argument("Empty boundary assignment");
+    binding.conditions.push_back(assignment.condition);
     for (const auto &region : assignment.regions) {
       if (!present.contains(region))
         throw std::invalid_argument("Absent boundary region: " + region);
-      if (!assigned
-               .emplace(region, std::pair{binding.regions.size(),
-                                          &assignment.condition})
+      if (!assigned.emplace(region, std::pair{binding.regions.size(), k})
                .second)
         throw std::invalid_argument("Overlapping boundary assignments: " +
                                     region);

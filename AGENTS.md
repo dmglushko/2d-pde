@@ -11,6 +11,7 @@ heading and which directions to keep open.
 | Path | Contents |
 | --- | --- |
 | `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
+| `cpp/provenance.hpp` | `pde2d::Fingerprint` (portable FNV-1a), `StrategyDescriptor`, `library_version()` (reads the CMake-generated `pde2d_version.hpp`, from `cmake/pde2d_version.hpp.in`) |
 | `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing (size fields, marked refinement; criteria and boundary policies in `detail/refinement_policy.hpp`), point location (`point_location.hpp`), mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
 | `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration and step control (`step_control.hpp`), boundary region binding shared by assembly and analysis (`boundary_assignment.hpp`), boundary edge forms with one unit per form (`detail/edge_forms/`: Dirichlet, natural, oblique), problem analysis (`analysis.hpp`, types in `analysis_types.hpp`), decision records (`decision.hpp`), solve plans (`plan.hpp`), prepared stationary solves (`solver.hpp`), run records (`record.hpp`), error estimation and marking (`estimation.hpp`), field transfer between meshes (`transfer.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
 | `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
@@ -91,6 +92,16 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   must keep writing versions 4/2 byte for byte.
 - `MeshResult::report` must be checked: meshing can return a mesh that misses
   its size target.
+- **Decisions match options.** Solves throw "Stale decision" when a recorded
+  `Decision` no longer matches its option. Change plan options with the
+  `SolvePlan` setters (or update the decision), and give a new setting a
+  `DecisionSubject` plus a case in `validate_decisions`.
+- **Run record JSON is a format.** `record_json.hpp` keys and
+  `DecisionSubject` names are stable; renaming or removing a key bumps
+  `run_record_schema_version`. Fingerprint encodings carry a version tag
+  (`pde2d.mesh.v1`, `pde2d.problem.v1`); changing one needs a new tag.
+- **Time settings live in `TimePlan`.** `TimeOptions` derives from it; do not
+  re-declare a time setting elsewhere.
 - **Request-time options are not serialized:** `RefinementOptions::size_field`
   and `MeshReport::marked` have no `.pde2d` record. Do not add one without a
   format version (docs/formats/pde2d-mesh.md).

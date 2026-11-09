@@ -380,12 +380,38 @@ starts the iterative backends (CG, GMRES); direct backends ignore it.
 `SolverReport::initial_guess` says `None`, `Used` or `Ignored`.
 
 A `SolvePlan` (`fem/plan.hpp`) bundles assembly options, solver options, time
-settings and the decisions explaining them. `plan_from_user(assembly,solver)`
+settings (`TimePlan`) and the decisions explaining them. `plan_from_user(assembly,solver)`
 and `plan_from_user(time_options)` record today's user choices; the overloads
 `solve_stationary(mesh,problem,plan)`, `PreparedStationary(mesh,problem,plan)`
 and `evolve(mesh,problem,initial,plan,output)` give the same results as the
 option-based calls. Nothing chooses settings automatically yet; a future
-chooser will return a `SolvePlan`, and editing the plan overrides it.
+chooser will return a `SolvePlan`.
+
+Each `Decision` has a typed subject (`DecisionSubject::LinearSolver`,
+`TimeSteps`, `Quadrature`, ...; `decision_subject_name` prints it). Override a
+setting with a setter, which changes the option and its decision together:
+
+```cpp
+auto plan=plan_from_user(assembly,solver);
+plan.set_linear_solver(LinearSolver::ConjugateGradient)
+    .set_preconditioner(Preconditioner::IncompleteCholesky);
+plan.set_quadrature_degree(4,{"source has degree 3",Evidence::Proven,
+                              DecisionSource::Automatic});  // a chooser's basis
+```
+
+Every solve validates the plan at entry (`validate_decisions`): a decision that
+no longer matches its option, for example after `plan.solver.method=GMRES`
+without the setter, throws `"Stale decision: linear solver records "SparseLU"
+but the options give "GMRES""`; duplicate subjects and mesh subjects in a
+solve plan throw too. `TimeOptions` is a `TimePlan` plus `EvolutionOutput`
+plus assembly and solver options, so every time setting is declared once.
+
+A `MeshPlan` (`fem/mesh_plan.hpp`, `mesh_plan_from_user(mesh_options)`) is
+the meshing counterpart: `MeshOptions` with decisions for the mesh algorithm,
+boundary treatment, mesh size and size field. Put it in `plan.mesh`; a solve
+given the `MeshResult` (`solve_stationary(result,problem,plan)`,
+`evolve(result,...)`) checks it against `result.options`. `plan.analysis`
+holds the `analyze` options and result a chooser used.
 
 ## Optional parallel execution and verification
 
@@ -427,12 +453,60 @@ pde2d::fem::write_report(std::cout, solution.report); // pde2d::fem::SolverRepor
 pde2d::fem::write_report(std::cout, motion.record);   // pde2d::fem::RunRecord
 ```
 
+### Run records
+
 `StationarySolution::record` and `Evolution::record` (`fem/record.hpp`) carry
-what is needed to reproduce and compare a run, as fields: the plan that ran
-(with its decisions), the selected execution policy and whether OpenMP was
-compiled in, the workload (nodes, elements, boundary edges), work counters
-(assemblies, solves, preparations, reuses, accepted and rejected steps) and an
-evidence summary of the decisions. Wall-clock timings are not part of it.
+what is needed to reproduce and compare a run, as fields:
+
+- the plan that ran, with its decisions, mesh plan and analysis (if any);
+- the inputs, by deterministic fingerprint (`pde2d::Fingerprint`, FNV-1a 64,
+  explicit little-endian encoding): the mesh (`mesh_fingerprint`: node bit
+  patterns, elements, boundary edges, tags), the problem
+  (`problem_fingerprint`: the canonical SymEngine string of every `Equation`
+  field, then each assignment's regions and condition fields, in assignment
+  order) and, for evolutions, the initial value and velocity
+  (`field_fingerprint`, expression or nodal);
+- mesh provenance (`MeshOptions`, `MeshReport`, whether a boundary context was
+  kept) when the solve was given a `MeshResult`;
+- the stationary evaluation time;
+- `strategies`: what ran for the time integrator, step sequence, linear solver
+  and size field, each `built-in` (the options rebuild it), `described` (a
+  `StrategyDescriptor` names it and its parameters) or `not replayable` (a
+  factory without descriptor); `record.replayable()` is true when all are
+  built-in;
+- versions: library version and git commit at configure time
+  (`pde2d::library_version()`, "unknown" and empty outside CMake or git),
+  Eigen and SymEngine;
+- execution policy and OpenMP availability, workload, work counters, an
+  evidence summary of the decisions, and the total wall-clock time
+  (`timings.total_seconds`, the only field that differs between identical
+  runs).
+
+`Evolution::metadata` is a deprecated view of the record
+(`evolution_metadata(record,method)`), kept so old field access compiles.
+
+`write_json(out,record)` (`fem/record_json.hpp`) writes a versioned JSON
+document: `"schema": "pde2d.run_record"`, `"schema_version": 1`, then
+`versions`, `replayable`, `problem`, `mesh` (`fingerprint`, `provenance`),
+`workload`, `stationary_time`, `initial`, `plan` (`assembly`, `solver`,
+`time`, `decisions`, `mesh`, `analysis`), `strategies`, `execution`, `work`,
+`evidence` and `timings`. Absent optional values are `null`. Numbers use the
+classic locale and `max_digits10` digits, so parsed doubles are the run's bit
+for bit; non-finite values are the strings `"nan"`, `"inf"`, `"-inf"`. Adding
+a key keeps the schema version; renaming or removing one increments it.
+
+```cpp
+std::ofstream file("run.json");
+pde2d::fem::write_json(file, solution.record);
+std::ifstream in("run.json");
+auto document = pde2d::fem::read_run_record_json(in);   // checks the schema
+for (const auto &d : pde2d::fem::diff_records(old_record, new_record))
+  std::cout << d.path << ": " << d.left << " -> " << d.right << '\n';
+```
+
+`diff_records` compares two records or parsed documents leaf by leaf (paths
+such as `plan.decisions[2].choice`) and ignores `timings` unless
+`{.ignore_timings = false}`.
 
 These overloads return `std::ostream&`, emit one summary without per-step output,
 and preserve the caller's formatting flags, precision, fill, width and locale.
@@ -452,9 +526,10 @@ initial acceleration solves for Newmark, although per-step reports do not.
 Observers still receive the initial state and every accepted step independently
 of frame stride; callback exceptions propagate to the caller.
 
-`Evolution::metadata` records mesh node, element and boundary-edge counts,
-quadrature degree, time method/interval/step, solver options, OpenMP build
-availability, and the selected `execution` policy. Its `execution.threads` is
+`Evolution::record` (and its view `Evolution::metadata`) records mesh node,
+element and boundary-edge counts, quadrature degree, time method/interval/step,
+solver options, OpenMP build availability, and the selected `execution` policy.
+Its `execution.threads` is
 the requested count (zero means runtime default), **not** measured team size.
 Small loops, nested execution and runtime limits may cause serial or smaller
 teams. The formatter labels this distinction explicitly. The default selected

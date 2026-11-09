@@ -230,7 +230,7 @@ void decisions() {
   const auto e = evolve(mesh, p, {0}, options);
   std::vector<std::string> subjects;
   for (const auto &decision : e.metadata.decisions)
-    subjects.push_back(decision.subject);
+    subjects.emplace_back(decision_subject_name(decision.subject));
   check(subjects == std::vector<std::string>{"time integrator", "time steps",
                                              "linear solver", "preconditioner",
                                              "solver validation"},
@@ -259,8 +259,8 @@ void decisions() {
             custom[0].basis == "user-selected (SolverOptions::backend)",
         "Backend decision");
   const auto one =
-      formatted(Decision{"mesh", "graded", "estimated error", Evidence::Sampled,
-                         DecisionSource::Automatic});
+      formatted(Decision{DecisionSubject::Mesh, "graded", "estimated error",
+                         Evidence::Sampled, DecisionSource::Automatic});
   check(one.find("decision: mesh=graded basis=\"estimated error\" "
                  "evidence=Sampled source=Automatic") != std::string::npos,
         "Single decision report");

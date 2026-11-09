@@ -9,8 +9,10 @@ preparation, deterministic serial scatter, explicit exceptions.
 A user scheme needs no library change. Implement `TimeIntegrator` in your
 own code and pass a factory: `options.integrator = [] { return
 std::make_unique<MyScheme>(); };`. `evolve()` calls it once per evolution and
-ignores `options.method`; reports and `EvolutionMetadata::method_name` use
-`name()` (`method()` defaults to `TimeMethod::Custom`). See
+ignores `options.method`; reports and the run record's strategies use
+`name()` (`method()` defaults to `TimeMethod::Custom`). Override
+`descriptor()` so the record can say what ran (see "A strategy
+descriptor"). See
 `tests/fem/custom_integrator.cpp`.
 
 1. Implement `TimeIntegrator`:
@@ -72,7 +74,9 @@ std::make_unique<MyController>(...); };`; `evolve()` then ignores
   at every accepted step.
 - `accepted(StepOutcome)` sees each accepted step with the states before
   and after it.
-- `name()` appears in `EvolutionMetadata::decisions` ("time steps").
+- `name()` appears in the run record's decisions ("time steps");
+  `descriptor()` makes the controller described rather than "not
+  replayable" in the record.
 - Tests: a non-uniform sequence against a hand-computed recurrence on an
   exact semidiscrete solution, and the default path bit-identical (see
   `tests/fem/step_control.cpp`); for rejection, retried and halved trials
@@ -107,28 +111,74 @@ std::make_unique<MyController>(...); };`; `evolve()` then ignores
 
 ## A decision record
 
-`Decision` (`decision.hpp`) records subject, choice, basis, evidence and
-source. User choices use `user_decision(subject, choice, "Options::field")`.
-Add a new one where the setting enters the plan: solver choices in
-`solver_decisions()`, time choices in `time_decisions()` (`plan.hpp`), both
-collected by `plan_from_user`. The plan's decisions are copied into every
-stationary `SolverReport` and into `EvolutionMetadata::decisions`;
-`write_report` prints them. A choice made by a strategy object (integrator
-or step controller factory) is named by `evolve()` from `name()`.
+`Decision` (`decision.hpp`) records a typed subject (`DecisionSubject`),
+choice, basis, evidence and source. User choices use
+`user_decision(DecisionSubject::X, choice, "Options::field")`.
+
+1. A new setting gets a `DecisionSubject` value (append it, add its name in
+   `decision_subject_name` and the `decision_subjects` list; names are
+   stable, run record JSON uses them).
+2. Teach `validate_decisions` (`plan.hpp`, or `mesh_plan.hpp` for a mesh
+   setting) how to compute the choice text from the options, so a stale
+   decision throws. Format numbers with `std::format("{}")` (shortest
+   round trip) so every change of the option changes the text.
+3. Add a `SolvePlan` setter that changes the option and calls
+   `set_decision(decisions, decision_for(subject, choice, "Options::field",
+   why))`.
+4. If plan_from_user should record it, add it in `solver_decisions()` or
+   `time_decisions()` (or `mesh_decisions()`); existing decision lists are
+   asserted by tests, so prefer the setter for optional settings.
+
+The plan's decisions are copied into every stationary `SolverReport` and
+into `Evolution::record.plan.decisions`; `write_report` prints them and
+`write_json` serializes them. A choice made by a strategy object
+(integrator or step controller factory) stays empty in the plan and is
+named by `evolve()` from `name()`; a nonempty choice must equal that name.
+
+## A strategy descriptor (reproducible custom strategies)
+
+Factories (`TimeOptions::integrator`, `step_controller`,
+`SolverOptions::backend`, `RefinementOptions::size_field`) cannot be
+replayed from a run record. Give each custom strategy a
+`pde2d::StrategyDescriptor` (`cpp/provenance.hpp`): a stable name and its
+parameters as text (`std::format("{}", value)` for numbers), enough for a
+reader to rebuild it.
+
+- Integrator / step controller / error estimator: override
+  `descriptor()` on the object (`TimeIntegrator`, `StepController`,
+  `ErrorEstimator`); built-in schemes and `UniformStepController` already
+  return theirs.
+- Linear solver backend: override `LinearSolverBackendFactory::descriptor()`
+  or pass one to `make_linear_solver_backend(name, creator, descriptor)`.
+- Size field: set `RefinementOptions::size_field_descriptor` next to the
+  field.
+
+`RunRecord::strategies` then says `described` with the descriptor; without
+one it says `not replayable` and `record.replayable()` is false. Tests: the
+record's strategy entry and its JSON (`tests/fem/run_records.cpp`).
 
 ## An automatic chooser (planner)
 
-Not implemented; the seam is `SolvePlan` (`plan.hpp`). A chooser is a
-function from the problem, mesh and analysis (`analyze`) to a `SolvePlan`:
-it sets `assembly`, `solver` and `time` and records one `Decision` per
-choice with `DecisionSource::Automatic`, its basis (for example the
-analysis property and its evidence) and that evidence. The user overrides
-it by editing the returned plan (and its decision) before calling
+Not implemented; the seam is `SolvePlan` (`plan.hpp`), plus `MeshPlan`
+(`mesh_plan.hpp`) for meshing. A chooser is a function from the problem,
+mesh (or geometry) and analysis (`analyze`) to a plan:
+
+1. Start from `plan_from_user(...)` defaults (or `mesh_plan_from_user`).
+2. Change each setting it chooses with the setter and a `Rationale`:
+   `plan.set_linear_solver(LinearSolver::ConjugateGradient,
+   {"operator proven symmetric", properties.symmetric.evidence,
+   DecisionSource::Automatic})`. Never edit an option without its
+   decision: solves throw "Stale decision" at entry.
+3. Store what it was based on: `plan.analysis = AnalysisRecord{options,
+   properties}` and `plan.mesh = mesh_plan`.
+
+The user overrides it by calling setters on the returned plan before
 `solve_stationary(mesh, problem, plan)`, `PreparedStationary` or
-`evolve(mesh, problem, initial, plan, output)`. The run record
-(`record.hpp`) then carries the plan and an evidence summary. Judge a
-chooser against `plan_from_user` defaults on reference problems
-(docs/vision.md, "Better is measured").
+`evolve(mesh, problem, initial, plan, output)` (pass the `MeshResult` to
+check the mesh plan against it). The run record (`record.hpp`) then
+carries the plan, its analysis and an evidence summary. Judge a chooser
+against `plan_from_user` defaults on reference problems (docs/vision.md,
+"Better is measured"), comparing records with `diff_records`.
 
 ## An error estimator
 

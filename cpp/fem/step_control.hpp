@@ -28,12 +28,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <functional>
 #include <limits>
-#include <locale>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 
 namespace pde2d::fem {
@@ -78,6 +77,12 @@ public:
   virtual ~StepController() = default;
   // Name used in decision records and reports.
   virtual std::string name() const = 0;
+  // Stable description (name + parameters) for run records, when the
+  // controller comes from a factory (TimeOptions::step_controller). Without
+  // one the record says the controller is "not replayable".
+  virtual std::optional<pde2d::StrategyDescriptor> descriptor() const {
+    return std::nullopt;
+  }
   // The next step, or nothing once the evolution has reached its end.
   virtual std::optional<TimeStep> next() = 0;
   // Judge one trial. Reject to discard it; the next call to next() then
@@ -95,13 +100,19 @@ public:
   UniformStepController(double start, double end, double step)
       : grid_(start, end, step) {}
   // The name of a uniform controller with this step, without building it.
+  // Shortest round-trip format (locale independent), so the name changes
+  // with every change of the step and stale-decision checks are exact.
   static std::string describe(double step) {
-    std::ostringstream out;
-    out.imbue(std::locale::classic());
-    out << "Uniform(step=" << step << ')';
-    return out.str();
+    return std::format("Uniform(step={})", step);
   }
   std::string name() const override { return describe(grid_.step()); }
+  std::optional<pde2d::StrategyDescriptor> descriptor() const override {
+    return pde2d::StrategyDescriptor{
+        "Uniform",
+        {{"start", std::format("{}", grid_.start())},
+         {"end", std::format("{}", grid_.end())},
+         {"step", std::format("{}", grid_.step())}}};
+  }
   std::optional<TimeStep> next() override { return grid_.next(); }
 };
 

@@ -17,10 +17,17 @@
 // time_integration.hpp, the step sequence in step_control.hpp (default:
 // time_grid.hpp). Every step is a trial that the step controller accepts or
 // rejects (step_control.hpp); only accepted steps produce frames.
-// EvolutionMetadata::decisions records the choices made and
-// Evolution::record what is needed to reproduce the run (record.hpp).
+// Evolution::record holds what is needed to reproduce the run (record.hpp):
+// the plan with its decisions, the input fingerprints and the strategies
+// that ran. EvolutionMetadata is a compatibility view derived from it.
+//
+// Settings have one source of truth each: TimePlan (plan.hpp) for the time
+// discretization, EvolutionOutput for what is kept, AssemblyOptions and
+// SolverOptions for the rest. TimeOptions is all four together.
+#include "discretization/mesh_fingerprint.hpp"
 #include "fem/assembly.hpp"
 #include "fem/decision.hpp"
+#include "fem/fingerprint.hpp"
 #include "fem/interpolation.hpp"
 #include "fem/linear_solver.hpp"
 #include "fem/plan.hpp"
@@ -61,25 +68,19 @@ struct EvolutionOutput {
   // Called for every accepted time stamp, retained or not.
   std::function<void(const Frame &)> observer{};
 };
-struct TimeOptions {
-  TimeMethod method = TimeMethod::BackwardEuler;
-  double start = 0, end = 1, step = .01;
+// The option-based form of a plan: the time settings (TimePlan: method,
+// interval, step, integrator, step_controller, max_consecutive_rejections),
+// the output settings (EvolutionOutput: frame_stride, store_reports,
+// observer) and the assembly and solver options. Fields are reached as
+// before (options.step, options.frame_stride); a new time setting belongs
+// in TimePlan and appears here automatically.
+struct TimeOptions : TimePlan, EvolutionOutput {
   AssemblyOptions assembly;
   SolverOptions solver;
-  // Retain frames 0, stride, 2*stride, ... and the final frame.
-  std::size_t frame_stride = 1;
-  bool store_reports = true;
-  // Called for every accepted time stamp, retained or not.
-  std::function<void(const Frame &)> observer{};
-  // A user scheme. When set, evolve() calls it once and ignores `method`.
-  TimeIntegratorFactory integrator{};
-  // A user step sequence on [start, end]. When set, evolve() calls it once
-  // and ignores `step`; otherwise steps are uniform (UniformStepController).
-  StepControllerFactory step_controller{};
-  // At most this many trials in a row may be rejected; one more throws
-  // std::runtime_error. 0 forbids rejections. Counts reset on acceptance.
-  std::size_t max_consecutive_rejections = default_max_consecutive_rejections;
 };
+// Deprecated compatibility view of Evolution::record (use the record): the
+// same values under their old names, derived by evolution_metadata(), so it
+// needs no change when a setting is added.
 struct EvolutionMetadata {
   // Selected policy, not an observation of actual OpenMP team sizes. Zero
   // threads delegates the choice to the runtime; small loops may stay serial.
@@ -87,6 +88,7 @@ struct EvolutionMetadata {
   bool openmp_available = false;
   std::size_t nodes = 0, elements = 0, boundary_edges = 0;
   int quadrature_degree = 2;
+  // TimeIntegrator::method() of the integrator that ran.
   TimeMethod method = TimeMethod::BackwardEuler;
   SolverOptions solver;
   double start = 0, end = 0, step = 0;
@@ -95,25 +97,48 @@ struct EvolutionMetadata {
   // Time integrator, step sequence and linear solver choices (decision.hpp).
   std::vector<Decision> decisions{};
 };
+// The view of a record. `method` is TimeIntegrator::method() of what ran
+// (TimeMethod::Custom for most user schemes), which the record names only.
+inline EvolutionMetadata evolution_metadata(const RunRecord &record,
+                                            TimeMethod method) {
+  EvolutionMetadata m;
+  m.execution = record.execution.selected;
+  m.openmp_available = record.execution.openmp_available;
+  m.nodes = record.workload.nodes;
+  m.elements = record.workload.elements;
+  m.boundary_edges = record.workload.boundary_edges;
+  m.quadrature_degree = record.plan.assembly.quadrature_degree;
+  m.method = method;
+  m.solver = record.plan.solver;
+  if (const auto &t = record.plan.time) {
+    m.start = t->start;
+    m.end = t->end;
+    m.step = t->step;
+  }
+  for (const auto &strategy : record.strategies)
+    if (strategy.subject == DecisionSubject::TimeIntegrator)
+      m.method_name = strategy.name;
+  m.decisions = record.plan.decisions;
+  return m;
+}
 struct Evolution {
   std::vector<Frame> frames;
   std::vector<SolverReport> reports;
   EvolutionTimings timings;
+  // Deprecated: evolution_metadata(record, ...); kept for field access.
   EvolutionMetadata metadata;
-  // Plan, execution, workload, work and evidence of the run (record.hpp).
+  // Plan, inputs, strategies, execution, workload, work and evidence of the
+  // run (record.hpp).
   RunRecord record{};
 };
 
 // The plan and the output part of TimeOptions.
 inline SolvePlan plan_from_user(const TimeOptions &options) {
   return plan_from_user(options.assembly, options.solver,
-                        TimePlan{options.method, options.start, options.end,
-                                 options.step, options.integrator,
-                                 options.step_controller,
-                                 options.max_consecutive_rejections});
+                        static_cast<const TimePlan &>(options));
 }
 inline EvolutionOutput output_options(const TimeOptions &options) {
-  return {options.frame_stride, options.store_reports, options.observer};
+  return static_cast<const EvolutionOutput &>(options);
 }
 
 namespace evolution_detail {
@@ -178,38 +203,26 @@ inline void check_step(const TimeStep &step, std::size_t index, double time,
 
 // Name the strategy objects that actually run in their decision records.
 inline void name_choice(std::vector<Decision> &decisions,
-                        const std::string &subject, const std::string &name) {
-  for (auto &decision : decisions)
-    if (decision.subject == subject)
-      decision.choice = name;
+                        DecisionSubject subject, const std::string &name) {
+  if (auto *decision = find_decision(decisions, subject))
+    decision->choice = name;
 }
-} // namespace evolution_detail
+inline FieldRecord field_record(const Field &field) {
+  return {field_kind(field), field_fingerprint(field)};
+}
 
-// Evolve with the settings of a plan (plan.hpp); `output` selects what is
-// kept. evolve(mesh, problem, initial, TimeOptions) is this function with
-// plan_from_user(options) and output_options(options).
-inline Evolution evolve(const discretization::TriangleMesh &mesh,
-                        const Problem &problem,
-                        const InitialConditions &initial, const SolvePlan &plan,
-                        const EvolutionOutput &output = {}) {
+inline Evolution run(const discretization::TriangleMesh &mesh,
+                     const Problem &problem, const InitialConditions &initial,
+                     const SolvePlan &plan, const EvolutionOutput &output,
+                     const discretization::MeshResult *mesh_result) {
   const auto started = timing::Clock::now();
   if (!plan.time)
     throw std::invalid_argument("Evolution plan has no time settings");
+  solver_detail::checked_plan(plan, mesh_result);
   const auto &time = *plan.time;
   const auto &assembly_options = plan.assembly;
   const auto &solver_options = plan.solver;
   Evolution result;
-  result.metadata = {assembly_options.execution,
-                     pde2d::openmp_available(),
-                     mesh.nodes.size(),
-                     mesh.elements.size(),
-                     mesh.boundary_edges.size(),
-                     assembly_options.quadrature_degree,
-                     time.method,
-                     solver_options,
-                     time.start,
-                     time.end,
-                     time.step};
   std::unique_ptr<StepController> controller;
   if (time.step_controller) {
     if (!std::isfinite(time.start) || !std::isfinite(time.end) ||
@@ -227,13 +240,11 @@ inline Evolution evolve(const discretization::TriangleMesh &mesh,
   if (!integrator)
     throw std::invalid_argument(
         "Time integrator factory returned no integrator");
-  result.metadata.method = integrator->method();
-  result.metadata.method_name = integrator->name();
-  auto &decisions = result.metadata.decisions;
-  decisions = plan.decisions;
-  evolution_detail::name_choice(decisions, "time integrator",
-                                integrator->name());
-  evolution_detail::name_choice(decisions, "time steps", controller->name());
+  // Factory-made strategies exist now: their decisions must name them.
+  validate_decisions(plan, {integrator->name(), controller->name()});
+  auto decisions = plan.decisions;
+  name_choice(decisions, DecisionSubject::TimeIntegrator, integrator->name());
+  name_choice(decisions, DecisionSubject::TimeSteps, controller->name());
   if (output.frame_stride == 0)
     throw std::invalid_argument("Frame stride must be positive");
   solver_detail::validate(solver_options);
@@ -353,23 +364,66 @@ inline Evolution evolve(const discretization::TriangleMesh &mesh,
   auto record_plan = plan;
   record_plan.decisions = decisions;
   const auto &t = result.timings;
-  result.record =
-      make_run_record(std::move(record_plan), mesh,
-                      {t.assembly_calls, t.linear_solves, t.solver.preparations,
-                       t.solver_reuses, t.time_steps, t.rejected_steps});
+  auto &record = result.record;
+  record = record_detail::make(
+      std::move(record_plan), record_detail::workload(mesh),
+      discretization::mesh_fingerprint(mesh),
+      {t.assembly_calls, t.linear_solves, t.solver.preparations,
+       t.solver_reuses, t.time_steps, t.rejected_steps});
+  if (mesh_result)
+    set_mesh_provenance(record, *mesh_result);
+  record.problem_fingerprint = problem_fingerprint(problem);
+  record.initial = InitialRecord{field_record(initial.value), std::nullopt};
+  if (initial.velocity)
+    record.initial->velocity = field_record(*initial.velocity);
+  set_strategy(record, strategy_record(DecisionSubject::TimeIntegrator,
+                                       integrator->name(), !time.integrator,
+                                       integrator->descriptor()));
+  set_strategy(
+      record, strategy_record(DecisionSubject::TimeSteps, controller->name(),
+                              !time.step_controller, controller->descriptor()));
+  result.metadata = evolution_metadata(record, integrator->method());
   result.timings.total_seconds = timing::seconds_since(started);
   result.timings.other_seconds = std::max(
       0., result.timings.total_seconds - result.timings.assembly_seconds -
               result.timings.constraints_seconds -
               result.timings.solver_seconds - result.timings.observer_seconds);
+  record.timings.total_seconds = result.timings.total_seconds;
   return result;
 }
+} // namespace evolution_detail
 
+// Evolve with the settings of a plan (plan.hpp); `output` selects what is
+// kept. evolve(mesh, problem, initial, TimeOptions) is this function with
+// plan_from_user(options) and output_options(options). Decisions are
+// validated at entry (validate_decisions): a stale one throws.
+inline Evolution evolve(const discretization::TriangleMesh &mesh,
+                        const Problem &problem,
+                        const InitialConditions &initial, const SolvePlan &plan,
+                        const EvolutionOutput &output = {}) {
+  return evolution_detail::run(mesh, problem, initial, plan, output, nullptr);
+}
 inline Evolution evolve(const discretization::TriangleMesh &mesh,
                         const Problem &problem,
                         const InitialConditions &initial,
                         const TimeOptions &options = {}) {
   return evolve(mesh, problem, initial, plan_from_user(options),
+                output_options(options));
+}
+// From a MeshResult: the record also carries its options and report, and
+// plan.mesh (if set) must match result.options.
+inline Evolution evolve(const discretization::MeshResult &result,
+                        const Problem &problem,
+                        const InitialConditions &initial, const SolvePlan &plan,
+                        const EvolutionOutput &output = {}) {
+  return evolution_detail::run(result.mesh, problem, initial, plan, output,
+                               &result);
+}
+inline Evolution evolve(const discretization::MeshResult &result,
+                        const Problem &problem,
+                        const InitialConditions &initial,
+                        const TimeOptions &options = {}) {
+  return evolve(result, problem, initial, plan_from_user(options),
                 output_options(options));
 }
 } // namespace pde2d::fem

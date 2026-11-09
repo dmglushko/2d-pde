@@ -21,10 +21,12 @@
 #include "fem/p1_element.hpp"
 #include "fem/problem.hpp"
 #include "fem/system.hpp"
+#include "provenance.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -42,6 +44,11 @@ class ErrorEstimator {
 public:
   virtual ~ErrorEstimator() = default;
   virtual std::string name() const = 0;
+  // Stable description (name + parameters) for records of an adaptive loop.
+  // Without one the estimator is "not replayable" from a record.
+  virtual std::optional<pde2d::StrategyDescriptor> descriptor() const {
+    return std::nullopt;
+  }
   // `solution` holds one nodal value per mesh node at `time`.
   virtual ErrorEstimate estimate(const discretization::TriangleMesh &mesh,
                                  const Problem &problem, const Vector &solution,
@@ -55,6 +62,10 @@ public:
   explicit GradientRecoveryEstimator(pde2d::ExecutionOptions options)
       : execution(options) {}
   std::string name() const override { return "gradient recovery (ZZ)"; }
+  // Execution does not change the result (serial/OpenMP bit-identical).
+  std::optional<pde2d::StrategyDescriptor> descriptor() const override {
+    return pde2d::StrategyDescriptor{"GradientRecovery"};
+  }
   ErrorEstimate estimate(const discretization::TriangleMesh &mesh,
                          const Problem &, const Vector &solution,
                          double time) const override {

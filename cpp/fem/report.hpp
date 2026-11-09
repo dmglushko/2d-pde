@@ -25,8 +25,8 @@ inline void solver_timings(std::ostream &out, const SolverTimings &t) {
       << " total=" << t.total_seconds << '\n';
 }
 inline void decision(std::ostream &out, const Decision &d) {
-  out << "  decision: " << d.subject << '=' << d.choice << " basis=\""
-      << d.basis << "\" evidence=" << evidence_name(d.evidence)
+  out << "  decision: " << decision_subject_name(d.subject) << '=' << d.choice
+      << " basis=\"" << d.basis << "\" evidence=" << evidence_name(d.evidence)
       << " source=" << decision_source_name(d.source) << '\n';
 }
 inline void decisions(std::ostream &out, const std::vector<Decision> &list) {
@@ -65,6 +65,33 @@ inline void record(std::ostream &out, const RunRecord &r) {
         << " start=" << t->start << " end=" << t->end << " step=" << t->step
         << " step_controller=" << (t->step_controller ? "user" : "uniform")
         << '\n';
+  out << "  record inputs: problem=" << r.problem_fingerprint
+      << " mesh=" << r.mesh.fingerprint
+      << " mesh_provenance=" << r.mesh.provenance.has_value();
+  if (r.stationary_time)
+    out << " stationary_time=" << *r.stationary_time;
+  if (r.initial) {
+    out << " initial_value=" << r.initial->value.kind << ':'
+        << r.initial->value.fingerprint;
+    if (r.initial->velocity)
+      out << " initial_velocity=" << r.initial->velocity->kind << ':'
+          << r.initial->velocity->fingerprint;
+  }
+  out << '\n'
+      << "  record versions: pde2d=" << r.versions.library.version << " git="
+      << (r.versions.library.git_sha.empty() ? std::string("unknown")
+                                             : r.versions.library.git_sha)
+      << " eigen=" << r.versions.eigen << " symengine=" << r.versions.symengine
+      << " replayable=" << r.replayable() << '\n';
+  for (const auto &strategy : r.strategies) {
+    out << "  record strategy: " << decision_subject_name(strategy.subject)
+        << '=' << strategy.name
+        << " replay=" << strategy_replay_name(strategy.replay);
+    if (strategy.descriptor)
+      out << " descriptor=\"" << pde2d::describe_strategy(*strategy.descriptor)
+          << '"';
+    out << '\n';
+  }
   const auto &w = r.work;
   out << "  record work: assembly_calls=" << w.assembly_calls
       << " linear_solves=" << w.linear_solves
@@ -128,24 +155,30 @@ inline std::ostream &write_report(std::ostream &out, const RunRecord &record) {
 inline std::ostream &write_report(std::ostream &out,
                                   const Evolution &evolution) {
   return report_detail::write(out, [&](std::ostream &s) {
-    const auto &m = evolution.metadata;
+    const auto &r = evolution.record;
+    const auto &solver = r.plan.solver;
+    const auto &execution = r.execution.selected;
     const auto &t = evolution.timings;
+    const auto &m = evolution.metadata;
     s << "FEM evolution: method="
       << (m.method_name.empty() ? time_method_name(m.method) : m.method_name)
-      << " solver=" << linear_solver_name(m.solver)
-      << " preconditioner=" << preconditioner_name(m.solver.preconditioner)
-      << " validation=" << solver_validation_name(m.solver.validation) << '\n'
+      << " solver=" << linear_solver_name(solver)
+      << " preconditioner=" << preconditioner_name(solver.preconditioner)
+      << " validation=" << solver_validation_name(solver.validation) << '\n'
       << "  execution: selected_backend="
-      << (m.execution.backend == pde2d::ExecutionBackend::OpenMP ? "OpenMP"
-                                                                 : "Serial")
-      << " requested_threads=" << m.execution.threads
+      << report_detail::backend_name(execution.backend)
+      << " requested_threads=" << execution.threads
       << " (0=runtime default; actual team size not measured)"
-      << " min_parallel_size=" << m.execution.min_parallel_size
-      << " openmp_available=" << m.openmp_available << '\n'
-      << "  workload: nodes=" << m.nodes << " elements=" << m.elements
-      << " boundary_edges=" << m.boundary_edges
-      << " quadrature_degree=" << m.quadrature_degree << " start=" << m.start
-      << " end=" << m.end << " step=" << m.step << '\n'
+      << " min_parallel_size=" << execution.min_parallel_size
+      << " openmp_available=" << r.execution.openmp_available << '\n'
+      << "  workload: nodes=" << r.workload.nodes
+      << " elements=" << r.workload.elements
+      << " boundary_edges=" << r.workload.boundary_edges
+      << " quadrature_degree=" << r.plan.assembly.quadrature_degree;
+    if (const auto &time = r.plan.time)
+      s << " start=" << time->start << " end=" << time->end
+        << " step=" << time->step;
+    s << '\n'
       << "  work: time_steps=" << t.time_steps
       << " assembly_calls=" << t.assembly_calls
       << " linear_solves=" << t.linear_solves
@@ -158,8 +191,8 @@ inline std::ostream &write_report(std::ostream &out,
       << " solver=" << t.solver_seconds << " observer=" << t.observer_seconds
       << " other=" << t.other_seconds << " total=" << t.total_seconds << '\n';
     report_detail::solver_timings(s, t.solver);
-    report_detail::decisions(s, m.decisions);
-    report_detail::record(s, evolution.record);
+    report_detail::decisions(s, r.plan.decisions);
+    report_detail::record(s, r);
   });
 }
 inline std::ostream &write_report(std::ostream &out, const Decision &decision) {

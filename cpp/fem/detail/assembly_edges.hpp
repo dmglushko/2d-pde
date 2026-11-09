@@ -65,11 +65,11 @@ public:
   }
 
   // Classify and prepare every bound edge (after set_rule()).
-  void prepare(const Problem &problem, const BoundaryBinding &binding) {
+  void prepare(const BoundaryBinding &binding) {
     for (const auto &bound : binding.edges) {
       const auto &frame = bound.frame;
-      const auto c =
-          classify_edge_condition(problem.equation, *bound.condition, frame);
+      const auto c = classify_edge_condition(binding.equation,
+                                             binding.condition(bound), frame);
       const EdgeSite site{frame.length, frame.normal_x, frame.normal_y, rule,
                           divisor_samples};
       edges.push_back(

@@ -13,13 +13,23 @@
 // re-solves on one mesh, a time-dependent source sampled at several times)
 // pay for symbolic preparation and factorization once. solve_stationary()
 // is the one-shot wrapper.
+//
+// The plan's decisions are validated on construction (validate_decisions,
+// plan.hpp): a stale decision throws before any work. Constructed from a
+// discretization::MeshResult, the solve also checks the plan's mesh plan
+// against the result's options and records the result's MeshOptions and
+// MeshReport in every RunRecord.
+#include "discretization/mesh_fingerprint.hpp"
 #include "fem/assembly.hpp"
+#include "fem/fingerprint.hpp"
 #include "fem/linear_solver.hpp"
 #include "fem/plan.hpp"
 #include "fem/record.hpp"
 #include "fem/timing.hpp"
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace pde2d::fem {
@@ -37,11 +47,35 @@ struct StationaryStatistics {
   SolverTimings solver{};
 };
 
+namespace solver_detail {
+// The solve plan's decisions, and its mesh plan against the mesh's options.
+inline const SolvePlan &checked_plan(const SolvePlan &plan,
+                                     const discretization::MeshResult *mesh) {
+  validate_decisions(plan);
+  if (plan.mesh && mesh) {
+    validate_decisions(*plan.mesh, mesh->options);
+    for (const auto subject :
+         {DecisionSubject::MeshAlgorithm, DecisionSubject::BoundaryTreatment,
+          DecisionSubject::MeshSize, DecisionSubject::SizeField})
+      if (mesh_decision_choice(plan.mesh->options, subject) !=
+          mesh_decision_choice(mesh->options, subject))
+        throw std::invalid_argument(
+            "Mesh plan does not match the mesh's options: " +
+            std::string(decision_subject_name(subject)));
+  }
+  return plan;
+}
+} // namespace solver_detail
+
 class PreparedStationary {
-  PreparedAssembly assembly_;
   SolvePlan plan_;
+  PreparedAssembly assembly_;
   std::unique_ptr<PreparedLinearSolver> prepared_;
   StationaryStatistics statistics_;
+  // Inputs of every record: computed once, the mesh and problem are copied
+  // into the assembly and do not change.
+  std::string mesh_fingerprint_, problem_fingerprint_;
+  std::optional<MeshProvenance> provenance_;
 
   StationarySolution solve_from(double time, const Vector *guess) {
     const auto started = timing::Clock::now();
@@ -76,19 +110,47 @@ class PreparedStationary {
     result.report.decisions = plan_.decisions;
     if (!result.report.converged)
       throw std::runtime_error("Stationary solve: " + result.report.message);
-    result.record = make_run_record(plan_, assembly_.mesh(), work);
+    result.record =
+        record_detail::make(plan_, record_detail::workload(assembly_.mesh()),
+                            mesh_fingerprint_, work);
+    if (provenance_)
+      set_mesh_provenance(result.record, *provenance_);
+    result.record.problem_fingerprint = problem_fingerprint_;
+    result.record.stationary_time = time;
+    result.record.timings.total_seconds = result.report.timings.total_seconds;
     return result;
+  }
+
+  PreparedStationary(const discretization::TriangleMesh &mesh,
+                     const Problem &problem, const SolvePlan &plan,
+                     const discretization::MeshResult *result)
+      : plan_(solver_detail::checked_plan(plan, result)),
+        assembly_(mesh, problem, plan_.assembly),
+        mesh_fingerprint_(discretization::mesh_fingerprint(mesh)),
+        problem_fingerprint_(fem::problem_fingerprint(problem)) {
+    if (result)
+      provenance_ = mesh_provenance(*result);
   }
 
 public:
   PreparedStationary(const discretization::TriangleMesh &mesh,
                      const Problem &problem, const SolvePlan &plan)
-      : assembly_(mesh, problem, plan.assembly), plan_(plan) {}
+      : PreparedStationary(mesh, problem, plan, nullptr) {}
   PreparedStationary(const discretization::TriangleMesh &mesh,
                      const Problem &problem,
                      const AssemblyOptions &assembly = {},
                      const SolverOptions &solver = {})
       : PreparedStationary(mesh, problem, plan_from_user(assembly, solver)) {}
+  // A mesh with provenance: records carry its MeshOptions and MeshReport,
+  // and plan.mesh (if set) must match result.options.
+  PreparedStationary(const discretization::MeshResult &result,
+                     const Problem &problem, const SolvePlan &plan)
+      : PreparedStationary(result.mesh, problem, plan, &result) {}
+  PreparedStationary(const discretization::MeshResult &result,
+                     const Problem &problem,
+                     const AssemblyOptions &assembly = {},
+                     const SolverOptions &solver = {})
+      : PreparedStationary(result, problem, plan_from_user(assembly, solver)) {}
 
   // Assemble at `time`, lift Dirichlet data and solve. Throws
   // std::runtime_error ("Stationary solve: ...") when the solve fails.
@@ -131,5 +193,23 @@ solve_stationary(const discretization::TriangleMesh &mesh,
                  const Problem &problem, const SolvePlan &plan,
                  const Vector &guess) {
   return PreparedStationary(mesh, problem, plan).solve(0, guess);
+}
+// From a MeshResult: the record also carries its options and report.
+inline StationarySolution
+solve_stationary(const discretization::MeshResult &result,
+                 const Problem &problem, const AssemblyOptions &assembly = {},
+                 const SolverOptions &solver = {}) {
+  return PreparedStationary(result, problem, assembly, solver).solve();
+}
+inline StationarySolution
+solve_stationary(const discretization::MeshResult &result,
+                 const Problem &problem, const SolvePlan &plan) {
+  return PreparedStationary(result, problem, plan).solve();
+}
+inline StationarySolution
+solve_stationary(const discretization::MeshResult &result,
+                 const Problem &problem, const SolvePlan &plan,
+                 const Vector &guess) {
+  return PreparedStationary(result, problem, plan).solve(0, guess);
 }
 } // namespace pde2d::fem

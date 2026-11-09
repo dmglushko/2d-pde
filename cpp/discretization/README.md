@@ -55,6 +55,7 @@ A raw `Boundary` has no analytical context.
 | `boundary.max_curve_deviation` | `0.02` | Initial absolute curve-to-chord deviation bound. |
 | `refinement.max_edge_length` | `0.0` | Maximum triangle-edge length target; zero disables it. |
 | `refinement.size_field` | empty | Optional `SizeField` (`double(Point2)`): a local length target. Not serialized. |
+| `refinement.size_field_descriptor` | empty | Optional `pde2d::StrategyDescriptor` naming the size field for run records and mesh plans; without it a size field is "not replayable". Not serialized. |
 | `refinement.max_steps` | `10000` | Maximum midpoint insertion steps; zero allows none. |
 
 Length/deviation constraints must be finite and nonnegative; zero disables each
@@ -314,6 +315,15 @@ run at a curve's mathematical parameter, not an arc-length fraction.
 `mergeRegions(first, count, name)` retains consecutive-range semantics without
 wraparound. Use name-based merging for arbitrary groups and wraparound.
 
+
+## Fingerprints
+
+`mesh_fingerprint(mesh)` (`mesh_fingerprint.hpp`) is a deterministic
+16-hex-digit fingerprint of the node coordinates (bit patterns), elements,
+boundary edges and tags in storage order, equal on every platform. FEM run
+records use it to identify the mesh of a solve. `interior_algorithm_name` and
+`boundary_treatment_name` (`mesh_types.hpp`) give report names of the
+options' enums.
 
 ## Export and resume
 

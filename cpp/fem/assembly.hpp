@@ -71,7 +71,7 @@ public:
       throw std::invalid_argument("Mesh exceeds sparse matrix index capacity");
     interior.compile(problem.equation);
     interior.prepare(mesh, options.quadrature_degree);
-    boundary.prepare(problem, bind_boundary(mesh, problem));
+    boundary.prepare(bind_boundary(mesh, problem));
     statistics.elements = interior.elements.size();
     statistics.edges = boundary.edges.size();
     statistics.physical_quadrature_points =
