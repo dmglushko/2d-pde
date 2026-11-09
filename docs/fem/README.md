@@ -385,8 +385,9 @@ settings (`TimePlan`) and the decisions explaining them. `plan_from_user(assembl
 and `plan_from_user(time_options)` record today's user choices; the overloads
 `solve_stationary(mesh,problem,plan)`, `PreparedStationary(mesh,problem,plan)`
 and `evolve(mesh,problem,initial,plan,output)` give the same results as the
-option-based calls. Nothing chooses settings automatically yet; a future
-chooser will return a `SolvePlan`.
+option-based calls. Nothing chooses settings automatically yet; a planner
+(`SolvePlanner`, `fem/planner.hpp`) returns a `SolvePlan`, and `UserPlanner`
+is the identity.
 
 Each `Decision` has a typed subject (`DecisionSubject::LinearSolver`,
 `TimeSteps`, `Quadrature`, ...; `decision_subject_name` prints it). Override a
@@ -404,16 +405,33 @@ Every solve validates the plan at entry (`validate_decisions`): a decision that
 no longer matches its option, for example after `plan.solver.method=GMRES`
 without the setter, throws `"Stale decision: linear solver records "SparseLU"
 but the options give "GMRES""`; duplicate subjects and mesh subjects in a
-solve plan throw too. `TimeOptions` is a `TimePlan` plus `EvolutionOutput`
-plus assembly and solver options, so every time setting is declared once.
+solve plan throw too (`"Decision subject mesh size does not belong to a
+solve plan (owner Mesh; use SolvePlan::mesh)"`). Every subject has an owner
+(`decision_subject_owner`: Solve, Time, Mesh or Adapt) and each plan has one
+binding table (`solve_plan_bindings`, `mesh_plan_bindings`) from which its
+user decisions, setters and validation all come; `plan.update(subject,
+change, why)` changes any bound option with its decision. `TimeOptions` is a
+`TimePlan` plus `EvolutionOutput` plus assembly and solver options, so every
+time setting is declared once.
 
 A `MeshPlan` (`fem/mesh_plan.hpp`, `mesh_plan_from_user(mesh_options)`) is
 the meshing counterpart: `MeshOptions` with decisions for the mesh algorithm,
 boundary treatment, mesh size and size field (and a refinement criterion
-when `RefinementOptions::criterion` is set). Put it in `plan.mesh`; a solve
-given the `MeshResult` (`solve_stationary(result,problem,plan)`,
-`evolve(result,...)`) checks it against `result.options`. `plan.analysis`
-holds the `analyze` options and result a chooser used.
+when `RefinementOptions::criterion` is set), with setters
+(`set_interior_algorithm`, `set_boundary_treatment`, `set_max_edge_length`,
+`set_size_field(field, descriptor)`, `set_refinement_criterion`) and
+`update`. Put it in `plan.mesh`; a solve given the `MeshResult`
+(`solve_stationary(result,problem,plan)`, `evolve(result,...)`) checks it
+against `result.options`.
+
+`plan.analysis` holds the analysis a planner based its decisions on, bound to
+its inputs: `make_analysis_record(problem[, mesh][, options])`
+(`fem/analysis.hpp`) records the properties with the problem fingerprint, the
+mesh fingerprint (when it sampled a mesh) and the sampling options, and is
+the only way to make one. Solves, evolutions and `adapt` throw `"Stale
+analysis: ..."` when the plan's analysis was made for another problem or
+mesh; `refresh_analysis(plan, problem, mesh)` recomputes it with its own
+options.
 
 A solve given a `MeshResult` also checks its report: meshing can return a
 mesh that misses its size target (`report.size_satisfied == false`), and
@@ -454,6 +472,18 @@ auto &u = history.solution.values;   // on history.mesh.mesh
 | `warm_start`, `transfer` | true, `{}` | seed each solve with `transfer_field` of the previous solution |
 | `time` | 0 | time at which the stationary problem is solved and estimated |
 | `accept_unsatisfied_refinement` | false | keep going on a refined mesh that missed its size target |
+| `solve_planner` | unset (plan as given) | `std::shared_ptr<const SolvePlanner>`, run before every solve |
+| `mesh_planner` | unset (`refinement`) | `std::shared_ptr<const MeshPlanner>`, run after marking; its options refine the mesh |
+
+Across iterations the plan follows the mesh: a mesh-bound `plan.analysis` is
+recomputed on every refined mesh, `plan.mesh` (when set) is replaced by the
+mesh plan of the refinement options when they differ from it (or by the mesh
+planner's plan), and then the solve planner, if any, plans the solve with the
+iteration's mesh and the previous `AdaptiveIteration` (`PlanningContext`).
+The planner's plan is validated before solving ("Solve planner <name>
+returned an invalid plan: ...") and recorded: `plan.planner`, the run
+record's strategies and a `DecisionSubject::SolvePlanner` decision of the
+iteration.
 
 The loop stops, checked after every solve and estimate in this order, with
 `AdaptiveStop::ToleranceReached`, `MaxIterations`, `NothingMarked` (the
@@ -473,7 +503,9 @@ nodes, largest outside distance), an `EstimateSummary` (estimator name and
 descriptor, global estimate, elements, largest and mean indicator) and,
 unless it was the last, a `MarkingRecord` (strategy name, descriptor,
 marked and total elements), the `MeshReport` of the refined mesh (with
-`MarkedRefinementReport` counters) and two `Decision`s:
+`MarkedRefinementReport` counters) and its `Decision`s (with planners, a
+`SolvePlanner` decision first and a `MeshPlanner` decision before the
+refinement):
 `DecisionSubject::Marking` (choice `Bulk(fraction=0.6)`, or
 `<name> (not replayable)` without a descriptor) and
 `DecisionSubject::Refinement` (choice `marked longest-edge bisection
@@ -547,7 +579,7 @@ what is needed to reproduce and compare a run, as fields:
   kept) when the solve was given a `MeshResult`;
 - the stationary evaluation time;
 - `strategies`: what ran for the time integrator, step sequence, linear solver,
-  size field and refinement criterion, each `built-in` (the options rebuild it), `described` (a
+  size field, refinement criterion and the solve and mesh planners, each `built-in` (the options rebuild it), `described` (a
   `StrategyDescriptor` names it and its parameters) or `not replayable` (a
   factory without descriptor); `record.replayable()` is true when all are
   built-in;
@@ -559,14 +591,13 @@ what is needed to reproduce and compare a run, as fields:
   (`timings.total_seconds`, the only field that differs between identical
   runs).
 
-`Evolution::metadata` is a deprecated view of the record
-(`evolution_metadata(record,method)`), kept so old field access compiles.
-
 `write_json(out,record)` (`fem/record_json.hpp`) writes a versioned JSON
 document: `"schema": "pde2d.run_record"`, `"schema_version": 1`, then
 `versions`, `replayable`, `problem`, `mesh` (`fingerprint`, `provenance`),
 `workload`, `stationary_time`, `initial`, `plan` (`assembly`, `solver`,
-`time`, `decisions`, `mesh`, `analysis`), `strategies`, `execution`, `work`,
+`time`, `decisions`, `mesh` (with its `planner`), `analysis` (with
+`problem_fingerprint` and `mesh_fingerprint`), `planner`), `strategies`,
+`execution`, `work`,
 `evidence` and `timings`. Absent optional values are `null`. Numbers use the
 classic locale and `max_digits10` digits, so parsed doubles are the run's bit
 for bit; non-finite values are the strings `"nan"`, `"inf"`, `"-inf"`. Adding
@@ -605,8 +636,8 @@ initial acceleration solves for Newmark, although per-step reports do not.
 Observers still receive the initial state and every accepted step independently
 of frame stride; callback exceptions propagate to the caller.
 
-`Evolution::record` (and its view `Evolution::metadata`) records mesh node,
-element and boundary-edge counts, quadrature degree, time method/interval/step,
+`Evolution::record` records mesh node, element and boundary-edge counts,
+quadrature degree, time method/interval/step,
 solver options, OpenMP build availability, and the selected `execution` policy.
 Its `execution.threads` is
 the requested count (zero means runtime default), **not** measured team size.

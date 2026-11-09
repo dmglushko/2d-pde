@@ -86,18 +86,23 @@ void reports() {
             w.solver.rhs_solves == w.linear_solves &&
             w.solver.preparations + w.solver_reuses == w.linear_solves,
         "Aggregates lost with store_reports=false");
-  const auto &m = evolution.metadata;
-  check(m.nodes == mesh.nodes.size() && m.elements == mesh.elements.size() &&
-            m.boundary_edges == mesh.boundary_edges.size() &&
-            m.quadrature_degree == 2 && m.start == 0 && m.end == options.end &&
-            m.step == options.step && m.method == options.method &&
-            m.solver.method == options.solver.method &&
-            m.solver.validation == options.solver.validation,
-        "Evolution workload metadata mismatch");
-  check(m.execution.backend == pde2d::ExecutionBackend::Serial &&
-            m.execution.threads == 0 &&
-            m.openmp_available == pde2d::openmp_available(),
-        "Default execution metadata mismatch");
+  const auto &m = evolution.record;
+  const auto *integrator = find_strategy(m, DecisionSubject::TimeIntegrator);
+  check(m.workload.nodes == mesh.nodes.size() &&
+            m.workload.elements == mesh.elements.size() &&
+            m.workload.boundary_edges == mesh.boundary_edges.size() &&
+            m.plan.assembly.quadrature_degree == 2 && m.plan.time &&
+            m.plan.time->start == 0 && m.plan.time->end == options.end &&
+            m.plan.time->step == options.step &&
+            m.plan.time->method == options.method && integrator &&
+            integrator->name == time_method_name(options.method) &&
+            m.plan.solver.method == options.solver.method &&
+            m.plan.solver.validation == options.solver.validation,
+        "Evolution workload record mismatch");
+  check(m.execution.selected.backend == pde2d::ExecutionBackend::Serial &&
+            m.execution.selected.threads == 0 &&
+            m.execution.openmp_available == pde2d::openmp_available(),
+        "Default execution record mismatch");
   const auto text = formatted(evolution);
   for (const char *token :
        {"FEM evolution:", "selected_backend=Serial", "requested_threads=0",
@@ -155,10 +160,9 @@ void reports() {
     options.assembly.execution.min_parallel_size = 1000000;
     auto parallel = evolve(mesh, p, {0, 0}, options);
     accounting(parallel);
-    check(parallel.metadata.execution.threads == 2 &&
-              parallel.metadata.execution.min_parallel_size == 1000000 &&
-              parallel.metadata.execution.backend ==
-                  pde2d::ExecutionBackend::OpenMP,
+    const auto &selected = parallel.record.execution.selected;
+    check(selected.threads == 2 && selected.min_parallel_size == 1000000 &&
+              selected.backend == pde2d::ExecutionBackend::OpenMP,
           "Selected policy lost");
     check(formatted(parallel).find("requested_threads=2") != std::string::npos,
           "Requested workers mislabeled");
@@ -205,14 +209,17 @@ void decisions() {
   const auto solution = solve_linear(a, Vector::Ones(2), o);
   const auto &d = solution.report.decisions;
   check(d.size() == 3, "Solver decisions");
-  check(d[0].subject == "linear solver" && d[0].choice == "ConjugateGradient" &&
+  check(d[0].subject == DecisionSubject::LinearSolver &&
+            d[0].choice == "ConjugateGradient" &&
             d[0].basis == "user-selected (SolverOptions::method)" &&
             d[0].source == DecisionSource::User &&
             d[0].evidence == Evidence::Unknown,
         "Linear solver decision");
-  check(d[1].subject == "preconditioner" && d[1].choice == "Identity",
+  check(d[1].subject == DecisionSubject::Preconditioner &&
+            d[1].choice == "Identity",
         "Preconditioner decision");
-  check(d[2].subject == "solver validation" && d[2].choice == "Checked",
+  check(d[2].subject == DecisionSubject::SolverValidation &&
+            d[2].choice == "Checked",
         "Validation decision");
   const auto text = formatted(solution);
   check(text.find("decision: linear solver=ConjugateGradient "
@@ -229,14 +236,14 @@ void decisions() {
   options.solver = o;
   const auto e = evolve(mesh, p, {0}, options);
   std::vector<std::string> subjects;
-  for (const auto &decision : e.metadata.decisions)
+  for (const auto &decision : e.record.plan.decisions)
     subjects.emplace_back(decision_subject_name(decision.subject));
   check(subjects == std::vector<std::string>{"time integrator", "time steps",
                                              "linear solver", "preconditioner",
                                              "solver validation"},
         "Evolution decisions");
-  check(e.metadata.decisions[0].choice == "BackwardEuler" &&
-            e.metadata.decisions[0].basis ==
+  check(e.record.plan.decisions[0].choice == "BackwardEuler" &&
+            e.record.plan.decisions[0].basis ==
                 "user-selected (TimeOptions::method)",
         "Time integrator decision");
   check(!e.reports.empty() &&

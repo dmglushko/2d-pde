@@ -1,7 +1,7 @@
 #pragma once
-// Stationary P1 solve. The element-independent linear algebra (Dirichlet
-// lifting, backends, PreparedLinearSolver) lives in linear_solver.hpp, which
-// this header includes for compatibility.
+// Stationary P1 solve. The element-independent linear algebra lives in
+// constraints.hpp (Dirichlet lifting) and prepared_linear_solver.hpp
+// (PreparedLinearSolver, backends); linear_solver.hpp includes both.
 //
 //   PreparedStationary s(mesh, problem, plan);  // symbolic preparation once
 //   auto a = s.solve();                         // assemble, lift, solve
@@ -15,14 +15,17 @@
 // is the one-shot wrapper.
 //
 // The plan's decisions are validated on construction (validate_decisions,
-// plan.hpp): a stale decision throws before any work. Constructed from a
+// plan.hpp): a stale decision throws before any work, and so does an
+// analysis (plan.analysis) made for another problem or mesh ("Stale
+// analysis", require_current_analysis). Constructed from a
 // discretization::MeshResult, the solve also checks the plan's mesh plan
 // against the result's options and records the result's MeshOptions and
 // MeshReport in every RunRecord.
 #include "discretization/mesh_fingerprint.hpp"
 #include "fem/assembly.hpp"
 #include "fem/fingerprint.hpp"
-#include "fem/linear_solver.hpp"
+#include "fem/constraints.hpp"
+#include "fem/prepared_linear_solver.hpp"
 #include "fem/mesh_acceptance.hpp"
 #include "fem/plan.hpp"
 #include "fem/record.hpp"
@@ -49,39 +52,41 @@ struct StationaryStatistics {
 };
 
 namespace solver_detail {
-// The solve plan's decisions, and its mesh plan against the mesh's options.
-// A MeshResult must meet its size target unless the caller accepted it
-// (accept_unsatisfied, mesh_acceptance.hpp).
+// The solve plan's decisions, its mesh plan against the mesh's options and
+// its analysis against the problem and mesh fingerprints. A MeshResult must
+// meet its size target unless the caller accepted it (accept_unsatisfied,
+// mesh_acceptance.hpp).
 inline const SolvePlan &checked_plan(const SolvePlan &plan,
                                      const discretization::MeshResult *mesh,
-                                     bool accepted = false) {
+                                     bool accepted,
+                                     const std::string &problem_fingerprint,
+                                     const std::string &mesh_fingerprint) {
   if (mesh && !accepted)
     require_size_satisfied(*mesh);
   validate_decisions(plan);
   if (plan.mesh && mesh) {
     validate_decisions(*plan.mesh, mesh->options);
-    for (const auto subject :
-         {DecisionSubject::MeshAlgorithm, DecisionSubject::BoundaryTreatment,
-          DecisionSubject::MeshSize, DecisionSubject::SizeField,
-          DecisionSubject::RefinementCriterion})
-      if (mesh_decision_choice(plan.mesh->options, subject) !=
-          mesh_decision_choice(mesh->options, subject))
-        throw std::invalid_argument(
-            "Mesh plan does not match the mesh's options: " +
-            std::string(decision_subject_name(subject)));
+    if (const auto subject =
+            mesh_options_difference(plan.mesh->options, mesh->options))
+      throw std::invalid_argument(
+          "Mesh plan does not match the mesh's options: " +
+          std::string(decision_subject_name(*subject)));
   }
+  if (plan.analysis)
+    require_current_analysis(*plan.analysis, problem_fingerprint,
+                             mesh_fingerprint);
   return plan;
 }
 } // namespace solver_detail
 
 class PreparedStationary {
+  // Inputs of every record: computed once, the mesh and problem are copied
+  // into the assembly and do not change.
+  std::string mesh_fingerprint_, problem_fingerprint_;
   SolvePlan plan_;
   PreparedAssembly assembly_;
   std::unique_ptr<PreparedLinearSolver> prepared_;
   StationaryStatistics statistics_;
-  // Inputs of every record: computed once, the mesh and problem are copied
-  // into the assembly and do not change.
-  std::string mesh_fingerprint_, problem_fingerprint_;
   std::optional<MeshProvenance> provenance_;
 
   StationarySolution solve_from(double time, const Vector *guess) {
@@ -131,10 +136,11 @@ class PreparedStationary {
   PreparedStationary(const discretization::TriangleMesh &mesh,
                      const Problem &problem, const SolvePlan &plan,
                      const discretization::MeshResult *result, bool accepted)
-      : plan_(solver_detail::checked_plan(plan, result, accepted)),
-        assembly_(mesh, problem, plan_.assembly),
-        mesh_fingerprint_(discretization::mesh_fingerprint(mesh)),
-        problem_fingerprint_(fem::problem_fingerprint(problem)) {
+      : mesh_fingerprint_(discretization::mesh_fingerprint(mesh)),
+        problem_fingerprint_(fem::problem_fingerprint(problem)),
+        plan_(solver_detail::checked_plan(
+            plan, result, accepted, problem_fingerprint_, mesh_fingerprint_)),
+        assembly_(mesh, problem, plan_.assembly) {
     if (result)
       provenance_ = mesh_provenance(*result);
   }

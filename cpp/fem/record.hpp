@@ -128,7 +128,8 @@ inline const char *strategy_replay_name(StrategyReplay replay) {
   return "invalid";
 }
 // One strategy that ran: the decision subject it serves (time integrator,
-// time steps, linear solver, size field), its name() and how to rebuild it.
+// time steps, linear solver, size field, refinement criterion, solve and
+// mesh planner), its name() and how to rebuild it.
 struct StrategyRecord {
   DecisionSubject subject{};
   std::string name{};
@@ -178,6 +179,14 @@ struct RunRecord {
   }
 };
 
+// The strategy that served `subject`, or nullptr.
+inline const StrategyRecord *find_strategy(const RunRecord &record,
+                                           DecisionSubject subject) {
+  for (const auto &s : record.strategies)
+    if (s.subject == subject)
+      return &s;
+  return nullptr;
+}
 // Insert or replace the strategy of `strategy.subject`, in subject order.
 inline void set_strategy(RunRecord &record, StrategyRecord strategy) {
   auto &list = record.strategies;
@@ -203,6 +212,17 @@ inline void set_size_field_strategy(RunRecord &record,
                  strategy_record(DecisionSubject::RefinementCriterion,
                                  refinement_criterion_choice(o.refinement),
                                  false, o.refinement.criterion->descriptor));
+}
+// The planners that produced the plan and its mesh plan (planner.hpp).
+inline void set_planner_strategies(RunRecord &record, const SolvePlan &plan) {
+  const auto planner = [&](DecisionSubject subject, const PlannerRecord &p) {
+    set_strategy(record,
+                 strategy_record(subject, p.name, p.builtin, p.descriptor));
+  };
+  if (plan.planner)
+    planner(DecisionSubject::SolvePlanner, *plan.planner);
+  if (plan.mesh && plan.mesh->planner)
+    planner(DecisionSubject::MeshPlanner, *plan.mesh->planner);
 }
 // Attach where the mesh came from (and its size field strategy).
 inline void set_mesh_provenance(RunRecord &record, MeshProvenance provenance) {
@@ -231,6 +251,7 @@ inline RunRecord make(SolvePlan plan, const WorkloadRecord &workload,
                                               : std::nullopt));
   if (plan.mesh)
     set_size_field_strategy(record, plan.mesh->options);
+  set_planner_strategies(record, plan);
   record.plan = std::move(plan);
   return record;
 }

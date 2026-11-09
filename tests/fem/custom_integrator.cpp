@@ -113,16 +113,14 @@ public:
   void check(const AssembledSystem &) const override {}
   void start(const AssembledSystem &, IntegratorState &,
              const IntegratorServices &services) override {
-    // Both spellings of the Dirichlet-derivative request reach the driver.
-    const auto by_enum =
+    // Both Dirichlet-derivative requests reach the driver (and are counted
+    // as assemblies).
+    const auto first =
         services.start_dirichlet(DirichletDerivative::FirstDerivative);
-    const auto by_int = services.start_dirichlet(1);
-    if (by_enum.size() != by_int.size())
-      throw std::logic_error("start_dirichlet overloads disagree");
-    for (std::size_t k = 0; k < by_enum.size(); ++k)
-      if (by_enum[k].node != by_int[k].node ||
-          by_enum[k].value != by_int[k].value)
-        throw std::logic_error("start_dirichlet overloads disagree");
+    const auto second =
+        services.start_dirichlet(DirichletDerivative::SecondDerivative);
+    if (first.size() != second.size())
+      throw std::logic_error("start_dirichlet requests disagree");
   }
   IntegratorState advance(const AssembledSystem &old,
                           const AssembledSystem &cur, double h,
@@ -161,14 +159,19 @@ void theta_method() {
   for (std::size_t k = 0; k < custom.frames.size(); ++k)
     pde2d_test::near_vector(custom.frames[k].values, expected.frames[k].values,
                             1e-12);
-  check(custom.metadata.method == TimeMethod::Custom &&
-            custom.metadata.method_name == "Theta",
-        "Custom integrator metadata");
+  const auto *ran =
+      find_strategy(custom.record, DecisionSubject::TimeIntegrator);
+  check(ran && ran->name == "Theta" && ran->replay != StrategyReplay::BuiltIn &&
+            custom.record.plan.time->integrator,
+        "Custom integrator record");
   std::ostringstream text;
   write_report(text, custom);
   check(text.str().find("method=Theta") != std::string::npos,
         "Report lost the integrator name");
-  check(expected.metadata.method_name == "BackwardEuler",
+  const auto *builtin =
+      find_strategy(expected.record, DecisionSubject::TimeIntegrator);
+  check(builtin && builtin->name == "BackwardEuler" &&
+            builtin->replay == StrategyReplay::BuiltIn,
         "Built-in integrator name");
 }
 
@@ -283,9 +286,10 @@ void stage_assembly_service() {
   // start_dirichlet requests in Midpoint::start().
   check(e.timings.assembly_calls == 2 * e.timings.time_steps + 3,
         "Stage assemblies must be counted");
-  check(e.metadata.method_name == "Midpoint" &&
-            e.metadata.decisions.front().choice == "Midpoint" &&
-            e.metadata.decisions.front().basis ==
+  check(find_strategy(e.record, DecisionSubject::TimeIntegrator)->name ==
+                "Midpoint" &&
+            e.record.plan.decisions.front().choice == "Midpoint" &&
+            e.record.plan.decisions.front().basis ==
                 "user-selected (TimeOptions::integrator)",
         "Integrator decision");
 }

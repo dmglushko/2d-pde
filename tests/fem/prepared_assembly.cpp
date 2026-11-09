@@ -108,9 +108,12 @@ void moving() {
   bc.value = (2 + t) * (1 + x + y + t * t * t);
   p.assign(bc, {"bottom", "top", "left", "right"});
   PreparedAssembly a(mesh, p);
-  for (int order = 0; order < 3; ++order)
+  for (const auto derivative :
+       {DirichletDerivative::Value, DirichletDerivative::FirstDerivative,
+        DirichletDerivative::SecondDerivative})
     for (double time : {0., .4, 1.}) {
-      auto s = a.assemble(time, order);
+      const int order = dirichlet_derivative_order(derivative);
+      auto s = a.assemble(time, derivative);
       for (auto d : s.dirichlet) {
         double expected = order == 0
                               ? 1 + mesh.nodes[d.node].x +
@@ -120,26 +123,14 @@ void moving() {
         near(d.value, expected);
       }
     }
-  // The typed request and the compatible integer order select the same data.
-  for (const auto [order, derivative] :
-       {std::pair{0, DirichletDerivative::Value},
-        std::pair{1, DirichletDerivative::FirstDerivative},
-        std::pair{2, DirichletDerivative::SecondDerivative}}) {
-    const auto by_int = a.assemble(.4, order).dirichlet;
-    const auto by_enum = a.assemble(.4, derivative).dirichlet;
-    check(by_int.size() == by_enum.size() && !by_int.empty());
-    for (std::size_t k = 0; k < by_int.size(); ++k)
-      check(by_int[k].node == by_enum[k].node &&
-            by_int[k].value == by_enum[k].value);
-  }
   bool out_of_range = false;
   try {
-    a.assemble(0, 3);
+    a.assemble(0, static_cast<DirichletDerivative>(3));
   } catch (const std::invalid_argument &e) {
     out_of_range =
         std::string(e.what()).find("must be in [0,2]") != std::string::npos;
   }
-  check(out_of_range, "Integer derivative order range");
+  check(out_of_range, "Derivative value range");
   // Time zero need not be in the domain of a time-dependent coefficient.
   p.equation.source = 1 / t;
   PreparedAssembly singular(mesh, p);
@@ -150,7 +141,8 @@ void moving() {
   p.assign(bc, {"bottom"});
   p.assign(flux_neumann(0), {"top", "left", "right"});
   PreparedAssembly reduced(mesh, p);
-  for (const auto &d : reduced.assemble(.4, 2).dirichlet)
+  for (const auto &d :
+       reduced.assemble(.4, DirichletDerivative::SecondDerivative).dirichlet)
     near(d.value, 2.4);
   bool rejected = false;
   try {

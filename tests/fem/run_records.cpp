@@ -152,8 +152,7 @@ void json_round_trip() {
   plan.mesh = mesh_plan_from_user(result.options);
   AnalysisOptions analysis_options;
   analysis_options.sample_times = {0., .5};
-  plan.analysis = AnalysisRecord{analysis_options,
-                                 analyze(p, result.mesh, analysis_options)};
+  plan.analysis = make_analysis_record(p, result.mesh, analysis_options);
   const auto s = PreparedStationary(result, p, plan).solve(.75);
   const auto stationary = json(s.record);
   std::istringstream sin(stationary);
@@ -346,7 +345,7 @@ void mesh_provenance_and_strategies() {
         "Report names the replay status");
 }
 
-void evolution_metadata_is_the_record() {
+void one_source_for_time_settings() {
   const auto mesh = square_mesh(3);
   TimeOptions o;
   o.method = TimeMethod::CrankNicolson;
@@ -359,13 +358,15 @@ void evolution_metadata_is_the_record() {
   check(plan.time->method == o.method && plan.time->step == o.step,
         "Plan from the same fields");
   const auto e = evolve(mesh, heat(), {x * x - y}, o);
-  const auto view = evolution_metadata(e.record, TimeMethod::CrankNicolson);
-  const auto &m = e.metadata;
-  check(m.nodes == view.nodes && m.method == view.method &&
-            m.method_name == "CrankNicolson" && m.step == o.step &&
-            m.solver == o.solver && m.decisions.size() == 5 &&
-            m.decisions[0].choice == view.decisions[0].choice,
-        "Metadata is derived from the record");
+  const auto &r = e.record;
+  check(r.workload.nodes == mesh.nodes.size() &&
+            r.plan.time->method == TimeMethod::CrankNicolson &&
+            find_strategy(r, DecisionSubject::TimeIntegrator)->name ==
+                "CrankNicolson" &&
+            r.plan.time->step == o.step && r.plan.solver == o.solver &&
+            r.plan.decisions.size() == 5 &&
+            r.plan.decisions[0].choice == "CrankNicolson",
+        "The record holds the time settings that ran");
 }
 } // namespace
 int main() {
@@ -375,5 +376,5 @@ int main() {
         identical_inputs_identical_records},
        {"one_input_changes_one_fingerprint", one_input_changes_one_fingerprint},
        {"mesh_provenance_and_strategies", mesh_provenance_and_strategies},
-       {"evolution_metadata_is_the_record", evolution_metadata_is_the_record}});
+       {"one_source_for_time_settings", one_source_for_time_settings}});
 }

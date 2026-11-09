@@ -11,7 +11,15 @@
 // A decision must describe the option it explains: solves check every
 // recorded decision against the options that run (validate_decisions in
 // plan.hpp) and throw on a stale one. Change an option and its decision
-// together with the SolvePlan setters.
+// together with the plan setters (SolvePlan::update, MeshPlan::update).
+//
+// Subjects are listed once, in decision_subject_table (stable name and
+// owner). How each owned subject is read from a plan's options is one
+// DecisionBinding row in that plan's binding table (solve_plan_bindings,
+// mesh_plan_bindings); the user decisions, the setters and validation are
+// generic functions of the table (bound_user_decisions,
+// record_bound_decision, validate_bound_decisions), so there is no other
+// list of subjects to keep in step.
 //
 // Today every decision is the user's explicit choice: source User, basis
 // "user-selected (<option>)" and evidence Unknown, because nothing checked
@@ -19,7 +27,11 @@
 // Automatic, state its basis (e.g. "operator proven symmetric") and the
 // evidence of that basis.
 #include "fem/evidence.hpp"
+#include "provenance.hpp"
+#include <array>
 #include <cstddef>
+#include <initializer_list>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -40,19 +52,40 @@ inline const char *decision_source_name(DecisionSource source) {
   return "Invalid";
 }
 
-// What a decision is about. Solve settings (SolvePlan) and mesh settings
-// (MeshPlan) have one subject each; validate_decisions knows, for every
-// subject, which option it explains. Names are stable: reports and run
-// record JSON use them.
+// Which plan or record a decision belongs to: the solve settings of a
+// SolvePlan (Solve), its time settings (Time; only in a plan with
+// SolvePlan::time), the meshing options of a MeshPlan (Mesh), or the
+// adaptive driver and planners (Adapt: AdaptiveIteration::decisions, never
+// a plan). A decision in the wrong place is rejected ("does not belong").
+enum class DecisionOwner { Solve, Time, Mesh, Adapt };
+inline const char *decision_owner_name(DecisionOwner owner) {
+  switch (owner) {
+  case DecisionOwner::Solve:
+    return "Solve";
+  case DecisionOwner::Time:
+    return "Time";
+  case DecisionOwner::Mesh:
+    return "Mesh";
+  case DecisionOwner::Adapt:
+    return "Adapt";
+  }
+  return "Invalid";
+}
+
+// What a decision is about. Each subject has one row in
+// decision_subject_table below (stable name and owner), and each subject a
+// plan owns has one binding in that plan's table (solve_plan_bindings in
+// plan.hpp, mesh_plan_bindings in mesh_plan.hpp) saying how to read its
+// choice from the options; static_asserts there fail for a subject without
+// its binding. Append new values at the end; names are stable (reports and
+// run record JSON use them).
 enum class DecisionSubject {
-  // Solve plan (plan.hpp).
   TimeIntegrator,
   TimeSteps,
   LinearSolver,
   Preconditioner,
   SolverValidation,
   Quadrature,
-  // Mesh plan (mesh_plan.hpp).
   MeshAlgorithm,
   BoundaryTreatment,
   MeshSize,
@@ -60,75 +93,94 @@ enum class DecisionSubject {
   // A mesh chosen as a whole (for example "graded" by a preprocessor); it
   // explains MeshPlan::options together, not one field.
   Mesh,
-  // A user refinement criterion (RefinementOptions::criterion; mesh plan).
   RefinementCriterion,
   // Adaptive loop (adaptivity.hpp): which elements an iteration marks and
-  // how the marked mesh is refined. Recorded in AdaptiveIteration, never in
-  // a SolvePlan or MeshPlan.
+  // how the marked mesh is refined.
   Marking,
-  Refinement
+  Refinement,
+  // The planners an adaptive iteration ran (planner.hpp).
+  SolvePlanner,
+  MeshPlanner
 };
-inline constexpr DecisionSubject decision_subjects[] = {
-    DecisionSubject::TimeIntegrator,
-    DecisionSubject::TimeSteps,
-    DecisionSubject::LinearSolver,
-    DecisionSubject::Preconditioner,
-    DecisionSubject::SolverValidation,
-    DecisionSubject::Quadrature,
-    DecisionSubject::MeshAlgorithm,
-    DecisionSubject::BoundaryTreatment,
-    DecisionSubject::MeshSize,
-    DecisionSubject::SizeField,
-    DecisionSubject::Mesh,
-    DecisionSubject::RefinementCriterion,
-    DecisionSubject::Marking,
-    DecisionSubject::Refinement};
 
-inline std::string_view decision_subject_name(DecisionSubject subject) {
-  switch (subject) {
-  case DecisionSubject::TimeIntegrator:
-    return "time integrator";
-  case DecisionSubject::TimeSteps:
-    return "time steps";
-  case DecisionSubject::LinearSolver:
-    return "linear solver";
-  case DecisionSubject::Preconditioner:
-    return "preconditioner";
-  case DecisionSubject::SolverValidation:
-    return "solver validation";
-  case DecisionSubject::Quadrature:
-    return "quadrature";
-  case DecisionSubject::MeshAlgorithm:
-    return "mesh algorithm";
-  case DecisionSubject::BoundaryTreatment:
-    return "boundary treatment";
-  case DecisionSubject::MeshSize:
-    return "mesh size";
-  case DecisionSubject::SizeField:
-    return "size field";
-  case DecisionSubject::Mesh:
-    return "mesh";
-  case DecisionSubject::RefinementCriterion:
-    return "refinement criterion";
-  case DecisionSubject::Marking:
-    return "marking";
-  case DecisionSubject::Refinement:
-    return "refinement";
-  }
-  return "invalid";
+struct DecisionSubjectInfo {
+  DecisionSubject subject;
+  std::string_view name;
+  DecisionOwner owner;
+};
+// One row per subject, in enum order (checked below).
+inline constexpr DecisionSubjectInfo decision_subject_table[] = {
+    {DecisionSubject::TimeIntegrator, "time integrator", DecisionOwner::Time},
+    {DecisionSubject::TimeSteps, "time steps", DecisionOwner::Time},
+    {DecisionSubject::LinearSolver, "linear solver", DecisionOwner::Solve},
+    {DecisionSubject::Preconditioner, "preconditioner", DecisionOwner::Solve},
+    {DecisionSubject::SolverValidation, "solver validation",
+     DecisionOwner::Solve},
+    {DecisionSubject::Quadrature, "quadrature", DecisionOwner::Solve},
+    {DecisionSubject::MeshAlgorithm, "mesh algorithm", DecisionOwner::Mesh},
+    {DecisionSubject::BoundaryTreatment, "boundary treatment",
+     DecisionOwner::Mesh},
+    {DecisionSubject::MeshSize, "mesh size", DecisionOwner::Mesh},
+    {DecisionSubject::SizeField, "size field", DecisionOwner::Mesh},
+    {DecisionSubject::Mesh, "mesh", DecisionOwner::Mesh},
+    {DecisionSubject::RefinementCriterion, "refinement criterion",
+     DecisionOwner::Mesh},
+    {DecisionSubject::Marking, "marking", DecisionOwner::Adapt},
+    {DecisionSubject::Refinement, "refinement", DecisionOwner::Adapt},
+    {DecisionSubject::SolvePlanner, "solve planner", DecisionOwner::Adapt},
+    {DecisionSubject::MeshPlanner, "mesh planner", DecisionOwner::Adapt}};
+inline constexpr std::size_t decision_subject_count =
+    std::size(decision_subject_table);
+
+namespace decision_detail {
+consteval bool subject_table_in_order() {
+  for (std::size_t k = 0; k < decision_subject_count; ++k)
+    if (static_cast<std::size_t>(decision_subject_table[k].subject) != k ||
+        decision_subject_table[k].name.empty())
+      return false;
+  for (std::size_t i = 0; i < decision_subject_count; ++i)
+    for (std::size_t j = 0; j < i; ++j)
+      if (decision_subject_table[i].name == decision_subject_table[j].name)
+        return false;
+  return true;
+}
+static_assert(subject_table_in_order(),
+              "decision_subject_table needs one row per DecisionSubject, in "
+              "enum order, with distinct names");
+} // namespace decision_detail
+
+// Every subject, in enum order.
+inline constexpr auto decision_subjects = [] {
+  std::array<DecisionSubject, decision_subject_count> subjects{};
+  for (std::size_t k = 0; k < decision_subject_count; ++k)
+    subjects[k] = decision_subject_table[k].subject;
+  return subjects;
+}();
+
+// The table row of a subject; throws (or fails to compile in a constant
+// expression) for a value that has none.
+constexpr const DecisionSubjectInfo &
+decision_subject_info(DecisionSubject subject) {
+  const auto k = static_cast<std::size_t>(subject);
+  if (k >= decision_subject_count)
+    throw std::invalid_argument("Invalid decision subject");
+  return decision_subject_table[k];
+}
+constexpr std::string_view decision_subject_name(DecisionSubject subject) {
+  const auto k = static_cast<std::size_t>(subject);
+  return k < decision_subject_count ? decision_subject_table[k].name
+                                    : std::string_view("invalid");
+}
+constexpr DecisionOwner decision_subject_owner(DecisionSubject subject) {
+  return decision_subject_info(subject).owner;
 }
 // The subject with this name, if any.
-inline std::optional<DecisionSubject>
+constexpr std::optional<DecisionSubject>
 decision_subject_from_name(std::string_view name) {
-  for (const auto subject : decision_subjects)
-    if (decision_subject_name(subject) == name)
-      return subject;
+  for (const auto &row : decision_subject_table)
+    if (row.name == name)
+      return row.subject;
   return std::nullopt;
-}
-// Compatibility with string subjects: `decision.subject == "linear solver"`
-// compares the printed name.
-inline bool operator==(DecisionSubject subject, std::string_view name) {
-  return decision_subject_name(subject) == name;
 }
 
 struct Decision {
@@ -155,17 +207,6 @@ inline Decision user_decision(DecisionSubject subject, std::string choice,
   return {subject, std::move(choice), "user-selected (" + option + ")",
           Evidence::Unknown, DecisionSource::User};
 }
-// Deprecated: string subjects. Throws std::invalid_argument for a name that
-// is no DecisionSubject.
-inline Decision user_decision(std::string_view subject, std::string choice,
-                              const std::string &option) {
-  const auto key = decision_subject_from_name(subject);
-  if (!key)
-    throw std::invalid_argument("Unknown decision subject: " +
-                                std::string(subject));
-  return user_decision(*key, std::move(choice), option);
-}
-
 // The decision about `subject` in `decisions`, or nullptr.
 inline const Decision *find_decision(const std::vector<Decision> &decisions,
                                      DecisionSubject subject) {
@@ -201,6 +242,131 @@ inline Decision decision_for(DecisionSubject subject, std::string choice,
           why.evidence, why.source};
 }
 
+// How one decision subject is read from an options type: one row of a
+// plan's binding table (solve_plan_bindings in plan.hpp, built from
+// solver_option_bindings in linear_solver_types.hpp; mesh_plan_bindings in
+// mesh_plan.hpp). Everything about a setting's decision derives from its
+// row: the decisions of the user's options, the setters (SolvePlan::update,
+// MeshPlan::update), validation ("Stale decision") and, through the
+// subject, the stable name and owner.
+template <class Options> struct DecisionBinding {
+  DecisionSubject subject;
+  // The option field(s) the decision explains, named in a user decision's
+  // basis ("user-selected (SolverOptions::method)").
+  std::string_view (*option)(const Options &);
+  // The choice text the options give. nullopt when the options do not
+  // determine it: a strategy a factory creates (named by its name() once it
+  // exists, see validate_bound_decisions) or a whole-mesh decision.
+  std::optional<std::string> (*choice)(const Options &);
+  // The user's options record it (plan_from_user, mesh_plan_from_user);
+  // otherwise only a setter or a planner records it.
+  bool (*recorded)(const Options &);
+};
+
+// The planner that produced a plan (planner.hpp): its name() and, when it
+// has one, its descriptor. Run records list it among their strategies.
+struct PlannerRecord {
+  std::string name{};
+  std::optional<pde2d::StrategyDescriptor> descriptor{};
+  // The library's identity planner (UserPlanner): replayable from the
+  // plan's options alone.
+  bool builtin = false;
+};
+
+// The names of strategy objects a run created (TimeIntegrator::name(),
+// StepController::name()), by the subject they serve, for validating
+// decisions whose choice the options do not determine.
+struct StrategyNames {
+  std::vector<std::pair<DecisionSubject, std::string>> names{};
+  const std::string *find(DecisionSubject subject) const {
+    for (const auto &[s, name] : names)
+      if (s == subject)
+        return &name;
+    return nullptr;
+  }
+};
+
+namespace decision_detail {
+template <class Options, std::size_t N>
+constexpr const DecisionBinding<Options> *
+find_binding(const std::array<DecisionBinding<Options>, N> &table,
+             DecisionSubject subject) {
+  for (const auto &row : table)
+    if (row.subject == subject)
+      return &row;
+  return nullptr;
+}
+// The table binds exactly the subjects of `owners`, each once, and no other.
+template <class Options, std::size_t N>
+consteval bool
+binds_exactly(const std::array<DecisionBinding<Options>, N> &table,
+              std::initializer_list<DecisionOwner> owners) {
+  for (const auto &row : table) {
+    if (!row.option || !row.choice || !row.recorded)
+      return false;
+    bool owned = false;
+    for (const auto owner : owners)
+      owned = owned || decision_subject_owner(row.subject) == owner;
+    if (!owned)
+      return false;
+  }
+  for (const auto &info : decision_subject_table) {
+    bool owned = false;
+    for (const auto owner : owners)
+      owned = owned || info.owner == owner;
+    std::size_t rows = 0;
+    for (const auto &row : table)
+      rows += row.subject == info.subject;
+    if (rows != (owned ? 1u : 0u))
+      return false;
+  }
+  return true;
+}
+template <class Options, std::size_t N, std::size_t M>
+constexpr std::array<DecisionBinding<Options>, N + M>
+concat(const std::array<DecisionBinding<Options>, N> &a,
+       const std::array<DecisionBinding<Options>, M> &b) {
+  std::array<DecisionBinding<Options>, N + M> out{};
+  for (std::size_t k = 0; k < N; ++k)
+    out[k] = a[k];
+  for (std::size_t k = 0; k < M; ++k)
+    out[N + k] = b[k];
+  return out;
+}
+} // namespace decision_detail
+
+// The decisions the user's options record, in table order.
+template <class Options, std::size_t N>
+std::vector<Decision>
+bound_user_decisions(const std::array<DecisionBinding<Options>, N> &table,
+                     const Options &options) {
+  std::vector<Decision> decisions;
+  for (const auto &row : table)
+    if (row.recorded(options))
+      decisions.push_back(user_decision(row.subject,
+                                        row.choice(options).value_or(""),
+                                        std::string(row.option(options))));
+  return decisions;
+}
+// Record the decision about `subject` from the current options (a setter's
+// second half). Throws std::invalid_argument for a subject the table does
+// not bind.
+template <class Options, std::size_t N>
+void record_bound_decision(const std::array<DecisionBinding<Options>, N> &table,
+                           const Options &options,
+                           std::vector<Decision> &decisions,
+                           DecisionSubject subject, const Rationale &why,
+                           std::string_view plan_kind) {
+  const auto *row = decision_detail::find_binding(table, subject);
+  if (!row)
+    throw std::invalid_argument(
+        "Decision subject " + std::string(decision_subject_name(subject)) +
+        " does not belong to a " + std::string(plan_kind));
+  set_decision(decisions,
+               decision_for(subject, row->choice(options).value_or(""),
+                            std::string(row->option(options)), why));
+}
+
 namespace decision_detail {
 // A recorded choice must equal what the options give ("stale" otherwise).
 inline void require_current(const Decision &decision,
@@ -219,5 +385,42 @@ inline void require_unique(const std::vector<Decision> &decisions) {
             "Duplicate decision: " +
             std::string(decision_subject_name(decisions[i].subject)));
 }
+// The owner check of a plan: a decision whose subject the table does not
+// bind does not belong there ("Decision subject X does not belong to a
+// <plan kind> (owner Y<hint>)").
+inline void reject_foreign(const Decision &decision, std::string_view plan_kind,
+                           std::string_view hint) {
+  const auto owner = decision_subject_owner(decision.subject);
+  throw std::invalid_argument(
+      "Decision subject " +
+      std::string(decision_subject_name(decision.subject)) +
+      " does not belong to a " + std::string(plan_kind) + " (owner " +
+      decision_owner_name(owner) + std::string(hint) + ")");
+}
 } // namespace decision_detail
+
+// Every decision appears once, is bound by the table (owner check) and
+// matches the choice its row reads from `options`. A row whose options do not
+// determine the choice (nullopt) is compared with the strategy name in
+// `ran`, if there is one and the decision names a choice. `hint(subject)`
+// extends the owner message. Throws std::invalid_argument ("Duplicate
+// decision: ...", "... does not belong to a ...", "Stale decision: ...").
+template <class Options, std::size_t N, class Hint>
+void validate_bound_decisions(
+    const std::array<DecisionBinding<Options>, N> &table,
+    const Options &options, const std::vector<Decision> &decisions,
+    const StrategyNames &ran, std::string_view plan_kind, Hint &&hint) {
+  decision_detail::require_unique(decisions);
+  for (const auto &decision : decisions) {
+    const auto *row = decision_detail::find_binding(table, decision.subject);
+    if (!row)
+      decision_detail::reject_foreign(decision, plan_kind,
+                                      hint(decision.subject));
+    if (const auto choice = row->choice(options))
+      decision_detail::require_current(decision, *choice);
+    else if (const auto *name = ran.find(decision.subject);
+             name && !decision.choice.empty())
+      decision_detail::require_current(decision, *name);
+  }
+}
 } // namespace pde2d::fem

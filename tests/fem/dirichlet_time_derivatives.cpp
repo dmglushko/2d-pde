@@ -38,7 +38,9 @@ void dirichlet_time_derivatives() {
     bool rejected = false;
     std::optional<AssembledSystem> result;
     try {
-      result.emplace(prepared.assemble(1, order));
+      result.emplace(prepared.assemble(
+          1, order == 1 ? DirichletDerivative::FirstDerivative
+                        : DirichletDerivative::SecondDerivative));
     } catch (const std::exception &) {
       rejected = true;
     }

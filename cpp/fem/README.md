@@ -15,9 +15,13 @@ Problem (equation + boundary conditions)        problem.hpp
    ├─ analyze(problem[, mesh]) → ProblemProperties (each with Evidence)
    │                                             analysis.hpp, analysis_types.hpp
    ▼
-SolvePlan {assembly, solver, time, decisions, mesh, analysis}
-   setters change option + decision; validate_decisions at solve entry
+SolvePlan {assembly, solver, time, decisions, mesh, analysis, planner}
+   one binding table per plan kind (solve_plan_bindings, mesh_plan_bindings):
+   setters (update), plan_from_user, validate_decisions derive from it
+   analysis = make_analysis_record(problem[, mesh]) bound by fingerprints
                                                 plan.hpp, mesh_plan.hpp
+   SolvePlanner / MeshPlanner → plan (UserPlanner = identity), run_planner
+                                                planner.hpp
    ▼
 PreparedAssembly(mesh, problem)                 assembly.hpp
    ├─ bind_boundary (same binding as analysis)  boundary_assignment.hpp
@@ -41,13 +45,14 @@ stationary: PreparedStationary(mesh, problem, plan).solve(t[, guess])
 evolve(mesh, problem, InitialConditions, opts | plan + output)  evolution.hpp
    ├─ StepController (default: TimeGrid)        step_control.hpp, time_grid.hpp
    │    next() → trial; judge() accepts or rejects; rejected → retry
-   ├─ TimeIntegrator (BE / CN / Newmark / user) time_integration.hpp
+   ├─ TimeIntegrator (BE / CN / Newmark / user) time_integrator.hpp,
+   │    one unit per built-in TimeMethod         detail/time_schemes/
    │    trial() / accept() / reject(); IntegratorServices: solve,
    │    start_dirichlet, assemble(t)
    └─ initial fields: Expr or nodal Vector      interpolation.hpp (Field)
    ▼
 StationarySolution {values, report, record}     solver.hpp, record.hpp
-Evolution {frames, reports, timings, record (metadata: deprecated view)}
+Evolution {frames, reports, timings, record}
    RunRecord: plan, input fingerprints, mesh provenance, strategies, versions
    → write_report()                             report.hpp, timing.hpp, decision.hpp
    → write_json() / read_run_record_json() / diff_records()   record_json.hpp
@@ -61,6 +66,7 @@ Adaptivity (stationary): solve → estimate → mark → refine → transfer →
    PreparedStationary(new mesh, …).solve(t, transferred) solver.hpp
    adapt(result, problem, plan, AdaptOptions) → AdaptiveHistory
        optional driver composing the above            adaptivity.hpp
+       optional solve/mesh planners between iterations planner.hpp
        write_json(out, history)                       adaptivity_json.hpp
 Transient restart: transfer_field(last frame) → InitialConditions{Vector}
 MeshResult entry points refuse report.size_satisfied == false unless
@@ -105,10 +111,11 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | Header | Responsibility | Depends on |
 | --- | --- | --- |
 | `evidence.hpp` | `Evidence` (Proven / Sampled / Unknown), `Property<T>` | — |
-| `decision.hpp` | `DecisionSubject` (typed keys, `decision_subject_name`), `Decision` records (subject, choice, basis, evidence, source), `Rationale`, `find_decision`/`set_decision` | evidence |
+| `decision.hpp` | `DecisionSubject` and `decision_subject_table` (one row per subject: stable name, `DecisionOwner` Solve/Time/Mesh/Adapt; `decision_subject_name`, `decision_subject_owner`, `decision_subject_from_name`), `Decision` records (subject, choice, basis, evidence, source), `Rationale`, `find_decision`/`set_decision`; the binding row type `DecisionBinding<Options>` (subject, option, choice reader, recorded-by-default) with `bound_user_decisions`, `record_bound_decision`, `validate_bound_decisions`; `StrategyNames`, `PlannerRecord` | evidence, provenance |
 | `expression.hpp` | `Expr`, symbols `x y t nx ny`, `require_symbols` by context, compiled `Evaluator` | SymEngine |
 | `problem.hpp` | `Equation`, `BoundaryCondition` + factories, `Problem` | expression |
-| `weak_form.hpp` | named weak-form coefficients (`weak::Term`), `weak_time_dependence` | problem |
+| `weak_terms.hpp` | `weak::Term` names, `WeakCoefficients<T>`, `WeakFlags` (no symbolic types) | — |
+| `weak_form.hpp` | weak-form coefficients by `weak::Term`, `weak_time_dependence` | problem, weak_terms |
 | `quadrature.hpp` | triangle and edge rules by exactness degree | — |
 | `p1_element.hpp` | P1 gradients, edge frames/normals, local kernels | weak_form |
 | `boundary_classification.hpp` | general BC → `EdgeForm` (`DirichletEdge`, `NaturalEdge` or `ObliqueEdge`), pure symbolic; `derivative_vectors`, `may_be_oblique`; form and divisor names from each form's unit | detail/edge_forms, p1_element, problem |
@@ -118,38 +125,44 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `detail/edge_forms/forms.hpp` | `EdgeForm` variant; `static_assert` that every alternative has its unit; `PreparedEdgeForm` | the units |
 | `boundary_assignment.hpp` | `bind_boundary`: validated region → condition binding (owning snapshot of the equation and one condition per assignment; edges refer to them by index) and the frame (length, outward normal) of every boundary edge; shared by assembly and analysis | p1_element, problem |
 | `system.hpp` | `SparseMatrix`, `Vector`, `DirichletValue`, `DirichletDerivative`, `AssembledSystem`, `time_order`, `numerically_symmetric` | Eigen |
-| `assembly.hpp` | `AssemblyOptions`, `PreparedAssembly`, validation, parallel evaluation | all above, system |
+| `assembly_options.hpp` | `AssemblyOptions` (quadrature degree, boundary tolerance, execution), apart from the assembler so plans and records need no assembly | execution |
+| `assembly.hpp` | `PreparedAssembly`, validation, parallel evaluation | all above, assembly_options, system |
 | `detail/assembly_elements.hpp` | private: interior coefficients, quadrature points, element blocks | p1_element, weak_form |
 | `detail/assembly_edges.hpp` | private: classification and preparation of the bound edges, per-time evaluation, all through the form units | boundary_assignment, boundary_classification, edge_forms |
 | `detail/assembly_scatter.hpp` | private: deterministic serial scatter (edges through their units) | system, edge_forms |
-| `linear_solver_types.hpp` | Contracts only: `LinearSolver`, `Preconditioner`, `SolverValidation`, `SolverOptions`, `InitialGuess`, `SolverReport`, `LinearSolution`, `BackendSolution`, `LinearSolverBackend` (`prepare`, `solve`, `solve_with_guess`), `LinearSolverBackendFactory` (`descriptor()`), `make_linear_solver_backend`, report names (`linear_solver_name`, `linear_solver_method_name`, `preconditioner_name`, `solver_validation_name`), `solver_decisions`. Included by plans and records | system, timing, decision, provenance |
+| `linear_solver_types.hpp` | Contracts only: `LinearSolver`, `Preconditioner`, `SolverValidation`, `SolverOptions`, `InitialGuess`, `SolverReport`, `LinearSolution`, `BackendSolution`, `LinearSolverBackend` (`prepare`, `solve`, `solve_with_guess`), `LinearSolverBackendFactory` (`descriptor()`), `make_linear_solver_backend`, report names (`linear_solver_name`, `linear_solver_method_name`, `preconditioner_name`, `solver_validation_name`), the decision rows of the solver settings (`solver_option_bindings`) and `solver_decisions` derived from them. Included by plans and records | system, timing, decision, provenance |
 | `constraints.hpp` | `constrain(A, b, dirichlet)`: Dirichlet lifting; the shared linear-system check | system |
 | `prepared_linear_solver.hpp` | `PreparedLinearSolver` (validation, rank check, backend setup, true-residual check, reuse via `matches()`), `solve_linear` | linear_solver_types, constraints, detail/eigen_backends |
 | `detail/eigen_backends.hpp` | private: built-in Eigen backends (SparseLU, CG, GMRES and their preconditioners), `with_builtin` (the only dispatch on `LinearSolver`), option validation, backend creation | linear_solver_types |
-| `linear_solver.hpp` | Compatibility facade: includes `linear_solver_types.hpp`, `constraints.hpp` and `prepared_linear_solver.hpp` | the three |
-| `mesh_plan.hpp` | `MeshPlan` (MeshOptions + decisions), `mesh_plan_from_user`, `mesh_decisions` (a refinement criterion decision only when `RefinementOptions::criterion` is set), `size_field_choice`, `refinement_criterion_choice`, `validate_decisions(MeshPlan[, used options])` | decision, discretization/mesh_types |
+| `linear_solver.hpp` | Umbrella: includes `linear_solver_types.hpp`, `constraints.hpp` and `prepared_linear_solver.hpp` (include it for `solve_linear`) | the three |
+| `mesh_plan.hpp` | `mesh_plan_bindings` (the binding table of a mesh plan, one row per Mesh-owned subject), `MeshPlan` (MeshOptions + decisions + `planner`; `update(subject, change, why)` and the setters `set_interior_algorithm`, `set_boundary_treatment`, `set_max_edge_length`, `set_size_field(field, descriptor)`, `set_refinement_criterion`), `mesh_plan_from_user`, `mesh_decisions` (a refinement criterion decision only when `RefinementOptions::criterion` is set), `mesh_decision_choice`, `size_field_choice`, `refinement_criterion_choice`, `mesh_options_difference`, `validate_decisions(MeshPlan[, used options])` | decision, discretization/mesh_types |
 | `mesh_acceptance.hpp` | The mesh-report invariant by type: `AcceptedMesh`, `accept_unsatisfied(result)`, `require_size_satisfied` (MeshResult entry points refuse an unsatisfied report: "MeshResult misses its size target (...)") | discretization/mesh_types |
-| `plan.hpp` | `TimePlan` (the one source of time settings), `SolvePlan` (assembly, solver, time, decisions, `mesh`, `analysis`) and its setters, `AnalysisRecord`, `plan_from_user`, `time_decisions`, `validate_decisions` (stale/duplicate/misplaced decisions throw) | assembly, linear_solver_types, step_control, mesh_plan, analysis_types |
+| `plan.hpp` | `TimePlan` (the one source of time settings), `SolvePlan` (assembly, solver, time, decisions, `mesh`, `analysis`, `planner`; `update(subject, change, why)` and the setters), `solve_plan_bindings` (time rows `time_plan_bindings`, the lifted `solver_option_bindings`, `assembly_plan_bindings`), `AnalysisRecord` (properties bound to problem and mesh fingerprints and sampling options; made only by `make_analysis_record`), `require_current_analysis`, `plan_from_user`, `time_decisions`, `validate_decisions` (stale/duplicate/misplaced decisions throw). No assembly, symbolic or edge-form headers | assembly_options, linear_solver_types, step_control, time_integration, mesh_plan, analysis_types |
+| `planner.hpp` | `SolvePlanner` and `MeshPlanner` interfaces (`name`, `descriptor`, `plan(problem, properties, defaults, PlanningContext)`), the identity `UserPlanner`, `PlanningContext` (mesh, previous `AdaptiveIteration`, iteration), `run_planner` (validates and stamps the plan), `planner_choice` | plan, mesh_plan, analysis_types, fingerprint |
 | `fingerprint.hpp` | `problem_fingerprint`, `field_fingerprint`, `field_kind`, `expression_text` (canonical SymEngine string) | problem, interpolation, provenance |
-| `record.hpp` | `RunRecord` (plan, execution, workload, work, `EvidenceSummary`, `VersionRecord`, `MeshRecord` with fingerprint and `MeshProvenance`, problem fingerprint, stationary time, `InitialRecord`, `StrategyRecord`s with `StrategyReplay`, `TimingRecord`), `make_run_record`, `summarize_evidence` | plan, execution, provenance, discretization/mesh_fingerprint |
+| `record.hpp` | `RunRecord` (plan, execution, workload, work, `EvidenceSummary`, `VersionRecord`, `MeshRecord` with fingerprint and `MeshProvenance`, problem fingerprint, stationary time, `InitialRecord`, `StrategyRecord`s with `StrategyReplay`, including the plan's planners, `TimingRecord`), `make_run_record`, `find_strategy`, `summarize_evidence` | plan, execution, provenance, discretization/mesh_fingerprint |
 | `json.hpp` | `JsonValue` (number tokens kept as text), `json_number` (classic locale, max_digits10), `write_json(JsonValue)`, `parse_json` | — |
 | `record_json.hpp` | `to_json(RunRecord)`, `write_json(std::ostream &, const RunRecord &)` (schema `pde2d.run_record`, version 1), `read_run_record_json`, `diff_records` → `RecordDifference` | record, json, analysis_types |
-| `solver.hpp` | `PreparedStationary` (prepared assembly + reused linear solver, `StationaryStatistics`; from a mesh, a checked `MeshResult` or an `AcceptedMesh`; validates the plan), `StationarySolution`, `solve_stationary` wrappers (includes linear_solver.hpp) | assembly, linear_solver, mesh_acceptance, plan, record, fingerprint |
+| `solver.hpp` | `PreparedStationary` (prepared assembly + reused linear solver, `StationaryStatistics`; from a mesh, a checked `MeshResult` or an `AcceptedMesh`; validates the plan, its mesh plan and its analysis), `StationarySolution`, `solve_stationary` wrappers | assembly, constraints, prepared_linear_solver, mesh_acceptance, plan, record, fingerprint |
 | `interpolation.hpp` | nodal interpolation of a field (rejects normals); `Field` (Expr or nodal Vector), `validate_field`, `nodal_values` | system, expression |
 | `time_grid.hpp` | time stamps and step sizes | — |
-| `time_integration.hpp` | `TimeIntegrator` interface (transactional `trial`/`accept`/`reject`, `descriptor()`), `IntegratorServices`, schemes, `TimeIntegratorFactory` | system, provenance |
-| `step_control.hpp` | `StepController` interface (`judge` → `StepVerdict`, `descriptor()`), `UniformStepController` (TimeGrid), `step_size_consistent` rounding bound, `default_max_consecutive_rejections` | time_grid, time_integration |
-| `evolution.hpp` | `evolve()` driver (options or plan + `EvolutionOutput`; mesh or `MeshResult`), `TimeOptions` = `TimePlan` + `EvolutionOutput` + assembly/solver, trial/accept/reject loop, frames, observer, accounting, output/step checks, decisions, record; `EvolutionMetadata` (deprecated view, `evolution_metadata`) | all above |
+| `time_integrator.hpp` | `TimeMethod`, `TimeIntegrator` interface (transactional `trial`/`accept`/`reject`, `descriptor()`), `IntegratorState`, `IntegratorServices`, `impose_compatible`, `TimeIntegratorFactory` | system, provenance |
+| `detail/time_schemes/{backward_euler,crank_nicolson,newmark}.hpp` | one unit per built-in `TimeMethod`: `method`, `name`, `order`, `Integrator` (the public class, e.g. `NewmarkIntegrator`), `make()`, `descriptor()`; the classes take `method()`/`name()`/`order()`/`descriptor()` from their unit (`BuiltinScheme`) | time_schemes/interface |
+| `detail/time_schemes/{interface,schemes}.hpp` | private: the `TimeSchemeUnit` concept, `BuiltinScheme`, `FirstOrder`; the unit list `Units` with a `static_assert` that every `TimeMethod` before `Custom` has its unit in order, and `with_time_method` (the only dispatch on `TimeMethod`) | time_integrator |
+| `time_integration.hpp` | the built-in schemes and `time_method_name`, `time_method_order`, `time_method_descriptor`, `make_time_integrator`, all read from the units | time_integrator, detail/time_schemes |
+| `step_control.hpp` | `StepController` interface (`judge` → `StepVerdict`, `descriptor()`), `UniformStepController` (TimeGrid), `step_size_consistent` rounding bound, `default_max_consecutive_rejections` | time_grid, time_integrator |
+| `evolution.hpp` | `evolve()` driver (options or plan + `EvolutionOutput`; mesh or `MeshResult`), `TimeOptions` = `TimePlan` + `EvolutionOutput` + assembly/solver, trial/accept/reject loop, frames, observer, accounting, output/step checks, decisions, record | all above |
 | `timing.hpp` | timing structs, `timing::Accumulate` | — |
-| `analysis_types.hpp` | `AnalysisOptions`, `Sign`, `Definiteness`, `ProblemProperties`, `BoundaryRegionProperties` (incl. `oblique_edges`), `SystemProperties`, `ClassifiedEdge` | evidence, weak_form, boundary_classification, boundary_form |
-| `analysis.hpp` | `analyze()` → `ProblemProperties` / `SystemProperties` with evidence; `analyze_boundary_region` | analysis_types, boundary_assignment, detail/analysis_* |
+| `analysis_types.hpp` | `AnalysisOptions`, `Sign`, `Definiteness`, `ProblemProperties`, `BoundaryRegionProperties` (incl. `oblique_edges`), `SystemProperties` (result types only: no symbolic or edge-form headers) | evidence, weak_terms, boundary_form |
+| `classified_edge.hpp` | `ClassifiedEdge`, the edge input of region analysis (classified condition or rejection, edge frame) | boundary_classification, p1_element |
+| `analysis.hpp` | `analyze()` → `ProblemProperties` / `SystemProperties` with evidence; `analyze_boundary_region`; `make_analysis_record(problem[, mesh], options)` (the only `AnalysisRecord` factory) and `refresh_analysis(plan, problem, mesh)` | analysis_types, classified_edge, boundary_assignment, plan, fingerprint, detail/analysis_* |
 | `detail/analysis_interior.hpp` | private: constant signs, sampled signs and definiteness, interior properties | analysis_types, weak_form, quadrature |
 | `detail/analysis_regions.hpp` | private: mesh-free region judgement, per-region accumulation of the units' judgements, Robin and tangential terms, nullspace | analysis_types, boundary_classification, edge_forms |
 | `report.hpp` | text summaries of solves, evolutions, run records, decisions and analyses | evolution, solver, record, analysis |
 | `error_norms.hpp` | prepared L2/H1 error norms (rejects normals) | system, quadrature |
 | `estimation.hpp` | `ErrorEstimator` interface (with `descriptor()`), `GradientRecoveryEstimator` (ZZ, H1 seminorm), `estimate_error`, Dörfler `mark_bulk` | p1_element, problem, system |
 | `marking.hpp` | `MarkingStrategy` interface (`name()`, `descriptor()`, `mark(estimate, mesh)`), `BulkMarking` (Dörfler via `mark_bulk`, default fraction 0.5), `mark_elements` (runs a strategy, checks ascending in-range indices) | estimation, provenance |
-| `adaptivity.hpp` | Optional adaptive driver: `adapt(MeshResult | AcceptedMesh, problem, plan, AdaptOptions)` → `AdaptiveHistory` (per-iteration `AdaptiveIteration`: `RunRecord`, `TransferRecord`, `EstimateSummary`, `MarkingRecord`, refinement `MeshReport`, marking/refinement `Decision`s; `AdaptiveStop`; final mesh, solution and estimate) | solver, estimation, marking, transfer, mesh_acceptance, discretization/triangulate |
+| `adaptivity.hpp` | Optional adaptive driver: `adapt(MeshResult | AcceptedMesh, problem, plan, AdaptOptions)` → `AdaptiveHistory` (per-iteration `AdaptiveIteration`: `RunRecord`, `TransferRecord`, `EstimateSummary`, `MarkingRecord`, refinement `MeshReport`, planner/marking/refinement `Decision`s; `AdaptiveStop`; final mesh, solution and estimate); optional `AdaptOptions::solve_planner` and `mesh_planner`; per iteration it refreshes a mesh-bound analysis and updates `plan.mesh` explicitly | solver, analysis, planner, estimation, marking, transfer, mesh_acceptance, discretization/triangulate |
 | `adaptivity_json.hpp` | `to_json(AdaptiveHistory)`, `write_json` (schema `pde2d.adaptive_history`, version 1; each iteration embeds its run record), `read_adaptive_history_json` | adaptivity, record_json |
 | `transfer.hpp` | `transfer_field`: P1 nodal field onto another mesh (point location + interpolation, documented outside rule) | discretization/point_location, system |
 
@@ -181,11 +194,21 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 - **Decisions are recorded and current.** Every choice that shapes a solve
   appears in `SolverReport::decisions` or `Evolution::record.plan.decisions`,
   copied from the `SolvePlan` that ran. Subjects are typed
-  (`DecisionSubject`); matching by string is only a compatibility
-  comparison. Solves validate every decision against the option it explains
-  (`validate_decisions`) and throw on a stale one, so change options with the
-  `SolvePlan` setters. Today all are user-selected (`plan_from_user`);
-  nothing selects solvers automatically yet. A chooser returns a `SolvePlan`.
+  (`DecisionSubject`, one row each in `decision_subject_table` with a stable
+  name and an owner). Each plan kind has one binding table
+  (`solve_plan_bindings`, `mesh_plan_bindings`) that the decisions of the
+  user's options, the setters (`update`) and validation all read; a
+  `static_assert` fails for an owned subject without its row. Solves validate
+  every decision against the option it explains (`validate_decisions`) and
+  throw on a stale one or on a subject the plan does not own. Today all are
+  user-selected (`plan_from_user`); nothing selects solvers automatically
+  yet. A planner (`SolvePlanner`, `planner.hpp`) returns a `SolvePlan`.
+- **Evidence is bound to its inputs.** `AnalysisRecord` carries the problem
+  fingerprint, the mesh fingerprint (when it sampled a mesh) and its options,
+  and only `make_analysis_record` makes one. `PreparedStationary`,
+  `solve_stationary`, `evolve` and `adapt` throw "Stale analysis: ..." for
+  evidence made for other inputs; `refresh_analysis` recomputes it, and
+  `adapt` does so for every refined mesh.
 - **Results are reproducible.** `StationarySolution::record` and
   `Evolution::record` hold the plan, input fingerprints (mesh, problem,
   initial fields), mesh provenance, the stationary time, the strategies that
@@ -195,8 +218,17 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
   `diff_records` compares two runs. Two runs of the same inputs differ only
   in `timings`.
 - **One source per setting.** Time settings live in `TimePlan` only
-  (`TimeOptions` derives from it and from `EvolutionOutput`);
-  `EvolutionMetadata` is derived from the record.
+  (`TimeOptions` derives from it and from `EvolutionOutput`); what ran is in
+  `Evolution::record`.
+- **One unit per built-in time scheme.** `TimeMethod` values before
+  `Custom` each have a unit in `detail/time_schemes/` (name, order, factory,
+  descriptor); `time_method_name`, `make_time_integrator` and the integrator
+  classes read them through `with_time_method`, and `schemes.hpp` fails to
+  compile for a value without its unit.
+- **Contract headers stay light.** `plan.hpp`, `record.hpp`,
+  `analysis_types.hpp` and `mesh_plan.hpp` include no assembly, symbolic or
+  boundary-classification header. The `header_standalone` test compiles
+  every public header in its own translation unit.
 - **Bindings own their data.** `BoundaryBinding` snapshots the equation and
   conditions, so it outlives and ignores later changes to the `Problem`.
 - **Steps are transactional.** Only accepted trials change integrator state,

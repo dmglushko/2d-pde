@@ -51,8 +51,11 @@ void parallel_assembly_equivalence() {
     same(serial.assemble(.4),
          PreparedAssembly(mesh, p, fallback_options).assemble(.4));
     for (double time : {0., .3, .8})
-      for (int order = 0; order < 3; ++order)
-        same(serial.assemble(time, order), parallel.assemble(time, order));
+      for (const auto derivative :
+           {DirichletDerivative::Value, DirichletDerivative::FirstDerivative,
+            DirichletDerivative::SecondDerivative})
+        same(serial.assemble(time, derivative),
+             parallel.assemble(time, derivative));
     // Errors are thrown by numeric workers after serial symbolic preparation.
     p.equation.source = log(x - t);
     PreparedAssembly bad_serial(mesh, p);

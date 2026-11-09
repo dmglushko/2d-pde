@@ -159,9 +159,11 @@ inline std::ostream &write_report(std::ostream &out,
     const auto &solver = r.plan.solver;
     const auto &execution = r.execution.selected;
     const auto &t = evolution.timings;
-    const auto &m = evolution.metadata;
+    const auto *integrator = find_strategy(r, DecisionSubject::TimeIntegrator);
     s << "FEM evolution: method="
-      << (m.method_name.empty() ? time_method_name(m.method) : m.method_name)
+      << (integrator    ? integrator->name
+          : r.plan.time ? std::string(time_method_name(r.plan.time->method))
+                        : std::string("Unknown"))
       << " solver=" << linear_solver_name(solver)
       << " preconditioner=" << preconditioner_name(solver.preconditioner)
       << " validation=" << solver_validation_name(solver.validation) << '\n'

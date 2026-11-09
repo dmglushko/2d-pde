@@ -126,12 +126,12 @@ inline JsonValue analysis(const AnalysisRecord &a) {
   const auto sign = [](Sign s) { return json_string(sign_name(s)); };
   const auto boolean = [](bool b) { return json_bool(b); };
   auto options = JsonValue::object();
-  options.set("quadrature_degree", json_number(a.options.quadrature_degree));
+  options.set("quadrature_degree", json_number(a.options().quadrature_degree));
   auto times = JsonValue::array();
-  for (const double t : a.options.sample_times)
+  for (const double t : a.options().sample_times)
     times.push(json_number(t));
   options.set("sample_times", std::move(times));
-  const auto &p = a.properties;
+  const auto &p = a.properties();
   auto properties = JsonValue::object();
   properties.set("time_order",
                  property(p.time_order, [](int v) { return json_number(v); }));
@@ -169,7 +169,20 @@ inline JsonValue analysis(const AnalysisRecord &a) {
   properties.set("boundaries", std::move(regions));
   auto v = JsonValue::object();
   v.set("options", std::move(options));
+  v.set("problem_fingerprint", json_string(a.problem_fingerprint()));
+  v.set("mesh_fingerprint", a.mesh_fingerprint()
+                                ? json_string(*a.mesh_fingerprint())
+                                : JsonValue::null());
   v.set("properties", std::move(properties));
+  return v;
+}
+inline JsonValue planner(const std::optional<PlannerRecord> &p) {
+  if (!p)
+    return JsonValue::null();
+  auto v = JsonValue::object();
+  v.set("name", json_string(p->name));
+  v.set("descriptor", descriptor(p->descriptor));
+  v.set("builtin", json_bool(p->builtin));
   return v;
 }
 inline JsonValue plan(const SolvePlan &plan) {
@@ -214,11 +227,13 @@ inline JsonValue plan(const SolvePlan &plan) {
     auto mesh = JsonValue::object();
     mesh.set("options", mesh_options(plan.mesh->options));
     mesh.set("decisions", decisions(plan.mesh->decisions));
+    mesh.set("planner", planner(plan.mesh->planner));
     v.set("mesh", std::move(mesh));
   } else
     v.set("mesh", JsonValue::null());
   v.set("analysis",
         plan.analysis ? analysis(*plan.analysis) : JsonValue::null());
+  v.set("planner", planner(plan.planner));
   return v;
 }
 inline JsonValue field(const FieldRecord &f) {

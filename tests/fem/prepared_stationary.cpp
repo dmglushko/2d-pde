@@ -168,14 +168,15 @@ void evolution_plans() {
   for (std::size_t k = 0; k < by_plan.frames.size(); ++k)
     check(by_plan.frames[k].values == by_options.frames[k].values,
           "Plan and options paths must agree bit for bit");
-  const auto &d = by_plan.metadata.decisions;
-  check(d.size() == 5 && d[0].subject == "time integrator" &&
-            d[0].choice == "CrankNicolson" && d[1].subject == "time steps" &&
+  const auto &d = by_plan.record.plan.decisions;
+  check(d.size() == 5 && d[0].subject == DecisionSubject::TimeIntegrator &&
+            d[0].choice == "CrankNicolson" &&
+            d[1].subject == DecisionSubject::TimeSteps &&
             d[1].choice == "Uniform(step=0.01)",
         "Plan decisions");
   for (std::size_t k = 0; k < d.size(); ++k)
-    check(d[k].choice == by_options.metadata.decisions[k].choice &&
-              d[k].basis == by_options.metadata.decisions[k].basis,
+    check(d[k].choice == by_options.record.plan.decisions[k].choice &&
+              d[k].basis == by_options.record.plan.decisions[k].basis,
           "Decisions agree between the paths");
   // A factory-made strategy is named by what ran.
   auto custom = plan;
@@ -185,7 +186,7 @@ void evolution_plans() {
   custom.decisions =
       plan_from_user(custom.assembly, custom.solver, *custom.time).decisions;
   check(custom.decisions[0].choice.empty(), "Unnamed before running");
-  check(evolve(mesh, p, {u0}, custom).metadata.decisions[0].choice ==
+  check(evolve(mesh, p, {u0}, custom).record.plan.decisions[0].choice ==
             "CrankNicolson",
         "Factory strategy named after running");
   auto stationary = plan_from_user({}, {});
@@ -231,8 +232,9 @@ void run_records() {
             er.work.solver_preparations == e.timings.solver.preparations &&
             er.work.solver_reuses == e.timings.solver_reuses,
         "Evolution work");
-  check(er.plan.decisions.size() == e.metadata.decisions.size() &&
-            er.plan.decisions[1].choice == e.metadata.decisions[1].choice,
+  check(er.plan.decisions.size() == 5 &&
+            er.plan.decisions[1].subject == DecisionSubject::TimeSteps &&
+            er.plan.decisions[1].choice == "Uniform(step=0.01)",
         "Evolution decisions");
 
   const std::vector<Decision> mixed{

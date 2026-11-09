@@ -1,10 +1,12 @@
 #pragma once
 // Linear solves for assembled systems, independent of the element type.
-// Compatibility facade: includes every part of the linear solver layer.
+// Umbrella header: includes every part of the linear solver layer (the one
+// to include for solve_linear and PreparedLinearSolver).
 //
 //   linear_solver_types.hpp     SolverOptions, LinearSolver, Preconditioner,
 //                               reports, LinearSolverBackend (+ factory),
-//                               report names, solver_decisions
+//                               report names, solver_option_bindings
+//                               (decision rows), solver_decisions
 //   constraints.hpp             constrain(A, b, dirichlet): Dirichlet lifting
 //   prepared_linear_solver.hpp  PreparedLinearSolver, solve_linear
 //   detail/eigen_backends.hpp   private built-in Eigen backends

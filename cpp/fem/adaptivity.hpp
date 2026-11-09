@@ -25,6 +25,19 @@
 // refinement recorded as Decisions. AdaptiveHistory::stop says why the loop
 // ended.
 //
+// Plans across iterations. The plan of iteration k is the user's plan, or
+// for k > 0 the plan of iteration k - 1 updated for the new mesh:
+//  - plan.analysis made on a mesh is recomputed on the new mesh with its own
+//    options (refresh_analysis); a mesh-free analysis stays;
+//  - plan.mesh, when set, describes the options that refined the mesh: the
+//    mesh planner's MeshPlan, or, when the refinement options (AdaptOptions::
+//    refinement) differ from it, mesh_plan_from_user(refinement options);
+//    unchanged options keep it as is. A plan without a mesh plan gets one
+//    only from a mesh planner.
+//  - then the solve planner, if any, plans the solve (run_planner).
+// The first iteration's plan must match its inputs: a stale analysis or a
+// mesh plan that does not describe the mesh throws as in PreparedStationary.
+//
 // Stopping, checked after every solve and estimate in this order:
 // estimate.global <= tolerance (ToleranceReached), max_iterations
 // refinements done (MaxIterations), the strategy marked nothing
@@ -37,8 +50,11 @@
 #include "fem/decision.hpp"
 #include "fem/estimation.hpp"
 #include "fem/marking.hpp"
+#include "fem/analysis.hpp"
 #include "fem/mesh_acceptance.hpp"
+#include "fem/mesh_plan.hpp"
 #include "fem/plan.hpp"
+#include "fem/planner.hpp"
 #include "fem/record.hpp"
 #include "fem/solver.hpp"
 #include "fem/transfer.hpp"
@@ -77,6 +93,15 @@ struct AdaptOptions {
   // an unrefinable marked triangle under a Fixed boundary); otherwise the
   // loop stops with UnsatisfiedRefinement.
   bool accept_unsatisfied_refinement = false;
+  // Planner of the solve settings (planner.hpp), run before every solve with
+  // the iteration's mesh and the previous iteration; unset: the plan stays
+  // as given. Its plan (checked by run_planner) is the plan of that solve
+  // and the defaults of the next call.
+  std::shared_ptr<const SolvePlanner> solve_planner{};
+  // Planner of the refinement options, run after marking with the current
+  // mesh and the iteration just estimated. Its MeshPlan's options refine the
+  // mesh (in place of `refinement`) and become plan.mesh of the next solve.
+  std::shared_ptr<const MeshPlanner> mesh_planner{};
 };
 
 enum class AdaptiveStop {
@@ -150,8 +175,11 @@ struct AdaptiveIteration {
   // anything was) the report of the refined mesh.
   std::optional<MarkingRecord> marking{};
   std::optional<discretization::MeshReport> refinement{};
-  // The marking and refinement choices (DecisionSubject::Marking,
-  // DecisionSubject::Refinement), in that order.
+  // The choices of this iteration, in this order: the solve planner that
+  // planned its solve (DecisionSubject::SolvePlanner, only with
+  // AdaptOptions::solve_planner), the marking (Marking), the mesh planner
+  // (MeshPlanner, only with AdaptOptions::mesh_planner) and the refinement
+  // (Refinement).
   std::vector<Decision> decisions{};
 };
 
@@ -186,6 +214,21 @@ inline void validate(const AdaptOptions &o) {
   if (!std::isfinite(o.time))
     throw std::invalid_argument("Adaptive solve time must be finite");
 }
+inline Decision planner_decision(DecisionSubject subject,
+                                 const PlannerRecord &planner,
+                                 const char *option) {
+  return decision_for(subject, planner_choice(planner), option, Rationale{});
+}
+// The properties a planner sees: the plan's (current) analysis, or an
+// analysis of the problem on the mesh with default options.
+inline ProblemProperties
+planning_properties(const SolvePlan &plan, const Problem &problem,
+                    const discretization::TriangleMesh &mesh) {
+  if (plan.analysis)
+    return plan.analysis->properties();
+  return make_analysis_record(problem, mesh).properties();
+}
+
 inline AdaptiveHistory run(discretization::MeshResult mesh, bool accepted,
                            const Problem &problem, const SolvePlan &plan,
                            const AdaptOptions &options) {
@@ -206,20 +249,34 @@ inline AdaptiveHistory run(discretization::MeshResult mesh, bool accepted,
   AdaptiveHistory history;
   std::optional<Vector> guess;
   std::optional<TransferRecord> transfer;
+  SolvePlan current = plan;
   for (std::size_t k = 0;; ++k) {
+    AdaptiveIteration it;
+    it.index = k;
+    if (k > 0)
+      refresh_analysis(current, problem, mesh.mesh);
+    if (options.solve_planner) {
+      const PlanningContext context{
+          &mesh,
+          history.iterations.empty() ? nullptr : &history.iterations.back(), k};
+      current = run_planner(*options.solve_planner, problem,
+                            planning_properties(current, problem, mesh.mesh),
+                            current, context);
+      it.decisions.push_back(planner_decision(DecisionSubject::SolvePlanner,
+                                              *current.planner,
+                                              "AdaptOptions::solve_planner"));
+    }
     // Refined meshes reach here only if satisfied or explicitly accepted.
     auto prepared = [&] {
       if (accepted || options.accept_unsatisfied_refinement)
-        return PreparedStationary(accept_unsatisfied(mesh), problem, plan);
-      return PreparedStationary(mesh, problem, plan);
+        return PreparedStationary(accept_unsatisfied(mesh), problem, current);
+      return PreparedStationary(mesh, problem, current);
     };
     PreparedStationary stationary = prepared();
     auto solution = guess ? stationary.solve(options.time, *guess)
                           : stationary.solve(options.time);
     auto estimate = estimate_error(mesh.mesh, problem, solution.values,
                                    options.time, estimator);
-    AdaptiveIteration it;
-    it.index = k;
     it.record = solution.record;
     it.solver_iterations = solution.report.iterations;
     it.initial_guess = solution.report.initial_guess;
@@ -245,15 +302,39 @@ inline AdaptiveHistory run(discretization::MeshResult mesh, bool accepted,
         stop = AdaptiveStop::NothingMarked;
         message = "the marking strategy marked no element";
       } else {
-        const auto &refine_options =
+        const auto &requested =
             options.refinement ? *options.refinement : mesh.options;
-        it.decisions.push_back(decision_for(
-            DecisionSubject::Refinement, refinement_choice(refine_options),
-            "AdaptOptions::refinement",
-            options.refinement
-                ? Rationale{}
-                : Rationale{"default (the mesh's own MeshResult::options)"}));
+        // The mesh plan of the refined mesh (see the header comment): the
+        // current one while it describes the requested options, otherwise
+        // the requested options' own; a mesh planner starts from it.
+        std::optional<MeshPlan> next_mesh_plan = current.mesh;
+        if (next_mesh_plan &&
+            mesh_options_difference(next_mesh_plan->options, requested))
+          next_mesh_plan = mesh_plan_from_user(requested);
+        Rationale why;
+        const char *option = "AdaptOptions::refinement";
+        if (options.mesh_planner) {
+          const PlanningContext context{&mesh, &it, k + 1};
+          next_mesh_plan = run_planner(
+              *options.mesh_planner, problem,
+              planning_properties(current, problem, mesh.mesh),
+              next_mesh_plan ? *next_mesh_plan : mesh_plan_from_user(requested),
+              context);
+          it.decisions.push_back(planner_decision(
+              DecisionSubject::MeshPlanner, *next_mesh_plan->planner,
+              "AdaptOptions::mesh_planner"));
+          option = "AdaptOptions::mesh_planner";
+          why = {"planned (" + planner_choice(*next_mesh_plan->planner) + ")",
+                 Evidence::Unknown, DecisionSource::Automatic};
+        } else if (!options.refinement)
+          why = {"default (the mesh's own MeshResult::options)"};
+        const auto &refine_options =
+            options.mesh_planner ? next_mesh_plan->options : requested;
+        it.decisions.push_back(decision_for(DecisionSubject::Refinement,
+                                            refinement_choice(refine_options),
+                                            option, why));
         refined = discretization::refine_mesh(mesh, marked, refine_options);
+        current.mesh = std::move(next_mesh_plan);
         it.refinement = refined->report;
         if (!refined->report.size_satisfied &&
             !options.accept_unsatisfied_refinement) {

@@ -10,7 +10,8 @@ A user scheme needs no library change. Implement `TimeIntegrator` in your
 own code and pass a factory: `options.integrator = [] { return
 std::make_unique<MyScheme>(); };`. `evolve()` calls it once per evolution and
 ignores `options.method`; reports and the run record's strategies use
-`name()` (`method()` defaults to `TimeMethod::Custom`). Override
+`name()` (override it; the default is "Custom", and `method()` defaults to
+`TimeMethod::Custom`). Override
 `descriptor()` so the record can say what ran (see "A strategy
 descriptor"). See
 `tests/fem/custom_integrator.cpp`.
@@ -22,7 +23,7 @@ descriptor"). See
      second mass for a first-order scheme);
    - `start()`: optional start-up work (Newmark solves for the acceleration;
      use `services.start_dirichlet(DirichletDerivative::FirstDerivative)`
-     for Dirichlet time derivatives; an integer order 0..2 still works);
+     for Dirichlet time derivatives);
    - `advance()`: form the linear system(s) for one step and call
      `services.solve(matrix, rhs, constraints, true)`. Do not solve directly:
      the driver supplies lifting, factorization reuse and accounting. A
@@ -40,9 +41,23 @@ descriptor"). See
      from `transactional()`. A stateless scheme only needs
      `transactional() == true`. With the default `false`, `evolve()` throws
      when a controller rejects a trial.
-2. Only for a built-in scheme (in `time_integration.hpp`): add the enum value
-   to `TimeMethod`, a case to `make_time_integrator` and a name in
-   `time_method_name`.
+2. Only for a built-in scheme: one unit, as for boundary edge forms and
+   interior algorithms. Copy `detail/time_schemes/crank_nicolson.hpp`:
+   - a unit struct in `time_scheme_detail` deriving from
+     `UnitBase<Self>` with `using Integrator = MyIntegrator;`,
+     `static constexpr TimeMethod method`, `name` (stable: decisions, run
+     records and tests use it) and `order`; `make()` and `descriptor()` come
+     from `UnitBase` (override them for parameters);
+   - the public integrator class deriving from
+     `time_scheme_detail::BuiltinScheme<Unit[, FirstOrder]>`, which supplies
+     `method()`, `name()`, `order()` and `descriptor()` from the unit
+     (`FirstOrder` adds the first-order `check()` and `transactional()`);
+   - a `TimeMethod` value before `Custom`, the include in
+     `detail/time_schemes/schemes.hpp` and the unit appended to `Units` in
+     enum order. The `static_assert` there (`TimeSchemeUnit`, ids in order,
+     `Custom` last) fails until the three agree. `time_method_name`,
+     `time_method_order`, `time_method_descriptor` and
+     `make_time_integrator` then know the scheme; no switch to edit.
 3. Tests (`tests/fem/`): a manufactured-solution convergence-rate test for
    the scheme's order, and an equivalence test that drives the integrator
    through an uncached reference driver (see the reusable-evolution test).
@@ -112,28 +127,43 @@ std::make_unique<MyController>(...); };`; `evolve()` then ignores
 ## A decision record
 
 `Decision` (`decision.hpp`) records a typed subject (`DecisionSubject`),
-choice, basis, evidence and source. User choices use
-`user_decision(DecisionSubject::X, choice, "Options::field")`.
+choice, basis, evidence and source. Each plan kind has one binding table,
+and everything about a setting's decision derives from its row:
 
-1. A new setting gets a `DecisionSubject` value (append it, add its name in
-   `decision_subject_name` and the `decision_subjects` list; names are
-   stable, run record JSON uses them).
-2. Teach `validate_decisions` (`plan.hpp`, or `mesh_plan.hpp` for a mesh
-   setting) how to compute the choice text from the options, so a stale
-   decision throws. Format numbers with `std::format("{}")` (shortest
-   round trip) so every change of the option changes the text.
-3. Add a `SolvePlan` setter that changes the option and calls
-   `set_decision(decisions, decision_for(subject, choice, "Options::field",
-   why))`.
-4. If plan_from_user should record it, add it in `solver_decisions()` or
-   `time_decisions()` (or `mesh_decisions()`); existing decision lists are
-   asserted by tests, so prefer the setter for optional settings.
+| Plan | Table | Rows live in |
+| --- | --- | --- |
+| `SolvePlan` | `solve_plan_bindings` | `time_plan_bindings`, `assembly_plan_bindings` (`plan.hpp`), `solver_option_bindings` (`linear_solver_types.hpp`, lifted) |
+| `MeshPlan` | `mesh_plan_bindings` | `mesh_plan.hpp` |
+
+A new setting with a decision:
+
+1. Append a `DecisionSubject` value and its row in `decision_subject_table`
+   (`decision.hpp`: stable name, used by reports and run record JSON, and
+   its `DecisionOwner`: Solve, Time, Mesh or Adapt). A `static_assert`
+   checks the table is complete and in enum order.
+2. Add one `DecisionBinding` row next to the options it reads: the option
+   field(s) named in a user decision's basis, the choice text read from the
+   options (`std::format("{}")` for numbers, so every change of the option
+   changes the text; `nullopt` only when a factory-made strategy names the
+   choice after it runs) and whether the user's options record it
+   (`plan_from_user` / `mesh_plan_from_user`; existing decision lists are
+   asserted by tests, so return `false` for optional settings). The
+   `binds_exactly` `static_assert` fails until every subject the plan owns
+   has exactly one row.
+3. Optionally a named setter: `return update(DecisionSubject::X,
+   [&](SolvePlan &p) { p.assembly.x = value; }, why);`. Without one, callers
+   use `plan.update(...)` directly. Never edit an option without its
+   decision: solves throw "Stale decision" at entry.
+4. Add the raw edit to the lists in `tests/fem/decision_bindings.cpp`, which
+   fail for a row without one.
 
 The plan's decisions are copied into every stationary `SolverReport` and
 into `Evolution::record.plan.decisions`; `write_report` prints them and
 `write_json` serializes them. A choice made by a strategy object
 (integrator or step controller factory) stays empty in the plan and is
-named by `evolve()` from `name()`; a nonempty choice must equal that name.
+named by `evolve()` from `name()` (`StrategyNames`); a nonempty choice must
+equal that name. Adapt-owned subjects (marking, refinement, planners) are
+recorded in `AdaptiveIteration::decisions` and refused by both plans.
 
 ## A strategy descriptor (reproducible custom strategies)
 
@@ -163,26 +193,38 @@ record's strategy entry and its JSON (`tests/fem/run_records.cpp`).
 
 ## An automatic chooser (planner)
 
-Not implemented; the seam is `SolvePlan` (`plan.hpp`), plus `MeshPlan`
-(`mesh_plan.hpp`) for meshing. A chooser is a function from the problem,
-mesh (or geometry) and analysis (`analyze`) to a plan:
+Not implemented; the seams are `SolvePlanner` and `MeshPlanner`
+(`planner.hpp`), whose identity is `UserPlanner`. A planner is a function
+from the problem, its analysis (`ProblemProperties`), default plan and a
+`PlanningContext` (mesh; inside `adapt()` also the previous
+`AdaptiveIteration` and the iteration index) to a plan:
 
-1. Start from `plan_from_user(...)` defaults (or `mesh_plan_from_user`).
-2. Change each setting it chooses with the setter and a `Rationale`:
-   `plan.set_linear_solver(LinearSolver::ConjugateGradient,
-   {"operator proven symmetric", properties.symmetric.evidence,
-   DecisionSource::Automatic})`. Never edit an option without its
-   decision: solves throw "Stale decision" at entry.
-3. Store what it was based on: `plan.analysis = AnalysisRecord{options,
-   properties}` and `plan.mesh = mesh_plan`.
+1. Implement `name()`, `descriptor()` (so records can say what planned) and
+   `plan(problem, properties, defaults, context)`.
+2. Start from `defaults` and change each setting it chooses with a setter or
+   `update` and a `Rationale`: `plan.set_linear_solver(
+   LinearSolver::ConjugateGradient, {"operator proven symmetric",
+   properties.symmetric.evidence, DecisionSource::Automatic})`. A mesh
+   planner uses the `MeshPlan` setters; `set_size_field` and
+   `set_refinement_criterion` require a descriptor.
+3. Store what it was based on: `plan.analysis = make_analysis_record(problem,
+   mesh, options)` binds the properties to the problem and mesh
+   fingerprints, so a solve on other inputs refuses them.
+4. Run it with `run_planner(planner, problem, properties, defaults,
+   context)`, which validates the plan ("Solve planner <name> returned an
+   invalid plan: ...") and records the planner in `plan.planner` and the run
+   record's strategies; or pass it to `adapt()` as
+   `AdaptOptions::solve_planner` / `mesh_planner`, which calls it before
+   every solve / refinement and records it per iteration.
 
-The user overrides it by calling setters on the returned plan before
+The user overrides a planner by calling setters on the returned plan before
 `solve_stationary(mesh, problem, plan)`, `PreparedStationary` or
 `evolve(mesh, problem, initial, plan, output)` (pass the `MeshResult` to
-check the mesh plan against it). The run record (`record.hpp`) then
-carries the plan, its analysis and an evidence summary. Judge a chooser
-against `plan_from_user` defaults on reference problems (docs/vision.md,
-"Better is measured"), comparing records with `diff_records`.
+check the mesh plan against it). Judge a planner against `UserPlanner` on
+reference problems (docs/vision.md, "Better is measured"), comparing records
+with `diff_records`. Tests: a planner whose choice is known, run inside
+`adapt()` against the hand-composed loop with the same plans
+(`tests/fem/planners.cpp`).
 
 ## An error estimator
 
@@ -231,7 +273,9 @@ the indices) and feed the result to
 
 `adaptivity.hpp` composes the public components and adds no numerics of
 its own; keep it that way, so the hand-composed loop in
-`tests/fem/adaptive_loop.cpp` stays its bit-for-bit oracle. A new stopping
+`tests/fem/adaptive_loop.cpp` stays its bit-for-bit oracle. Planners run where the header comment of `adaptivity.hpp` says (solve
+planner before every solve, mesh planner after marking); the mesh plan and
+analysis of each iteration follow the rules documented there. A new stopping
 rule is an `AdaptiveStop` value with a stable name in
 `adaptive_stop_name`, a check in `adaptivity_detail::run` in the documented
 order and a case in that test. A new per-iteration field goes into
@@ -282,7 +326,8 @@ contracts.
 The weak form is linear in the coefficients of `weak::Term`.
 
 1. Add the term to `Equation` (`problem.hpp`) and document its sign.
-2. Add a `weak::Term` entry and its expression in `weak_form_coefficients`
+2. Add a `weak::Term` entry (`weak_terms.hpp`) and its expression in
+   `weak_form_coefficients`
    (integrate by parts there if needed, and record the derivation in the
    header comment).
 3. Use it in `p1::accumulate_element_point` and extend `p1::active_blocks`

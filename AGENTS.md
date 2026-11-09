@@ -13,8 +13,8 @@ heading and which directions to keep open.
 | `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
 | `cpp/provenance.hpp` | `pde2d::Fingerprint` (portable FNV-1a), `StrategyDescriptor`, `library_version()` (reads the CMake-generated `pde2d_version.hpp`, from `cmake/pde2d_version.hpp.in`) |
 | `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing (size fields, marked refinement, public refinement criteria in `size_criterion.hpp`; one unit per interior algorithm with declared capabilities in `detail/interior_algorithms.hpp`, the generic loop in `detail/refinement_loop.hpp`, boundary policies in `detail/refinement_policy.hpp`), point location (`point_location.hpp`), mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md) (header map), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solvers (`linear_solver.hpp` facade over `linear_solver_types.hpp` contracts, `constraints.hpp`, `prepared_linear_solver.hpp` and private `detail/eigen_backends.hpp`), time integration and step control (`step_control.hpp`), boundary region binding shared by assembly and analysis (`boundary_assignment.hpp`), boundary edge forms with one unit per form (`detail/edge_forms/`: Dirichlet, natural, oblique), problem analysis (`analysis.hpp`, types in `analysis_types.hpp`), decision records (`decision.hpp`), solve plans (`plan.hpp`), prepared stationary solves (`solver.hpp`), run records (`record.hpp`), error estimation (`estimation.hpp`), marking strategies (`marking.hpp`), field transfer between meshes (`transfer.hpp`), the optional adaptive driver (`adaptivity.hpp`, JSON in `adaptivity_json.hpp`), the checked `MeshResult` boundary (`mesh_acceptance.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
-| `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests and the CMake README header-map check `readme_headers.cmake`), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
+| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solvers (`linear_solver.hpp` umbrella over `linear_solver_types.hpp` contracts, `constraints.hpp`, `prepared_linear_solver.hpp` and private `detail/eigen_backends.hpp`), time integration (`time_integrator.hpp` interface, one unit per built-in scheme in `detail/time_schemes/`) and step control (`step_control.hpp`), boundary region binding shared by assembly and analysis (`boundary_assignment.hpp`), boundary edge forms with one unit per form (`detail/edge_forms/`: Dirichlet, natural, oblique), problem analysis (`analysis.hpp`, types in `analysis_types.hpp`), decision records (`decision.hpp`), solve and mesh plans with one binding table each (`plan.hpp`, `mesh_plan.hpp`), planner seams (`planner.hpp`), light contract headers (`assembly_options.hpp`, `weak_terms.hpp`), prepared stationary solves (`solver.hpp`), run records (`record.hpp`), error estimation (`estimation.hpp`), marking strategies (`marking.hpp`), field transfer between meshes (`transfer.hpp`), the optional adaptive driver (`adaptivity.hpp`, JSON in `adaptivity_json.hpp`), the checked `MeshResult` boundary (`mesh_acceptance.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests and the CMake README header-map check `readme_headers.cmake`), `headers/` (every public header compiled in its own translation unit), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
 | `examples/` | runnable programs (learning, meshing showcase, FEM showcase, long waves). Built as CTest smoke tests |
 | `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
 | `tools/` | mesh viewer (`mesh_viewer/`), `plot_mesh.py`, `render_solutions.mjs`, independent references (`reference/`), `format.sh`, `test*.sh` |
@@ -88,7 +88,15 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
 - **Settings travel as a `SolvePlan`** (`cpp/fem/plan.hpp`) with their
   decisions; option-based entry points are `plan_from_user` wrappers and
   must stay bit-identical to the plan overloads. Results carry a
-  `RunRecord` (`record.hpp`).
+  `RunRecord` (`record.hpp`). A setting with a decision is one row in its
+  plan's binding table (`solve_plan_bindings`, `mesh_plan_bindings`); never
+  add a parallel list of subjects, and change options through `update` or a
+  setter. `plan.analysis` comes only from `make_analysis_record` and is
+  bound to the problem and mesh it describes.
+- **Contract headers stay light:** `plan.hpp`, `record.hpp`, `mesh_plan.hpp`
+  and `analysis_types.hpp` must not include `assembly.hpp`, symbolic or
+  boundary-classification headers (the `header_standalone` test compiles
+  every public header alone).
 - **Time steps are transactional:** an integrator with state commits it in
   `accept()`, never in `trial()` (see `NewmarkIntegrator`).
 - **Boundaries have loops:** an outer loop plus holes (`BoundaryCurve::loop`,

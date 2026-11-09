@@ -223,7 +223,8 @@ void dirichlet_and_errors() {
   expect_throws(
       [&] {
         PreparedAssembly(mesh, p).assemble(
-            std::numeric_limits<double>::quiet_NaN(), 1);
+            std::numeric_limits<double>::quiet_NaN(),
+            DirichletDerivative::FirstDerivative);
       },
       "Invalid FEM assembly time");
   expect_throws([&] { assemble(mesh, p, 0, AssemblyOptions{2, -1}); },

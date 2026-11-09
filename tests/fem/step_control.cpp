@@ -112,8 +112,8 @@ void nonuniform_steps_follow_the_recurrence() {
     check(e.timings.solver.preparations == 3 &&
               e.timings.solver_reuses == e.timings.time_steps - 3,
           "Factorization reuse across equal steps");
-    const auto &d = e.metadata.decisions;
-    check(d.size() == 5 && d[1].subject == "time steps" &&
+    const auto &d = e.record.plan.decisions;
+    check(d.size() == 5 && d[1].subject == DecisionSubject::TimeSteps &&
               d[1].choice == "List" &&
               d[1].basis == "user-selected (TimeOptions::step_controller)",
           "Step controller decision");
@@ -139,8 +139,8 @@ void default_controller_is_the_time_grid() {
     check(implicit.frames[k].time == explicit_default.frames[k].time &&
               implicit.frames[k].values == explicit_default.frames[k].values,
           "UniformStepController must be the default path, bit for bit");
-  check(implicit.metadata.decisions[1].choice == "Uniform(step=0.03)" &&
-            implicit.metadata.decisions[1].basis ==
+  check(implicit.record.plan.decisions[1].choice == "Uniform(step=0.03)" &&
+            implicit.record.plan.decisions[1].basis ==
                 "user-selected (TimeOptions::step)",
         "Default step decision");
 }

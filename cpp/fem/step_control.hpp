@@ -24,7 +24,7 @@
 // rejected trials in a row (default default_max_consecutive_rejections)
 // throw std::runtime_error ("rejected N consecutive trial steps").
 #include "fem/time_grid.hpp"
-#include "fem/time_integration.hpp"
+#include "fem/time_integrator.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>

@@ -47,6 +47,7 @@ function(pde2d_add_cpp_test)
 endfunction()
 
 add_subdirectory(core)
+add_subdirectory(headers)
 add_subdirectory(discretization)
 add_subdirectory(fem)
 add_subdirectory(tools)

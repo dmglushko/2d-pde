@@ -13,12 +13,8 @@ using Vector = Eigen::VectorXd;
 // Which Dirichlet data an assembly produces: the prescribed values g, or
 // their time derivatives g_t, g_tt (used to start second-order schemes).
 enum class DirichletDerivative { Value, FirstDerivative, SecondDerivative };
-// Compatibility with the former integer orders 0, 1 and 2.
-inline DirichletDerivative dirichlet_derivative(int order) {
-  if (order < 0 || order > 2)
-    throw std::invalid_argument("Dirichlet derivative order must be in [0,2]");
-  return static_cast<DirichletDerivative>(order);
-}
+// The order of the derivative (0, 1, 2); throws std::invalid_argument for a
+// value that names none.
 inline int dirichlet_derivative_order(DirichletDerivative derivative) {
   switch (derivative) {
   case DirichletDerivative::Value:

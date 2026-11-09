@@ -10,31 +10,42 @@
 //   PreparedStationary(mesh, problem, plan);
 //   evolve(mesh, problem, initial, plan, output);
 //
-// SolvePlan is the one output type of a planner and the one place to
-// override it: a future automatic chooser returns a SolvePlan whose
+// SolvePlan is the one output type of a planner (SolvePlanner, planner.hpp)
+// and the one place to override it: a planner returns a SolvePlan whose
 // decisions use DecisionSource::Automatic, and a user overrides a setting
 // with a setter (plan.set_linear_solver(...), set_time_step(...)), which
-// changes the option and its decision together. Solves call
-// validate_decisions at entry: a decision that no longer matches its option
-// (an option edited without its decision) throws "Stale decision: ...".
-// Nothing chooses automatically yet: plan_from_user records the user's
+// changes the option and its decision together.
+//
+// Every subject a solve plan owns (DecisionOwner::Solve and Time) has one
+// row in solve_plan_bindings: its option, how to read its choice from the
+// plan and whether plan_from_user records it. The rows of the solver
+// settings are solver_option_bindings (linear_solver_types.hpp); the time
+// and assembly rows are below. plan_from_user, the setters (update) and
+// validate_decisions all derive from that table, so a new setting is one
+// row (plus a setter if wanted). Solves call validate_decisions at entry: a
+// decision that no longer matches its option (an option edited without its
+// decision) throws "Stale decision: ...". plan_from_user records the user's
 // options exactly as the option-based entry points do, so both paths give
 // identical results.
 //
-// A plan may also carry the mesh plan of its mesh (mesh_plan.hpp) and the
-// analysis a chooser based its decisions on; run records include both.
+// A plan may also carry the mesh plan of its mesh (mesh_plan.hpp), the
+// analysis its decisions were based on (AnalysisRecord, bound to the
+// problem and mesh it was made for) and the planner that produced it; run
+// records include all three.
 #include "fem/analysis_types.hpp"
-#include "fem/assembly.hpp"
+#include "fem/assembly_options.hpp"
 #include "fem/decision.hpp"
 #include "fem/linear_solver_types.hpp"
 #include "fem/mesh_plan.hpp"
 #include "fem/step_control.hpp"
 #include "fem/time_integration.hpp"
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -55,113 +66,180 @@ struct TimePlan {
   std::size_t max_consecutive_rejections = default_max_consecutive_rejections;
 };
 
-// The analysis a plan's decisions were based on (analysis.hpp).
-struct AnalysisRecord {
-  AnalysisOptions options{};
-  ProblemProperties properties{};
+namespace analysis_detail {
+struct RecordFactory;
+}
+// The analysis a plan's decisions were based on (analysis.hpp), bound to the
+// inputs it was made for: the problem fingerprint, the mesh fingerprint
+// when the analysis sampled a mesh, and the sampling configuration. Only
+// make_analysis_record (analysis.hpp) creates one, so the fingerprints
+// always describe the properties. Solves reject a plan whose analysis was
+// made for another problem or mesh ("Stale analysis"); refresh it with
+// make_analysis_record on the current inputs (adapt() does so when the mesh
+// changes).
+class AnalysisRecord {
+  AnalysisOptions options_{};
+  ProblemProperties properties_{};
+  std::string problem_fingerprint_{};
+  std::optional<std::string> mesh_fingerprint_{};
+  AnalysisRecord() = default;
+  friend struct analysis_detail::RecordFactory;
+
+public:
+  // The sampling configuration (quadrature degree, sample times).
+  const AnalysisOptions &options() const noexcept { return options_; }
+  const ProblemProperties &properties() const noexcept { return properties_; }
+  // problem_fingerprint (fingerprint.hpp) of the analyzed problem.
+  const std::string &problem_fingerprint() const noexcept {
+    return problem_fingerprint_;
+  }
+  // discretization::mesh_fingerprint of the sampled mesh; empty for an
+  // analysis without a mesh, which holds for every mesh.
+  const std::optional<std::string> &mesh_fingerprint() const noexcept {
+    return mesh_fingerprint_;
+  }
 };
+
+// The analysis was made for these inputs: the same problem and, when it
+// sampled a mesh, the same mesh. Throws std::invalid_argument ("Stale
+// analysis: ..."); refresh with refresh_analysis or make_analysis_record
+// (analysis.hpp).
+inline void require_current_analysis(const AnalysisRecord &analysis,
+                                     const std::string &problem_fingerprint,
+                                     const std::string &mesh_fingerprint) {
+  if (analysis.problem_fingerprint() != problem_fingerprint)
+    throw std::invalid_argument(
+        "Stale analysis: the plan's analysis was made for problem " +
+        analysis.problem_fingerprint() + ", not for this problem (" +
+        problem_fingerprint +
+        "); refresh it with refresh_analysis or "
+        "make_analysis_record");
+  if (analysis.mesh_fingerprint() &&
+      *analysis.mesh_fingerprint() != mesh_fingerprint)
+    throw std::invalid_argument(
+        "Stale analysis: the plan's analysis sampled mesh " +
+        *analysis.mesh_fingerprint() + ", not this mesh (" + mesh_fingerprint +
+        "); refresh it with refresh_analysis or make_analysis_record");
+}
+
+struct SolvePlan;
+namespace plan_detail {
+inline void record_decision(SolvePlan &plan, DecisionSubject subject,
+                            const Rationale &why);
+}
 
 struct SolvePlan {
   AssemblyOptions assembly{};
   SolverOptions solver{};
   // Present for evolutions; evolve() rejects a plan without it.
   std::optional<TimePlan> time{};
-  // Why each setting has its value, in a fixed order: for evolutions
-  // time integrator, time steps, then the solver_decisions(). A choice made
-  // by a strategy object (an integrator or step controller factory) is named
-  // by that object: evolve() sets those two records' `choice` to the name()
-  // of what actually ran (empty until then).
+  // Why each setting has its value, in table order: for evolutions time
+  // integrator, time steps, then linear solver, preconditioner, solver
+  // validation. A choice made by a strategy object (an integrator or step
+  // controller factory) is named by that object: evolve() sets those two
+  // records' `choice` to the name() of what actually ran (empty until then).
   std::vector<Decision> decisions{};
   // The mesh plan of the mesh this plan runs on, when known. Solves given a
   // MeshResult check it against the result's options.
   std::optional<MeshPlan> mesh{};
-  // The analysis a chooser based its decisions on, when one ran.
+  // The analysis a planner based its decisions on, when one ran.
   std::optional<AnalysisRecord> analysis{};
+  // The planner that produced the plan (planner.hpp), when one did.
+  std::optional<PlannerRecord> planner{};
 
-  // Overrides: each changes one option and its decision together. The
-  // default rationale records a user choice naming the option; a chooser
-  // passes its basis, evidence and DecisionSource::Automatic.
-  SolvePlan &set_linear_solver(LinearSolver method, const Rationale &why = {}) {
-    solver.method = method;
-    solver.backend = nullptr;
-    set_decision(decisions, decision_for(DecisionSubject::LinearSolver,
-                                         linear_solver_name(solver),
-                                         "SolverOptions::method", why));
+  // Change options with `change(plan)` and record the decision about
+  // `subject` from the result, with `why` (default: a user choice naming
+  // the option; a planner passes its basis, evidence and
+  // DecisionSource::Automatic). The plan is unchanged if either step throws.
+  // Throws std::invalid_argument for a subject a solve plan does not own and
+  // for a time subject in a plan without time settings.
+  template <class Change>
+  SolvePlan &update(DecisionSubject subject, Change &&change,
+                    const Rationale &why = {}) {
+    SolvePlan next = *this;
+    std::forward<Change>(change)(next);
+    plan_detail::record_decision(next, subject, why);
+    *this = std::move(next);
     return *this;
+  }
+
+  SolvePlan &set_linear_solver(LinearSolver method, const Rationale &why = {}) {
+    return update(
+        DecisionSubject::LinearSolver,
+        [&](SolvePlan &p) {
+          p.solver.method = method;
+          p.solver.backend = nullptr;
+        },
+        why);
   }
   SolvePlan &set_linear_solver_backend(
       std::shared_ptr<const LinearSolverBackendFactory> backend,
       const Rationale &why = {}) {
     if (!backend)
       throw std::invalid_argument("Linear solver backend needs a factory");
-    solver.backend = std::move(backend);
-    set_decision(decisions, decision_for(DecisionSubject::LinearSolver,
-                                         linear_solver_name(solver),
-                                         "SolverOptions::backend", why));
-    return *this;
+    return update(
+        DecisionSubject::LinearSolver,
+        [&](SolvePlan &p) { p.solver.backend = std::move(backend); }, why);
   }
   SolvePlan &set_preconditioner(Preconditioner preconditioner,
                                 const Rationale &why = {}) {
-    solver.preconditioner = preconditioner;
-    set_decision(decisions, decision_for(DecisionSubject::Preconditioner,
-                                         preconditioner_name(preconditioner),
-                                         "SolverOptions::preconditioner", why));
-    return *this;
+    return update(
+        DecisionSubject::Preconditioner,
+        [&](SolvePlan &p) { p.solver.preconditioner = preconditioner; }, why);
   }
   SolvePlan &set_solver_validation(SolverValidation validation,
                                    const Rationale &why = {}) {
-    solver.validation = validation;
-    set_decision(decisions, decision_for(DecisionSubject::SolverValidation,
-                                         solver_validation_name(validation),
-                                         "SolverOptions::validation", why));
-    return *this;
+    return update(
+        DecisionSubject::SolverValidation,
+        [&](SolvePlan &p) { p.solver.validation = validation; }, why);
   }
   SolvePlan &set_quadrature_degree(int degree, const Rationale &why = {}) {
-    assembly.quadrature_degree = degree;
-    set_decision(decisions,
-                 decision_for(DecisionSubject::Quadrature,
-                              std::to_string(degree),
-                              "AssemblyOptions::quadrature_degree", why));
-    return *this;
+    return update(
+        DecisionSubject::Quadrature,
+        [&](SolvePlan &p) { p.assembly.quadrature_degree = degree; }, why);
   }
   SolvePlan &set_time_method(TimeMethod method, const Rationale &why = {}) {
-    auto &t = time_settings();
-    t.method = method;
-    t.integrator = {};
-    set_decision(decisions, decision_for(DecisionSubject::TimeIntegrator,
-                                         time_method_name(method),
-                                         "TimeOptions::method", why));
-    return *this;
+    return update(
+        DecisionSubject::TimeIntegrator,
+        [&](SolvePlan &p) {
+          auto &t = p.time_settings();
+          t.method = method;
+          t.integrator = {};
+        },
+        why);
   }
   // The choice stays empty until evolve() names what the factory created.
   SolvePlan &set_time_integrator(TimeIntegratorFactory integrator,
                                  const Rationale &why = {}) {
     if (!integrator)
       throw std::invalid_argument("Time integrator override needs a factory");
-    time_settings().integrator = std::move(integrator);
-    set_decision(decisions,
-                 decision_for(DecisionSubject::TimeIntegrator, std::string(),
-                              "TimeOptions::integrator", why));
-    return *this;
+    return update(
+        DecisionSubject::TimeIntegrator,
+        [&](SolvePlan &p) {
+          p.time_settings().integrator = std::move(integrator);
+        },
+        why);
   }
   SolvePlan &set_time_step(double step, const Rationale &why = {}) {
-    auto &t = time_settings();
-    t.step = step;
-    t.step_controller = {};
-    set_decision(decisions, decision_for(DecisionSubject::TimeSteps,
-                                         UniformStepController::describe(step),
-                                         "TimeOptions::step", why));
-    return *this;
+    return update(
+        DecisionSubject::TimeSteps,
+        [&](SolvePlan &p) {
+          auto &t = p.time_settings();
+          t.step = step;
+          t.step_controller = {};
+        },
+        why);
   }
   SolvePlan &set_step_controller(StepControllerFactory controller,
                                  const Rationale &why = {}) {
     if (!controller)
       throw std::invalid_argument("Step controller override needs a factory");
-    time_settings().step_controller = std::move(controller);
-    set_decision(decisions,
-                 decision_for(DecisionSubject::TimeSteps, std::string(),
-                              "TimeOptions::step_controller", why));
-    return *this;
+    return update(
+        DecisionSubject::TimeSteps,
+        [&](SolvePlan &p) {
+          p.time_settings().step_controller = std::move(controller);
+        },
+        why);
   }
 
 private:
@@ -172,83 +250,133 @@ private:
   }
 };
 
+namespace plan_detail {
+template <std::size_t I> constexpr DecisionBinding<SolvePlan> solver_row() {
+  return {solver_option_bindings[I].subject,
+          [](const SolvePlan &p) {
+            return solver_option_bindings[I].option(p.solver);
+          },
+          [](const SolvePlan &p) {
+            return solver_option_bindings[I].choice(p.solver);
+          },
+          [](const SolvePlan &p) {
+            return solver_option_bindings[I].recorded(p.solver);
+          }};
+}
+template <std::size_t... I>
+constexpr std::array<DecisionBinding<SolvePlan>, sizeof...(I)>
+solver_rows(std::index_sequence<I...>) {
+  return {solver_row<I>()...};
+}
+} // namespace plan_detail
+
+// The rows of the time settings (DecisionOwner::Time; recorded only in a
+// plan with time settings). A factory-made integrator or step controller
+// leaves the choice to the object's name() (nullopt here).
+inline constexpr std::array<DecisionBinding<SolvePlan>, 2> time_plan_bindings{{
+    {DecisionSubject::TimeIntegrator,
+     [](const SolvePlan &p) -> std::string_view {
+       return p.time && p.time->integrator ? "TimeOptions::integrator"
+                                           : "TimeOptions::method";
+     },
+     [](const SolvePlan &p) -> std::optional<std::string> {
+       if (!p.time || p.time->integrator)
+         return std::nullopt;
+       return time_method_name(p.time->method);
+     },
+     [](const SolvePlan &p) { return p.time.has_value(); }},
+    {DecisionSubject::TimeSteps,
+     [](const SolvePlan &p) -> std::string_view {
+       return p.time && p.time->step_controller ? "TimeOptions::step_controller"
+                                                : "TimeOptions::step";
+     },
+     [](const SolvePlan &p) -> std::optional<std::string> {
+       if (!p.time || p.time->step_controller)
+         return std::nullopt;
+       return UniformStepController::describe(p.time->step);
+     },
+     [](const SolvePlan &p) { return p.time.has_value(); }},
+}};
+// The rows of the assembly settings. The quadrature degree is recorded only
+// by its setter, so the decisions of plain options are unchanged.
+inline constexpr std::array<DecisionBinding<SolvePlan>, 1>
+    assembly_plan_bindings{{
+        {DecisionSubject::Quadrature,
+         [](const SolvePlan &) -> std::string_view {
+           return "AssemblyOptions::quadrature_degree";
+         },
+         [](const SolvePlan &p) -> std::optional<std::string> {
+           return std::to_string(p.assembly.quadrature_degree);
+         },
+         [](const SolvePlan &) { return false; }},
+    }};
+// The binding table of a solve plan: time, solver and assembly rows, in
+// subject order.
+inline constexpr auto solve_plan_bindings = decision_detail::concat(
+    decision_detail::concat(
+        time_plan_bindings,
+        plan_detail::solver_rows(
+            std::make_index_sequence<solver_option_bindings.size()>{})),
+    assembly_plan_bindings);
+static_assert(decision_detail::binds_exactly(solve_plan_bindings,
+                                             {DecisionOwner::Solve,
+                                              DecisionOwner::Time}),
+              "solve_plan_bindings needs one row per DecisionOwner::Solve "
+              "and Time subject and no other");
+
+namespace plan_detail {
+inline void require_time(const SolvePlan &plan, DecisionSubject subject) {
+  if (decision_subject_owner(subject) == DecisionOwner::Time && !plan.time)
+    throw std::invalid_argument("Plan has no time settings");
+}
+inline void record_decision(SolvePlan &plan, DecisionSubject subject,
+                            const Rationale &why) {
+  if (decision_detail::find_binding(solve_plan_bindings, subject))
+    require_time(plan, subject);
+  record_bound_decision(solve_plan_bindings, plan, plan.decisions, subject, why,
+                        "solve plan");
+}
+inline std::vector<Decision> decisions_of(const SolvePlan &plan,
+                                          DecisionOwner owner) {
+  std::vector<Decision> out;
+  for (auto &d : bound_user_decisions(solve_plan_bindings, plan))
+    if (decision_subject_owner(d.subject) == owner)
+      out.push_back(std::move(d));
+  return out;
+}
+} // namespace plan_detail
+
 // The decisions of the time settings, as user choices.
 inline std::vector<Decision> time_decisions(const TimePlan &time) {
-  return {user_decision(DecisionSubject::TimeIntegrator,
-                        time.integrator ? std::string()
-                                        : time_method_name(time.method),
-                        time.integrator ? "TimeOptions::integrator"
-                                        : "TimeOptions::method"),
-          user_decision(DecisionSubject::TimeSteps,
-                        time.step_controller
-                            ? std::string()
-                            : UniformStepController::describe(time.step),
-                        time.step_controller ? "TimeOptions::step_controller"
-                                             : "TimeOptions::step")};
+  SolvePlan plan;
+  plan.time = time;
+  return plan_detail::decisions_of(plan, DecisionOwner::Time);
 }
 
-// The names of the strategy objects a run created (TimeIntegrator::name(),
-// StepController::name()), for validating factory-made choices.
-struct StrategyNames {
-  std::optional<std::string> integrator{}, step_controller{};
-};
-
-// Every decision of the plan is about a solve setting, appears once and
+// Every decision of the plan is owned by a solve plan, appears once and
 // matches the option it explains; the mesh plan, if any, is valid too.
 // Solves call this at entry. A decision about a factory-made strategy may
-// be empty (named after running) or must equal the name() in `ran`; before
+// be empty (named after running) or must equal the name in `ran`; before
 // the strategy exists (no name in `ran`) it is not compared. Throws
-// std::invalid_argument ("Stale decision: ...", "Duplicate decision: ...").
+// std::invalid_argument ("Stale decision: ...", "Duplicate decision: ...",
+// "... does not belong to a solve plan ...").
 inline void validate_decisions(const SolvePlan &plan,
                                const StrategyNames &ran = {}) {
-  using decision_detail::require_current;
-  decision_detail::require_unique(plan.decisions);
-  auto strategy = [](const Decision &decision, bool from_factory,
-                     const std::optional<std::string> &name,
-                     const std::string &builtin) {
-    if (!from_factory)
-      require_current(decision, builtin);
-    else if (name && !decision.choice.empty())
-      require_current(decision, *name);
-  };
-  for (const auto &decision : plan.decisions) {
-    const auto subject = decision.subject;
-    switch (subject) {
-    case DecisionSubject::LinearSolver:
-      require_current(decision, linear_solver_name(plan.solver));
-      break;
-    case DecisionSubject::Preconditioner:
-      require_current(decision,
-                      preconditioner_name(plan.solver.preconditioner));
-      break;
-    case DecisionSubject::SolverValidation:
-      require_current(decision, solver_validation_name(plan.solver.validation));
-      break;
-    case DecisionSubject::Quadrature:
-      require_current(decision,
-                      std::to_string(plan.assembly.quadrature_degree));
-      break;
-    case DecisionSubject::TimeIntegrator:
-    case DecisionSubject::TimeSteps: {
-      if (!plan.time)
-        throw std::invalid_argument(
-            "Stale decision: " + std::string(decision_subject_name(subject)) +
-            " recorded for a plan without time settings");
-      const auto &t = *plan.time;
-      if (subject == DecisionSubject::TimeIntegrator)
-        strategy(decision, static_cast<bool>(t.integrator), ran.integrator,
-                 time_method_name(t.method));
-      else
-        strategy(decision, static_cast<bool>(t.step_controller),
-                 ran.step_controller, UniformStepController::describe(t.step));
-      break;
-    }
-    default:
+  for (const auto &decision : plan.decisions)
+    if (decision_subject_owner(decision.subject) == DecisionOwner::Time &&
+        !plan.time)
       throw std::invalid_argument(
-          "Decision subject " + std::string(decision_subject_name(subject)) +
-          " does not belong to a solve plan (use SolvePlan::mesh)");
-    }
-  }
+          "Stale decision: " +
+          std::string(decision_subject_name(decision.subject)) +
+          " recorded for a plan without time settings");
+  validate_bound_decisions(solve_plan_bindings, plan, plan.decisions, ran,
+                           "solve plan", [](DecisionSubject subject) {
+                             return std::string(
+                                 decision_subject_owner(subject) ==
+                                         DecisionOwner::Mesh
+                                     ? "; use SolvePlan::mesh"
+                                     : "");
+                           });
   if (plan.mesh)
     validate_decisions(*plan.mesh);
 }
@@ -256,15 +384,16 @@ inline void validate_decisions(const SolvePlan &plan,
 // A stationary plan of the user's options.
 inline SolvePlan plan_from_user(const AssemblyOptions &assembly,
                                 const SolverOptions &solver = {}) {
-  return {assembly, solver, std::nullopt, solver_decisions(solver)};
+  SolvePlan plan{assembly, solver};
+  plan.decisions = bound_user_decisions(solve_plan_bindings, plan);
+  return plan;
 }
 // A transient plan of the user's options.
 inline SolvePlan plan_from_user(const AssemblyOptions &assembly,
                                 const SolverOptions &solver,
                                 const TimePlan &time) {
-  auto decisions = time_decisions(time);
-  for (auto &decision : solver_decisions(solver))
-    decisions.push_back(std::move(decision));
-  return {assembly, solver, time, std::move(decisions)};
+  SolvePlan plan{assembly, solver, time};
+  plan.decisions = bound_user_decisions(solve_plan_bindings, plan);
+  return plan;
 }
 } // namespace pde2d::fem

@@ -2,7 +2,8 @@
 // Public contracts of the linear solvers, without any solver implementation:
 // the built-in method and preconditioner selectors, SolverOptions, the
 // reports a solve returns, the backend interface (LinearSolverBackend) and
-// its factory (SolverOptions::backend), report names and solver_decisions.
+// its factory (SolverOptions::backend), report names and the decision rows
+// of the solver settings (solver_option_bindings, solver_decisions).
 // Plans and run records include only this header. The driver
 // (PreparedLinearSolver, solve_linear) is in prepared_linear_solver.hpp,
 // Dirichlet lifting in constraints.hpp and the built-in Eigen backends in
@@ -11,12 +12,14 @@
 #include "fem/system.hpp"
 #include "fem/timing.hpp"
 #include "provenance.hpp"
+#include <array>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -219,18 +222,41 @@ inline const char *solver_validation_name(SolverValidation validation) {
   return validation == SolverValidation::Checked ? "Checked" : "AssumeValid";
 }
 
-// The user's linear-solver choices as decision records (decision.hpp).
+// The decision rows of the linear solver settings (decision.hpp,
+// DecisionBinding). plan.hpp lifts them into solve_plan_bindings, the one
+// table of a SolvePlan; a new solver setting with a decision is one row here.
+inline constexpr std::array<DecisionBinding<SolverOptions>, 3>
+    solver_option_bindings{{
+        {DecisionSubject::LinearSolver,
+         [](const SolverOptions &o) -> std::string_view {
+           return o.backend ? "SolverOptions::backend"
+                            : "SolverOptions::method";
+         },
+         [](const SolverOptions &o) -> std::optional<std::string> {
+           return linear_solver_name(o);
+         },
+         [](const SolverOptions &) { return true; }},
+        {DecisionSubject::Preconditioner,
+         [](const SolverOptions &) -> std::string_view {
+           return "SolverOptions::preconditioner";
+         },
+         [](const SolverOptions &o) -> std::optional<std::string> {
+           return preconditioner_name(o.preconditioner);
+         },
+         [](const SolverOptions &) { return true; }},
+        {DecisionSubject::SolverValidation,
+         [](const SolverOptions &) -> std::string_view {
+           return "SolverOptions::validation";
+         },
+         [](const SolverOptions &o) -> std::optional<std::string> {
+           return solver_validation_name(o.validation);
+         },
+         [](const SolverOptions &) { return true; }},
+    }};
+
+// The user's linear-solver choices as decision records, from the rows above.
 inline std::vector<Decision> solver_decisions(const SolverOptions &options) {
-  return {user_decision(DecisionSubject::LinearSolver,
-                        linear_solver_name(options),
-                        options.backend ? "SolverOptions::backend"
-                                        : "SolverOptions::method"),
-          user_decision(DecisionSubject::Preconditioner,
-                        preconditioner_name(options.preconditioner),
-                        "SolverOptions::preconditioner"),
-          user_decision(DecisionSubject::SolverValidation,
-                        solver_validation_name(options.validation),
-                        "SolverOptions::validation")};
+  return bound_user_decisions(solver_option_bindings, options);
 }
 
 } // namespace pde2d::fem

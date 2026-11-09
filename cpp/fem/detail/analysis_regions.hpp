@@ -6,6 +6,7 @@
 // judgement and tangential terms the symmetry judgement.
 #include "fem/analysis_types.hpp"
 #include "fem/boundary_classification.hpp"
+#include "fem/classified_edge.hpp"
 #include "fem/detail/analysis_interior.hpp"
 #include "fem/detail/edge_forms/forms.hpp"
 #include "fem/expression.hpp"

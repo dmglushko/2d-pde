@@ -44,15 +44,18 @@ void subjects_are_typed() {
   for (const auto subject : decision_subjects) {
     const auto name = decision_subject_name(subject);
     check(decision_subject_from_name(name) == subject, "Name round trip");
-    check(subject == name, "String comparison of the printed name");
+    check(decision_subject_info(subject).name == name, "Table row");
   }
   check(!decision_subject_from_name("no such subject"), "Unknown name");
-  check(user_decision("linear solver", "SparseLU", "SolverOptions::method")
-                .subject == DecisionSubject::LinearSolver,
-        "String subjects map to the enum");
-  expect_throws<std::invalid_argument>(
-      [] { user_decision("bogus", "x", "Options::x"); },
-      "Unknown decision subject: bogus");
+  check(decision_subject_owner(DecisionSubject::LinearSolver) ==
+                DecisionOwner::Solve &&
+            decision_subject_owner(DecisionSubject::TimeSteps) ==
+                DecisionOwner::Time &&
+            decision_subject_owner(DecisionSubject::SizeField) ==
+                DecisionOwner::Mesh &&
+            decision_subject_owner(DecisionSubject::Marking) ==
+                DecisionOwner::Adapt,
+        "Owners");
 }
 
 void setters_change_option_and_decision() {
@@ -202,6 +205,8 @@ void mesh_plans() {
   options.refinement.max_edge_length = .4;
   const auto mesh_plan = mesh_plan_from_user(options);
   check(mesh_plan.decisions.size() == 4, "Four mesh decisions");
+  check(same(mesh_plan.decisions, mesh_decisions(options)),
+        "The plan records the options' decisions");
   check(mesh_plan.decisions[0].subject == DecisionSubject::MeshAlgorithm &&
             mesh_plan.decisions[0].choice == "ConstrainedDelaunay" &&
             mesh_plan.decisions[1].choice ==

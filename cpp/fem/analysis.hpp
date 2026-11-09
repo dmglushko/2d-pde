@@ -6,6 +6,8 @@
 //   ProblemProperties q = analyze(problem);          // symbolic only
 //   SystemProperties  s = analyze(assembled_system); // one assembled system
 //   BoundaryRegionProperties r = analyze_boundary_region(name, edges);
+//   plan.analysis = make_analysis_record(problem, mesh, options); // bound
+//                                                    // to problem and mesh
 //
 // Symbolic judgements (constant coefficients, symbolic zeros, boundary
 // classification) are Proven. Variable coefficients are sampled at the
@@ -22,15 +24,20 @@
 //
 // The types are in analysis_types.hpp; the interior and region judgements in
 // detail/analysis_interior.hpp and detail/analysis_regions.hpp.
+#include "discretization/mesh_fingerprint.hpp"
 #include "discretization/mesh_validation.hpp"
 #include "fem/analysis_types.hpp"
 #include "fem/boundary_assignment.hpp"
 #include "fem/boundary_classification.hpp"
+#include "fem/classified_edge.hpp"
 #include "fem/detail/analysis_interior.hpp"
 #include "fem/detail/analysis_regions.hpp"
+#include "fem/fingerprint.hpp"
+#include "fem/plan.hpp"
 #include "fem/problem.hpp"
 #include "fem/system.hpp"
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -161,5 +168,62 @@ inline SystemProperties analyze(const AssembledSystem &system) {
                            at + ", relative skew tolerance " +
                                analysis_detail::number(symmetry_tolerance)};
   return s;
+}
+
+namespace analysis_detail {
+struct RecordFactory {
+  static AnalysisRecord make(const AnalysisOptions &options,
+                             ProblemProperties properties,
+                             std::string problem_fingerprint,
+                             std::optional<std::string> mesh_fingerprint) {
+    AnalysisRecord record;
+    record.options_ = options;
+    record.properties_ = std::move(properties);
+    record.problem_fingerprint_ = std::move(problem_fingerprint);
+    record.mesh_fingerprint_ = std::move(mesh_fingerprint);
+    return record;
+  }
+};
+} // namespace analysis_detail
+
+// The analysis evidence of a plan (SolvePlan::analysis), bound to its
+// inputs: analyze(problem[, mesh], options) together with the problem
+// fingerprint, the mesh fingerprint (with a mesh) and the options. The only
+// way to make an AnalysisRecord, so a record's fingerprints always describe
+// its properties.
+inline AnalysisRecord
+make_analysis_record(const Problem &problem,
+                     const AnalysisOptions &options = {}) {
+  analysis_detail::validate(options);
+  return analysis_detail::RecordFactory::make(
+      options, analyze(problem), problem_fingerprint(problem), std::nullopt);
+}
+inline AnalysisRecord
+make_analysis_record(const Problem &problem,
+                     const discretization::TriangleMesh &mesh,
+                     const AnalysisOptions &options = {}) {
+  return analysis_detail::RecordFactory::make(
+      options, analyze(problem, mesh, options), problem_fingerprint(problem),
+      discretization::mesh_fingerprint(mesh));
+}
+
+// Make plan.analysis current for `problem` on `mesh`: an analysis made for
+// another problem, or on another mesh, is recomputed with its own options
+// (on `mesh` if it sampled a mesh). A plan without analysis is unchanged.
+// Returns true when it recomputed. adapt() calls this for every new mesh.
+inline bool refresh_analysis(SolvePlan &plan, const Problem &problem,
+                             const discretization::TriangleMesh &mesh) {
+  if (!plan.analysis)
+    return false;
+  const auto &a = *plan.analysis;
+  const auto problem_print = problem_fingerprint(problem);
+  const bool sampled = a.mesh_fingerprint().has_value();
+  if (a.problem_fingerprint() == problem_print &&
+      (!sampled ||
+       *a.mesh_fingerprint() == discretization::mesh_fingerprint(mesh)))
+    return false;
+  plan.analysis = sampled ? make_analysis_record(problem, mesh, a.options())
+                          : make_analysis_record(problem, a.options());
+  return true;
 }
 } // namespace pde2d::fem

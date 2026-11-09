@@ -50,7 +50,9 @@ TriangleMesh + Problem ──bind_boundary──▶ BoundaryBinding (owned snaps
      │                                      shared by assembly and analysis
      ├──analyze──▶ ProblemProperties   (each property: value + Evidence + reason)
      └──PreparedAssembly──▶ AssembledSystem
-options ──plan_from_user──▶ SolvePlan {assembly, solver, time, decisions, mesh, analysis}
+options ──plan_from_user──▶ SolvePlan {assembly, solver, time, decisions, mesh, analysis, planner}
+SolvePlanner / MeshPlanner ──run_planner──▶ checked SolvePlan / MeshPlan   (UserPlanner = identity)
+problem [+ mesh] ──make_analysis_record──▶ AnalysisRecord (properties + fingerprints + options)
 MeshOptions ──mesh_plan_from_user──▶ MeshPlan {options, decisions}   (SolvePlan::mesh)
 SolvePlan ──PreparedStationary.solve(t[, guess]) / solve_stationary──▶ StationarySolution
 SolvePlan + InitialConditions (Expr or nodal Vector) ──evolve──▶ Evolution
@@ -64,6 +66,8 @@ Adaptive loop (stationary), by hand or as adapt(result, problem, plan, AdaptOpti
      ──refine_mesh(result, marked)──▶ MeshResult
      ──transfer_field(old mesh, values, new mesh)──▶ values on the new mesh
      ──PreparedStationary(new result, plan).solve(t, guess = transferred)──▶ values
+  optional AdaptOptions::solve_planner (before each solve), mesh_planner (after marking);
+  plan.analysis refreshed and plan.mesh updated for each refined mesh
   adapt ──▶ AdaptiveHistory {iterations: RunRecord, transfer, estimate summary,
                              marking, refinement report, Decisions; stop; final state}
         ──write_json (adaptivity_json.hpp)──▶ versioned JSON
@@ -92,7 +96,10 @@ discretization facility; field transfer and error estimation are FEM
 
 `AssembledSystem` and the sparse aliases live in the element-independent
 `cpp/fem/system.hpp`; linear solvers and time integrators
-(`time_integration.hpp`) depend only on it. The linear solver layer is split
+(`time_integrator.hpp`, `time_integration.hpp`) depend only on it. Each
+built-in `TimeMethod` is one unit in `detail/time_schemes/` (name, order,
+factory, descriptor) behind one dispatch (`with_time_method`), like the
+boundary edge forms and the interior algorithms. The linear solver layer is split
 by role: contracts (`linear_solver_types.hpp`, which plans and records
 include), Dirichlet lifting (`constraints.hpp`), the shared driver
 (`prepared_linear_solver.hpp`) and the private Eigen backends
@@ -115,15 +122,28 @@ disagree. `decision.hpp` records choices (`Decision`: typed
 `DecisionSubject`, choice, basis, evidence, source) in
 `SolverReport::decisions` and the run record, printed by `write_report`.
 The settings and their decisions travel together as a `SolvePlan`
-(`plan.hpp`), the one output type of a future automatic chooser and the one
-place to override it: setters change an option and its decision together,
-and every solve validates at entry that each decision still matches its
-option ("Stale decision"). `MeshPlan` (`fem/mesh_plan.hpp`) does the same
-for `MeshOptions`; it lives in `fem` because decisions do, so
-discretization stays independent. Today every recorded decision is
+(`plan.hpp`), the one output type of a planner and the one place to
+override it: setters change an option and its decision together, and every
+solve validates at entry that each decision still matches its option
+("Stale decision"). Each subject has one row in `decision_subject_table`
+(stable name, owner: Solve, Time, Mesh or Adapt), and each plan kind one
+binding table (`solve_plan_bindings`, `mesh_plan_bindings`) saying how to
+read every owned subject's choice from the options; user decisions,
+setters, validation and the owner check all derive from it. `MeshPlan`
+(`fem/mesh_plan.hpp`) does the same for `MeshOptions`; it lives in `fem`
+because decisions do, so discretization stays independent. Planners plug in
+at `SolvePlanner` and `MeshPlanner` (`planner.hpp`; `UserPlanner` is the
+identity), checked by `run_planner` and run by `adapt` between iterations.
+The analysis a plan relies on (`AnalysisRecord`, made only by
+`make_analysis_record`) carries the problem and mesh fingerprints and its
+options; solves refuse evidence for other inputs ("Stale analysis") and
+`adapt` refreshes it on refined meshes. Today every recorded decision is
 user-selected (`plan_from_user`, `mesh_plan_from_user`); there is no
-automatic selection yet. Top-level results carry a `RunRecord`
-(`record.hpp`) with the plan (and its mesh plan and analysis), input
+automatic selection yet. Plans and records include only contract headers
+(`assembly_options.hpp`, `linear_solver_types.hpp`, `analysis_types.hpp`,
+`mesh_plan.hpp`), never assembly, symbolic or edge-form headers; the
+`header_standalone` test compiles every public header on its own. Top-level results carry a `RunRecord`
+(`record.hpp`) with the plan (and its mesh plan, analysis and planner), input
 fingerprints (mesh, problem, initial fields), mesh provenance when the
 solve got a `MeshResult`, the strategies that ran and whether they are
 replayable, library/dependency versions, execution policy, workload, work

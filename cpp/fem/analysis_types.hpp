@@ -1,20 +1,19 @@
 #pragma once
 // Result and option types of problem analysis (analysis.hpp): properties of
 // a Problem or an assembled system, each a Property<T> with its Evidence.
-// Kept apart from the analysis itself so code that only reads or prints
-// properties (report.hpp, a future automatic chooser) does not need it.
+// Kept apart from the analysis itself so code that only reads, records or
+// prints properties (plan.hpp, record.hpp, report.hpp, a planner) needs no
+// symbolic or boundary-classification headers. The edge input of region
+// analysis (ClassifiedEdge) is in classified_edge.hpp.
 //
 // Sign convention (problem.hpp): the operator is elliptic when A is negative
 // definite, as for the default a_xx = a_yy = -1 (that is, -Laplace u), and
 // the reaction c is coercive when c >= 0.
-#include "fem/boundary_classification.hpp"
 #include "fem/boundary_form.hpp"
 #include "fem/evidence.hpp"
-#include "fem/p1_element.hpp"
-#include "fem/weak_form.hpp"
+#include "fem/weak_terms.hpp"
 #include <cstddef>
 #include <string>
-#include <variant>
 #include <vector>
 
 namespace pde2d::fem {
@@ -124,14 +123,5 @@ struct ProblemProperties {
 struct SystemProperties {
   Property<int> time_order;
   Property<bool> symmetric_stiffness;
-};
-
-// One boundary edge as region analysis sees it: the classification of its
-// condition on the edge (classify_edge_condition) or the message that
-// rejected it, and its frame. analyze(problem, mesh) builds these from
-// bind_boundary; analyze_boundary_region accepts them directly.
-struct ClassifiedEdge {
-  std::variant<EdgeCondition, std::string> condition;
-  p1::EdgeFrame frame;
 };
 } // namespace pde2d::fem

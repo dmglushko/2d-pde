@@ -16,9 +16,10 @@
 // in detail/: interior elements
 // (assembly_elements.hpp), boundary edges (assembly_edges.hpp) and the serial
 // scatter (assembly_scatter.hpp). The element-independent result types are in
-// system.hpp.
+// system.hpp, the options (AssemblyOptions) in assembly_options.hpp.
 #include "discretization/mesh_validation.hpp"
 #include "execution.hpp"
+#include "fem/assembly_options.hpp"
 #include "fem/detail/assembly_edges.hpp"
 #include "fem/detail/assembly_elements.hpp"
 #include "fem/detail/assembly_scatter.hpp"
@@ -31,11 +32,6 @@
 #include <vector>
 
 namespace pde2d::fem {
-struct AssemblyOptions {
-  int quadrature_degree = 2;
-  double boundary_tolerance = 1e-10;
-  pde2d::ExecutionOptions execution{};
-};
 // Immutable preparation counters. Per-assembly interior evaluations count
 // successful full calls; boundary validation/evaluation is deliberately
 // separate.
@@ -121,12 +117,6 @@ public:
   assemble(double time = 0,
            DirichletDerivative derivative = DirichletDerivative::Value) const {
     return data_->assemble(time, derivative);
-  }
-  // Compatibility: integer order 0, 1 or 2.
-  AssembledSystem assemble(double time, int dirichlet_derivative_order) const {
-    if (!std::isfinite(time))
-      throw std::invalid_argument("Invalid FEM assembly time");
-    return assemble(time, dirichlet_derivative(dirichlet_derivative_order));
   }
   const discretization::TriangleMesh &mesh() const { return data_->mesh; }
   const Problem &problem() const { return data_->problem; }

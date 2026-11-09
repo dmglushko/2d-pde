@@ -29,9 +29,9 @@ std::vector<Frame> uncached(const pde2d::discretization::TriangleMesh &mesh,
     check(s.report.converged, "Uncached reference failed");
     return s.values;
   };
-  services.start_dirichlet = [&](int order) {
+  services.start_dirichlet = [&](DirichletDerivative derivative) {
     return PreparedAssembly(mesh, p, o.assembly)
-        .assemble(o.start, order)
+        .assemble(o.start, derivative)
         .dirichlet;
   };
   auto old = assemble(mesh, p, o.start, o.assembly);
