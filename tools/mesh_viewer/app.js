@@ -76,7 +76,7 @@
     const s=analysis.summary;
     const stat=(label,value,wide=false)=>`<div class="stat${wide?' wide':''}"><strong>${safe(value)}</strong><span>${safe(label)}</span></div>`;
     $('mesh-title').textContent='P1 triangular mesh';
-    $('overview').innerHTML=stat('Nodes',s.nodes)+stat('Triangles',s.elements)+stat('Recorded boundary edges',s.boundaryEdges)+stat('Degenerate / inverted triangles',s.degenerate+s.inverted)+stat('Mean-ratio quality: min / mean / max',s.quality?`${number(s.quality.min)} / ${number(s.quality.mean)} / ${number(s.quality.max)}`:'—',true)+stat('Minimum angle: min / mean / max',s.minAngle?`${number(s.minAngle.min)}° / ${number(s.minAngle.mean)}° / ${number(s.minAngle.max)}°`:'—',true)+'<p class="muted" style="grid-column:span 2">Quality summaries exclude degenerate and inverted triangles. Connectivity warnings are listed below.</p>';
+    $('overview').innerHTML=stat('Nodes',s.nodes)+stat('Triangles',s.elements)+stat('Recorded boundary edges',s.boundaryEdges)+stat('Boundary loops (outer + holes)',s.boundaryLoops)+stat('Degenerate / inverted triangles',s.degenerate+s.inverted)+stat('Mean-ratio quality: min / mean / max',s.quality?`${number(s.quality.min)} / ${number(s.quality.mean)} / ${number(s.quality.max)}`:'—',true)+stat('Minimum angle: min / mean / max',s.minAngle?`${number(s.minAngle.min)}° / ${number(s.minAngle.mean)}° / ${number(s.minAngle.max)}°`:'—',true)+'<p class="muted" style="grid-column:span 2">Quality summaries exclude degenerate and inverted triangles. Connectivity warnings are listed below.</p>';
     const row=(label,value)=>`<div class="row"><span>${safe(label)}</span><span>${safe(value)}</span></div>`;
     $('settings').innerHTML=mesh.options ?
       row('Interior algorithm',['Ear clipping','Constrained Delaunay'][mesh.options.algorithm])+
@@ -89,7 +89,7 @@
       row('Refinement step limit',mesh.options.refinement.maxSteps)+
       row('Protected junctions',mesh.boundaryContext?.protectedVertices.length ?? 0)+
       row('Stored source curves',mesh.boundaryContext?.curves.length ?? 0) :
-      '<p class="muted">Settings unavailable in v1/v2 files.</p>';
+      '<p class="muted">Settings unavailable in v1/v2 files and v5 files without a meshing result.</p>';
     $('report').innerHTML=mesh.report ?
       row('Size target satisfied',mesh.report.sizeSatisfied?'reported satisfied':'reported unsatisfied')+
       row('Constrained Delaunay',''+(mesh.report.delaunayVerified?'reported verified':'not verified'))+

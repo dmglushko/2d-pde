@@ -133,6 +133,12 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
   `edge_divisor_samples` (boundary divisors, Evidence::Sampled),
   `time_order` (integrator `check()`), `numerically_symmetric` (the CG
   backend). Do not re-implement one of them elsewhere.
+- **Domains may have holes.** Nothing in the FEM module assumes one
+  boundary loop: regions are bound per edge wherever they lie, and each
+  edge's outward normal comes from its triangle, so on a hole it points into
+  the hole (`nx`, `ny` in conditions). `tests/fem/annulus.cpp` solves a
+  manufactured problem with Dirichlet data outside and a Robin condition on
+  the hole at second order in L2.
 - **Decisions are recorded.** Every choice that shapes a solve appears in
   `SolverReport::decisions` or `EvolutionMetadata::decisions`, copied from
   the `SolvePlan` that ran. Today all are user-selected (`plan_from_user`);

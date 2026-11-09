@@ -1,8 +1,9 @@
 # Geometry and triangle meshing
 
 The header-only C++23 API separates analytical geometry, boundary sampling, and
-interior triangulation. It supports one simple closed outline, including concave
-polygons, without holes. Every triangle has three vertex indices (P1).
+interior triangulation. A domain is one outer closed loop plus zero or more
+inner loops (holes); every loop is simple and may be concave or curved. Every
+triangle has three vertex indices (P1). See [Domains with holes](#domains-with-holes).
 
 ```cpp
 #include "discretization/geometry.hpp"
@@ -146,11 +147,77 @@ partial mesh with an explicit unmet-size report. Invalid inputs throw.
 `report.refinement_steps` counts insertions; `report.delaunay_verified` describes
 the CDT check, not a minimum-angle certificate.
 
+## Domains with holes
+
+A domain is an outer loop and zero or more holes. The single-outline
+constructors and overloads are the zero-hole case and behave exactly as
+before (same meshes, same files).
+
+```cpp
+AnnulusGeometry ring(1.0, 0.4);                 // regions "outer", "inner"
+CurveGeometry plate({{"wall", outer_curves}},   // outer loop
+                    {{{"cylinder", {circle}}},  // hole 1
+                     {{"slot", slot_curves}}}); // hole 2
+Boundary raw{outer_points, outer_tags, {{hole_points, hole_tags}}};
+```
+
+- **Representation.** `CurveGeometry(outer, holes)` and `setRegions(outer,
+  holes)` take one `std::vector<CurveRegion>` per loop. Curves are stored loop
+  by loop, outer first; `BoundaryCurve::loop` is 0 for the outer loop and
+  `1 + i` for hole `i`, and `loopCount()` counts loops. `Boundary` (the
+  polygon form) keeps the outer loop in `points`/`edge_tags` and adds
+  `holes` (`BoundaryLoop {points, edge_tags}`); a hole with empty tags is
+  untagged.
+- **Regions** are global names: a region may have pieces on several loops,
+  then it is disconnected (`pieces` lists one piece per loop run, joined
+  across each loop's own stored seam). Runs and pieces never continue from one
+  loop into the next. Editing (rename, move, split by curve ID or connected
+  region, resize replay) works unchanged on hole curves; split pieces keep
+  their loop.
+- **Orientation** is neither normalized nor rejected: each loop may run either
+  way and keeps the direction it was given, because stored direction defines
+  region pieces and split fractions. Meshing, validation and FEM normals do
+  not depend on it; mesh boundary edges follow each loop in its given
+  direction.
+- **Nesting** is validated on the sampled polygon (`discretize_boundary`,
+  `generate_mesh(Boundary)`), with these messages: each loop simple (the
+  single-loop messages), "Boundary loops intersect or touch" (any contact
+  between two loops, including a shared vertex), "Hole is not inside the
+  outer boundary", "Holes must not be nested". Analytical curves are not
+  checked for contact beyond their sampling, as for single loops.
+- **Sampling** (`discretize_boundary`) runs per loop: region junctions and
+  corners are anchored per loop, a loop of one or two curves is still split
+  into a polygon, and each chord keeps its source intervals.
+  `BoundaryContext::polygon_snapshot` holds all loops one after another with
+  `snapshot_loop_sizes` (empty for one loop), and `curves[i].loop` names the
+  mesh boundary loop each source curve is sampled on.
+- **Triangulation.** Ear clipping joins every hole to the outer ring by a
+  bridge from the hole's rightmost vertex to the nearest visible ring vertex
+  (holes in decreasing order of that vertex; visibility with the exact
+  predicates, so the bridge touches no loop edge or earlier bridge), then
+  clips the resulting weakly simple ring. CDT legalization and refinement
+  start from that seed; every loop's edges are constrained, bridges are
+  ordinary interior edges. `Fixed`, `SplitPolygonEdges` and `RefineOnCurves`
+  treat hole edges like outer edges, so size targets, size fields and marked
+  refinement put new hole vertices on the hole curves. Curve rebuilds
+  traverse each loop separately.
+- **Mesh boundary.** `TriangleMesh::boundary_edges` lists the edges of every
+  loop; generated meshes list them loop by loop, outer first.
+  `boundary_loops(mesh)` returns the loops as boundary-edge index lists
+  (outer loop first: the one through the lexicographically least boundary
+  vertex; holes by lowest edge index).
+- **Point location** treats a hole as outside the mesh: a point in a hole
+  gets `std::nullopt`, or with `max_outside_distance` the triangle of the
+  nearest (hole) boundary edge. `transfer_field` works unchanged.
+- **Files.** Meshes with holes are written as version 5 of the format (below);
+  one-loop meshes keep versions 4 and 2.
+
 ## Geometry and boundary regions
 
 Built-in defaults are circle radius 1, ellipse semi-axes 2 and 1, rectangle
-2 by 1, capped rectangle 2 by 1 with a positive-x semicircle, and regular hexagon
-of side length 1. `PolygonGeometry` takes ordered local vertices; its closing
+2 by 1, capped rectangle 2 by 1 with a positive-x semicircle, regular hexagon
+of side length 1, and an annulus with radii 1 and 0.5 (`AnnulusGeometry`,
+regions `outer` and `inner`, `setRadii` requires inner < outer). `PolygonGeometry` takes ordered local vertices; its closing
 edge is implicit. Translation uses `setCenter`, and `setRotation` takes
 counterclockwise radians about that center. The cap diameter is the rectangle
 height; total capped length is width + height/2.
@@ -254,13 +321,18 @@ wraparound. Use name-based merging for arbitrary groups and wraparound.
 optional world-coordinate source-curve context for resumed curve refinement.
 `import_mesh_result(path)` restores it. This snapshot is not an editable geometry
 archive. `export_mesh(TriangleMesh, path)` writes version 2 with boundary tags.
+A mesh with holes is written as version 5 by both overloads (boundary edges
+grouped by loop, regrouped stably if needed; a raw mesh records no result).
 `import_mesh(path)` reads topology only, dropping refinement context. Readers
-accept versions 1 through 4; v1 edges are untagged. All use zero-based indices and
+accept versions 1 through 5 and reject holes in files older than version 5;
+v1 edges are untagged. All use zero-based indices and
 fixed `ORDER 1`. Nonempty tags use ASCII letters, digits, `_`, `.`, or `-`, with
 the standalone `-` token reserved for untagged edges.
 
 Validation checks indices, positive triangle area, shared-edge ownership and
-orientation, exterior boundary records, connected disk topology, unused and
+orientation, exterior boundary records, one connected domain whose boundary is
+one or more closed loops (Euler characteristic `V - E + F = 2 - loops`;
+messages "Boundary is not a closed loop", "Disconnected mesh"), unused and
 duplicate vertices, and crossing or overlapping edges. Conservative spatial
 indexes prune edge-pair checks before robust predicates; overlapping boxes can
 still yield quadratic work. Validation does not certify minimum angles. Meshing requires Boost
@@ -283,12 +355,16 @@ auto boundary = geo::discretize_boundary(geometry).boundary;
 geo::exportSvg(geometry, "edited-boundary.svg");
 ```
 
-Each `<path id="region" d="..."/>` supplies one tagged run. An optional
+Each `<path id="region" d="..."/>` supplies one tagged run per subpath (each
+`M` starts a subpath; only `M` may follow `Z`). An optional
 `data-region="name"` overrides the region name without changing the unique XML
 ID. Several paths may carry the same region name, preserving disconnected
 membership and runs crossing the stored boundary seam. Paths may
-be unordered and reversed; their endpoints must join unambiguously into one
-closed loop. A single path may close with `Z`. Supported path commands are
+be unordered and reversed; their endpoints must join unambiguously into closed
+loops. A single path may close with `Z`. Several closed loops become a domain
+with holes: the loop with the largest (sampled) area is the outer loop, the
+others are holes in file order; nesting is validated when the boundary is
+sampled. Supported path commands are
 absolute and relative `M`, `L`, `Q`, `C`, `A`, and `Z`, including repeated
 argument groups. Coordinates retain the SVG coordinate direction. A single
 optional `<circle id="origin" cx="..." cy="..."/>` sets the origin; otherwise
@@ -300,9 +376,9 @@ Distances are measured on the sampled polyline, with nearest measured to edges,
 so increasing `SvgOptions::samples_per_curve` improves curved-distance
 approximation. This option affects import scaling only; boundary sampling for
 meshing uses `BoundaryOptions`.
-The importer rejects zero distances, invalid or disconnected paths, transforms,
-groups, other shapes, multiple subpaths, and unsupported attributes and
-commands. It does not apply viewBox, CSS, or units; use plain numeric coordinates
+`Nearest`/`Farthest` distances are measured over all loops. The importer
+rejects zero distances, invalid paths, chains that do not close, transforms,
+groups, other shapes, and unsupported attributes and commands. It does not apply viewBox, CSS, or units; use plain numeric coordinates
 and export paths without presentation attributes. The triangulator validates
 loop simplicity. libxml2 development headers and pkg-config are required for
 SVG I/O and its tests. Include `discretization/boundary_discretization.hpp` for
@@ -311,7 +387,8 @@ the free sampling API in the example.
 `exportSvg(const CurveGeometry&, const std::string& filename)` exports the
 **current edited analytical geometry**, independently of mesh export (`.pde2d`).
 An overload accepts `std::ostream&`. Both return `void`. Curves remain in stored
-boundary order, with one path per consecutive named run. Lines and quadratic
+boundary order, with one path per consecutive named run of one loop; each loop
+is exported as its own closed chain, outer loop first. Lines and quadratic
 and cubic Beziers use `L`, `Q`, and `C`; elliptical arcs use `A`, split into
 pieces of at most a quarter turn. Full ellipses/circles therefore use four
 analytical arcs, never a polygon approximation. Segment subdivision changes

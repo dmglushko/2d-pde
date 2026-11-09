@@ -90,7 +90,11 @@ struct BoundaryContext {
   std::vector<std::size_t> protected_vertices;
   // Polygon at sampling or the last analytical-curve update. Chord splits
   // must remain on this polygon; its vertices are anchored to source curves.
+  // With holes it holds every loop, outer first, one after another.
   std::vector<Point2> polygon_snapshot;
+  // Vertex counts of the consecutive loops in polygon_snapshot (outer loop
+  // first). Empty means one loop: the historical single-outline snapshot.
+  std::vector<std::size_t> snapshot_loop_sizes{};
 };
 // What refine_mesh(result, marked, options) did with the marked triangles.
 // Request-time detail: .pde2d files do not store it.

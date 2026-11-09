@@ -59,7 +59,8 @@ stationary endpoints for every new curve.
 
 ## Interchange adapters
 
-PDE2D_MESH v3 IDs are stable: line `0`, quadratic `1`, cubic `2`, arc `3`.
+PDE2D_MESH v3 IDs are stable (unchanged in v4 and v5): line `0`, quadratic `1`,
+cubic `2`, arc `3`.
 `curve_io.hpp` assigns each concrete type an explicit `Codec` specialization
 with an ID and read/write functions. Never derive IDs from variant ordering,
 renumber existing IDs, or change an existing record's field layout. Decoding
@@ -81,7 +82,24 @@ or runtime plugin registry is needed for the current supported types.
 ## Shapes and meshing options
 
 A shape made from existing curve types only needs to construct `CurveRegion`s,
-as the existing shape classes do. It does not need mesher type dispatch.
+as the existing shape classes do. It does not need mesher type dispatch. A
+shape with holes passes one region list per hole to
+`rebuildRegions(outer, holes)` (see `AnnulusGeometry`); resize replay
+compares loops as well as regions and curve kinds.
+
+## Boundary loops
+
+Every layer carries the outer loop and the holes explicitly: `CurveGeometry`
+(`BoundaryCurve::loop`), `Boundary::holes`, `BoundaryContext`
+(`snapshot_loop_sizes`, `curves[i].loop`) and the mesh (`boundary_loops`). Code
+that walks a boundary must walk each loop on its own and close it on itself;
+the outer loop is first and holes keep their order. When adding a meshing
+step that rebuilds the boundary (like `rebuild_curved`), traverse
+`boundary_loops(mesh)` in order so hole numbering stays equal to
+`BoundaryCurve::loop` (`validate_boundary_context` checks it). The seed
+triangulation (`detail/ear_clipping.hpp`) bridges holes into one ring;
+a different seed (for example a CDT with hole removal) only has to return
+triangles of the same polygon, since all loop edges become constraints.
 
 `mesh_types.hpp` explicitly assigns stable algorithm and boundary-treatment IDs
 and centralizes value validation in `validateMeshOptionValues`. Add new values

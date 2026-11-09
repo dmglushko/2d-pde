@@ -85,6 +85,10 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   `RunRecord` (`record.hpp`).
 - **Time steps are transactional:** an integrator with state commits it in
   `accept()`, never in `trial()` (see `NewmarkIntegrator`).
+- **Boundaries have loops:** an outer loop plus holes (`BoundaryCurve::loop`,
+  `Boundary::holes`, `boundary_loops(mesh)`). Walk and close each loop on its
+  own, outer first; meshes with holes are `.pde2d` version 5, one-loop meshes
+  must keep writing versions 4/2 byte for byte.
 - `MeshResult::report` must be checked: meshing can return a mesh that misses
   its size target.
 - **Request-time options are not serialized:** `RefinementOptions::size_field`

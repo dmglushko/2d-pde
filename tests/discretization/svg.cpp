@@ -1,7 +1,9 @@
+#include "discretization/geometry.hpp"
 #include "discretization/svg_geometry.hpp"
 #include "discretization/triangulate.hpp"
 #include "support/geometry.hpp"
 #include "support/check.hpp"
+#include <cmath>
 #include <fstream>
 #include <iostream>
 using namespace pde2d::discretization;
@@ -212,10 +214,87 @@ void svg_import_export(const std::string &dir) {
   shortWrite.exceptions(std::ios::badbit);
   expect_throws<std::ios_base::failure>([&] { exportSvg(mixed, shortWrite); });
 }
+// Several closed subpaths or paths: the loop of largest area is the outer
+// loop, the others are holes in file order.
+void svg_holes(const std::string &dir) {
+  std::string file = std::string(dir) + "/holes.svg";
+  auto write = [&](const std::string &s) {
+    std::ofstream f(file);
+    f << s;
+  };
+  // A hole first in the file, then the outer square as two subpaths of one
+  // path that close into one loop, then a circular hole from two arcs.
+  write("<svg><path id='hole' d='M4 4 L6 4 L6 6 L4 6 Z'/>"
+        "<path id='wall' d='M0 0 L10 0 L10 10 M10 10 L0 10 L0 0'/>"
+        "<path id='round' d='M8 2 A0.5 0.5 0 0 1 8 3 A0.5 0.5 0 0 1 8 "
+        "2'/></svg>");
+  auto g = importSvg(file);
+  check(g.loopCount() == 3, "Outer loop plus two holes");
+  check(g.curves().front().region == "wall" && g.curves().front().loop == 0,
+        "Largest loop is the outer loop");
+  std::size_t loop_of_hole = 0, loop_of_round = 0;
+  for (const auto &c : g.curves()) {
+    if (c.region == "hole")
+      loop_of_hole = c.loop;
+    if (c.region == "round")
+      loop_of_round = c.loop;
+  }
+  check(loop_of_hole == 1 && loop_of_round == 2, "Holes keep file order");
+  MeshOptions options;
+  options.boundary.max_edge_length = 0.5;
+  options.refinement.max_edge_length = 0.6;
+  auto mesh = generate_mesh(g, options);
+  check(mesh.report.size_satisfied, mesh.report.message);
+  check(boundary_loops(mesh.mesh).size() == 3);
+  // Export writes one closed chain per loop; import recovers the loops.
+  AnnulusGeometry annulus(2, 0.75);
+  annulus.setCenter(1, -1);
+  exportSvg(annulus, file);
+  auto copy = importSvg(file);
+  check(copy.loopCount() == 2 && copy.region("inner").curves.size() == 4 &&
+            copy.region("outer").curves.size() == 4,
+        "Full circles export as four arcs per loop");
+  for (const auto &c : copy.curves()) {
+    auto p = curvePoint(c.segment, 0.3);
+    double r = std::hypot(p.x - 1, p.y + 1);
+    check(std::abs(r - (c.loop == 0 ? 2 : 0.75)) < 1e-9, "Radius per loop");
+  }
+  // A region spanning loops exports with generated IDs and data-region.
+  CurveGeometry shared(
+      {{"wall",
+        {LineCurve{{0, 0}, {4, 0}}, LineCurve{{4, 0}, {4, 4}},
+         LineCurve{{4, 4}, {0, 4}}, LineCurve{{0, 4}, {0, 0}}}}},
+      {{{"wall",
+         {LineCurve{{1, 1}, {2, 1}}, LineCurve{{2, 1}, {1, 2}},
+          LineCurve{{1, 2}, {1, 1}}}}}});
+  exportSvg(shared, file);
+  auto reread = importSvg(file);
+  check(reread.loopCount() == 2 && reread.region("wall").pieces.size() == 2);
+  // An open loop next to a closed one is still rejected.
+  for (const std::string bad :
+       {"<svg><path id='a' d='M0 0 L4 0 L4 4 Z'/><path id='b' d='M1 1 L2 "
+        "1'/></svg>",
+        "<svg><path id='a' d='M0 0 L4 0 L4 4 Z M1 1'/></svg>",
+        "<svg><path id='a' d='M0 0 L4 0 L4 4 Z L1 1'/></svg>"}) {
+    write(bad);
+    expect_throws<std::invalid_argument>([&] { (void)importSvg(file); });
+  }
+  // Nesting is validated when the boundary is sampled.
+  write("<svg><path id='a' d='M0 0 L4 0 L4 4 L0 4 Z M5 5 L6 5 L6 6 Z'/></svg>");
+  auto outside = importSvg(file);
+  expect_throws<std::invalid_argument>(
+      [&] { (void)discretize_boundary(outside); },
+      "Hole is not inside the outer boundary");
+}
 int main(int argc, char **argv) {
-  return pde2d_test::run({{"svg_import_export", [&] {
-                             pde2d_test::check(argc == 2,
-                                               "Usage: test TEMP_DIRECTORY");
-                             svg_import_export(argv[1]);
-                           }}});
+  return pde2d_test::run(
+      {{"svg_import_export",
+        [&] {
+          pde2d_test::check(argc == 2, "Usage: test TEMP_DIRECTORY");
+          svg_import_export(argv[1]);
+        }},
+       {"svg_holes", [&] {
+          pde2d_test::check(argc == 2, "Usage: test TEMP_DIRECTORY");
+          svg_holes(argv[1]);
+        }}});
 }

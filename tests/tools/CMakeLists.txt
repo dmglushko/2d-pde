@@ -6,6 +6,11 @@ if(NOT PDE2D_NODE)
 endif()
 pde2d_test(viewer_diagnostics "${CMAKE_COMMAND}" -E chdir "${PROJECT_SOURCE_DIR}"
   "${PDE2D_NODE}" "${CMAKE_CURRENT_SOURCE_DIR}/viewer_diagnostics.cjs")
+# Version 5 files (meshes with holes) written by tests/discretization/holes.cpp.
+pde2d_test(mesh_holes_viewer "${PDE2D_NODE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/mesh_holes_viewer.cjs"
+  "${CMAKE_BINARY_DIR}/fixtures/mesh_holes")
+set_tests_properties(mesh_holes_viewer PROPERTIES FIXTURES_REQUIRED mesh_holes_export)
 pde2d_test(long_waves_diagnostics_regressions "${PDE2D_NODE}"
   "${CMAKE_CURRENT_SOURCE_DIR}/long_waves_diagnostics_regressions.cjs")
 if(PDE2D_BUILD_FEM AND EXISTS "${PROJECT_SOURCE_DIR}/examples/fem/long_waves.cpp")

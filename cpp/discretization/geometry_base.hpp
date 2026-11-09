@@ -27,18 +27,32 @@ struct Point2 {
   double x = 0.0, y = 0.0;
 };
 
-struct Boundary {
-  // One simple, closed boundary represented without a repeated last point.
+// One simple closed loop represented without a repeated last point.
+struct BoundaryLoop {
   std::vector<Point2> points;
   // Optional tag for each edge from points[i] to points[(i+1)%size].
   std::vector<std::string> edge_tags{};
+};
+
+// A polygonal domain: one outer loop (points, edge_tags) and zero or more
+// inner loops (holes). Every loop is simple and may run in either direction;
+// holes lie strictly inside the outer loop and strictly outside each other
+// (validate_polygon checks this). Without holes this is the historical
+// single-outline boundary.
+struct Boundary {
+  // The outer loop, without a repeated last point.
+  std::vector<Point2> points;
+  // Optional tag for each edge from points[i] to points[(i+1)%size].
+  std::vector<std::string> edge_tags{};
+  std::vector<BoundaryLoop> holes{};
 };
 
 struct TriangleMesh {
   std::vector<Point2> nodes;
   // Every P1 triangle contains exactly three vertex indices.
   std::vector<std::array<std::size_t, 3>> elements;
-  // Vertex endpoints of exterior edges.
+  // Vertex endpoints of exterior edges, of every boundary loop (outer loop
+  // and holes; see boundary_loops() in mesh_validation.hpp).
   std::vector<std::pair<std::size_t, std::size_t>> boundary_edges;
   // Empty means all edges are untagged; otherwise parallel to boundary_edges.
   std::vector<std::string> boundary_tags{};

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Render PDE2D_MESH v1/v2/v3/v4 topology to PNG, without a browser/server.
+"""Render PDE2D_MESH v1-v5 topology to PNG, without a browser/server.
 
 Use the project-local visualization venv; see docs/showcase/README.md.
-The v3/v4 metadata trailer is intentionally ignored: this is a topology plotter,
+Version 5 boundary loop records (meshes with holes) are checked; the
+v3-v5 metadata trailer is intentionally ignored: this is a topology plotter,
 not an importer or validator for resuming refinement.
 """
 import argparse
@@ -26,7 +27,7 @@ def read_mesh(path):
             return line.split()
 
         header = record()
-        if len(header) != 2 or header[0] != "PDE2D_MESH" or header[1] not in {"1", "2", "3", "4"}:
+        if len(header) != 2 or header[0] != "PDE2D_MESH" or header[1] not in {"1", "2", "3", "4", "5"}:
             raise ValueError(f"{path}: unsupported mesh header")
         version = int(header[1])
         if record() != ["ORDER", "1"]:
@@ -60,6 +61,16 @@ def read_mesh(path):
                 raise ValueError(f"{path}: invalid boundary edge")
             boundary.append(tuple(map(int, row[:2])))
             tags.append(row[2] if version >= 2 and row[2] != "-" else "untagged")
+        if version >= 5:
+            # Consecutive groups of boundary edges, outer loop first.
+            loops = []
+            for _ in range(count("BOUNDARY_LOOPS")):
+                row = record()
+                if len(row) != 1:
+                    raise ValueError(f"{path}: invalid boundary loop")
+                loops.append(int(row[0]))
+            if not loops or any(n < 3 for n in loops) or sum(loops) != len(boundary):
+                raise ValueError(f"{path}: invalid boundary loops")
         if not nodes or not triangles:
             raise ValueError(f"{path}: empty mesh")
         if any(i < 0 or i >= len(nodes) for row in triangles + boundary for i in row):

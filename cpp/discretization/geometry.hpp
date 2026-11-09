@@ -100,6 +100,41 @@ private:
   double width_ = 2.0, height_ = 1.0;
 };
 
+// Region between two concentric circles: the outer loop is region "outer",
+// the hole region "inner". Both circles run counterclockwise from angle 0.
+class AnnulusGeometry final : public CurveGeometry {
+public:
+  explicit AnnulusGeometry(double outerRadius = 1.0, double innerRadius = 0.5) {
+    setRadii(outerRadius, innerRadius);
+  }
+  void setRadii(double outerRadius, double innerRadius) {
+    if (!(outerRadius > 0.0) || !std::isfinite(outerRadius) ||
+        !(innerRadius > 0.0) || !std::isfinite(innerRadius))
+      throw std::invalid_argument("Annulus radii must be finite and positive");
+    if (!(innerRadius < outerRadius))
+      throw std::invalid_argument(
+          "Annulus inner radius must be smaller than the outer radius");
+    auto next = *this;
+    next.outer_ = outerRadius;
+    next.inner_ = innerRadius;
+    next.rebuild();
+    *this = std::move(next);
+  }
+  void setOuterRadius(double r) { setRadii(r, inner_); }
+  void setInnerRadius(double r) { setRadii(outer_, r); }
+  double outerRadius() const { return outer_; }
+  double innerRadius() const { return inner_; }
+  void rebuild() {
+    const double turn = 2 * std::numbers::pi;
+    rebuildRegions(
+        {{"outer", {EllipticalArc{{0, 0}, outer_, outer_, 0, 0, turn}}}},
+        {{{"inner", {EllipticalArc{{0, 0}, inner_, inner_, 0, 0, turn}}}}});
+  }
+
+private:
+  double outer_ = 1.0, inner_ = 0.5;
+};
+
 enum class SemicircleEnd { PositiveX, NegativeX };
 
 // Rectangle with one short end replaced by a semicircular cap. The cap

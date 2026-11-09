@@ -56,16 +56,19 @@ arc-length cuts, and edit replay on resizing remain unchanged; consult the
 
 Exporting `MeshResult` writes v4, preserving options, report, and optional
 analytical boundary context. `import_mesh_result` supports resuming curves.
-Exporting raw `TriangleMesh` writes v2 (topology and tags). `import_mesh` accepts
-v1 through v4 but returns only topology; v1 has no tags. Source IDs stored in a
+Exporting raw `TriangleMesh` writes v2 (topology and tags). Meshes with holes
+are written as v5 by both. `import_mesh` accepts v1 through v5 but returns only
+topology; v1 has no tags. Source IDs stored in a
 boundary snapshot do not recreate an editable geometry or its history. All elements are
 three-node P1 triangles, indices start at zero, and `ORDER` must be `1`.
 
 Import validates indices, finite coordinates, exact positive orientation,
-edge ownership and direction, one connected disk, boundary records, unused or
+edge ownership and direction, one connected domain bounded by closed loops
+(an outer loop and holes), boundary records, unused or
 duplicate vertices, and crossing or overlapping edges. It also verifies recorded
 size/CDT guarantees and source-context consistency. Geometric validation includes
 a quadratic edge-pair check; it does not certify a minimum angle. Geometry
-accepts a single simple loop without holes. Floating-point coordinate precision
+accepts one simple outer loop plus simple holes strictly inside it and outside
+each other. Floating-point coordinate precision
 and finite work budgets limit near-degenerate cases. PDE assembly and solving
 live in the optional [FEM module](../fem/README.md). Exact predicate fallbacks require Boost development headers.

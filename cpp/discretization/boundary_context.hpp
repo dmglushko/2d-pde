@@ -4,7 +4,41 @@
 #include "mesh_validation.hpp"
 
 namespace pde2d::discretization {
-// A source context is an ordered, complete partition of the analytical loop.
+namespace mesh_detail {
+// The polygon snapshot as a Boundary: the outer loop and its holes, split by
+// snapshot_loop_sizes (empty: one loop).
+inline Boundary snapshot_boundary(const BoundaryContext &context) {
+  const auto &points = context.polygon_snapshot;
+  if (context.snapshot_loop_sizes.empty())
+    return Boundary{points, {}};
+  if (context.snapshot_loop_sizes.size() < 2)
+    throw std::invalid_argument("Invalid polygon snapshot loops");
+  std::size_t total = 0;
+  for (auto n : context.snapshot_loop_sizes) {
+    if (n > points.size() - total)
+      throw std::invalid_argument("Invalid polygon snapshot loops");
+    total += n;
+  }
+  if (total != points.size())
+    throw std::invalid_argument("Invalid polygon snapshot loops");
+  Boundary b;
+  auto at = points.begin();
+  for (std::size_t k = 0; k < context.snapshot_loop_sizes.size(); ++k) {
+    auto next =
+        at + static_cast<std::ptrdiff_t>(context.snapshot_loop_sizes[k]);
+    if (k == 0)
+      b.points.assign(at, next);
+    else
+      b.holes.push_back({std::vector<Point2>(at, next), {}});
+    at = next;
+  }
+  return b;
+}
+} // namespace mesh_detail
+// A source context is an ordered, complete partition of the analytical loops
+// (outer loop and holes). Every mesh boundary loop is sampled from the source
+// curves of one geometry loop: curves[i].loop equals the index of that mesh
+// loop in boundary_loops(mesh).
 // Chord refinement may place its mesh vertices off these source curves, but
 // it must not lose, duplicate, or reorder any source interval.
 inline void validate_boundary_context(const TriangleMesh &mesh,
@@ -121,7 +155,18 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
             "Boundary anchor disagrees with its source interval");
     }
   }
-  validate_polygon(Boundary{context.polygon_snapshot, {}});
+  const auto snapshot = snapshot_boundary(context);
+  validate_polygon(snapshot);
+  const auto loops = boundary_loops(mesh);
+  if (loops.size() != loop_count(snapshot))
+    throw std::invalid_argument(
+        "Boundary loops disagree with the polygon snapshot");
+  for (std::size_t k = 0; k < loops.size(); ++k)
+    for (auto e : loops[k])
+      for (auto s : context.edge_sources[e])
+        if (context.curves[s.curve].loop != k)
+          throw std::invalid_argument(
+              "Source curve loop disagrees with its mesh boundary loop");
   BoxIndex anchor_index(point_boxes(source_anchors));
   for (auto p : context.polygon_snapshot) {
     bool anchored = false;
@@ -134,11 +179,16 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
       throw std::invalid_argument(
           "Polygon snapshot vertex is not anchored to source curves");
   }
+  // Snapshot segments of every loop, each loop closing on itself.
+  std::vector<std::pair<Point2, Point2>> segments;
+  for (std::size_t k = 0; k < loop_count(snapshot); ++k) {
+    const auto &points = loop_points(snapshot, k);
+    for (std::size_t i = 0; i < points.size(); ++i)
+      segments.push_back({points[i], points[(i + 1) % points.size()]});
+  }
   std::vector<Box> segment_boxes;
-  for (std::size_t i = 0; i < context.polygon_snapshot.size(); ++i) {
-    auto box = Box::segment(
-        context.polygon_snapshot[i],
-        context.polygon_snapshot[(i + 1) % context.polygon_snapshot.size()]);
+  for (auto [p, q] : segments) {
+    auto box = Box::segment(p, q);
     segment_boxes.push_back(
         {down(box.xmin - tolerance), up(box.xmax + tolerance),
          down(box.ymin - tolerance), up(box.ymax + tolerance)});
@@ -148,9 +198,7 @@ inline void validate_boundary_context(const TriangleMesh &mesh,
     bool supported = false;
     for (auto i :
          segment_index.candidates(Box::segment(mesh.nodes[a], mesh.nodes[a]))) {
-      auto p = context.polygon_snapshot[i],
-           q = context
-                   .polygon_snapshot[(i + 1) % context.polygon_snapshot.size()];
+      auto [p, q] = segments[i];
       if (point_segment_distance(mesh.nodes[a], p, q) <= tolerance &&
           point_segment_distance(mesh.nodes[b], p, q) <= tolerance) {
         supported = true;

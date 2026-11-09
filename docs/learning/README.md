@@ -18,8 +18,10 @@ The optional argument selects the output path; otherwise it writes
 `setCenter` translates the shape; `setRotation` rotates it counterclockwise in
 radians about its center. Stored dimensions remain unchanged. Other built-ins
 are circles, ellipses, capped rectangles, regular polygons, and general simple
-polygons. The shape API supports one outline, including concavities, without
-holes. See [geometry.hpp](../../cpp/discretization/geometry.hpp).
+polygons, and annuli. A domain is one outer outline, including concavities,
+plus optional holes (`CurveGeometry(outer, holes)`, `AnnulusGeometry`). See
+[geometry.hpp](../../cpp/discretization/geometry.hpp) and
+[domains with holes](../../cpp/discretization/README.md#domains-with-holes).
 
 Named regions and stable curve IDs describe boundary pieces independently of
 mesh resolution. The [region-editing API](../../cpp/discretization/README.md#geometry-and-boundary-regions)
@@ -82,13 +84,15 @@ scalar PDEs on these meshes.
 
 `export_mesh(result, path)` writes v4 with options, report, and optional analytical
 context. `import_mesh_result(path)` restores these for resumed curve refinement.
-A raw `TriangleMesh` exports as v2, with topology and tags. `import_mesh(path)`
-accepts v1 through v4 and returns topology only, dropping context. V1 has untagged
+A raw `TriangleMesh` exports as v2, with topology and tags; a mesh with holes
+exports as v5. `import_mesh(path)` accepts v1 through v5 and returns topology
+only, dropping context. V1 has untagged
 edges. All use fixed `ORDER 1`. A stored boundary snapshot does not restore an
 editable original geometry or its history.
 
 The [I/O validator](../../cpp/discretization/mesh_io.hpp) checks indices,
-positive areas, edge ownership, exterior records, one connected disk, unused or
+positive areas, edge ownership, exterior records, one connected domain bounded
+by one or more closed loops, unused or
 duplicate vertices, and crossing or overlapping edges, plus any recorded
 size/CDT guarantees. Import success does not certify good angles. See the
 [format specification](../formats/pde2d-mesh.md).

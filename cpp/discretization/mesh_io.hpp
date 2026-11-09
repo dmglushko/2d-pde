@@ -62,6 +62,56 @@ inline std::size_t read_count(std::istream &in, const std::string &label) {
   return read_unsigned(in);
 }
 
+// Mesh loops as consecutive groups: the permutation of boundary edges that
+// lists each loop of boundary_loops() (outer loop first) in its original
+// relative edge order, and each group's size. Identity for grouped meshes,
+// which is what meshing produces.
+struct LoopGrouping {
+  std::vector<std::size_t> order, sizes;
+  bool identity() const {
+    for (std::size_t i = 0; i < order.size(); ++i)
+      if (order[i] != i)
+        return false;
+    return true;
+  }
+};
+inline LoopGrouping loop_grouping(const TriangleMesh &mesh) {
+  LoopGrouping g;
+  for (auto loop : boundary_loops(mesh)) {
+    std::sort(loop.begin(), loop.end());
+    g.order.insert(g.order.end(), loop.begin(), loop.end());
+    g.sizes.push_back(loop.size());
+  }
+  return g;
+}
+template <class T>
+std::vector<T> permuted(const std::vector<T> &values,
+                        const std::vector<std::size_t> &order) {
+  std::vector<T> out;
+  out.reserve(values.size());
+  for (auto i : order)
+    out.push_back(values[i]);
+  return out;
+}
+// Version 5 lists boundary edges loop by loop: regroup edges, tags and
+// their source intervals together (vertex indices are unchanged).
+inline MeshResult grouped_by_loop(const MeshResult &r, const LoopGrouping &g) {
+  if (g.identity())
+    return r;
+  MeshResult out = r;
+  out.mesh.boundary_edges = permuted(r.mesh.boundary_edges, g.order);
+  if (!r.mesh.boundary_tags.empty())
+    out.mesh.boundary_tags = permuted(r.mesh.boundary_tags, g.order);
+  if (r.boundary_context)
+    out.boundary_context->edge_sources =
+        permuted(r.boundary_context->edge_sources, g.order);
+  return out;
+}
+inline void write_loops(std::ostream &out, const LoopGrouping &g) {
+  out << "BOUNDARY_LOOPS " << g.sizes.size() << '\n';
+  for (auto n : g.sizes)
+    out << n << '\n';
+}
 } // namespace detail
 
 // Save a validated P1 triangular mesh in the project's
@@ -158,7 +208,7 @@ inline std::string decode_message(const std::string &hex) {
   }
   return message;
 }
-inline void write_result(std::ostream &out, const MeshResult &r) {
+inline void write_result(std::ostream &out, const MeshResult &r, int version) {
   const auto &o = r.options;
   out << "OPTIONS " << static_cast<int>(o.algorithm) << ' '
       << static_cast<int>(o.boundary_treatment) << ' ' << o.preserve_regions
@@ -178,6 +228,14 @@ inline void write_result(std::ostream &out, const MeshResult &r) {
     out << "POLYGON_SNAPSHOT " << c.polygon_snapshot.size() << '\n';
     for (auto p : c.polygon_snapshot)
       out << p.x << ' ' << p.y << '\n';
+    if (version >= 5) {
+      out << "POLYGON_LOOPS "
+          << std::max<std::size_t>(1, c.snapshot_loop_sizes.size()) << '\n';
+      if (c.snapshot_loop_sizes.empty())
+        out << c.polygon_snapshot.size() << '\n';
+      for (auto n : c.snapshot_loop_sizes)
+        out << n << '\n';
+    }
     out << "SOURCE_CURVES " << c.curves.size() << '\n';
     for (const auto &curve : c.curves) {
       out << curve.id.value << ' '
@@ -250,6 +308,18 @@ inline void read_result(std::istream &in, MeshResult &r, int version) {
       double x = read_real(in), y = read_real(in);
       c.polygon_snapshot.push_back({x, y});
     }
+    if (version >= 5) {
+      auto loops = read_count(in, "POLYGON_LOOPS");
+      if (loops == 0 || loops > c.polygon_snapshot.size())
+        throw std::runtime_error("Invalid polygon snapshot loop count");
+      std::vector<std::size_t> sizes(loops);
+      for (auto &size : sizes)
+        size = read_unsigned(in);
+      if (loops > 1)
+        c.snapshot_loop_sizes = std::move(sizes);
+      else if (sizes[0] != c.polygon_snapshot.size())
+        throw std::runtime_error("Invalid polygon snapshot loop sizes");
+    }
     n = read_count(in, "SOURCE_CURVES");
     c.curves.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -285,15 +355,29 @@ inline void read_result(std::istream &in, MeshResult &r, int version) {
 }
 } // namespace detail
 
+// Meshes with one boundary loop are written as version 4 (MeshResult) or 2
+// (TriangleMesh), byte for byte as before holes existed. Meshes with holes
+// are written as version 5, which lists the boundary edges loop by loop
+// (outer loop first); edges of an ungrouped mesh are regrouped stably.
 inline void export_mesh(const MeshResult &result, const std::string &path) {
   validate_mesh_geometry(result.mesh);
   detail::validate_mesh_format(result.mesh);
   detail::validate_result(result);
+  const auto grouping = detail::loop_grouping(result.mesh);
+  const bool holes = grouping.sizes.size() > 1;
   std::ofstream out(path);
   if (!out)
     throw std::runtime_error("Cannot create mesh file: " + path);
-  detail::write_mesh(out, result.mesh, 4);
-  detail::write_result(out, result);
+  if (holes) {
+    const auto grouped = detail::grouped_by_loop(result, grouping);
+    detail::write_mesh(out, grouped.mesh, 5);
+    detail::write_loops(out, grouping);
+    out << "RESULT 1\n";
+    detail::write_result(out, grouped, 5);
+  } else {
+    detail::write_mesh(out, result.mesh, 4);
+    detail::write_result(out, result, 4);
+  }
   out.close();
   if (!out)
     throw std::runtime_error("Failed while writing mesh file: " + path);
@@ -302,10 +386,18 @@ inline void export_mesh(const MeshResult &result, const std::string &path) {
 inline void export_mesh(const TriangleMesh &mesh, const std::string &path) {
   validate_mesh_geometry(mesh);
   detail::validate_mesh_format(mesh);
+  const auto grouping = detail::loop_grouping(mesh);
   std::ofstream out(path);
   if (!out)
     throw std::runtime_error("Cannot create mesh file: " + path);
-  detail::write_mesh(out, mesh, 2);
+  if (grouping.sizes.size() > 1) {
+    const auto grouped = detail::grouped_by_loop(
+        MeshResult{mesh, std::nullopt, {}, {}}, grouping);
+    detail::write_mesh(out, grouped.mesh, 5);
+    detail::write_loops(out, grouping);
+    out << "RESULT 0\n";
+  } else
+    detail::write_mesh(out, mesh, 2);
   out.close();
   if (!out)
     throw std::runtime_error("Failed while writing mesh file: " + path);
@@ -319,8 +411,8 @@ inline MeshResult import_mesh_result(const std::string &path) {
     throw std::runtime_error("Cannot open mesh file: " + path);
   std::string magic;
   int version = 0;
-  if (!(in >> magic >> version) || magic != "PDE2D_MESH" ||
-      (version != 1 && version != 2 && version != 3 && version != 4))
+  if (!(in >> magic >> version) || magic != "PDE2D_MESH" || version < 1 ||
+      version > 5)
     throw std::runtime_error("Unsupported or invalid PDE2D mesh-file header");
   MeshResult result;
   if (version < 3) {
@@ -364,14 +456,59 @@ inline MeshResult import_mesh_result(const std::string &path) {
         mesh.boundary_tags[i].clear();
     }
   }
-  if (version >= 3)
+  std::vector<std::size_t> loop_sizes;
+  bool has_result = version >= 3;
+  if (version >= 5) {
+    const auto loops = detail::read_count(in, "BOUNDARY_LOOPS");
+    if (loops == 0 || loops > edge_count)
+      throw std::runtime_error("Invalid boundary loop count");
+    loop_sizes.resize(loops);
+    std::size_t total = 0;
+    for (auto &n : loop_sizes) {
+      n = detail::read_unsigned(in);
+      if (n < 3 || n > edge_count - total)
+        throw std::runtime_error("Invalid boundary loop sizes");
+      total += n;
+    }
+    if (total != edge_count)
+      throw std::runtime_error("Invalid boundary loop sizes");
+    detail::expect(in, "RESULT");
+    has_result = detail::read_unsigned(in, 1) != 0;
+    if (!has_result) {
+      result.report.size_satisfied = false;
+      result.report.message =
+          "Meshing settings and guarantees were not recorded";
+    }
+  }
+  if (has_result)
     detail::read_result(in, result, version);
   std::string extra;
   if (in >> extra)
     throw std::runtime_error("Unexpected content after final mesh section");
   validate_mesh_geometry(mesh);
   detail::validate_mesh_format(mesh);
-  if (version >= 3)
+  if (version < 5 && boundary_loops(mesh).size() > 1)
+    throw std::runtime_error("A mesh with holes requires PDE2D_MESH version 5");
+  if (version >= 5) {
+    // Each recorded group must be exactly one mesh boundary loop, outer first.
+    const auto grouping = detail::loop_grouping(mesh);
+    if (grouping.sizes != loop_sizes || !grouping.identity())
+      throw std::runtime_error(
+          "Boundary edges are not grouped by their recorded loops");
+    if (result.boundary_context) {
+      // Source curves belong to the loop whose edges they are sampled on.
+      std::size_t offset = 0;
+      auto &context = *result.boundary_context;
+      for (std::size_t k = 0; k < loop_sizes.size(); ++k) {
+        for (std::size_t e = offset; e < offset + loop_sizes[k]; ++e)
+          for (auto span : context.edge_sources[e])
+            if (span.curve < context.curves.size())
+              context.curves[span.curve].loop = k;
+        offset += loop_sizes[k];
+      }
+    }
+  }
+  if (has_result)
     detail::validate_result(result);
   return result;
 }

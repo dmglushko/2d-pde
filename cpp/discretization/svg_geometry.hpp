@@ -93,9 +93,13 @@ inline CurveSegment arc(Point2 a, Point2 b, double rx, double ry,
     delta += 2 * std::numbers::pi;
   return EllipticalArc{center, rx, ry, phi, start, delta};
 }
-inline CurveRegion path(std::string name, const std::string &data) {
+// One tagged run per subpath: each M starts a new subpath. Every subpath
+// needs at least one segment; after Z only M may follow.
+inline std::vector<CurveRegion> subpaths(const std::string &name,
+                                         const std::string &data) {
   Reader r{data.c_str()};
-  CurveRegion out{std::move(name), {}};
+  std::vector<CurveRegion> runs;
+  CurveRegion out{name, {}};
   Point2 cur{}, first{};
   bool started = false, closed = false;
   char cmd = 0;
@@ -107,11 +111,16 @@ inline CurveRegion path(std::string name, const std::string &data) {
     bool rel = std::islower(static_cast<unsigned char>(cmd));
     char op = static_cast<char>(std::toupper(static_cast<unsigned char>(cmd)));
     if (op == 'M') {
-      if (started)
-        throw std::invalid_argument("Multiple SVG subpaths unsupported");
+      if (started) {
+        if (out.segments.empty())
+          throw std::invalid_argument("Empty SVG path");
+        runs.push_back(std::move(out));
+        out = CurveRegion{name, {}};
+      }
       cur = r.point(cur, rel);
       first = cur;
       started = true;
+      closed = false;
       cmd = rel ? 'l' : 'L';
       continue;
     }
@@ -153,7 +162,32 @@ inline CurveRegion path(std::string name, const std::string &data) {
   }
   if (out.segments.empty())
     throw std::invalid_argument("Empty SVG path");
-  return out;
+  runs.push_back(std::move(out));
+  return runs;
+}
+inline CurveRegion path(std::string name, const std::string &data) {
+  auto runs = subpaths(name, data);
+  if (runs.size() != 1)
+    throw std::invalid_argument("Expected a single SVG subpath");
+  return std::move(runs.front());
+}
+// Absolute area of a loop's polyline with `samples` points per curved
+// segment; picks the outer loop on import.
+inline double loop_area(const std::vector<CurveRegion> &loop,
+                        std::size_t samples) {
+  std::vector<Point2> points;
+  for (const auto &region : loop)
+    for (const auto &segment : region.segments) {
+      std::size_t n = curveIsLinear(segment) ? 1 : samples;
+      for (std::size_t i = 0; i < n; ++i)
+        points.push_back(curvePoint(segment, double(i) / n));
+    }
+  double twice = 0;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    auto a = points[i], b = points[(i + 1) % points.size()];
+    twice += a.x * b.y - a.y * b.x;
+  }
+  return std::abs(twice) / 2;
 }
 inline void reverse(CurveRegion &r) {
   std::reverse(r.segments.begin(), r.segments.end());
@@ -211,7 +245,8 @@ inline CurveGeometry importSvg(const std::string &filename,
         throw std::invalid_argument("SVG paths require unique IDs");
       std::string name =
           xmlHasProp(n, BAD_CAST "data-region") ? attr(n, "data-region") : id;
-      regions.push_back(path(name, attr(n, "d")));
+      for (auto &run : subpaths(name, attr(n, "d")))
+        regions.push_back(std::move(run));
     } else if (type == "circle" && id == "origin") {
       attributes(n, {"id", "cx", "cy", "r"});
       if (marker)
@@ -245,89 +280,125 @@ inline CurveGeometry importSvg(const std::string &filename,
   std::unique_ptr<mesh_detail::BoxIndex> endpoints;
   if (std::isfinite(endpointScale))
     endpoints = std::make_unique<mesh_detail::BoxIndex>(std::move(boxes));
+  // Chain runs into closed loops: each loop starts at the first unused run
+  // and ends when its end meets its own start.
   std::vector<bool> consumed(regions.size(), false);
-  consumed[0] = true;
-  std::vector<CurveRegion> ordered;
-  ordered.reserve(regions.size());
-  ordered.push_back(std::move(regions[0]));
-  for (std::size_t i = 1; i < regions.size(); ++i) {
-    Point2 end = curvePoint(ordered.back().segments.back(), 1);
-    std::vector<std::size_t> candidates;
-    if (endpoints && std::isfinite(end.x) && std::isfinite(end.y)) {
-      // Global endpoint norm bounds both operands of near(). Outward rounding
-      // protects contacts exactly at the relative tolerance boundary.
-      double radius = 1e-9 * std::max(endpointScale, std::hypot(end.x, end.y));
-      auto down = [](double v) { return std::nextafter(v, -INFINITY); };
-      auto up = [](double v) { return std::nextafter(v, INFINITY); };
-      candidates =
-          endpoints->candidates({down(end.x - radius), up(end.x + radius),
-                                 down(end.y - radius), up(end.y + radius)});
-    } else {
-      // Nonfinite computed endpoints retain the old exhaustive validation path.
-      for (std::size_t j = 0; j < 2 * regions.size(); ++j)
-        candidates.push_back(j);
-    }
-    std::size_t match = regions.size();
-    bool flip = false;
-    for (auto endpoint : candidates) {
-      auto j = endpoint / 2;
-      if (consumed[j])
-        continue;
-      const auto &r = regions[j];
-      Point2 p = endpoint % 2 ? curvePoint(r.segments.back(), 1)
-                              : curvePoint(r.segments.front(), 0);
-      if (near(end, p)) {
-        if (match != regions.size())
-          throw std::invalid_argument("Ambiguous SVG boundary");
-        match = j;
-        flip = endpoint % 2;
+  std::vector<std::vector<CurveRegion>> loops;
+  std::size_t remaining = regions.size();
+  for (std::size_t start = 0; start < regions.size(); ++start) {
+    if (consumed[start])
+      continue;
+    consumed[start] = true;
+    --remaining;
+    auto &loop = loops.emplace_back();
+    loop.push_back(std::move(regions[start]));
+    const Point2 first = curvePoint(loop.front().segments.front(), 0);
+    while (true) {
+      Point2 end = curvePoint(loop.back().segments.back(), 1);
+      std::vector<std::size_t> candidates;
+      if (endpoints && std::isfinite(end.x) && std::isfinite(end.y)) {
+        // Global endpoint norm bounds both operands of near(). Outward
+        // rounding protects contacts exactly at the relative tolerance
+        // boundary.
+        double radius =
+            1e-9 * std::max(endpointScale, std::hypot(end.x, end.y));
+        auto down = [](double v) { return std::nextafter(v, -INFINITY); };
+        auto up = [](double v) { return std::nextafter(v, INFINITY); };
+        candidates =
+            endpoints->candidates({down(end.x - radius), up(end.x + radius),
+                                   down(end.y - radius), up(end.y + radius)});
+      } else {
+        // Nonfinite computed endpoints retain the old exhaustive validation
+        // path.
+        for (std::size_t j = 0; j < 2 * regions.size(); ++j)
+          candidates.push_back(j);
       }
-    }
-    if (match == regions.size())
-      throw std::invalid_argument("Disconnected SVG boundary");
-    consumed[match] = true;
-    if (flip)
-      reverse(regions[match]);
-    ordered.push_back(std::move(regions[match]));
-  }
-  regions = std::move(ordered);
-  if (!near(curvePoint(regions.back().segments.back(), 1),
-            curvePoint(regions.front().segments.front(), 0)))
-    throw std::invalid_argument("SVG boundary is open");
-  double distance = options.mode == SvgScaleMode::Nearest ? INFINITY : 0;
-  if (options.mode != SvgScaleMode::Factor)
-    for (auto &region : regions)
-      for (auto &segment : region.segments) {
-        std::size_t n = curveIsLinear(segment) ? 1 : options.samples_per_curve;
-        for (std::size_t i = 0; i < n; ++i) {
-          Point2 a = curvePoint(segment, double(i) / n),
-                 b = curvePoint(segment, double(i + 1) / n);
-          double dx = b.x - a.x, dy = b.y - a.y, den = dx * dx + dy * dy;
-          double t =
-              den ? std::clamp(((origin.x - a.x) * dx + (origin.y - a.y) * dy) /
-                                   den,
-                               0., 1.)
-                  : 0.;
-          double d =
-              options.mode == SvgScaleMode::Nearest
-                  ? std::hypot(a.x + t * dx - origin.x, a.y + t * dy - origin.y)
-                  : std::max(std::hypot(a.x - origin.x, a.y - origin.y),
-                             std::hypot(b.x - origin.x, b.y - origin.y));
-          distance = options.mode == SvgScaleMode::Nearest
-                         ? std::min(distance, d)
-                         : std::max(distance, d);
+      std::size_t match = regions.size();
+      bool flip = false;
+      for (auto endpoint : candidates) {
+        auto j = endpoint / 2;
+        if (consumed[j])
+          continue;
+        const auto &r = regions[j];
+        Point2 p = endpoint % 2 ? curvePoint(r.segments.back(), 1)
+                                : curvePoint(r.segments.front(), 0);
+        if (near(end, p)) {
+          if (match != regions.size())
+            throw std::invalid_argument("Ambiguous SVG boundary");
+          match = j;
+          flip = endpoint % 2;
         }
       }
+      const bool closes = near(end, first);
+      if (closes && match != regions.size())
+        throw std::invalid_argument("Ambiguous SVG boundary");
+      if (closes)
+        break;
+      if (match == regions.size())
+        throw std::invalid_argument(remaining ? "Disconnected SVG boundary"
+                                              : "SVG boundary is open");
+      consumed[match] = true;
+      --remaining;
+      if (flip)
+        reverse(regions[match]);
+      loop.push_back(std::move(regions[match]));
+    }
+  }
+  // The outer loop encloses the others, so it has the largest area; the
+  // remaining loops are holes in file order. Nesting is validated when the
+  // boundary is sampled for meshing.
+  std::size_t outer = 0;
+  if (loops.size() > 1) {
+    double largest = -1;
+    for (std::size_t k = 0; k < loops.size(); ++k)
+      if (double a = loop_area(loops[k], options.samples_per_curve);
+          a > largest) {
+        largest = a;
+        outer = k;
+      }
+  }
+  double distance = options.mode == SvgScaleMode::Nearest ? INFINITY : 0;
+  if (options.mode != SvgScaleMode::Factor)
+    for (const auto &loop : loops)
+      for (const auto &region : loop)
+        for (const auto &segment : region.segments) {
+          std::size_t n =
+              curveIsLinear(segment) ? 1 : options.samples_per_curve;
+          for (std::size_t i = 0; i < n; ++i) {
+            Point2 a = curvePoint(segment, double(i) / n),
+                   b = curvePoint(segment, double(i + 1) / n);
+            double dx = b.x - a.x, dy = b.y - a.y, den = dx * dx + dy * dy;
+            double t =
+                den ? std::clamp(
+                          ((origin.x - a.x) * dx + (origin.y - a.y) * dy) / den,
+                          0., 1.)
+                    : 0.;
+            double d =
+                options.mode == SvgScaleMode::Nearest
+                    ? std::hypot(a.x + t * dx - origin.x,
+                                 a.y + t * dy - origin.y)
+                    : std::max(std::hypot(a.x - origin.x, a.y - origin.y),
+                               std::hypot(b.x - origin.x, b.y - origin.y));
+            distance = options.mode == SvgScaleMode::Nearest
+                           ? std::min(distance, d)
+                           : std::max(distance, d);
+          }
+        }
   double factor = options.mode == SvgScaleMode::Factor
                       ? options.scale
                       : options.scale / distance;
   if (!std::isfinite(factor) || factor <= 0)
     throw std::invalid_argument("Invalid SVG distance scale");
   const CurveTransform scaling{factor, 0, {}, origin};
-  for (auto &region : regions)
-    for (auto &segment : region.segments)
-      segment = transformCurve(segment, scaling);
-  return CurveGeometry(std::move(regions));
+  for (auto &loop : loops)
+    for (auto &region : loop)
+      for (auto &segment : region.segments)
+        segment = transformCurve(segment, scaling);
+  std::vector<std::vector<CurveRegion>> holes;
+  for (std::size_t k = 0; k < loops.size(); ++k)
+    if (k != outer)
+      holes.push_back(std::move(loops[k]));
+  return CurveGeometry(std::move(loops[outer]), std::move(holes));
 }
 
 namespace svg_detail {
@@ -381,15 +452,18 @@ inline std::string document(const CurveGeometry &geometry) {
   const auto &curves = geometry.curves();
   struct Run {
     std::string name;
+    std::size_t loop;
     std::span<const BoundaryCurve> curves;
   };
+  // Runs never continue across loops; each loop is one closed chain.
   std::vector<Run> runs;
   for (std::size_t begin = 0; begin < curves.size();) {
     std::size_t end = begin + 1;
-    while (end < curves.size() && curves[end].region == curves[begin].region)
+    while (end < curves.size() && curves[end].region == curves[begin].region &&
+           curves[end].loop == curves[begin].loop)
       ++end;
     runs.push_back(
-        {curves[begin].region,
+        {curves[begin].region, curves[begin].loop,
          std::span<const BoundaryCurve>(curves).subspan(begin, end - begin)});
     begin = end;
   }
@@ -426,7 +500,14 @@ inline std::string document(const CurveGeometry &geometry) {
   std::size_t serial = 0;
   Point2 first{}, previous{};
   bool started = false;
+  std::size_t loop = 0;
   for (const auto &r : runs) {
+    if (r.loop != loop) {
+      if (!near(previous, first))
+        throw std::invalid_argument("SVG curve boundary is open");
+      loop = r.loop;
+      started = false;
+    }
     // CurveGeometry restricts region names to ASCII letters/digits/_.-, so
     // both the ID and data attribute are already XML-safe.
     std::string id = r.name;

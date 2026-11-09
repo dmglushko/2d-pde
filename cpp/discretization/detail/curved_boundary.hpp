@@ -21,20 +21,19 @@
 #include <vector>
 
 namespace pde2d::discretization::mesh_detail {
+// Inside the outer loop and outside every hole; points on a loop count as
+// inside unless strict.
 inline bool inside_polygon(Point2 p, const Boundary &boundary,
                            bool strict = false) {
-  int winding = 0;
-  for (std::size_t i = 0; i < boundary.points.size(); ++i) {
-    auto a = boundary.points[i],
-         b = boundary.points[(i + 1) % boundary.points.size()];
-    if (predicates::on_segment(a, b, p))
-      return !strict;
-    if (a.y <= p.y && b.y > p.y && predicates::orient(a, b, p) > 0)
-      ++winding;
-    if (a.y > p.y && b.y <= p.y && predicates::orient(a, b, p) < 0)
-      --winding;
+  int outer = point_in_loop(p, boundary.points);
+  if (outer <= 0)
+    return outer == 0 && !strict;
+  for (const auto &hole : boundary.holes) {
+    int side = point_in_loop(p, hole.points);
+    if (side >= 0)
+      return side == 0 && !strict;
   }
-  return winding != 0;
+  return true;
 }
 inline std::pair<std::vector<CurveInterval>, std::vector<CurveInterval>>
 bisect_sources(const BoundaryContext &context,
@@ -107,39 +106,60 @@ inline void rebuild_curved(MeshResult &result) {
     if (!outgoing.emplace(m.boundary_edges[i].first, i).second)
       throw std::invalid_argument(
           "Curve refinement needs consistently directed boundary edges");
-  std::vector<std::size_t> order;
-  std::size_t current = m.boundary_edges.front().first;
-  do {
-    auto it = outgoing.find(current);
-    if (it == outgoing.end())
-      throw std::invalid_argument(
-          "Curve refinement needs a directed boundary loop");
-    order.push_back(it->second);
-    current = m.boundary_edges[it->second].second;
-  } while (current != m.boundary_edges.front().first &&
-           order.size() <= m.boundary_edges.size());
-  if (order.size() != m.boundary_edges.size())
-    throw std::invalid_argument("Invalid boundary traversal");
+  // Each loop (outer first, holes in mesh order) is traversed along its edge
+  // directions from its lowest-index edge.
   Boundary polygon;
   BoundaryContext next = ctx;
   next.edge_sources.clear();
   next.protected_vertices.clear();
+  next.snapshot_loop_sizes.clear();
   std::set<std::size_t> fixed(ctx.protected_vertices.begin(),
                               ctx.protected_vertices.end()),
       boundary_vertices;
-  for (auto i : order) {
-    auto vertex = m.boundary_edges[i].first;
-    boundary_vertices.insert(vertex);
-    auto s = ctx.edge_sources[i].front();
-    polygon.points.push_back(curvePoint(ctx.curves[s.curve].segment, s.begin));
-    if (!m.boundary_tags.empty())
-      polygon.edge_tags.push_back(m.boundary_tags[i]);
-    if (fixed.contains(vertex))
-      next.protected_vertices.push_back(polygon.points.size() - 1);
-    next.edge_sources.push_back(ctx.edge_sources[i]);
+  const auto loops = boundary_loops(m);
+  std::size_t traversed = 0, offset = 0;
+  for (std::size_t k = 0; k < loops.size(); ++k) {
+    const auto first = m.boundary_edges[loops[k].front()].first;
+    std::vector<std::size_t> order;
+    std::size_t current = first;
+    do {
+      auto it = outgoing.find(current);
+      if (it == outgoing.end())
+        throw std::invalid_argument(
+            "Curve refinement needs a directed boundary loop");
+      order.push_back(it->second);
+      current = m.boundary_edges[it->second].second;
+    } while (current != first && order.size() <= loops[k].size());
+    if (order.size() != loops[k].size())
+      throw std::invalid_argument("Invalid boundary traversal");
+    traversed += order.size();
+    BoundaryLoop loop;
+    for (auto i : order) {
+      auto vertex = m.boundary_edges[i].first;
+      boundary_vertices.insert(vertex);
+      auto s = ctx.edge_sources[i].front();
+      loop.points.push_back(curvePoint(ctx.curves[s.curve].segment, s.begin));
+      if (!m.boundary_tags.empty())
+        loop.edge_tags.push_back(m.boundary_tags[i]);
+      if (fixed.contains(vertex))
+        next.protected_vertices.push_back(offset + loop.points.size() - 1);
+      next.edge_sources.push_back(ctx.edge_sources[i]);
+    }
+    offset += loop.points.size();
+    if (k == 0) {
+      polygon.points = std::move(loop.points);
+      polygon.edge_tags = std::move(loop.edge_tags);
+    } else {
+      if (k == 1)
+        next.snapshot_loop_sizes.push_back(polygon.points.size());
+      next.snapshot_loop_sizes.push_back(loop.points.size());
+      polygon.holes.push_back(std::move(loop));
+    }
   }
+  if (traversed != m.boundary_edges.size())
+    throw std::invalid_argument("Invalid boundary traversal");
   TriangleMesh replacement = seed_mesh(polygon);
-  next.polygon_snapshot = polygon.points;
+  next.polygon_snapshot = boundary_points(polygon);
   Topology topology(replacement);
   std::size_t removed = 0;
   for (std::size_t i = 0; i < m.nodes.size(); ++i)

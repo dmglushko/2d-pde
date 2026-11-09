@@ -25,6 +25,10 @@ struct BoundaryCurve {
   CurveId id;
   CurveSegment segment;
   std::string region;
+  // Boundary component: 0 is the outer loop, 1, 2, ... are the holes in
+  // construction order. In a BoundaryContext snapshot it is the mesh
+  // boundary loop the curve is sampled on (see boundary_loops()).
+  std::size_t loop = 0;
 };
 struct RegionInfo {
   std::string name;
@@ -34,7 +38,14 @@ struct RegionInfo {
   bool connected() const { return pieces.size() == 1; }
 };
 
-// One ordered closed boundary; named membership is independent of connectivity.
+// An outer closed loop plus zero or more inner loops (holes), each an ordered
+// closed sequence of curves. Curves are stored loop by loop, outer first;
+// BoundaryCurve::loop says which loop a curve belongs to. Region names are
+// global: a region may have pieces on several loops. Loops keep the
+// direction they were given in (either orientation is accepted; nothing is
+// reversed), and nesting is validated when the boundary is sampled
+// (discretize_boundary): holes strictly inside the outer loop, pairwise
+// disjoint. Named membership is independent of connectivity.
 // Concurrent const queries and copying a read-only source are supported,
 // including simultaneous cache misses. Each copy owns its cache. Mutation
 // (including move from an object) requires external synchronization. Any edit
@@ -45,6 +56,15 @@ public:
   CurveGeometry() = default;
   explicit CurveGeometry(std::vector<CurveRegion> regions) {
     setRegions(std::move(regions));
+  }
+  // Outer loop plus holes; each hole is its own closed sequence of regions.
+  CurveGeometry(std::vector<CurveRegion> outer,
+                std::vector<std::vector<CurveRegion>> holes) {
+    setRegions(std::move(outer), std::move(holes));
+  }
+  // Number of boundary loops: 1 + number of holes (0 when empty).
+  std::size_t loopCount() const {
+    return curves_.empty() ? 0 : curves_.back().loop + 1;
   }
 
   const std::vector<BoundaryCurve> &curves() const { return curves_; }
@@ -90,8 +110,12 @@ public:
   // Explicit replacement resets edits and assigns fresh IDs. Shape setters
   // instead use rebuildRegions(), which preserves source identities/history.
   void setRegions(std::vector<CurveRegion> regions) {
+    setRegions(std::move(regions), {});
+  }
+  void setRegions(std::vector<CurveRegion> outer,
+                  std::vector<std::vector<CurveRegion>> holes) {
     CurveGeometry next = *this;
-    next.curves_ = next.makeCurves(regions);
+    next.curves_ = next.makeLoops(outer, holes);
     next.base_ = next.curves_;
     next.edits_.clear();
     next.lengths_.clear();
@@ -179,13 +203,15 @@ public:
 protected:
   // Built-in shape definitions provide the same source curves in the same
   // semantic order when dimensions change. Topology changes with edits fail.
-  void rebuildRegions(const std::vector<CurveRegion> &regions) {
+  void rebuildRegions(const std::vector<CurveRegion> &regions,
+                      const std::vector<std::vector<CurveRegion>> &holes = {}) {
     CurveGeometry next = *this;
-    auto rebuilt = next.makeCurves(regions);
+    auto rebuilt = next.makeLoops(regions, holes);
     bool same = rebuilt.size() == base_.size();
     if (same)
       for (std::size_t i = 0; i < rebuilt.size(); ++i)
         if (rebuilt[i].region != base_[i].region ||
+            rebuilt[i].loop != base_[i].loop ||
             rebuilt[i].segment.index() != base_[i].segment.index()) {
           same = false;
           break;
@@ -269,10 +295,19 @@ private:
     regionIndex_.clear();
     groups_.clear();
     runs_.clear();
+    // Per loop: its first curve, and the region pieces holding its first and
+    // last curves (for joining a region across the loop's stored seam).
+    struct Seam {
+      std::size_t begin, end, region, first, last;
+    };
+    std::vector<Seam> seams;
     for (std::size_t i = 0; i < curves_.size(); ++i) {
       const auto &c = curves_[i];
       ids_.emplace(c.id.value, i);
-      if (i == 0 || curves_[i - 1].region != c.region)
+      const bool loopStart = i == 0 || curves_[i - 1].loop != c.loop;
+      // Runs and pieces never continue from one loop into the next.
+      const bool newRun = loopStart || curves_[i - 1].region != c.region;
+      if (newRun)
         runs_.emplace_back();
       runs_.back().push_back(c.id);
       auto [it, added] = regionIndex_.emplace(c.region, groups_.size());
@@ -280,18 +315,28 @@ private:
         groups_.push_back({c.region, {}, {}});
       auto &r = groups_[it->second];
       r.curves.push_back(c.id);
-      if (i == 0 || curves_[i - 1].region != c.region)
+      if (newRun)
         r.pieces.emplace_back();
       r.pieces.back().push_back(c.id);
+      if (loopStart)
+        seams.push_back({i, i, it->second, r.pieces.size() - 1, 0});
+      seams.back().end = i + 1;
+      seams.back().last = r.pieces.size() - 1;
     }
-    if (curves_.size() > 1 && curves_.front().region == curves_.back().region) {
-      auto &pieces = groups_[regionIndex_.at(curves_.front().region)].pieces;
-      if (pieces.size() > 1) {
+    // Later loops hold later pieces, so joining from the last loop backwards
+    // keeps the recorded piece indices of earlier loops valid.
+    for (auto s = seams.rbegin(); s != seams.rend(); ++s) {
+      if (s->end - s->begin < 2 ||
+          curves_[s->begin].region != curves_[s->end - 1].region)
+        continue;
+      auto &pieces = groups_[s->region].pieces;
+      if (s->first != s->last) {
         // Old traversal starts at the first transition, so the seam piece is
-        // last.
-        auto first = std::move(pieces.front());
-        pieces.erase(pieces.begin());
-        pieces.back().insert(pieces.back().end(), first.begin(), first.end());
+        // the loop's last piece.
+        auto first = std::move(pieces[s->first]);
+        pieces.erase(pieces.begin() + static_cast<std::ptrdiff_t>(s->first));
+        auto &last = pieces[s->last - 1];
+        last.insert(last.end(), first.begin(), first.end());
       }
     }
   }
@@ -319,10 +364,12 @@ private:
       throw std::invalid_argument("Region names require ASCII letters, digits, "
                                   "_, . or -; '-' is reserved");
   }
-  std::vector<BoundaryCurve>
-  makeCurves(const std::vector<CurveRegion> &regions) {
+  std::vector<BoundaryCurve> makeCurves(const std::vector<CurveRegion> &regions,
+                                        std::size_t loop = 0) {
     if (regions.empty())
-      throw std::invalid_argument("Curve geometry requires regions");
+      throw std::invalid_argument(loop == 0
+                                      ? "Curve geometry requires regions"
+                                      : "Curve geometry holes require regions");
     std::vector<BoundaryCurve> records;
     for (const auto &r : regions) {
       validateName(r.name);
@@ -330,8 +377,18 @@ private:
         throw std::invalid_argument("Curve regions require segments");
       for (const auto &segment : r.segments) {
         curve_detail::validateCurve(segment);
-        records.push_back({allocateId(), segment, r.name});
+        records.push_back({allocateId(), segment, r.name, loop});
       }
+    }
+    return records;
+  }
+  std::vector<BoundaryCurve>
+  makeLoops(const std::vector<CurveRegion> &outer,
+            const std::vector<std::vector<CurveRegion>> &holes) {
+    auto records = makeCurves(outer);
+    for (std::size_t h = 0; h < holes.size(); ++h) {
+      auto loop = makeCurves(holes[h], h + 1);
+      records.insert(records.end(), loop.begin(), loop.end());
     }
     return records;
   }
@@ -485,7 +542,8 @@ private:
           throw std::invalid_argument(
               "Split portion is below supported geometric precision");
         measured[id] = pieceLength;
-        pieces.push_back({id, std::move(piece), edit.names[part]});
+        pieces.push_back(
+            {id, std::move(piece), edit.names[part], original.loop});
         result.push_back(id);
         previousF = endF;
       }

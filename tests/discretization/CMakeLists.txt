@@ -7,6 +7,10 @@ pde2d_add_cpp_test(NAME mesh_refinement_cdt SOURCE mesh_refinement_cdt.cpp)
 pde2d_add_cpp_test(NAME size_field SOURCE size_field.cpp)
 pde2d_add_cpp_test(NAME marked_refinement SOURCE marked_refinement.cpp)
 pde2d_add_cpp_test(NAME point_location SOURCE point_location.cpp)
+# Domains with holes; also writes the version 5 fixtures read by the Node and
+# Python format tests (FIXTURES_SETUP mesh_holes_export).
+pde2d_add_cpp_test(NAME mesh_holes SOURCE holes.cpp FIXTURE_ARG)
+set_tests_properties(mesh_holes PROPERTIES FIXTURES_SETUP mesh_holes_export)
 pde2d_add_cpp_test(NAME discretization SOURCE discretization.cpp
   FIXTURE_ARG FIXTURE_FILES examples/mesh_viewer/rectangle_p1.pde2d)
 pde2d_add_cpp_test(NAME region_editing SOURCE region_editing.cpp FIXTURE_ARG)

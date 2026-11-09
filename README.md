@@ -9,7 +9,8 @@ Boost.Multiprecision for exact predicate fallbacks.
 Implemented:
 
 - Editable circles, ellipses, rectangles, capped rectangles, regular polygons,
-  and general simple polygons, with translation and rotation.
+  general simple polygons and annuli, with translation and rotation; any
+  curve geometry may have holes (an outer loop plus inner loops).
 - Free-function meshing with ear clipping or constrained Delaunay triangulation,
   plus fixed, straight-chord, or analytical-curve boundary refinement.
 - Three-node P1 connectivity, optional maximum-edge-length refinement, explicit
@@ -34,7 +35,7 @@ unknown per vertex with linear interpolation. There is no element-order setting.
 Higher-order work must remain a separate optional module. All mesh files use
 fixed `ORDER 1`; old v1 P1 files remain readable. Raw meshes export as v2;
 `MeshResult` exports as v4 with settings, report, and optional boundary context.
-Readers accept v1 through v4.
+Meshes with holes export as v5. Readers accept v1 through v5.
 
 The [numerical module guide](docs/fem/README.md) documents supported equations,
 boundary classes, sign conventions, build dependencies, and limitations.
@@ -91,13 +92,16 @@ node tools/render_solutions.mjs build/fem-showcase.json docs/fem/showcase.html
 - [Archived dated reports](docs/archive/), including the
   [first audit](docs/archive/audit-2026-10-23.md), which predates the current API
 
-The mesher accepts one simple outline without holes. CDT size refinement uses
+The mesher accepts one simple outer outline plus simple holes strictly inside
+it (see [domains with holes](cpp/discretization/README.md#domains-with-holes)).
+CDT size refinement uses
 longest-edge midpoint insertion, initial global legalization and local updates
 (with a global curved-rebuild fallback); it has no minimum-angle
 control, smoothing, or local size field, and no classical circumcenter quality
 refinement guarantee. Always check `MeshResult::report`: fixed-boundary conflicts
 and exhausted work budgets return explicit unmet-size reports with a mesh.
-Externally supplied meshes are checked for connected disk topology, duplicate
+Externally supplied meshes are checked for one connected domain bounded by
+closed loops (Euler characteristic 2 − loops), duplicate
 and unused vertices, and crossing or overlapping edges. Geometric validation
 prunes edge-pair candidates spatially before robust predicates; worst-case
 overlap can still produce quadratic work. No minimum-angle guarantee is made.

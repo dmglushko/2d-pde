@@ -33,7 +33,8 @@ are not used by tests or examples.
 
 ```
 CurveGeometry ──discretize_boundary──▶ DiscretizedBoundary ──generate_mesh──▶ MeshResult
-   (analytical curves, regions)          (polygon + curve context)            .mesh  : TriangleMesh
+   (analytical curves, regions;          (polygon with holes                  .mesh  : TriangleMesh
+    outer loop + holes)                   + curve context)
                                                                                .report: guarantees met?
 MeshResult ──export_mesh/import_mesh_result──▶ .pde2d file   (docs/formats/pde2d-mesh.md)
 MeshResult ──refine_mesh──▶ MeshResult        (resumes from the stored boundary context)
@@ -59,6 +60,13 @@ Restart (transient): last frame ──transfer_field──▶ InitialConditions{
 Time steps: StepController.next ──▶ trial (TimeIntegrator.trial) ──judge──▶
      accept (commit, frame, observer) | reject (discard, next() proposes a retry)
 ```
+
+Domains are multiply connected: an outer loop plus holes, carried
+explicitly through every layer (`CurveGeometry` loops, `Boundary::holes`,
+the boundary context's per-loop snapshot and `boundary_loops(mesh)`).
+Ear clipping bridges holes into one ring and every loop's edges are CDT
+constraints; validation accepts one connected domain whose boundary is
+several closed loops. Files with holes use format version 5.
 
 Inside meshing, refinement is one generic loop (`refine_with`) with two
 seams in `detail/refinement_policy.hpp`: a size criterion (constant target,
@@ -148,8 +156,7 @@ the code. They are evidence, not documentation of the current API.
 The intended direction is in [vision.md](vision.md).
 
 
-- One simple outline without holes. CDT refinement has no minimum-angle
-  guarantee. Marked refinement only refines (no coarsening or node
+- CDT refinement has no minimum-angle guarantee. Marked refinement only refines (no coarsening or node
   movement), and the only built-in estimator is gradient recovery.
 - FEM is scalar, linear and P1. Extension points are in
   [cpp/fem/EXTENDING.md](../cpp/fem/EXTENDING.md) and

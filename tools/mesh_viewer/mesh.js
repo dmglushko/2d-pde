@@ -11,7 +11,7 @@ const sourceCurveFormats = new Map([
 ]);
 const interiorAlgorithmIds = new Set([0,1]); // EarClipping, ConstrainedDelaunay
 const boundaryTreatmentIds = new Set([0,1,2]); // Fixed, SplitPolygonEdges, RefineOnCurves
-// PDE2D_MESH 1 through 4 reader and corner-triangle diagnostics. No external packages.
+// PDE2D_MESH 1 through 5 reader and corner-triangle diagnostics. No external packages.
 function parseMesh(source) {
   // Count without retaining token strings, so huge claimed counts fail before allocation.
   const scanner = /\S+/g;
@@ -46,7 +46,7 @@ function parseMesh(source) {
   };
   expect('PDE2D_MESH');
   const version = integer('version');
-  if (version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new Error('Only PDE2D_MESH versions 1 through 4 are supported');
+  if (version < 1 || version > 5) throw new Error('Only PDE2D_MESH versions 1 through 5 are supported');
   expect('ORDER');
   const order = integer('order');
   if (order !== 1) throw new Error('Only order 1 is supported');
@@ -80,7 +80,36 @@ function parseMesh(source) {
     return [a, b, region === '-' ? null : region];
   });
   const result = {nodes, elements, boundaryEdges};
-  if (version >= 3) {
+  let hasResult = version >= 3;
+  if (version >= 5) {
+    // Version 5 (meshes with holes): consecutive groups of BOUNDARY_EDGES,
+    // outer loop first; each group must be one closed loop.
+    expect('BOUNDARY_LOOPS');
+    const loopCount = integer('boundary loop count', boundaryCount);
+    if (!loopCount) throw new Error('Missing boundary loops');
+    remaining(loopCount, 'BOUNDARY_LOOPS');
+    const loops = Array.from({length: loopCount}, () => integer('boundary loop size', boundaryCount));
+    if (loops.some(n => n < 3) || loops.reduce((a, b) => a+b, 0) !== boundaryCount) throw new Error('Invalid boundary loop sizes');
+    let first = 0;
+    loops.forEach((size, loop) => {
+      const group = boundaryEdges.slice(first, first+size), incident = new Map();
+      for (const e of group) for (const v of [e[0], e[1]]) incident.set(v, [...(incident.get(v) || []), e]);
+      if ([...incident.values()].some(edges => edges.length !== 2)) throw new Error(`Boundary loop ${loop} is not one closed loop`);
+      let vertex = group[0][1], edge = group[0], visited = 1;
+      while (vertex !== group[0][0] && visited <= size) {
+        const [p, q] = incident.get(vertex);
+        edge = p === edge ? q : p;
+        vertex = edge[0] === vertex ? edge[1] : edge[0];
+        ++visited;
+      }
+      if (visited !== size) throw new Error(`Boundary loop ${loop} is not one closed loop`);
+      first += size;
+    });
+    result.boundaryLoops = loops;
+    expect('RESULT');
+    hasResult = integer('result flag', 1) === 1;
+  }
+  if (hasResult) {
     expect('OPTIONS');
     const options = {algorithm: registered('algorithm',interiorAlgorithmIds), boundaryTreatment: registered('boundary treatment',boundaryTreatmentIds), preserveRegions: !!integer('preserve regions',1),
       boundary: {maxEdgeLength: finite('boundary length'), maxCurveDeviation: finite('curve deviation')},
@@ -105,6 +134,14 @@ function parseMesh(source) {
       if(polygonCount<3)throw new Error('Polygon snapshot needs three vertices');
       remaining(2*polygonCount,'POLYGON_SNAPSHOT');
       const polygonSnapshot=Array.from({length:polygonCount},()=>[finite('polygon x'),finite('polygon y')]);
+      let polygonLoops=null;
+      if(version>=5) {
+        expect('POLYGON_LOOPS');const count=integer('polygon loop count',polygonCount);
+        if(!count)throw new Error('Missing polygon snapshot loops');
+        remaining(count,'POLYGON_LOOPS');
+        polygonLoops=Array.from({length:count},()=>integer('polygon loop size',polygonCount));
+        if(polygonLoops.some(n=>n<3)||polygonLoops.reduce((a,b)=>a+b,0)!==polygonCount)throw new Error('Invalid polygon snapshot loops');
+      }
       expect('SOURCE_CURVES'); const curveCount=integer('source curve count');
       if(!curveCount) throw new Error('Missing source curves');
       remaining(7*curveCount,'SOURCE_CURVES');
@@ -146,6 +183,7 @@ function parseMesh(source) {
         if(!close(sourcePoint(curves[left.curve],left.end),sourcePoint(curves[right.curve],right.begin)))throw new Error('Source boundary intervals do not join');
       }
       result.boundaryContext={protectedVertices,polygonSnapshot,curves,edgeSources};
+      if(polygonLoops)result.boundaryContext.polygonLoops=polygonLoops;
     } else result.boundaryContext=null;
     expect('END_RESULT');
   }
@@ -258,6 +296,17 @@ function analyse(mesh) {
     issues.push(`Boundary node ${id} has degree ${n}, expected 2`);
     for (const [a,b] of boundaryEdges) if (a===id || b===id) problemEdges.add(key(a,b));
   }
+  // Closed boundary loops (outer loop plus holes), counted over degree-2 nodes.
+  const neighbours = new Map();
+  boundaryEdges.forEach(([a,b]) => {neighbours.set(a,[...(neighbours.get(a)||[]),b]);neighbours.set(b,[...(neighbours.get(b)||[]),a]);});
+  let boundaryLoops = 0;
+  const seen = new Set();
+  for (const start of neighbours.keys()) {
+    if (seen.has(start)) continue;
+    ++boundaryLoops;
+    const stack = [start];
+    while (stack.length) {const v=stack.pop();if(seen.has(v))continue;seen.add(v);stack.push(...neighbours.get(v));}
+  }
   const used = new Set(elements.flat());
   const unused = nodes.length-used.size;
   if (unused) issues.push(`${unused} node(s) are unused by elements`);
@@ -269,7 +318,7 @@ function analyse(mesh) {
     return {min,mean:sum/values.length,max};
   };
   return {bounds, triangles, edges, recorded, problemEdges, problemTriangles, issues,
-    summary: {nodes:nodes.length, elements:elements.length, boundaryEdges:boundaryEdges.length,
+    summary: {nodes:nodes.length, elements:elements.length, boundaryEdges:boundaryEdges.length, boundaryLoops,
       inverted:triangles.filter(t=>t.status==='inverted').length,
       degenerate:triangles.filter(t=>t.status==='degenerate').length,
       quality:stats(valid.map(t=>t.quality)), minAngle:stats(valid.map(t=>Math.min(...t.angles)))}};
