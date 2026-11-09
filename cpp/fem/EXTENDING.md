@@ -161,9 +161,10 @@ The plan's decisions are copied into every stationary `SolverReport` and
 into `Evolution::record.plan.decisions`; `write_report` prints them and
 `write_json` serializes them. A choice made by a strategy object
 (integrator or step controller factory) stays empty in the plan and is
-named by `evolve()` from `name()` (`StrategyNames`); a nonempty choice must
-equal that name. Adapt-owned subjects (marking, refinement, planners) are
-recorded in `AdaptiveIteration::decisions` and refused by both plans.
+named by `evolve()` from `name()` (a list of `StrategyRecord`s passed to
+`validate_decisions`); a nonempty choice must equal that name. Adapt-owned
+subjects (marking, refinement, planners) are recorded in
+`AdaptiveStep::decisions` and refused by both plans.
 
 ## A strategy descriptor (reproducible custom strategies)
 
@@ -184,8 +185,9 @@ reader to rebuild it.
   field. A refinement criterion (`RefinementOptions::criterion`) carries
   its own `RefinementCriterion::descriptor`; it is recorded under
   `DecisionSubject::RefinementCriterion`.
-- Marking strategy: override `MarkingStrategy::descriptor()`; adaptive
-  histories record it in each iteration's marking.
+- Marking strategy and mesh adaptation: override `descriptor()` on the
+  `MarkingStrategy` or `MeshAdaptation`; adaptive histories record them in
+  each step's marking and adaptation.
 
 `RunRecord::strategies` then says `described` with the descriptor; without
 one it says `not replayable` and `record.replayable()` is false. Tests: the
@@ -196,8 +198,9 @@ record's strategy entry and its JSON (`tests/fem/run_records.cpp`).
 Not implemented; the seams are `SolvePlanner` and `MeshPlanner`
 (`planner.hpp`), whose identity is `UserPlanner`. A planner is a function
 from the problem, its analysis (`ProblemProperties`), default plan and a
-`PlanningContext` (mesh; inside `adapt()` also the previous
-`AdaptiveIteration` and the iteration index) to a plan:
+`PlanningContext` (before the first mesh the geometry and its sampled
+boundary; then the mesh; inside the adaptive drivers also the previous
+`AdaptiveStep` and the step index) to a plan:
 
 1. Implement `name()`, `descriptor()` (so records can say what planned) and
    `plan(problem, properties, defaults, context)`.
@@ -213,18 +216,25 @@ from the problem, its analysis (`ProblemProperties`), default plan and a
 4. Run it with `run_planner(planner, problem, properties, defaults,
    context)`, which validates the plan ("Solve planner <name> returned an
    invalid plan: ...") and records the planner in `plan.planner` and the run
-   record's strategies; or pass it to `adapt()` as
-   `AdaptOptions::solve_planner` / `mesh_planner`, which calls it before
-   every solve / refinement and records it per iteration.
+   record's strategies; or `plan_mesh(geometry, problem, planner,
+   defaults)` to plan and generate the first mesh; or pass it to `adapt()`
+   or `adapt_evolution()` as `AdaptOptions::planners.solve` / `.mesh`,
+   which calls it before every solve or window / mesh change and records
+   it per step.
 
 The user overrides a planner by calling setters on the returned plan before
 `solve_stationary(mesh, problem, plan)`, `PreparedStationary` or
 `evolve(mesh, problem, initial, plan, output)` (pass the `MeshResult` to
 check the mesh plan against it). Judge a planner against `UserPlanner` on
 reference problems (docs/vision.md, "Better is measured"), comparing records
-with `diff_records`. Tests: a planner whose choice is known, run inside
-`adapt()` against the hand-composed loop with the same plans
-(`tests/fem/planners.cpp`).
+with `diff_records`, or with `compare_planners(reference, {PlannerSet...},
+defaults)`, which always includes the identity baseline and reports the
+planner's decisions, its cost and the error and work relative to the
+baseline. Tests: a planner whose choice is known, run inside `adapt()`
+(`tests/fem/planners.cpp`) and `adapt_evolution()`
+(`tests/fem/transient_adaptivity.cpp`) against the hand-composed loop with
+the same plans, and in `compare_planners` against the plain comparison of
+the plans it chose (`tests/fem/reference_problems.cpp`).
 
 ## An error estimator
 
@@ -263,38 +273,62 @@ the indices) and feed the result to
 - Deterministic: the same estimate gives the same marks (break ties by
   element index, as `mark_bulk` does).
 - Override `descriptor()` so the "marking" decision of every adaptive
-  iteration is replayable; without one the choice says "<name> (not
+  step is replayable; without one the choice says "<name> (not
   replayable)".
 - Tests: the marked set against a hand-computed one on small indicator
-  vectors, and an `adapt()` run whose iterations record the strategy
+  vectors, and an `adapt()` run whose steps record the strategy
   (`tests/fem/adaptive_loop.cpp`).
 
-## The adaptive driver
+## A mesh adaptation strategy
 
-`adaptivity.hpp` composes the public components and adds no numerics of
-its own; keep it that way, so the hand-composed loop in
-`tests/fem/adaptive_loop.cpp` stays its bit-for-bit oracle. Planners run where the header comment of `adaptivity.hpp` says (solve
-planner before every solve, mesh planner after marking); the mesh plan and
-analysis of each iteration follow the rules documented there. A new stopping
-rule is an `AdaptiveStop` value with a stable name in
-`adaptive_stop_name`, a check in `adaptivity_detail::run` in the documented
-order and a case in that test. A new per-iteration field goes into
-`AdaptiveIteration` and its key into `adaptivity_json.hpp` (adding a key
-keeps `adaptive_history_schema_version`; renaming or removing one bumps it)
-and docs/fem/README.md. A new `AdaptOptions` field also belongs in
-`AdaptiveSettings` (`settings_of`) and its JSON, so a history says how it
-was produced.
+`mesh_adaptation.hpp` defines `MeshAdaptation`: `name()`, `descriptor()`
+and `apply(mesh, marked, options)` returning the new `MeshResult`. The
+default `MarkedBisection` is `refine_mesh(result, marked, options)`. No
+library change is needed: set `AdaptOptions::adaptation`. Both drivers call
+it through `apply_mesh_adaptation`, which refuses a result whose record does
+not describe its mesh (operation unset, other fingerprint) and, for a
+strategy other than the built-in one, an invalid mesh
+(`validate_mesh_geometry`).
 
-The transient driver `adapt_evolution` follows the same rule: it composes
-`evolve`, `estimate_error`, a `MarkingStrategy`, `refine_mesh`,
-`transfer_field` and the Dirichlet data of `PreparedAssembly` at the
-restart time, and `tests/fem/transient_adaptivity.cpp` composes the same
-loop by hand as its oracle. Keep the restart nodal (`InitialConditions`
-with nodal `Field`s) and the windows uniform-step (`adaptive_window_times`);
-a step controller spanning windows would need its own restart contract.
-A new per-window field goes into `EvolutionWindow`, its key into
-`adaptivity_json.hpp` (schema `pde2d.evolution_adaptive_history`) and
-docs/fem/README.md ("Transient adaptive loop").
+- Return a result of the meshing entry points (`refine_mesh`,
+  `generate_mesh`), so its report and `MeshRunRecord` are complete; keep
+  the boundary context when the next change needs it.
+- Report honestly: `report.size_satisfied` false makes `adapt` stop and
+  `adapt_evolution` discard the mesh unless
+  `accept_unsatisfied_refinement`.
+- Coarsening and node movement are not in the library; they plug in here
+  (the transfer and the plan refresh already handle any new mesh).
+- Tests: a strategy in the test (`RefineWithNeighbours`,
+  `tests/fem/adaptive_loop.cpp`) against the hand-composed loop that calls
+  the same meshing functions, and a tampered result rejected.
+
+## The adaptive drivers
+
+`adaptivity_core.hpp` holds the one adaptive step both drivers run
+(`adaptivity_detail::Loop::change_mesh`: mark, plan the mesh, change it,
+transfer, refresh plan.mesh and plan.analysis) and the solve planner call
+(`plan_solve`); `adapt_stationary.hpp` and `adapt_evolution.hpp` add only
+their loop (solve with warm start and stopping rules; windows, nodal
+restart and Dirichlet data). They compose public components and add no
+numerics; keep it that way, so the hand-composed loops in
+`tests/fem/adaptive_loop.cpp` and `transient_adaptivity.cpp` stay their
+bit-for-bit oracles. Put a change to the step in the core, never in one
+driver.
+
+- A new stopping rule is an `AdaptiveStop` value with a stable name in
+  `adaptive_stop_name`, a check in the driver in the documented order and a
+  case in that driver's test.
+- A new per-step field goes into `AdaptiveStep` (`adaptivity_types.hpp`;
+  windows-only data stays optional there), its key into
+  `adaptivity_json.hpp` (adding a key keeps
+  `adaptive_history_schema_version`; renaming or removing one bumps it) and
+  docs/fem/README.md ("Adaptive loop").
+- A new `AdaptOptions` field is in the history automatically
+  (`AdaptiveHistory::options`); add its key to the `settings` JSON. Mark
+  fields read by one driver only in their comment.
+- Keep the transient restart nodal (`InitialConditions` with nodal
+  `Field`s) and the windows uniform-step (`adaptive_window_times`); a step
+  controller spanning windows would need its own restart contract.
 
 ## A reference problem
 

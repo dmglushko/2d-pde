@@ -129,13 +129,13 @@ inline JsonValue analysis(const AnalysisRecord &a) {
   v.set("properties", std::move(properties));
   return v;
 }
-inline JsonValue planner(const std::optional<PlannerRecord> &p) {
+inline JsonValue planner(const std::optional<StrategyRecord> &p) {
   if (!p)
     return JsonValue::null();
   auto v = JsonValue::object();
   v.set("name", json_string(p->name));
   v.set("descriptor", descriptor(p->descriptor));
-  v.set("builtin", json_bool(p->builtin));
+  v.set("builtin", json_bool(p->replay == StrategyReplay::BuiltIn));
   return v;
 }
 inline JsonValue plan(const SolvePlan &plan) {
@@ -348,7 +348,7 @@ struct RecordDifference {
 struct RecordDiffOptions {
   // Skip "timings.*", the only field that differs between identical runs
   // (also nested, as in the run records of an adaptive history:
-  // "iterations[0].record.timings.total_seconds").
+  // "steps[0].record.timings.total_seconds").
   bool ignore_timings = true;
   // Skip "outcome" objects: what a solve produced from its inputs
   // (iterations, residuals of "stationary_solve.outcome"). They are

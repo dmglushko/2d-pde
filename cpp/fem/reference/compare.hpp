@@ -12,6 +12,16 @@
 //   write_json(out, c);              // schema "pde2d.plan_comparison"
 //
 //   compare_mesh_plans(reference, {coarse, fine}, plan);  // one plan, meshes
+//   compare_planners(reference, {{mesh_planner, solve_planner}}, plan);
+//
+// compare_planners judges planners (planner.hpp): entry 0 is always the
+// identity UserPlanner (the baseline: the defaults as given), then one entry
+// per PlannerSet (an unset planner is the identity). Each entry plans and
+// meshes with plan_mesh (its geometry in the PlanningContext), plans the
+// solve on that mesh (run_planner) and solves; it records the planners' own
+// cost (ComparisonTimings::planning_seconds, wall clock without meshing),
+// the decisions they changed (planner_decisions) and its error and work
+// relative to the baseline (ComparisonEntry::relative).
 //
 // compare_plans meshes the reference geometry once (generate_mesh with the
 // mesh plan's options) and solves it with every solve plan;
@@ -32,14 +42,18 @@
 #include "fem/mesh_acceptance.hpp"
 #include "fem/mesh_plan.hpp"
 #include "fem/plan.hpp"
+#include "fem/planner.hpp"
 #include "fem/record.hpp"
 #include "fem/record_json.hpp"
 #include "fem/reference/problems.hpp"
 #include "fem/solver.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <format>
 #include <istream>
 #include <limits>
+#include <optional>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -71,6 +85,18 @@ struct ComparisonWork {
 // Wall-clock seconds. Never reproducible (diff_records skips them).
 struct ComparisonTimings {
   double mesh_seconds = 0, solve_seconds = 0;
+  // compare_planners: the planners' own time (analysis and plan calls,
+  // without meshing), and the entry's total (mesh + planning + solve)
+  // divided by the baseline's.
+  double planning_seconds = 0;
+  std::optional<double> relative_seconds{};
+};
+// An entry divided by the baseline entry (compare_planners: the identity
+// planner), error by error and count by count; 1 when both are 0, inf when
+// only the baseline's is.
+struct ComparisonRelative {
+  double l2 = 1, h1_seminorm = 1;
+  double nodes = 1, linear_solves = 1, solver_iterations = 1;
 };
 struct ComparisonEntry {
   std::size_t index = 0;
@@ -80,17 +106,32 @@ struct ComparisonEntry {
   ComparisonErrors errors{};
   ComparisonWork work{};
   ComparisonTimings timings{};
+  // compare_planners: the decisions the planners changed (of the mesh plan,
+  // then of the solve plan; those that differ from the defaults' or are
+  // new), and the entry relative to the baseline.
+  std::vector<Decision> planner_decisions{};
+  std::optional<ComparisonRelative> relative{};
 };
 // What varied between the entries.
-enum class ComparisonKind { SolvePlans, MeshPlans };
+enum class ComparisonKind { SolvePlans, MeshPlans, Planners };
 inline const char *comparison_kind_name(ComparisonKind kind) {
-  return kind == ComparisonKind::SolvePlans ? "solve plans" : "mesh plans";
+  switch (kind) {
+  case ComparisonKind::SolvePlans:
+    return "solve plans";
+  case ComparisonKind::MeshPlans:
+    return "mesh plans";
+  case ComparisonKind::Planners:
+    return "planners";
+  }
+  return "invalid";
 }
 struct PlanComparison {
   std::string reference{}; // ReferenceProblem::name
   std::string notes{};
   ComparisonKind kind = ComparisonKind::SolvePlans;
   std::vector<ComparisonEntry> entries{};
+  // The entry the others are relative to (compare_planners: 0).
+  std::optional<std::size_t> baseline{};
 };
 
 // "SparseLU", "ConjugateGradient / CrankNicolson h=0.01", ...: the solver
@@ -231,6 +272,123 @@ compare_mesh_plans(const ReferenceProblem &reference,
   return comparison;
 }
 
+// "mesh: FinerTarget, solve: User": the planners of a set (unset: User).
+inline std::string comparison_label(const PlannerSet &planners) {
+  return "mesh: " + (planners.mesh ? planners.mesh->name() : "User") +
+         ", solve: " + (planners.solve ? planners.solve->name() : "User");
+}
+
+namespace comparison_detail {
+inline double ratio(double value, double baseline) {
+  if (baseline > 0)
+    return value / baseline;
+  return value == 0 ? 1.0 : std::numeric_limits<double>::infinity();
+}
+inline double seconds_since(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+      .count();
+}
+// The decisions of `planned` that are not in `defaults` as they are.
+inline void changed_decisions(const std::vector<Decision> &defaults,
+                              const std::vector<Decision> &planned,
+                              std::vector<Decision> &out) {
+  for (const auto &d : planned) {
+    const auto *was = find_decision(defaults, d.subject);
+    if (!was || was->choice != d.choice || was->basis != d.basis ||
+        was->evidence != d.evidence || was->source != d.source)
+      out.push_back(d);
+  }
+}
+inline ComparisonEntry
+run_planners(const ReferenceProblem &reference, const MeshPlanner &mesh_planner,
+             const SolvePlanner &solve_planner, const MeshPlan &mesh_defaults,
+             const SolvePlan &defaults, const ComparisonOptions &options) {
+  const auto planning_started = std::chrono::steady_clock::now();
+  auto planned = plan_mesh(reference.geometry, reference.problem, mesh_planner,
+                           mesh_defaults);
+  // plan_mesh times meshing in the mesh run record; the rest is planning.
+  double planning =
+      seconds_since(planning_started) - planned.result.record.total_seconds;
+  const auto solve_started = std::chrono::steady_clock::now();
+  auto solve_defaults = defaults;
+  solve_defaults.mesh = planned.plan;
+  refresh_analysis(solve_defaults, reference.problem, planned.result.mesh);
+  PlanningContext context;
+  context.geometry = &reference.geometry;
+  context.mesh = &planned.result;
+  const auto properties =
+      solve_defaults.analysis
+          ? solve_defaults.analysis->properties()
+          : make_analysis_record(reference.problem, planned.result.mesh)
+                .properties();
+  const auto plan = run_planner(solve_planner, reference.problem, properties,
+                                solve_defaults, context);
+  planning += seconds_since(solve_started);
+  auto entry = run(reference, planned.result, planned.plan, plan, options);
+  entry.timings.planning_seconds = std::max(planning, 0.0);
+  changed_decisions(mesh_defaults.decisions, planned.plan.decisions,
+                    entry.planner_decisions);
+  changed_decisions(defaults.decisions, plan.decisions,
+                    entry.planner_decisions);
+  return entry;
+}
+} // namespace comparison_detail
+
+// Compare planner sets on a reference problem against the identity
+// planner: entry 0 plans nothing (UserPlanner for mesh and solve), entry
+// k + 1 runs planners[k]. Meshing starts from defaults.mesh (unset: the
+// reference's suggested options, mesh_plan_from_user(reference.mesh)), the
+// solve from `defaults`. Throws what planning, meshing and the solves
+// throw, and as compare_plans for time settings that do not fit.
+inline PlanComparison compare_planners(const ReferenceProblem &reference,
+                                       const std::vector<PlannerSet> &planners,
+                                       const SolvePlan &defaults,
+                                       const ComparisonOptions &options = {}) {
+  PlanComparison comparison{reference.name, reference.notes,
+                            ComparisonKind::Planners};
+  comparison.baseline = 0;
+  const auto mesh_defaults =
+      defaults.mesh ? *defaults.mesh : mesh_plan_from_user(reference.mesh);
+  const UserPlanner identity;
+  for (std::size_t k = 0; k <= planners.size(); ++k) {
+    const PlannerSet set = k == 0 ? PlannerSet{} : planners[k - 1];
+    auto entry = comparison_detail::run_planners(
+        reference, set.mesh ? *set.mesh : identity,
+        set.solve ? *set.solve : identity, mesh_defaults, defaults, options);
+    entry.index = k;
+    entry.label =
+        k == 0 ? "User (baseline)" : comparison_label(planners[k - 1]);
+    comparison.entries.push_back(std::move(entry));
+  }
+  using comparison_detail::ratio;
+  const auto &base = comparison.entries.front();
+  const auto total = [](const ComparisonEntry &e) {
+    return e.timings.mesh_seconds + e.timings.planning_seconds +
+           e.timings.solve_seconds;
+  };
+  for (auto &e : comparison.entries) {
+    e.relative = ComparisonRelative{
+        ratio(e.errors.l2, base.errors.l2),
+        ratio(e.errors.h1_seminorm, base.errors.h1_seminorm),
+        ratio(static_cast<double>(e.work.nodes),
+              static_cast<double>(base.work.nodes)),
+        ratio(static_cast<double>(e.work.linear_solves),
+              static_cast<double>(base.work.linear_solves)),
+        ratio(static_cast<double>(e.work.solver_iterations),
+              static_cast<double>(base.work.solver_iterations))};
+    e.timings.relative_seconds = ratio(total(e), total(base));
+  }
+  return comparison;
+}
+// A stationary reference with the default solve settings
+// (plan_from_user(AssemblyOptions{})).
+inline PlanComparison compare_planners(const ReferenceProblem &reference,
+                                       const std::vector<PlannerSet> &planners,
+                                       const ComparisonOptions &options = {}) {
+  return compare_planners(reference, planners,
+                          plan_from_user(AssemblyOptions{}), options);
+}
+
 inline constexpr const char *plan_comparison_schema = "pde2d.plan_comparison";
 inline constexpr int plan_comparison_schema_version = 1;
 
@@ -268,11 +426,29 @@ inline JsonValue to_json(const PlanComparison &c) {
     auto timings = JsonValue::object();
     timings.set("mesh_seconds", json_number(e.timings.mesh_seconds));
     timings.set("solve_seconds", json_number(e.timings.solve_seconds));
+    timings.set("planning_seconds", json_number(e.timings.planning_seconds));
+    timings.set("relative_seconds",
+                e.timings.relative_seconds
+                    ? json_number(*e.timings.relative_seconds)
+                    : JsonValue::null());
     entry.set("timings", std::move(timings));
+    entry.set("planner_decisions",
+              record_json_detail::decisions(e.planner_decisions));
+    if (const auto &r = e.relative) {
+      auto relative = JsonValue::object();
+      relative.set("l2", json_number(r->l2));
+      relative.set("h1_seminorm", json_number(r->h1_seminorm));
+      relative.set("nodes", json_number(r->nodes));
+      relative.set("linear_solves", json_number(r->linear_solves));
+      relative.set("solver_iterations", json_number(r->solver_iterations));
+      entry.set("relative", std::move(relative));
+    } else
+      entry.set("relative", JsonValue::null());
     entry.set("record", to_json(e.record));
     entries.push(std::move(entry));
   }
   v.set("entries", std::move(entries));
+  v.set("baseline", c.baseline ? json_number(*c.baseline) : JsonValue::null());
   return v;
 }
 inline std::ostream &write_json(std::ostream &out, const PlanComparison &c) {

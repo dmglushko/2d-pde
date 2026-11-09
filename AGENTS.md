@@ -8,18 +8,22 @@ heading and which directions to keep open.
 
 ## Where things are
 
+Start with [docs/concepts.md](docs/concepts.md): the minimal path and the
+optional layers. Module READMEs hold the header maps (checked by the
+`docs_header_map` test).
+
 | Path | Contents |
 | --- | --- |
-| `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
-| `cpp/json.hpp` | `pde2d::JsonValue`, `json_number`, `parse_json`: the JSON document of every record (mesh run records, FEM run records, histories, comparisons); `fem/json.hpp` re-exports it in `pde2d::fem` |
-| `cpp/provenance.hpp` | `pde2d::Fingerprint` (portable FNV-1a), `StrategyDescriptor`, `library_version()` (reads the CMake-generated `pde2d_version.hpp`, from `cmake/pde2d_version.hpp.in`) |
-| `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing (size fields, marked refinement, public refinement criteria in `size_criterion.hpp`; one unit per interior algorithm with declared capabilities in `detail/interior_algorithms.hpp`, the generic loop in `detail/refinement_loop.hpp`, boundary policies in `detail/refinement_policy.hpp`), point location (`point_location.hpp`), mesh validation, mesh run records (`MeshResult::record`; `mesh_record.hpp`, JSON in `mesh_record_json.hpp`), `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md) (header map), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solvers (`linear_solver.hpp` umbrella over `linear_solver_types.hpp` contracts, `constraints.hpp`, `prepared_linear_solver.hpp` and private `detail/eigen_backends.hpp`), time integration (`time_integrator.hpp` interface, one unit per built-in scheme in `detail/time_schemes/`) and step control (`step_control.hpp`), boundary region binding shared by assembly and analysis (`boundary_assignment.hpp`), boundary edge forms with one unit per form (`detail/edge_forms/`: Dirichlet, natural, oblique), problem analysis (`analysis.hpp`, types in `analysis_types.hpp`), decision records (`decision.hpp`), solve and mesh plans with one binding table each (`plan.hpp`, `mesh_plan.hpp`), planner seams (`planner.hpp`), light contract headers (`assembly_options.hpp`, `weak_terms.hpp`), prepared stationary solves (`solver.hpp`), run records (`record.hpp`), error estimation (`estimation.hpp`), marking strategies (`marking.hpp`), field transfer between meshes (`transfer.hpp`), the optional adaptive drivers (`adaptivity.hpp`: stationary `adapt`, transient `adapt_evolution`; JSON in `adaptivity_json.hpp`), the checked `MeshResult` boundary (`mesh_acceptance.hpp`), reference problems with exact solutions and plan comparisons in the public subdirectory `reference/` (`problems.hpp`, `compare.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
-| `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests and the CMake README header-map check `readme_headers.cmake`), `headers/` (every public header compiled in its own translation unit), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
-| `examples/` | runnable programs (learning, meshing showcase, FEM showcase, long waves). Built as CTest smoke tests |
+| `cpp/execution.hpp` | `ExecutionOptions`, `parallel_for` (serial/OpenMP) |
+| `cpp/json.hpp`, `cpp/provenance.hpp` | JSON document of all records; fingerprints, strategy descriptors, library version |
+| `cpp/discretization/` | geometry, curves, meshing, refinement, mesh records and IO: [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
+| `cpp/fem/` | problems, assembly, solvers, time integration, plans, records, adaptivity: [README](cpp/fem/README.md), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `cpp/fem/reference/` | reference problems with exact solutions and plan/planner comparisons |
+| `tests/` | one directory per module, `headers/` (standalone headers), `tools/`, `support/` (shared helpers) |
+| `examples/` | runnable programs (`fem/minimal.cpp` is the minimal path); built as CTest smoke tests |
 | `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
-| `tools/` | mesh viewer (`mesh_viewer/`), `plot_mesh.py`, `render_solutions.mjs`, independent references (`reference/`), `format.sh`, `test*.sh` |
-| `docs/` | user docs (`fem/`, `learning/`, `showcase/`, `formats/`), current performance (`performance/`), `archive/` = dated historical reports |
+| `tools/` | mesh viewer, plotting, independent references, `format.sh`, `test*.sh` |
+| `docs/` | `concepts.md`, `architecture.md`, `vision.md`, user docs, performance; `archive/` = dated reports |
 
 ## Build and test
 
@@ -47,9 +51,10 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
 - Extension seams that need no library edit: `SolverOptions::backend`
   (`LinearSolverBackend`), `TimeOptions::integrator` (`TimeIntegrator`),
   `TimeOptions::step_controller`, `RefinementOptions::criterion`
-  (`RefinementCriterion`), `AdaptOptions::estimator`/`marker`
-  (`ErrorEstimator`, `MarkingStrategy`). The enums `LinearSolver`/`TimeMethod`
-  select the built-ins. An `InteriorAlgorithm` is a unit with declared
+  (`RefinementCriterion`), `AdaptOptions::estimator`/`marker`/`adaptation`
+  (`ErrorEstimator`, `MarkingStrategy`, `MeshAdaptation`) and
+  `AdaptOptions::planners` (`SolvePlanner`, `MeshPlanner`). The enums
+  `LinearSolver`/`TimeMethod` select the built-ins. An `InteriorAlgorithm` is a unit with declared
   capabilities; compatibility errors come from them, never from comparing
   enum values.
 - Dependencies point downward: `fem` may include `discretization`, never the
@@ -68,6 +73,13 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   thing (time dependence, divisor sign, time order, matrix symmetry), both
   call one shared public function. Analysis properties and `Decision`s state
   their `Evidence` (Proven / Sampled / Unknown) honestly.
+- Conceptual weight: the minimal path of docs/concepts.md (geometry, mesh,
+  `Problem`, solve/evolve) constructs no plan, record or decision, and
+  `examples/fem/minimal.cpp` (a CTest smoke test) keeps it so. Prefer an
+  optional field on an existing record over a new record type; a history
+  has one entry type (`AdaptiveStep` serves both adaptive drivers); a
+  change to the adaptive step goes into `adaptivity_core.hpp`, never into
+  one driver.
 - Boundary forms are `EdgeForm` alternatives dispatched with `std::visit`
   and a `static_assert` fallback; add an alternative, not a flag.
 
@@ -112,9 +124,9 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   `Decision` no longer matches its option. Change plan options with the
   `SolvePlan` setters (or update the decision), and give a new setting a
   `DecisionSubject` plus a case in `validate_decisions`.
-- **Run record JSON is a format** (and so are the adaptive histories,
-  `adaptivity_json.hpp`, schemas `pde2d.adaptive_history` and
-  `pde2d.evolution_adaptive_history`, the mesh run record,
+- **Run record JSON is a format** (and so are the adaptive histories of
+  both drivers, `adaptivity_json.hpp`, schema `pde2d.adaptive_history`
+  version 2, the mesh run record,
   `mesh_record_json.hpp`, schema `pde2d.mesh_run_record`, and plan
   comparisons, `reference/compare.hpp`, schema `pde2d.plan_comparison`).
   `diff_records` skips `timings` and `outcome` groups by default; put a
@@ -142,7 +154,8 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   `detail/`, and the module README names them with their relative path.
 - Reference problems (`fem/reference/problems.hpp`) are the oracle for
   "better is measured": judge an automatic choice with `compare_plans` /
-  `compare_mesh_plans` against a simple default.
+  `compare_mesh_plans` against a simple default, and a planner with
+  `compare_planners` (always against the `UserPlanner` baseline).
 - Put a new test in the module directory and register it in that directory's
   `CMakeLists.txt` with `pde2d_add_cpp_test(NAME ... SOURCE ... [FEM] [LIBXML2] ...)`.
   White-box tests of `*_detail` code go in `tests/<module>/internal/` with an

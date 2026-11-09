@@ -17,11 +17,13 @@
 #include "fem/error_norms.hpp"
 #include "fem/estimation.hpp"
 #include "fem/marking.hpp"
+#include "fem/mesh_adaptation.hpp"
 #include "fem/record_json.hpp"
 #include "fem/solver.hpp"
 #include "fem/transfer.hpp"
 #include "support/check.hpp"
 #include "support/check_eigen.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -157,14 +159,14 @@ void adaptive_loop_reduces_error() {
       options.boundary.max_curve_deviation;
   const auto history = adapt(initial, p, plan, adapt_options);
   check(history.stop == AdaptiveStop::MaxIterations, history.stop_message);
-  check(history.iterations.size() == observed.size(),
+  check(history.steps.size() == observed.size(),
         "one entry per solve (eight refinements after the first)");
   check(mesh_fingerprint(history.mesh.mesh) == mesh_fingerprint(mesh.mesh),
         "the driver reaches the hand-composed mesh");
-  check(identical(history.solution.values, u),
+  check(identical(history.solution->values, u),
         "the driver's final values equal the hand-composed ones bit for bit");
   for (std::size_t k = 0; k < observed.size(); ++k) {
-    const auto &it = history.iterations[k];
+    const auto &it = history.steps[k];
     const auto &o = observed[k];
     check(it.index == k);
     check(it.record.mesh.fingerprint == o.fingerprint, "mesh fingerprint");
@@ -174,7 +176,7 @@ void adaptive_loop_reduces_error() {
     check(it.estimate.global == o.estimate, "estimate bit for bit");
     check(it.estimate.estimator == "gradient recovery (ZZ)");
     const bool last = k + 1 == observed.size();
-    check(it.marking.has_value() == !last && it.refinement.has_value() == !last,
+    check(it.marking.has_value() == !last && it.adaptation.has_value() == !last,
           "the last iteration stops before marking");
     check(it.transfer.has_value() == (k > 0),
           "transfer into every refined mesh");
@@ -183,12 +185,16 @@ void adaptive_loop_reduces_error() {
                 it.transfer->max_outside_distance ==
                     o.transfer->max_outside_distance,
             "transfer statistics");
-      check(it.initial_guess == InitialGuess::Used, "warm start");
+      check(it.record.stationary_solve->initial_guess == InitialGuess::Used,
+            "warm start");
     }
     if (!last) {
       check(it.marking->marked == o.marked, "marked count");
       check(it.marking->strategy == "bulk (Dorfler)");
-      check(same_report(*it.refinement, *o.refinement), "refinement report");
+      check(same_report(it.adaptation->report, *o.refinement) &&
+                it.adaptation->accepted &&
+                it.adaptation->strategy == "marked longest-edge bisection",
+            "refinement report");
       check(it.decisions.size() == 2 &&
                 it.decisions[0].subject == DecisionSubject::Marking &&
                 it.decisions[0].choice == "Bulk(fraction=0.6)" &&
@@ -209,8 +215,8 @@ void history_json_round_trip() {
   o.max_iterations = 2;
   o.transfer.max_outside_distance = .02;
   const auto history = adapt(mesh, p, cg_plan(), o);
-  check(history.iterations.size() == 3);
-  check(history.iterations[0].decisions[0].basis ==
+  check(history.steps.size() == 3);
+  check(history.steps[0].decisions[0].basis ==
             "default (AdaptOptions::marker unset)",
         "an unset marker is recorded as the default");
   std::stringstream out;
@@ -219,7 +225,8 @@ void history_json_round_trip() {
   check(diff_records(document, to_json(history)).empty(), "JSON round trip");
   check(document.at("schema").text == "pde2d.adaptive_history", "schema");
   check(document.at("stop").at("reason").text == "max iterations");
-  const auto &iterations = document.at("iterations");
+  check(document.at("kind").text == "stationary", "kind");
+  const auto &iterations = document.at("steps");
   check(iterations.items.size() == 3);
   const auto &second = iterations.items[1];
   check(second.at("record").at("schema").text == "pde2d.run_record",
@@ -230,11 +237,14 @@ void history_json_round_trip() {
                 .at("fraction")
                 .text == "0.5",
         "default Dorfler fraction");
-  check(second.at("refinement").at("marked").at("bisected_edges").kind ==
-            pde2d::fem::JsonValue::Kind::Number,
+  check(second.at("adaptation")
+                .at("report")
+                .at("marked")
+                .at("bisected_edges")
+                .kind == pde2d::fem::JsonValue::Kind::Number,
         "marked-refinement counters");
   check(second.at("transfer").at("target_nodes").text ==
-            std::to_string(history.iterations[1].record.workload.nodes),
+            std::to_string(history.steps[1].record.workload.nodes),
         "transfer into the second mesh");
   check(iterations.items[2].at("marking").kind ==
             pde2d::fem::JsonValue::Kind::Null,
@@ -284,29 +294,28 @@ void stopping_rules() {
 
   o.tolerance = 1e9;
   auto h = adapt(mesh, p, plan, o);
-  check(h.stop == AdaptiveStop::ToleranceReached && h.iterations.size() == 1 &&
-            !h.iterations[0].marking,
+  check(h.stop == AdaptiveStop::ToleranceReached && h.steps.size() == 1 &&
+            !h.steps[0].marking,
         "a loose tolerance stops after the first solve");
   check(mesh_fingerprint(h.mesh.mesh) == mesh_fingerprint(mesh.mesh));
 
   o.tolerance = 0;
   o.max_iterations = 0;
   h = adapt(mesh, p, plan, o);
-  check(h.stop == AdaptiveStop::MaxIterations && h.iterations.size() == 1);
+  check(h.stop == AdaptiveStop::MaxIterations && h.steps.size() == 1);
   // The driver's single solve and estimate are the components' results.
   const auto direct = solve_stationary(mesh, p, plan);
-  check(identical(h.solution.values, direct.values));
+  check(identical(h.solution->values, direct.values));
   check(h.estimate.global ==
         estimate_error(mesh.mesh, p, direct.values).global);
 
   o.max_iterations = 3;
   o.marker = std::make_shared<NoMarking>();
   h = adapt(mesh, p, plan, o);
-  check(h.stop == AdaptiveStop::NothingMarked && h.iterations.size() == 1 &&
-            h.iterations[0].marking->marked == 0 &&
-            h.iterations[0].decisions.size() == 1,
+  check(h.stop == AdaptiveStop::NothingMarked && h.steps.size() == 1 &&
+            h.steps[0].marking->marked == 0 && h.steps[0].decisions.size() == 1,
         "nothing marked");
-  check(h.iterations[0].decisions[0].choice == "none (not replayable)",
+  check(h.steps[0].decisions[0].choice == "none (not replayable)",
         "an undescribed strategy is named but not replayable");
 
   o.marker = std::make_shared<Unsorted>();
@@ -320,9 +329,9 @@ void stopping_rules() {
   budget.refinement.max_steps = 0;
   o.refinement = budget;
   h = adapt(mesh, p, plan, o);
-  check(h.stop == AdaptiveStop::UnsatisfiedRefinement &&
-            h.iterations.size() == 1 &&
-            !h.iterations[0].refinement->size_satisfied,
+  check(h.stop == AdaptiveStop::UnsatisfiedRefinement && h.steps.size() == 1 &&
+            !h.steps[0].adaptation->report.size_satisfied &&
+            !h.steps[0].adaptation->accepted,
         "an unsatisfied refinement stops the loop");
   check(h.stop_message.find("Refinement step budget exhausted") !=
             std::string::npos,
@@ -330,8 +339,8 @@ void stopping_rules() {
   o.accept_unsatisfied_refinement = true;
   o.max_iterations = 1;
   h = adapt(mesh, p, plan, o);
-  check(h.stop == AdaptiveStop::MaxIterations && h.iterations.size() == 2 &&
-            !h.iterations[1].record.mesh.provenance->report.size_satisfied,
+  check(h.stop == AdaptiveStop::MaxIterations && h.steps.size() == 2 &&
+            !h.steps[1].record.mesh.provenance->report.size_satisfied,
         "accepted unsatisfied refinements continue and stay recorded");
 
   // Invalid options and an unsatisfied initial mesh.
@@ -348,8 +357,109 @@ void stopping_rules() {
       [&] { (void)adapt(unsatisfied, p, plan, once); },
       "misses its size target (test shortfall)");
   h = adapt(accept_unsatisfied(unsatisfied), p, plan, once);
-  check(identical(h.solution.values, direct.values),
+  check(identical(h.solution->values, direct.values),
         "an accepted initial mesh is solved as is");
+}
+
+// The elements that share a vertex with a marked element, marked included.
+std::vector<std::size_t>
+with_neighbours(const TriangleMesh &mesh,
+                const std::vector<std::size_t> &marked) {
+  std::vector<bool> touched(mesh.nodes.size(), false);
+  for (const auto e : marked)
+    for (const auto v : mesh.elements[e])
+      touched[v] = true;
+  std::vector<std::size_t> grown;
+  for (std::size_t e = 0; e < mesh.elements.size(); ++e)
+    if (std::ranges::any_of(mesh.elements[e],
+                            [&](std::size_t v) { return touched[v]; }))
+      grown.push_back(e);
+  return grown;
+}
+// A mesh adaptation strategy of the test: bisect the marked elements and
+// their vertex neighbours.
+class RefineWithNeighbours final : public MeshAdaptation {
+public:
+  std::string name() const override { return "marked plus neighbours"; }
+  std::optional<pde2d::StrategyDescriptor> descriptor() const override {
+    return pde2d::StrategyDescriptor{"WithNeighbours"};
+  }
+  MeshResult apply(const MeshResult &mesh,
+                   const std::vector<std::size_t> &marked,
+                   const MeshOptions &options) const override {
+    return refine_mesh(mesh, with_neighbours(mesh.mesh, marked), options);
+  }
+};
+// Returns a refined mesh whose record no longer describes it.
+class Tampered final : public MeshAdaptation {
+public:
+  std::string name() const override { return "tampered"; }
+  MeshResult apply(const MeshResult &mesh,
+                   const std::vector<std::size_t> &marked,
+                   const MeshOptions &options) const override {
+    auto result = refine_mesh(mesh, marked, options);
+    result.mesh.nodes.front().x += 1e-3;
+    return result;
+  }
+};
+
+// The mesh change is a strategy: the driver with RefineWithNeighbours
+// equals the hand-composed loop that refines the grown marking.
+void mesh_adaptation_strategy() {
+  const auto p = peak_problem();
+  const auto initial = generate_mesh(CircleGeometry(1.0), disk_options());
+  const auto plan = cg_plan();
+  AdaptOptions o;
+  o.max_iterations = 2;
+  o.transfer.max_outside_distance = .02;
+  o.adaptation = std::make_shared<RefineWithNeighbours>();
+  const auto history = adapt(initial, p, plan, o);
+
+  auto mesh = initial;
+  auto u = solve_stationary(mesh, p, plan).values;
+  std::size_t plain_bisected = 0, grown_bisected = 0;
+  for (int k = 0; k < 2; ++k) {
+    const auto marked =
+        mark_bulk(estimate_error(mesh.mesh, p, u).indicators, .5);
+    auto refined =
+        refine_mesh(mesh, with_neighbours(mesh.mesh, marked), mesh.options);
+    if (k == 0) {
+      plain_bisected =
+          refine_mesh(mesh, marked, mesh.options).report.marked->bisected_edges;
+      grown_bisected = refined.report.marked->bisected_edges;
+    }
+    const auto guess = transfer_field(mesh.mesh, u, refined.mesh, o.transfer);
+    u = PreparedStationary(refined, p, plan).solve(0, guess.values).values;
+    mesh = std::move(refined);
+  }
+  check(identical(history.solution->values, u) &&
+            mesh_fingerprint(history.mesh.mesh) == mesh_fingerprint(mesh.mesh),
+        "the strategy's meshes and values equal the hand loop's");
+  check(grown_bisected > plain_bisected,
+        "the grown marking bisects more edges than the marking alone");
+  const auto &step = history.steps[0];
+  check(step.adaptation &&
+            step.adaptation->strategy == "marked plus neighbours" &&
+            step.adaptation->descriptor->name == "WithNeighbours" &&
+            step.adaptation->run.fingerprint ==
+                history.steps[1].record.mesh.fingerprint,
+        "the record names the strategy and the new mesh");
+  check(step.decisions.back().subject == DecisionSubject::Refinement &&
+            step.decisions.back().choice ==
+                "marked plus neighbours (ConstrainedDelaunay, RefineOnCurves)",
+        "the Refinement decision names the strategy");
+  AdaptOptions once;
+  once.max_iterations = 0;
+  check(history.options.adaptation.get() == o.adaptation.get() &&
+            dynamic_cast<const MarkedBisection *>(
+                adapt(initial, p, plan, once).options.adaptation.get()),
+        "the history keeps the strategy; the default is MarkedBisection");
+
+  o.adaptation = std::make_shared<Tampered>();
+  expect_throws<std::invalid_argument>(
+      [&] { (void)adapt(initial, p, plan, o); },
+      "Mesh adaptation tampered returned an invalid mesh: its record "
+      "describes another mesh");
 }
 } // namespace
 
@@ -357,5 +467,6 @@ int main() {
   return pde2d_test::run(
       {{"adaptive_loop_reduces_error", adaptive_loop_reduces_error},
        {"history_json_round_trip", history_json_round_trip},
-       {"stopping_rules", stopping_rules}});
+       {"stopping_rules", stopping_rules},
+       {"mesh_adaptation_strategy", mesh_adaptation_strategy}});
 }

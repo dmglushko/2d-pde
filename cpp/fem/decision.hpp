@@ -55,7 +55,7 @@ inline const char *decision_source_name(DecisionSource source) {
 // Which plan or record a decision belongs to: the solve settings of a
 // SolvePlan (Solve), its time settings (Time; only in a plan with
 // SolvePlan::time), the meshing options of a MeshPlan (Mesh), or the
-// adaptive driver and planners (Adapt: AdaptiveIteration::decisions, never
+// adaptive drivers and planners (Adapt: AdaptiveStep::decisions, never
 // a plan). A decision in the wrong place is rejected ("does not belong").
 enum class DecisionOwner { Solve, Time, Mesh, Adapt };
 inline const char *decision_owner_name(DecisionOwner owner) {
@@ -263,28 +263,50 @@ template <class Options> struct DecisionBinding {
   bool (*recorded)(const Options &);
 };
 
-// The planner that produced a plan (planner.hpp): its name() and, when it
-// has one, its descriptor. Run records list it among their strategies.
-struct PlannerRecord {
-  std::string name{};
-  std::optional<pde2d::StrategyDescriptor> descriptor{};
-  // The library's identity planner (UserPlanner): replayable from the
-  // plan's options alone.
-  bool builtin = false;
-};
-
-// The names of strategy objects a run created (TimeIntegrator::name(),
-// StepController::name()), by the subject they serve, for validating
-// decisions whose choice the options do not determine.
-struct StrategyNames {
-  std::vector<std::pair<DecisionSubject, std::string>> names{};
-  const std::string *find(DecisionSubject subject) const {
-    for (const auto &[s, name] : names)
-      if (s == subject)
-        return &name;
-    return nullptr;
+// Whether a record rebuilds a strategy: from the options alone (built-in),
+// from a descriptor only a reader can turn back into an object (described),
+// or not at all (not replayable: a factory without a descriptor).
+enum class StrategyReplay { BuiltIn, Described, NotReplayable };
+inline const char *strategy_replay_name(StrategyReplay replay) {
+  switch (replay) {
+  case StrategyReplay::BuiltIn:
+    return "built-in";
+  case StrategyReplay::Described:
+    return "described";
+  case StrategyReplay::NotReplayable:
+    return "not replayable";
   }
+  return "invalid";
+}
+// One strategy object that ran or produced a plan: the decision subject it
+// serves (time integrator, time steps, linear solver, size field, refinement
+// criterion, solve and mesh planner), its name() and how to rebuild it.
+// Run records list them (RunRecord::strategies), plans name their planner
+// with one (SolvePlan::planner, MeshPlan::planner), and validation compares
+// factory-made strategies' decisions with them.
+struct StrategyRecord {
+  DecisionSubject subject{};
+  std::string name{};
+  StrategyReplay replay = StrategyReplay::BuiltIn;
+  std::optional<pde2d::StrategyDescriptor> descriptor{};
 };
+inline StrategyRecord
+strategy_record(DecisionSubject subject, std::string name, bool builtin,
+                std::optional<pde2d::StrategyDescriptor> descriptor) {
+  const auto replay = builtin      ? StrategyReplay::BuiltIn
+                      : descriptor ? StrategyReplay::Described
+                                   : StrategyReplay::NotReplayable;
+  return {subject, std::move(name), replay, std::move(descriptor)};
+}
+// The strategy that served `subject` in `strategies`, or nullptr.
+inline const StrategyRecord *
+find_strategy(const std::vector<StrategyRecord> &strategies,
+              DecisionSubject subject) {
+  for (const auto &s : strategies)
+    if (s.subject == subject)
+      return &s;
+  return nullptr;
+}
 
 namespace decision_detail {
 template <class Options, std::size_t N>
@@ -401,15 +423,17 @@ inline void reject_foreign(const Decision &decision, std::string_view plan_kind,
 
 // Every decision appears once, is bound by the table (owner check) and
 // matches the choice its row reads from `options`. A row whose options do not
-// determine the choice (nullopt) is compared with the strategy name in
-// `ran`, if there is one and the decision names a choice. `hint(subject)`
-// extends the owner message. Throws std::invalid_argument ("Duplicate
-// decision: ...", "... does not belong to a ...", "Stale decision: ...").
+// determine the choice (nullopt) is compared with the name of the strategy
+// in `ran` that served its subject, if there is one and the decision names a
+// choice. `hint(subject)` extends the owner message. Throws
+// std::invalid_argument ("Duplicate decision: ...", "... does not belong to a
+// ...", "Stale decision: ...").
 template <class Options, std::size_t N, class Hint>
 void validate_bound_decisions(
     const std::array<DecisionBinding<Options>, N> &table,
     const Options &options, const std::vector<Decision> &decisions,
-    const StrategyNames &ran, std::string_view plan_kind, Hint &&hint) {
+    const std::vector<StrategyRecord> &ran, std::string_view plan_kind,
+    Hint &&hint) {
   decision_detail::require_unique(decisions);
   for (const auto &decision : decisions) {
     const auto *row = decision_detail::find_binding(table, decision.subject);
@@ -418,9 +442,9 @@ void validate_bound_decisions(
                                       hint(decision.subject));
     if (const auto choice = row->choice(options))
       decision_detail::require_current(decision, *choice);
-    else if (const auto *name = ran.find(decision.subject);
-             name && !decision.choice.empty())
-      decision_detail::require_current(decision, *name);
+    else if (const auto *strategy = find_strategy(ran, decision.subject);
+             strategy && !decision.choice.empty())
+      decision_detail::require_current(decision, strategy->name);
   }
 }
 } // namespace pde2d::fem

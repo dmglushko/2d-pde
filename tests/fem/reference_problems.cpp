@@ -11,18 +11,24 @@
 //  - every problem converges: halving the mesh size reduces the L2 error;
 //  - comparing a direct and an iterative solver gives the same errors to the
 //    solver tolerance and different work, and the records differ only in
-//    the solver settings and their consequences.
+//    the solver settings and their consequences;
+//  - comparing planners: the identity baseline equals the plain comparison
+//    of the default plans bit for bit, a planner's entry equals the plain
+//    comparison of the plans it chose, and both are reported relative to
+//    the baseline with the planners' decisions.
 #include "discretization/geometry.hpp"
 #include "discretization/triangulate.hpp"
 #include "fem/evolution.hpp"
 #include "fem/expression.hpp"
 #include "fem/mesh_plan.hpp"
 #include "fem/plan.hpp"
+#include "fem/planner.hpp"
 #include "fem/record_json.hpp"
 #include "fem/reference/compare.hpp"
 #include "fem/reference/problems.hpp"
 #include "support/check.hpp"
 #include <cmath>
+#include <memory>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -337,6 +343,112 @@ void direct_and_iterative_solvers() {
         "a repeated comparison differs only in timings");
 }
 
+const Rationale planned{"planned for the test", Evidence::Unknown,
+                        DecisionSource::Automatic};
+class HalveTarget final : public MeshPlanner {
+public:
+  std::string name() const override { return "HalveTarget"; }
+  MeshPlan plan(const Problem &, const ProblemProperties &,
+                const MeshPlan &defaults,
+                const PlanningContext &context) const override {
+    if (!context.geometry || !context.boundary || context.mesh)
+      throw std::logic_error("planning before the first mesh");
+    auto plan = defaults;
+    plan.set_max_edge_length(defaults.options.refinement.max_edge_length / 2,
+                             planned);
+    return plan;
+  }
+};
+class UseCg final : public SolvePlanner {
+public:
+  std::string name() const override { return "UseCg"; }
+  std::optional<pde2d::StrategyDescriptor> descriptor() const override {
+    return pde2d::StrategyDescriptor{"UseCg"};
+  }
+  SolvePlan plan(const Problem &, const ProblemProperties &,
+                 const SolvePlan &defaults,
+                 const PlanningContext &context) const override {
+    if (!context.geometry || !context.mesh)
+      throw std::logic_error("planning on the planned mesh");
+    auto plan = defaults;
+    plan.set_linear_solver(LinearSolver::ConjugateGradient, planned);
+    return plan;
+  }
+};
+
+void planners_against_the_baseline() {
+  const auto r = find_reference_problem("annulus_mixed");
+  const auto defaults = plan_from_user(AssemblyOptions{6});
+  const auto c = compare_planners(r,
+                                  {{std::make_shared<HalveTarget>(), nullptr},
+                                   {nullptr, std::make_shared<UseCg>()}},
+                                  defaults);
+  check(c.kind == ComparisonKind::Planners && c.entries.size() == 3 &&
+            c.baseline == 0,
+        "baseline plus one entry per planner set");
+  const auto &base = c.entries[0], &finer = c.entries[1], &cg = c.entries[2];
+  check(base.label == "User (baseline)" &&
+            finer.label == "mesh: HalveTarget, solve: User" &&
+            cg.label == "mesh: User, solve: UseCg",
+        "labels");
+  // Oracles: the plain comparisons of the plans the planners chose.
+  auto halved = mesh_plan_from_user(r.mesh);
+  halved.set_max_edge_length(r.mesh.refinement.max_edge_length / 2, planned);
+  auto cg_plan = defaults;
+  cg_plan.set_linear_solver(LinearSolver::ConjugateGradient, planned);
+  const auto plain =
+      compare_mesh_plans(r, {mesh_plan_from_user(r.mesh), halved}, defaults);
+  const auto plain_cg =
+      compare_plans(r, mesh_plan_from_user(r.mesh), {cg_plan});
+  check(base.errors.l2 == plain.entries[0].errors.l2 &&
+            base.errors.h1_seminorm == plain.entries[0].errors.h1_seminorm &&
+            finer.errors.l2 == plain.entries[1].errors.l2 &&
+            cg.errors.l2 == plain_cg.entries[0].errors.l2,
+        "entries are the plain solves of the planned plans, bit for bit");
+  check(base.planner_decisions.empty() && base.relative &&
+            base.relative->l2 == 1 && base.relative->nodes == 1 &&
+            base.timings.relative_seconds == 1.0,
+        "the baseline is relative 1 and changed nothing");
+  check(finer.planner_decisions.size() == 1 &&
+            finer.planner_decisions[0].subject == DecisionSubject::MeshSize &&
+            finer.planner_decisions[0].source == DecisionSource::Automatic,
+        "the mesh planner's decision");
+  check(finer.relative->nodes > 2 && finer.relative->l2 < .5,
+        "a finer mesh: more nodes, smaller error");
+  std::cout << "planners: CG relative l2 " << cg.relative->l2 << " iterations "
+            << cg.relative->solver_iterations << " (LU "
+            << base.work.solver_iterations << "), decisions "
+            << cg.planner_decisions.size() << "; finer nodes "
+            << finer.relative->nodes << " l2 " << finer.relative->l2 << '\n';
+  check(cg.planner_decisions.size() == 1 &&
+            cg.planner_decisions[0].subject == DecisionSubject::LinearSolver &&
+            std::abs(cg.relative->l2 - 1) < 1e-6 && cg.relative->nodes == 1 &&
+            cg.relative->solver_iterations > 10,
+        "the solve planner's decision; many more iterations than LU");
+  check(find_strategy(cg.record, DecisionSubject::SolvePlanner)->name ==
+                "UseCg" &&
+            find_strategy(finer.record, DecisionSubject::MeshPlanner)->name ==
+                "HalveTarget",
+        "the planners are in the run records");
+  for (const auto &e : c.entries)
+    check(e.timings.planning_seconds >= 0 &&
+              e.timings.relative_seconds.has_value(),
+          "planning cost");
+  std::ostringstream out;
+  write_json(out, c);
+  std::istringstream in(out.str());
+  const auto doc = read_plan_comparison_json(in);
+  check(doc.at("kind").text == "planners" && doc.at("baseline").number() == 0 &&
+            doc.at("entries")
+                    .items[2]
+                    .at("relative")
+                    .at("solver_iterations")
+                    .number() == cg.relative->solver_iterations &&
+            doc.at("entries").items[1].at("planner_decisions").items.size() ==
+                1,
+        "comparison JSON");
+}
+
 void plans_must_fit_the_problem() {
   const auto heat = find_reference_problem("heat_moving_peak");
   const auto mesh_plan = mesh_plan_from_user(heat.mesh);
@@ -368,5 +480,6 @@ int main() {
        {"initial_conditions_match", initial_conditions_match},
        {"every_problem_converges", every_problem_converges},
        {"direct_and_iterative_solvers", direct_and_iterative_solvers},
+       {"planners_against_the_baseline", planners_against_the_baseline},
        {"plans_must_fit_the_problem", plans_must_fit_the_problem}});
 }

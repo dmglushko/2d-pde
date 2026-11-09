@@ -156,17 +156,17 @@ void adapt_refreshes_on_new_meshes() {
   sampling.sample_times = {0., 1.};
   plan.analysis = make_analysis_record(p, initial.mesh, sampling);
   const auto history = adapt(initial, p, plan, options);
-  check(history.solution.values == plain.solution.values,
+  check(history.solution->values == plain.solution->values,
         "Analysis evidence changes no numbers");
-  for (const auto &it : history.iterations) {
+  for (const auto &it : history.steps) {
     const auto &a = it.record.plan.analysis;
     check(a && a->mesh_fingerprint() == it.record.mesh.fingerprint &&
               a->options().sample_times == sampling.sample_times,
           "Each iteration's analysis matches its mesh");
   }
-  check(history.iterations.size() == 3 &&
-            history.iterations[1].record.plan.analysis->mesh_fingerprint() !=
-                history.iterations[0].record.plan.analysis->mesh_fingerprint(),
+  check(history.steps.size() == 3 &&
+            history.steps[1].record.plan.analysis->mesh_fingerprint() !=
+                history.steps[0].record.plan.analysis->mesh_fingerprint(),
         "Refreshed when the mesh changed");
   // Evidence for another mesh is refused on the first iteration.
   auto coarser = mesh_options;

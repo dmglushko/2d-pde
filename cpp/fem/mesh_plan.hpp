@@ -157,7 +157,7 @@ struct MeshPlan {
   // optionally a whole-mesh decision.
   std::vector<Decision> decisions{};
   // The planner that produced this plan (planner.hpp), when one did.
-  std::optional<PlannerRecord> planner{};
+  std::optional<StrategyRecord> planner{};
 
   // Change options with `change(options)` and record the decision about
   // `subject` from the result, with `why` (default: a user choice naming the

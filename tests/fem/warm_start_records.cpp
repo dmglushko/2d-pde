@@ -189,25 +189,27 @@ void adaptive_history_keeps_its_settings() {
   requested.refinement.max_steps = 5000;
   o.refinement = requested;
   const auto h = adapt(mesh, problem, cg_plan(), o);
-  const auto &s = h.settings;
+  const auto &s = h.options;
   check(s.max_iterations == 2 && s.tolerance == 1e-6 && s.warm_start &&
             !s.accept_unsatisfied_refinement && s.time == 0 &&
-            s.default_estimator && s.default_marker &&
-            s.estimator == "gradient recovery (ZZ)" &&
-            s.marker == "bulk (Dorfler)" && s.refinement &&
-            s.refinement->refinement.max_steps == 5000 && !s.solve_planner,
+            s.estimator->name() == "gradient recovery (ZZ)" &&
+            s.marker->name() == "bulk (Dorfler)" &&
+            s.adaptation->name() == "marked longest-edge bisection" &&
+            s.refinement && s.refinement->refinement.max_steps == 5000 &&
+            !s.planners.solve,
         "settings of the loop");
-  for (std::size_t k = 0; k + 1 < h.iterations.size(); ++k) {
-    const auto &it = h.iterations[k];
-    check(it.refinement_options &&
-              it.refinement_options->refinement.max_steps == 5000 &&
-              it.refinement_run &&
-              it.refinement_run->operation ==
+  check(h.steps[0].decisions[0].basis == "default (AdaptOptions::marker unset)",
+        "the default marker is recorded as the default");
+  for (std::size_t k = 0; k + 1 < h.steps.size(); ++k) {
+    const auto &it = h.steps[k];
+    check(it.adaptation &&
+              it.adaptation->run.options.refinement.max_steps == 5000 &&
+              it.adaptation->run.operation ==
                   disc::MeshOperation::MarkedRefine &&
-              it.refinement_run->source_fingerprint ==
+              it.adaptation->run.source_fingerprint ==
                   it.record.mesh.fingerprint &&
-              it.refinement_run->fingerprint ==
-                  h.iterations[k + 1].record.mesh.fingerprint,
+              it.adaptation->run.fingerprint ==
+                  h.steps[k + 1].record.mesh.fingerprint,
           "each refinement: requested options and mesh run record");
   }
   std::ostringstream out;
@@ -224,14 +226,16 @@ void adaptive_history_keeps_its_settings() {
               5000 &&
           settings.at("estimator").at("name").text == "gradient recovery (ZZ)",
       "settings JSON");
-  check(doc.at("iterations").items[0].at("refinement_options").kind ==
-                JsonValue::Kind::Object &&
-            doc.at("iterations")
-                    .items[0]
-                    .at("refinement_run")
-                    .at("schema")
-                    .text == disc::mesh_run_record_schema,
-        "iteration JSON");
+  check(
+      doc.at("steps").items[0].at("adaptation").at("run").at("options").kind ==
+              JsonValue::Kind::Object &&
+          doc.at("steps")
+                  .items[0]
+                  .at("adaptation")
+                  .at("run")
+                  .at("schema")
+                  .text == disc::mesh_run_record_schema,
+      "step JSON");
 
   // One setting changed: exactly its path differs.
   auto other = o;
@@ -245,7 +249,7 @@ void adaptive_history_keeps_its_settings() {
   const auto cold = paths(diff_records(
       to_json(h), to_json(adapt(mesh, problem, cg_plan(), other))));
   check(cold.contains("settings.warm_start") &&
-            cold.contains("iterations[1].transfer.source_nodes"),
+            cold.contains("steps[1].transfer.source_nodes"),
         "warm start: setting and transfer differ");
 }
 
@@ -256,19 +260,19 @@ void failed_refinement_keeps_its_options() {
   budget.refinement.max_steps = 0;
   o.refinement = budget;
   const auto h = adapt(mesh, peak_problem(), cg_plan(), o);
-  check(h.stop == AdaptiveStop::UnsatisfiedRefinement &&
-            h.iterations.size() == 1,
+  check(h.stop == AdaptiveStop::UnsatisfiedRefinement && h.steps.size() == 1,
         "the refined mesh missed its target");
-  const auto &it = h.iterations.back();
-  check(it.refinement_options &&
-            it.refinement_options->refinement.max_steps == 0 &&
-            it.refinement_run && !it.refinement->size_satisfied,
+  const auto &it = h.steps.back();
+  check(it.adaptation && it.adaptation->run.options.refinement.max_steps == 0 &&
+            !it.adaptation->report.size_satisfied && !it.adaptation->accepted,
         "the requested options are kept although nothing was solved on them");
-  check(h.settings.refinement->refinement.max_steps == 0, "and in settings");
+  check(h.options.refinement->refinement.max_steps == 0, "and in settings");
   const auto doc = to_json(h);
-  check(doc.at("iterations")
+  check(doc.at("steps")
                 .items[0]
-                .at("refinement_options")
+                .at("adaptation")
+                .at("run")
+                .at("options")
                 .at("refinement")
                 .at("max_steps")
                 .number() == 0,

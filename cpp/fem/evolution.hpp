@@ -204,8 +204,8 @@ inline Evolution run(const discretization::TriangleMesh &mesh,
         "Time integrator factory returned no integrator");
   // Factory-made strategies exist now: their decisions must name them.
   validate_decisions(plan,
-                     {{{DecisionSubject::TimeIntegrator, integrator->name()},
-                       {DecisionSubject::TimeSteps, controller->name()}}});
+                     {{DecisionSubject::TimeIntegrator, integrator->name()},
+                      {DecisionSubject::TimeSteps, controller->name()}});
   auto decisions = plan.decisions;
   name_choice(decisions, DecisionSubject::TimeIntegrator, integrator->name());
   name_choice(decisions, DecisionSubject::TimeSteps, controller->name());

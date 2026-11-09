@@ -4,7 +4,8 @@
 // Oracles: the same loop composed by hand from the public components with
 // the plans switched at the same iterations (meshes and values bit for bit),
 // the identity planner (results bit-identical to no planner), and the
-// documented messages for invalid planner output.
+// documented messages for invalid planner output. plan_mesh plans before the
+// first mesh exists: its mesh is generate_mesh with the planned options.
 #include "discretization/geometry.hpp"
 #include "discretization/mesh_fingerprint.hpp"
 #include "discretization/triangulate.hpp"
@@ -72,7 +73,7 @@ public:
                  const SolvePlan &defaults,
                  const PlanningContext &context) const override {
     Seen s;
-    s.iteration = context.iteration;
+    s.iteration = context.step;
     if (context.mesh)
       s.mesh_fingerprint = mesh_fingerprint(context.mesh->mesh);
     if (context.previous) {
@@ -81,7 +82,7 @@ public:
     }
     seen->push_back(s);
     auto plan = defaults;
-    if (context.iteration > 2 &&
+    if (context.step > 2 &&
         plan.solver.method != LinearSolver::ConjugateGradient)
       plan.set_linear_solver(LinearSolver::ConjugateGradient, switched);
     return plan;
@@ -101,9 +102,9 @@ void solve_planner_switches_solver() {
   const auto plan = plan_from_user({}, {});
   auto options = loop_options(5);
   auto planner = std::make_shared<SwitchAfterTwo>();
-  options.solve_planner = planner;
+  options.planners.solve = planner;
   const auto history = adapt(initial, p, plan, options);
-  check(history.iterations.size() == 6, "Six solves");
+  check(history.steps.size() == 6, "Six solves");
 
   // The oracle: the loop by hand, with the plan the planner gives.
   auto cg = plan;
@@ -123,10 +124,10 @@ void solve_planner_switches_solver() {
     mesh = std::move(refined);
     fingerprints.push_back(mesh_fingerprint(mesh.mesh));
   }
-  check(identical(history.solution.values, u),
+  check(identical(history.solution->values, u),
         "The driver with a planner reproduces the hand loop bit for bit");
-  for (std::size_t k = 0; k < history.iterations.size(); ++k) {
-    const auto &it = history.iterations[k];
+  for (std::size_t k = 0; k < history.steps.size(); ++k) {
+    const auto &it = history.steps[k];
     check(it.record.mesh.fingerprint == fingerprints[k], "Same meshes");
     const auto *solver =
         find_decision(it.record.plan.decisions, DecisionSubject::LinearSolver);
@@ -138,7 +139,7 @@ void solve_planner_switches_solver() {
       check(solver->choice == "ConjugateGradient" &&
                 solver->source == DecisionSource::Automatic &&
                 solver->basis == switched.basis &&
-                it.initial_guess == InitialGuess::Used,
+                it.record.stationary_solve->initial_guess == InitialGuess::Used,
             "Planned solver from iteration 3");
     // Recorded per iteration: the decision and the record's strategy.
     check(!it.decisions.empty() &&
@@ -159,15 +160,15 @@ void solve_planner_switches_solver() {
     const auto &s = (*planner->seen)[k];
     check(s.iteration == k && s.mesh_fingerprint == fingerprints[k],
           "Current mesh");
-    check(k == 0 ? !s.previous_index
-                 : s.previous_index == k - 1 &&
-                       s.previous_estimate ==
-                           history.iterations[k - 1].estimate.global,
+    check(k == 0
+              ? !s.previous_index
+              : s.previous_index == k - 1 &&
+                    s.previous_estimate == history.steps[k - 1].estimate.global,
           "Previous iteration's diagnostics");
   }
   // JSON names the planner.
   std::ostringstream json;
-  write_json(json, history.iterations.back().record);
+  write_json(json, history.steps.back().record);
   check(json.str().find("\"subject\": \"solve planner\"") !=
                 std::string::npos &&
             json.str().find("\"planner\": {") != std::string::npos,
@@ -180,13 +181,13 @@ void identity_planner_changes_nothing() {
   const auto plan = plan_from_user({}, {});
   const auto plain = adapt(initial, p, plan, loop_options(2));
   auto options = loop_options(2);
-  options.solve_planner = std::make_shared<UserPlanner>();
-  options.mesh_planner = std::make_shared<UserPlanner>();
+  options.planners.solve = std::make_shared<UserPlanner>();
+  options.planners.mesh = std::make_shared<UserPlanner>();
   const auto planned = adapt(initial, p, plan, options);
-  check(identical(plain.solution.values, planned.solution.values) &&
-            plain.iterations.size() == planned.iterations.size(),
+  check(identical(plain.solution->values, planned.solution->values) &&
+            plain.steps.size() == planned.steps.size(),
         "Identity planners are bit-identical");
-  const auto &record = planned.iterations.back().record;
+  const auto &record = planned.steps.back().record;
   check(record.replayable() &&
             find_strategy(record, DecisionSubject::SolvePlanner)->replay ==
                 StrategyReplay::BuiltIn &&
@@ -197,12 +198,11 @@ void identity_planner_changes_nothing() {
       record.plan.mesh && record.plan.mesh->planner &&
           !mesh_options_difference(record.plan.mesh->options, initial.options),
       "Mesh plan of the refined mesh");
-  check(planned.iterations[0].decisions.size() == 4 &&
-            planned.iterations[0].decisions[1].subject ==
-                DecisionSubject::Marking &&
-            planned.iterations[0].decisions[2].subject ==
+  check(planned.steps[0].decisions.size() == 4 &&
+            planned.steps[0].decisions[1].subject == DecisionSubject::Marking &&
+            planned.steps[0].decisions[2].subject ==
                 DecisionSubject::MeshPlanner &&
-            planned.iterations[0].decisions[3].subject ==
+            planned.steps[0].decisions[3].subject ==
                 DecisionSubject::Refinement,
         "Decision order of an iteration");
 }
@@ -218,7 +218,7 @@ public:
                 const MeshPlan &defaults,
                 const PlanningContext &context) const override {
     auto plan = defaults;
-    if (context.iteration >= 2)
+    if (context.step >= 2)
       plan.set_max_edge_length(.2, {"finer from iteration 2", Evidence::Unknown,
                                     DecisionSource::Automatic});
     return plan;
@@ -231,7 +231,7 @@ void mesh_planner_sets_refinement() {
   auto plan = plan_from_user({}, {});
   plan.mesh = mesh_plan_from_user(initial.options);
   auto options = loop_options(2);
-  options.mesh_planner = std::make_shared<FinerTarget>();
+  options.planners.mesh = std::make_shared<FinerTarget>();
   const auto history = adapt(initial, p, plan, options);
 
   // The oracle: refinement with the options the planner gives.
@@ -249,18 +249,18 @@ void mesh_planner_sets_refinement() {
             .values;
     mesh = std::move(refined);
   }
-  check(identical(history.solution.values, u) &&
-            history.iterations.back().record.mesh.fingerprint ==
+  check(identical(history.solution->values, u) &&
+            history.steps.back().record.mesh.fingerprint ==
                 mesh_fingerprint(mesh.mesh),
         "Planned refinement reproduces the hand loop");
-  const auto &last = history.iterations.back().record.plan;
+  const auto &last = history.steps.back().record.plan;
   const auto *size =
       find_decision(last.mesh->decisions, DecisionSubject::MeshSize);
   check(last.mesh->options.refinement.max_edge_length == .2 && size &&
             size->source == DecisionSource::Automatic &&
             last.mesh->planner->name == "FinerTarget",
         "The planner's mesh plan is the next plan.mesh");
-  const auto &refinement = history.iterations[1].decisions.back();
+  const auto &refinement = history.steps[1].decisions.back();
   check(refinement.subject == DecisionSubject::Refinement &&
             refinement.source == DecisionSource::Automatic &&
             refinement.basis == "planned (FinerTarget(h=0.2))",
@@ -279,8 +279,8 @@ void refinement_options_replace_the_mesh_plan() {
   other.refinement.max_edge_length = .25;
   options.refinement = other;
   const auto history = adapt(initial, p, plan, options);
-  const auto &first = history.iterations[0].record.plan;
-  const auto &second = history.iterations[1].record.plan;
+  const auto &first = history.steps[0].record.plan;
+  const auto &second = history.steps[1].record.plan;
   check(!mesh_options_difference(first.mesh->options, initial.options) &&
             mesh_options_difference(second.mesh->options, initial.options) ==
                 DecisionSubject::MeshSize &&
@@ -316,7 +316,7 @@ void invalid_plans_are_rejected() {
   const auto p = peak_problem();
   const auto initial = disk();
   auto options = loop_options(1);
-  options.solve_planner = std::make_shared<Stale>();
+  options.planners.solve = std::make_shared<Stale>();
   expect_throws<std::invalid_argument>(
       [&] { (void)adapt(initial, p, plan_from_user({}, {}), options); },
       "Solve planner Stale returned an invalid plan: Stale decision: linear "
@@ -336,6 +336,66 @@ void invalid_plans_are_rejected() {
             solution.record.replayable(),
         "Planner recorded outside adapt()");
 }
+
+// Plans from the geometry alone: a target from the sampled boundary.
+class FromBoundary final : public MeshPlanner {
+public:
+  std::shared_ptr<std::size_t> boundary_points =
+      std::make_shared<std::size_t>();
+  std::string name() const override { return "FromBoundary"; }
+  std::optional<pde2d::StrategyDescriptor> descriptor() const override {
+    return pde2d::StrategyDescriptor{"FromBoundary"};
+  }
+  MeshPlan plan(const Problem &, const ProblemProperties &,
+                const MeshPlan &defaults,
+                const PlanningContext &context) const override {
+    if (!context.geometry || !context.boundary || context.mesh ||
+        context.previous)
+      throw std::logic_error("plan_mesh plans from the geometry");
+    *boundary_points = context.boundary->boundary.points.size();
+    auto plan = defaults;
+    plan.set_max_edge_length(.25,
+                             {"from the sampled boundary", Evidence::Unknown,
+                              DecisionSource::Automatic});
+    return plan;
+  }
+};
+
+void plan_mesh_before_the_first_mesh() {
+  const auto p = peak_problem();
+  const CircleGeometry geometry(1.0);
+  const auto defaults = mesh_plan_from_user(disk_options());
+  // The identity: the plain generate_mesh of the defaults.
+  const auto same = plan_mesh(geometry, p, UserPlanner{}, defaults);
+  check(
+      mesh_fingerprint(same.result.mesh) ==
+              mesh_fingerprint(generate_mesh(geometry, disk_options()).mesh) &&
+          same.plan.planner &&
+          same.plan.planner->replay == StrategyReplay::BuiltIn &&
+          !mesh_options_difference(same.result.options, disk_options()),
+      "UserPlanner meshes the defaults");
+  // A planner that reads the geometry and its sampled boundary.
+  FromBoundary planner;
+  const auto planned = plan_mesh(geometry, p, planner, defaults);
+  auto expected_options = disk_options();
+  expected_options.refinement.max_edge_length = .25;
+  check(
+      *planner.boundary_points > 0 &&
+          mesh_fingerprint(planned.result.mesh) ==
+              mesh_fingerprint(generate_mesh(geometry, expected_options).mesh),
+      "the planned options mesh the geometry");
+  auto plan = plan_from_user({}, {});
+  plan.mesh = planned.plan;
+  const auto solution = solve_stationary(planned.result, p, plan);
+  const auto *strategy =
+      find_strategy(solution.record, DecisionSubject::MeshPlanner);
+  const auto *size = find_decision(solution.record.plan.mesh->decisions,
+                                   DecisionSubject::MeshSize);
+  check(strategy && strategy->name == "FromBoundary" &&
+            strategy->replay == StrategyReplay::Described && size &&
+            size->source == DecisionSource::Automatic,
+        "the planned mesh's plan travels into the run record");
+}
 } // namespace
 int main() {
   return pde2d_test::run(
@@ -344,5 +404,6 @@ int main() {
        {"mesh_planner_sets_refinement", mesh_planner_sets_refinement},
        {"refinement_options_replace_the_mesh_plan",
         refinement_options_replace_the_mesh_plan},
-       {"invalid_plans_are_rejected", invalid_plans_are_rejected}});
+       {"invalid_plans_are_rejected", invalid_plans_are_rejected},
+       {"plan_mesh_before_the_first_mesh", plan_mesh_before_the_first_mesh}});
 }

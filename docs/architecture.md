@@ -1,6 +1,7 @@
 # Architecture
 
-Current structure of the project. Module-level detail lives next to the code:
+Current structure of the project. For the concepts a task needs, start with
+[concepts.md](concepts.md). Module-level detail lives next to the code:
 [cpp/discretization/README.md](../cpp/discretization/README.md) and
 [cpp/fem/README.md](../cpp/fem/README.md).
 
@@ -66,26 +67,26 @@ results carry RunRecord {plan, inputs (fingerprints, mesh provenance with the
                          workload, work, evidence, timings}
 RunRecord ──write_json──▶ versioned JSON ──read_run_record_json / diff_records
 
-Adaptive loop (stationary), by hand or as adapt(result, problem, plan, AdaptOptions):
-  PreparedStationary(result, plan).solve ──▶ values ──estimate_error──▶ ErrorEstimate
-     ──MarkingStrategy (BulkMarking = mark_bulk)──▶ marked elements
-     ──refine_mesh(result, marked)──▶ MeshResult
-     ──transfer_field(old mesh, values, new mesh)──▶ values on the new mesh
-     ──PreparedStationary(new result, plan).solve(t, guess = transferred)──▶ values
-  optional AdaptOptions::solve_planner (before each solve), mesh_planner (after marking);
-  plan.analysis refreshed and plan.mesh updated for each refined mesh
-  adapt ──▶ AdaptiveHistory {iterations: RunRecord, transfer, estimate summary,
-                             marking, refinement report, Decisions; stop; final state}
-        (and AdaptiveSettings: tolerance, budget, warm start, transfer, ...)
-        ──write_json (adaptivity_json.hpp)──▶ versioned JSON
-Restart (transient): last frame ──transfer_field──▶ InitialConditions{Vector} ──evolve
-Adaptive loop (transient), adapt_evolution(result, problem, initial, plan, options):
-  windows of plan.time: evolve ──▶ estimate (last frame) ──▶ mark ──▶ refine
-     ──transfer_field + Dirichlet data at the restart time──▶ nodal restart ──▶ evolve
-  ──▶ EvolutionAdaptiveHistory {settings, windows: RunRecord, restart, estimate, ...}
+Before the first mesh: CurveGeometry + Problem + MeshPlanner ──plan_mesh──▶
+  PlannedMesh {result: MeshResult, plan: MeshPlan}   (plan ──▶ SolvePlan::mesh)
+Adaptive step (adaptivity_core.hpp), shared by both drivers:
+  values ──estimate_error──▶ ErrorEstimate ──MarkingStrategy──▶ marked elements
+     ──MeshPlanner (optional)──▶ MeshPlan ──MeshAdaptation (MarkedBisection =
+     refine_mesh(result, marked))──▶ checked MeshResult
+     ──transfer_field(old mesh, fields, new mesh)──▶ fields on the new mesh
+     ──▶ plan.mesh and plan.analysis follow the new mesh; SolvePlanner (optional)
+adapt(result, problem, plan, AdaptOptions):  solve (warm start) ──▶ step ──▶ ...
+adapt_evolution(result, problem, initial, plan, AdaptOptions):
+  windows of plan.time: evolve ──▶ step ──▶ nodal restart with the Dirichlet
+  data at the restart time ──▶ evolve ...
+  ──▶ AdaptiveHistory {options, steps: AdaptiveStep {RunRecord, transfers,
+      estimate, marking, adaptation, Decisions}, stop, final state}
+      ──write_json (adaptivity_json.hpp)──▶ "pde2d.adaptive_history" v2
 Reference problems (fem/reference/problems.hpp: geometry, problem, exact solution)
-  ──compare_plans(reference, mesh plan, {plans}) / compare_mesh_plans──▶
-  PlanComparison {per plan: RunRecord, L2/H1 errors, work, timings} ──▶ JSON
+  ──compare_plans(reference, mesh plan, {plans}) / compare_mesh_plans /
+    compare_planners(reference, {PlannerSet}, defaults)──▶
+  PlanComparison {per entry: RunRecord, L2/H1 errors, work, timings;
+                  planners: decisions, cost, relative to the UserPlanner baseline} ──▶ JSON
 Time steps: StepController.next ──▶ trial (TimeIntegrator.trial) ──judge──▶
      accept (commit, frame, observer) | reject (discard, next() proposes a retry)
 ```
@@ -147,7 +148,9 @@ setters, validation and the owner check all derive from it. `MeshPlan`
 (`fem/mesh_plan.hpp`) does the same for `MeshOptions`; it lives in `fem`
 because decisions do, so discretization stays independent. Planners plug in
 at `SolvePlanner` and `MeshPlanner` (`planner.hpp`; `UserPlanner` is the
-identity), checked by `run_planner` and run by `adapt` between iterations.
+identity), checked by `run_planner`, run by `plan_mesh` before the first
+mesh (with the geometry and its sampled boundary in the `PlanningContext`)
+and by both adaptive drivers between steps.
 The analysis a plan relies on (`AnalysisRecord`, made only by
 `make_analysis_record`) carries the problem and mesh fingerprints and its
 options; solves refuse evidence for other inputs ("Stale analysis") and
@@ -187,13 +190,19 @@ Meshing results cross into FEM with their report: entry points that take a
 caller wraps it in `accept_unsatisfied(result)` (`fem/mesh_acceptance.hpp`),
 and the meshing functions returning `MeshResult` are `[[nodiscard]]`.
 
-The adaptive driver `adapt` (`fem/adaptivity.hpp`) is an optional
-composition of the public solve, estimate, mark, refine and transfer
-components; it adds no numerics (the hand-composed loop is its bit-for-bit
-test oracle) and records each iteration and its marking and refinement
-decisions in an `AdaptiveHistory`, together with the settings it ran with.
-`adapt_evolution` does the same for evolutions, window by window, with a
-nodal restart on each refined mesh.
+The adaptive drivers (`fem/adaptivity.hpp`, an umbrella over
+`adaptivity_types.hpp`, `mesh_adaptation.hpp`, `adaptivity_core.hpp`,
+`adapt_stationary.hpp`, `adapt_evolution.hpp`) are optional compositions of
+the public solve, estimate, mark, mesh-change and transfer components. One
+core step (estimate, mark, plan mesh, change mesh, transfer, refresh the
+plan) serves `adapt` and `adapt_evolution`; each adds only its loop (warm
+started solves and stopping rules; windows and nodal restarts). They add no
+numerics (hand-composed loops are their bit-for-bit test oracles) and
+report one `AdaptiveHistory` with one `AdaptiveStep` per solve or window.
+The mesh change is a strategy (`MeshAdaptation`, default marked
+bisection), so coarsening or node movement can plug in without touching
+the drivers. The step records live in the light `adaptivity_types.hpp`, so
+planners read the previous step without including the drivers.
 
 Meshing keeps its own record: `MeshResult::record` (`MeshRunRecord`,
 declared in `discretization/mesh_types.hpp`, filled by the meshing entry
@@ -206,8 +215,11 @@ in its mesh provenance. Both serialize with the core JSON document
 
 Reference problems (`fem/reference/`) make "better is measured" concrete:
 a small library of problems with exact solutions and `compare_plans` /
-`compare_mesh_plans`, which run plans with the public solve calls and
-report each one's errors next to its run record and work. They live in a
+`compare_mesh_plans` / `compare_planners`, which run plans (or plan, mesh
+and solve) with the public calls and report each one's errors next to its
+run record and work; `compare_planners` always includes the identity
+`UserPlanner` baseline and reports the others relative to it with the
+planners' decisions and cost. They live in a
 public subdirectory of the FEM module because they need the solver; nothing
 in the solve path depends on them.
 
@@ -251,7 +263,7 @@ The intended direction is in [vision.md](vision.md).
 
 
 - CDT refinement has no minimum-angle guarantee. Marked refinement only refines (no coarsening or node
-  movement), the only built-in estimator is gradient recovery and the only
+  movement; both would be a `MeshAdaptation`), the only built-in estimator is gradient recovery and the only
   built-in marking strategy is Dörfler (`BulkMarking`). The transient
   driver refines between fixed time windows only (no re-solve of a window,
   no coarsening, uniform steps).

@@ -1,5 +1,8 @@
 # `cpp/fem` — scalar P1 finite elements
 
+New here? [docs/concepts.md](../../docs/concepts.md) lists the five
+concepts of the minimal path and the optional layers.
+
 Header-only, optional module (CMake `PDE2D_BUILD_FEM=ON`; needs Eigen3 and
 SymEngine). User-level documentation with equations, sign conventions and
 examples is in [docs/fem/README.md](../../docs/fem/README.md). This page maps
@@ -58,24 +61,28 @@ Evolution {frames, reports, timings, record}
    → write_json() / read_run_record_json() / diff_records()   record_json.hpp
 L2 / H1 errors against exact solutions          error_norms.hpp
 
-Adaptivity (stationary): solve → estimate → mark → refine → transfer → seed
+Adaptivity (optional): one shared step after every solve or window
    estimate_error → ErrorEstimate {indicators, global}   estimation.hpp
    MarkingStrategy (BulkMarking = mark_bulk, Dörfler)    marking.hpp
-   discretization::refine_mesh(result, marked, options)  triangulate.hpp
+   MeshPlanner (optional) → MeshPlan of the change       planner.hpp
+   MeshAdaptation (MarkedBisection = refine_mesh(result, marked, options))
+       apply_mesh_adaptation checks the result           mesh_adaptation.hpp
    transfer_field(old mesh, values, new mesh)            transfer.hpp
-   PreparedStationary(new mesh, …).solve(t, transferred) solver.hpp
-   adapt(result, problem, plan, AdaptOptions) → AdaptiveHistory
-       optional driver composing the above            adaptivity.hpp
-       optional solve/mesh planners between iterations planner.hpp
-       write_json(out, history)                       adaptivity_json.hpp
-Transient restart: transfer_field(last frame) → InitialConditions{Vector}
-Adaptivity (transient), windows of plan.time: evolve → estimate (last frame)
-   → mark → refine → transfer_field + Dirichlet data → nodal restart → …
-   adapt_evolution(result, problem, initial, plan, EvolutionAdaptOptions)
-       → EvolutionAdaptiveHistory (per-window EvolutionWindow)  adaptivity.hpp
+   refresh plan.mesh, plan.analysis; SolvePlanner        adaptivity_core.hpp
+   adapt(result, problem, plan, AdaptOptions)            adapt_stationary.hpp
+       solve (warm start) → step → … → AdaptiveHistory
+   adapt_evolution(result, problem, initial, plan, AdaptOptions)
+       windows of plan.time: evolve → step → nodal restart with Dirichlet
+       data → …                                          adapt_evolution.hpp
+   AdaptiveHistory {options, steps: AdaptiveStep, stop, final state}
+       records in adaptivity_types.hpp; write_json       adaptivity_json.hpp
+Planning before the first mesh: plan_mesh(geometry, problem, MeshPlanner,
+   defaults) → PlannedMesh {result, plan}                planner.hpp
 Reference problems with exact solutions                reference/problems.hpp
-   compare_plans / compare_mesh_plans → PlanComparison  reference/compare.hpp
-       (per plan: RunRecord, L2/H1 errors, work, timings; JSON)
+   compare_plans / compare_mesh_plans / compare_planners → PlanComparison
+       (per entry: RunRecord, L2/H1 errors, work, timings; planners: their
+       decisions and cost, relative to the UserPlanner baseline; JSON)
+                                                        reference/compare.hpp
 MeshResult entry points refuse report.size_satisfied == false unless
    wrapped in accept_unsatisfied(result)          mesh_acceptance.hpp
 ```
@@ -96,17 +103,17 @@ auto next = PreparedStationary(finer.mesh, problem, plan)
 ```
 
 The same loop as one call; the driver gives the same meshes and values bit
-for bit and records every iteration:
+for bit and records every step:
 
 ```cpp
 AdaptOptions adapt_options;
 adapt_options.marker = std::make_shared<BulkMarking>(0.6); // default 0.5
-adapt_options.max_iterations = 8;                         // refinements
+adapt_options.max_iterations = 8;                         // mesh changes
 adapt_options.transfer.max_outside_distance = 0.02;      // curved domain
 auto history = adapt(result, problem, plan, adapt_options);
-// history.mesh, history.solution, history.estimate: the final state
-// history.iterations[k]: RunRecord, transfer, estimate summary, marking,
-//                        refinement report, decisions; history.stop
+// history.mesh, history.solution->values, history.estimate: final state
+// history.steps[k]: RunRecord, transfer, estimate, marking, mesh
+//                   adaptation, decisions; history.stop
 write_json(std::cout, history);                           // adaptivity_json.hpp
 ```
 
@@ -118,7 +125,7 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | Header | Responsibility | Depends on |
 | --- | --- | --- |
 | `evidence.hpp` | `Evidence` (Proven / Sampled / Unknown), `Property<T>` | — |
-| `decision.hpp` | `DecisionSubject` and `decision_subject_table` (one row per subject: stable name, `DecisionOwner` Solve/Time/Mesh/Adapt; `decision_subject_name`, `decision_subject_owner`, `decision_subject_from_name`), `Decision` records (subject, choice, basis, evidence, source), `Rationale`, `find_decision`/`set_decision`; the binding row type `DecisionBinding<Options>` (subject, option, choice reader, recorded-by-default) with `bound_user_decisions`, `record_bound_decision`, `validate_bound_decisions`; `StrategyNames`, `PlannerRecord` | evidence, provenance |
+| `decision.hpp` | `DecisionSubject` and `decision_subject_table` (one row per subject: stable name, `DecisionOwner` Solve/Time/Mesh/Adapt; `decision_subject_name`, `decision_subject_owner`, `decision_subject_from_name`), `Decision` records (subject, choice, basis, evidence, source), `Rationale`, `find_decision`/`set_decision`; the binding row type `DecisionBinding<Options>` (subject, option, choice reader, recorded-by-default) with `bound_user_decisions`, `record_bound_decision`, `validate_bound_decisions` (factory-made strategies are compared with a list of `StrategyRecord`s); `StrategyRecord` (subject, name, `StrategyReplay`, descriptor: a strategy that ran or the planner of a plan), `strategy_record`, `find_strategy` | evidence, provenance |
 | `expression.hpp` | `Expr`, symbols `x y t nx ny`, `require_symbols` by context, compiled `Evaluator` | SymEngine |
 | `problem.hpp` | `Equation`, `BoundaryCondition` + factories, `Problem` | expression |
 | `weak_terms.hpp` | `weak::Term` names, `WeakCoefficients<T>`, `WeakFlags` (no symbolic types) | — |
@@ -145,9 +152,9 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `mesh_plan.hpp` | `mesh_plan_bindings` (the binding table of a mesh plan, one row per Mesh-owned subject), `MeshPlan` (MeshOptions + decisions + `planner`; `update(subject, change, why)` and the setters `set_interior_algorithm`, `set_boundary_treatment`, `set_max_edge_length`, `set_size_field(field, descriptor)`, `set_refinement_criterion`), `mesh_plan_from_user`, `mesh_decisions` (a refinement criterion decision only when `RefinementOptions::criterion` is set), `mesh_decision_choice`, `size_field_choice`, `refinement_criterion_choice`, `mesh_options_difference`, `validate_decisions(MeshPlan[, used options])` | decision, discretization/mesh_types |
 | `mesh_acceptance.hpp` | The mesh-report invariant by type: `AcceptedMesh`, `accept_unsatisfied(result)`, `require_size_satisfied` (MeshResult entry points refuse an unsatisfied report: "MeshResult misses its size target (...)") | discretization/mesh_types |
 | `plan.hpp` | `TimePlan` (the one source of time settings), `SolvePlan` (assembly, solver, time, decisions, `mesh`, `analysis`, `planner`; `update(subject, change, why)` and the setters), `solve_plan_bindings` (time rows `time_plan_bindings`, the lifted `solver_option_bindings`, `assembly_plan_bindings`), `AnalysisRecord` (properties bound to problem and mesh fingerprints and sampling options; made only by `make_analysis_record`), `require_current_analysis`, `plan_from_user`, `time_decisions`, `validate_decisions` (stale/duplicate/misplaced decisions throw). No assembly, symbolic or edge-form headers | assembly_options, linear_solver_types, step_control, time_integration, mesh_plan, analysis_types |
-| `planner.hpp` | `SolvePlanner` and `MeshPlanner` interfaces (`name`, `descriptor`, `plan(problem, properties, defaults, PlanningContext)`), the identity `UserPlanner`, `PlanningContext` (mesh, previous `AdaptiveIteration`, iteration), `run_planner` (validates and stamps the plan), `planner_choice` | plan, mesh_plan, analysis_types, fingerprint |
+| `planner.hpp` | `SolvePlanner` and `MeshPlanner` interfaces (`name`, `descriptor`, `plan(problem, properties, defaults, PlanningContext)`), the identity `UserPlanner`, `PlanningContext` (geometry and sampled boundary before the first mesh, mesh, previous `AdaptiveStep`, step), `PlannerSet` (mesh + solve planner), `run_planner` (validates and stamps the plan with a `StrategyRecord`), `planner_choice`, `plan_mesh(geometry, problem, planner, defaults)` → `PlannedMesh` (result + plan) | plan, mesh_plan, analysis, adaptivity_types, fingerprint, discretization/triangulate |
 | `fingerprint.hpp` | `problem_fingerprint`, `field_fingerprint`, `field_kind`, `expression_text` (canonical SymEngine string) | problem, interpolation, provenance |
-| `record.hpp` | `RunRecord` (plan, execution, workload, work with `solver_iterations`, `EvidenceSummary`, `VersionRecord`, `MeshRecord` with fingerprint and `MeshProvenance` (with the `discretization::MeshRunRecord` of the meshing call, `run`), problem fingerprint, stationary time, `InitialRecord`, `StationarySolveRecord` (initial-guess use and fingerprint, iterations, final residual), `StrategyRecord`s with `StrategyReplay`, including the plan's planners, `TimingRecord`), `make_run_record`, `find_strategy`, `summarize_evidence` | plan, execution, provenance, discretization/mesh_fingerprint |
+| `record.hpp` | `RunRecord` (plan, execution, workload, work with `solver_iterations`, `EvidenceSummary`, `VersionRecord`, `MeshRecord` with fingerprint and `MeshProvenance` (with the `discretization::MeshRunRecord` of the meshing call, `run`), problem fingerprint, stationary time, `InitialRecord`, `StationarySolveRecord` (initial-guess use and fingerprint, iterations, final residual), `StrategyRecord`s (decision.hpp), including the plan's planners, `TimingRecord`), `make_run_record`, `find_strategy(record, subject)`, `summarize_evidence` | plan, execution, provenance, discretization/mesh_fingerprint |
 | `json.hpp` | The FEM names (`pde2d::fem::JsonValue`, `json_number`, `json_string`, `json_bool`, `json_text`, `write_json(JsonValue)`, `parse_json`) of the core JSON document `cpp/json.hpp` (number tokens kept as text; classic locale, max_digits10), shared with discretization's mesh run records | cpp/json.hpp |
 | `record_json.hpp` | `to_json(RunRecord)`, `write_json(std::ostream &, const RunRecord &)` (schema `pde2d.run_record`, version 1; mesh options and reports in discretization's encoding, the mesh run record under `mesh.provenance.run`), `read_run_record_json`, `diff_records` → `RecordDifference` (`RecordDiffOptions`: skips `timings` and `outcome` groups by default) | record, json, analysis_types, discretization/mesh_record_json |
 | `solver.hpp` | `PreparedStationary` (prepared assembly + reused linear solver, `StationaryStatistics`; from a mesh, a checked `MeshResult` or an `AcceptedMesh`; validates the plan, its mesh plan and its analysis), `StationarySolution`, `solve_stationary` wrappers | assembly, constraints, prepared_linear_solver, mesh_acceptance, plan, record, fingerprint |
@@ -169,10 +176,15 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `error_norms.hpp` | prepared L2/H1 error norms (rejects normals) | system, quadrature |
 | `estimation.hpp` | `ErrorEstimator` interface (with `descriptor()`), `GradientRecoveryEstimator` (ZZ, H1 seminorm), `estimate_error`, Dörfler `mark_bulk` | p1_element, problem, system |
 | `marking.hpp` | `MarkingStrategy` interface (`name()`, `descriptor()`, `mark(estimate, mesh)`), `BulkMarking` (Dörfler via `mark_bulk`, default fraction 0.5), `mark_elements` (runs a strategy, checks ascending in-range indices) | estimation, provenance |
-| `adaptivity.hpp` | Optional adaptive drivers. Stationary: `adapt(MeshResult | AcceptedMesh, problem, plan, AdaptOptions)` → `AdaptiveHistory` (`AdaptiveSettings`; per-iteration `AdaptiveIteration`: `RunRecord`, `TransferRecord`, `EstimateSummary`, `MarkingRecord`, requested refinement options, refinement `MeshReport` and mesh run record, planner/marking/refinement `Decision`s; `AdaptiveStop`; final mesh, solution and estimate); optional `AdaptOptions::solve_planner` and `mesh_planner`; per iteration it refreshes a mesh-bound analysis and updates `plan.mesh` explicitly. Transient: `adapt_evolution(MeshResult | AcceptedMesh, problem, initial, plan, EvolutionAdaptOptions)` → `EvolutionAdaptiveHistory` (`EvolutionAdaptSettings`, per-window `EvolutionWindow` with `RestartRecord`), `adaptive_window_times` | solver, evolution, assembly, analysis, planner, estimation, marking, transfer, mesh_acceptance, discretization/triangulate |
-| `adaptivity_json.hpp` | `to_json(AdaptiveHistory)`, `write_json` (schema `pde2d.adaptive_history`, version 1; settings, each iteration embeds its run record), `read_adaptive_history_json`; `to_json(EvolutionAdaptiveHistory)` (schema `pde2d.evolution_adaptive_history`, version 1), `read_evolution_adaptive_history_json` | adaptivity, record_json |
+| `adaptivity_types.hpp` | Records of an adaptive loop, light enough for planners: `AdaptiveStop` (+ `adaptive_stop_name`), `TransferRecord` (nodes, extrapolation, Dirichlet reset of a restart), `EstimateRecord`, `MarkingRecord`, `MeshAdaptationRecord` (strategy, report, mesh run record, accepted), `AdaptiveStep` (one solve or window: `RunRecord`, time and window start, transfers, estimate, marking, adaptation, decisions) | decision, record, discretization/mesh_types |
+| `mesh_adaptation.hpp` | `MeshAdaptation` strategy (`name`, `descriptor`, `apply(MeshResult, marked, MeshOptions)` → `MeshResult`), default `MarkedBisection` (`refine_mesh` with marked elements), `mesh_adaptation_choice`, `apply_mesh_adaptation` (checks the result: "Mesh adaptation <name> returned an invalid mesh: ...") | discretization/triangulate, discretization/mesh_validation |
+| `adaptivity_core.hpp` | `AdaptOptions` (strategies, `PlannerSet planners`, tolerance, refinement, transfer; `adapt`-only and `adapt_evolution`-only fields), `AdaptiveHistory` (options as run, steps, stop, final mesh, estimate, `solution` or `evolution`), `summarize_estimate`, `marking_choice`; private: the shared step (estimate, mark, plan mesh, change mesh, transfer, refresh plan.mesh and plan.analysis) | adaptivity_types, mesh_adaptation, planner, estimation, marking, transfer, solver, evolution, analysis |
+| `adapt_stationary.hpp` | `adapt(MeshResult | AcceptedMesh, problem, plan, AdaptOptions)` → `AdaptiveHistory` (stops: tolerance, max iterations, nothing marked, unsatisfied refinement) | adaptivity_core, mesh_acceptance, solver |
+| `adapt_evolution.hpp` | `adapt_evolution(MeshResult | AcceptedMesh, problem, initial, plan, AdaptOptions)` → `AdaptiveHistory` (windows, nodal restarts with Dirichlet data, stop `EndReached`), `adaptive_window_times` | adaptivity_core, assembly, evolution, mesh_acceptance |
+| `adaptivity.hpp` | Umbrella of the five adaptive headers above | them |
+| `adaptivity_json.hpp` | `to_json(AdaptiveHistory)`, `write_json` (schema `pde2d.adaptive_history`, version 2, `kind` stationary or transient; settings, each step embeds its run record), `read_adaptive_history_json` | adaptivity, record_json |
 | `reference/problems.hpp` | `ReferenceProblem` (name, `CurveGeometry`, `Problem`, optional `ReferenceTransient` with `InitialConditions` and window, exact solution, notes, suggested `MeshOptions`), the library (`reference_l_shape_corner`, `reference_boundary_layer`, `reference_variable_anisotropic`, `reference_oblique_square`, `reference_annulus_mixed`, `reference_heat_moving_peak`, `reference_wave_standing`), `reference_problems()`, `find_reference_problem` | discretization/geometry, problem, evolution |
-| `reference/compare.hpp` | `compare_plans(reference, MeshPlan, {SolvePlan…})`, `compare_mesh_plans(reference, {MeshPlan…}, SolvePlan)` → `PlanComparison` (per `ComparisonEntry`: `RunRecord`, `ComparisonErrors` L2/H1, `ComparisonWork`, `ComparisonTimings`), `comparison_label`, `to_json`/`write_json` (schema `pde2d.plan_comparison`, version 1), `read_plan_comparison_json` | reference/problems, solver, evolution, analysis, error_norms, record_json, discretization/triangulate |
+| `reference/compare.hpp` | `compare_plans(reference, MeshPlan, {SolvePlan…})`, `compare_mesh_plans(reference, {MeshPlan…}, SolvePlan)`, `compare_planners(reference, {PlannerSet…}[, SolvePlan defaults])` (entry 0 the identity `UserPlanner` baseline) → `PlanComparison` (per `ComparisonEntry`: `RunRecord`, `ComparisonErrors` L2/H1, `ComparisonWork`, `ComparisonTimings` incl. planning seconds, `planner_decisions`, `ComparisonRelative` to the baseline; `baseline`), `comparison_label`, `to_json`/`write_json` (schema `pde2d.plan_comparison`, version 1), `read_plan_comparison_json` | reference/problems, planner, solver, evolution, analysis, error_norms, record_json, discretization/triangulate |
 | `transfer.hpp` | `transfer_field`: P1 nodal field onto another mesh (point location + interpolation, documented outside rule) | discretization/point_location, system |
 
 ## Invariants
@@ -217,7 +229,7 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
   and only `make_analysis_record` makes one. `PreparedStationary`,
   `solve_stationary`, `evolve` and `adapt` throw "Stale analysis: ..." for
   evidence made for other inputs; `refresh_analysis` recomputes it, and
-  `adapt` does so for every refined mesh.
+  the adaptive drivers do so for every new mesh.
 - **Comparisons are plain solves.** `compare_plans` and
   `compare_mesh_plans` run the public meshing and solve calls on a reference
   problem and only measure them; an entry's values are those of the same
@@ -254,9 +266,10 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
   `EdgeForm` alternative without its unit.
 - **Estimators report, they do not decide.** `estimate_error` returns
   indicators and a global value; marking (`MarkingStrategy`) and refinement
-  are separate calls. The optional driver `adapt()` only composes them and
-  records each marking and refinement as a `Decision`
-  (`DecisionSubject::Marking`, `Refinement`) in its `AdaptiveIteration`;
+  are separate calls. The optional drivers `adapt()` and `adapt_evolution()`
+  share one step (`adaptivity_core.hpp`), only compose them and record
+  each marking and mesh change as a `Decision`
+  (`DecisionSubject::Marking`, `Refinement`) in its `AdaptiveStep`;
   every component stays usable on its own.
 - **Unsatisfied meshes are refused at the type boundary.** Entry points
   taking a `MeshResult` (`PreparedStationary`, `solve_stationary`, `evolve`,

@@ -145,7 +145,7 @@ struct SolvePlan {
   // The analysis a planner based its decisions on, when one ran.
   std::optional<AnalysisRecord> analysis{};
   // The planner that produced the plan (planner.hpp), when one did.
-  std::optional<PlannerRecord> planner{};
+  std::optional<StrategyRecord> planner{};
 
   // Change options with `change(plan)` and record the decision about
   // `subject` from the result, with `why` (default: a user choice naming
@@ -361,7 +361,7 @@ inline std::vector<Decision> time_decisions(const TimePlan &time) {
 // std::invalid_argument ("Stale decision: ...", "Duplicate decision: ...",
 // "... does not belong to a solve plan ...").
 inline void validate_decisions(const SolvePlan &plan,
-                               const StrategyNames &ran = {}) {
+                               const std::vector<StrategyRecord> &ran = {}) {
   for (const auto &decision : plan.decisions)
     if (decision_subject_owner(decision.subject) == DecisionOwner::Time &&
         !plan.time)

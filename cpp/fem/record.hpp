@@ -129,39 +129,6 @@ struct StationarySolveRecord {
   double residual_norm = 0, relative_residual = 0;
 };
 
-// Whether a record rebuilds a strategy: from the options alone (built-in),
-// from a descriptor only a reader can turn back into an object (described),
-// or not at all (not replayable: a factory without a descriptor).
-enum class StrategyReplay { BuiltIn, Described, NotReplayable };
-inline const char *strategy_replay_name(StrategyReplay replay) {
-  switch (replay) {
-  case StrategyReplay::BuiltIn:
-    return "built-in";
-  case StrategyReplay::Described:
-    return "described";
-  case StrategyReplay::NotReplayable:
-    return "not replayable";
-  }
-  return "invalid";
-}
-// One strategy that ran: the decision subject it serves (time integrator,
-// time steps, linear solver, size field, refinement criterion, solve and
-// mesh planner), its name() and how to rebuild it.
-struct StrategyRecord {
-  DecisionSubject subject{};
-  std::string name{};
-  StrategyReplay replay = StrategyReplay::BuiltIn;
-  std::optional<pde2d::StrategyDescriptor> descriptor{};
-};
-inline StrategyRecord
-strategy_record(DecisionSubject subject, std::string name, bool builtin,
-                std::optional<pde2d::StrategyDescriptor> descriptor) {
-  const auto replay = builtin      ? StrategyReplay::BuiltIn
-                      : descriptor ? StrategyReplay::Described
-                                   : StrategyReplay::NotReplayable;
-  return {subject, std::move(name), replay, std::move(descriptor)};
-}
-
 struct TimingRecord {
   // Wall-clock seconds of the solve or evolution. Never reproducible;
   // diff_records ignores it by default.
@@ -201,10 +168,7 @@ struct RunRecord {
 // The strategy that served `subject`, or nullptr.
 inline const StrategyRecord *find_strategy(const RunRecord &record,
                                            DecisionSubject subject) {
-  for (const auto &s : record.strategies)
-    if (s.subject == subject)
-      return &s;
-  return nullptr;
+  return find_strategy(record.strategies, subject);
 }
 // Insert or replace the strategy of `strategy.subject`, in subject order.
 inline void set_strategy(RunRecord &record, StrategyRecord strategy) {
@@ -234,14 +198,10 @@ inline void set_size_field_strategy(RunRecord &record,
 }
 // The planners that produced the plan and its mesh plan (planner.hpp).
 inline void set_planner_strategies(RunRecord &record, const SolvePlan &plan) {
-  const auto planner = [&](DecisionSubject subject, const PlannerRecord &p) {
-    set_strategy(record,
-                 strategy_record(subject, p.name, p.builtin, p.descriptor));
-  };
   if (plan.planner)
-    planner(DecisionSubject::SolvePlanner, *plan.planner);
+    set_strategy(record, *plan.planner);
   if (plan.mesh && plan.mesh->planner)
-    planner(DecisionSubject::MeshPlanner, *plan.mesh->planner);
+    set_strategy(record, *plan.mesh->planner);
 }
 // Attach where the mesh came from (and its size field strategy).
 inline void set_mesh_provenance(RunRecord &record, MeshProvenance provenance) {

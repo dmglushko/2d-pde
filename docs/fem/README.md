@@ -15,6 +15,10 @@ The [100-second wave examples](long-waves.md) use a larger 10-by-10 square:
 a localized source with fixed Dirichlet edges, and a source-free Neumann wave.
 They include energy/work checks and a recorded execution-time breakdown.
 
+Start with [../concepts.md](../concepts.md): the five concepts of the
+minimal path and when the optional layers (plans, analysis, records,
+adaptivity, comparisons) are worth learning.
+
 ## Build and reproduce
 
 Prerequisites: C++23 compiler, CMake 3.20+, Boost headers, Eigen3 development
@@ -387,7 +391,11 @@ and `plan_from_user(time_options)` record today's user choices; the overloads
 and `evolve(mesh,problem,initial,plan,output)` give the same results as the
 option-based calls. Nothing chooses settings automatically yet; a planner
 (`SolvePlanner`, `fem/planner.hpp`) returns a `SolvePlan`, and `UserPlanner`
-is the identity.
+is the identity. A `MeshPlanner` can also plan before the first mesh exists:
+`plan_mesh(geometry, problem, planner, mesh_plan_from_user(options))` returns
+a `PlannedMesh` (the `MeshResult` and the `MeshPlan` that made it; put the
+plan in `SolvePlan::mesh`). The planner sees the geometry and its sampled
+boundary in its `PlanningContext`.
 
 Each `Decision` has a typed subject (`DecisionSubject::LinearSolver`,
 `TimeSteps`, `Quadrature`, ...; `decision_subject_name` prints it). Override a
@@ -444,145 +452,115 @@ not check.
 
 ## Adaptive loop
 
-The adaptive loop of a stationary problem is a composition of public
-components, each usable on its own: `PreparedStationary` (solve, warm
-started from a guess), `estimate_error` (an `ErrorEstimator`, default the
-gradient-recovery estimator), a `MarkingStrategy` (`fem/marking.hpp`;
-`BulkMarking` is Dörfler marking with `mark_bulk`),
-`discretization::refine_mesh(result, marked, options)` and
-`transfer_field`. `adapt` (`fem/adaptivity.hpp`) runs them in that order:
+Adaptivity is optional: every component is usable on its own —
+`PreparedStationary` (solve, warm started from a guess), `estimate_error`
+(an `ErrorEstimator`, default the gradient-recovery estimator), a
+`MarkingStrategy` (`fem/marking.hpp`; `BulkMarking` is Dörfler marking with
+`mark_bulk`), a `MeshAdaptation` (`fem/mesh_adaptation.hpp`; the default
+`MarkedBisection` is `discretization::refine_mesh(result, marked, options)`)
+and `transfer_field`. Two drivers (`fem/adaptivity.hpp`) run them, with one
+`AdaptOptions` and one `AdaptiveHistory`:
 
 ```cpp
 AdaptOptions options;
 options.marker = std::make_shared<BulkMarking>(0.6); // unset: BulkMarking{0.5}
-options.max_iterations = 8;          // refine-and-solve iterations after the first
+options.max_iterations = 8;          // mesh changes after the first solve
 options.tolerance = 1e-3;            // stop once estimate.global <= tolerance
 options.transfer.max_outside_distance = 0.02;   // curved boundary
 auto history = adapt(mesh_result, problem, plan, options);
-auto &u = history.solution.values;   // on history.mesh.mesh
+auto &u = history.solution->values;  // on history.mesh.mesh
+
+options.windows = 6;                 // transient: equal windows of plan.time
+auto moving = adapt_evolution(mesh_result, problem, initial, plan, options);
+moving.evolution->frames.back();     // final state on moving.mesh
 ```
 
 | `AdaptOptions` field | Default | Meaning |
 | --- | --- | --- |
 | `estimator` | gradient recovery (plan's execution) | `std::shared_ptr<const ErrorEstimator>` |
 | `marker` | `BulkMarking{0.5}` | `std::shared_ptr<const MarkingStrategy>` |
-| `max_iterations` | 10 | refine-and-solve iterations after the first solve |
-| `tolerance` | 0 (off) | stop once the global estimate is at most this |
-| `refinement` | each result's own options | `MeshOptions` of `refine_mesh(result, marked, options)` |
-| `warm_start`, `transfer` | true, `{}` | seed each solve with `transfer_field` of the previous solution |
-| `time` | 0 | time at which the stationary problem is solved and estimated |
-| `accept_unsatisfied_refinement` | false | keep going on a refined mesh that missed its size target |
-| `solve_planner` | unset (plan as given) | `std::shared_ptr<const SolvePlanner>`, run before every solve |
-| `mesh_planner` | unset (`refinement`) | `std::shared_ptr<const MeshPlanner>`, run after marking; its options refine the mesh |
+| `adaptation` | `MarkedBisection` | `std::shared_ptr<const MeshAdaptation>`: how the marked mesh changes |
+| `planners` | unset (plans as given) | `PlannerSet{mesh, solve}`: `solve` runs before every solve or window, `mesh` after marking (its options change the mesh) |
+| `tolerance` | 0 (off) | `adapt`: stop once the global estimate is at most this; `adapt_evolution`: change the mesh after a window only above it |
+| `refinement` | each result's own options | `MeshOptions` the mesh is changed with |
+| `transfer` | `{}` | `TransferOptions` of every `transfer_field` |
+| `accept_unsatisfied_refinement` | false | use a changed mesh that missed its size target; otherwise `adapt` stops and `adapt_evolution` discards it |
+| `max_iterations`, `warm_start`, `time` | 10, true, 0 | `adapt` only: mesh changes after the first solve, seed each solve with the transferred solution, solve time |
+| `windows`, `output` | 4, `{}` | `adapt_evolution` only: number of windows, `EvolutionOutput` of every window |
 
-Across iterations the plan follows the mesh: a mesh-bound `plan.analysis` is
-recomputed on every refined mesh, `plan.mesh` (when set) is replaced by the
-mesh plan of the refinement options when they differ from it (or by the mesh
-planner's plan), and then the solve planner, if any, plans the solve with the
-iteration's mesh and the previous `AdaptiveIteration` (`PlanningContext`).
-The planner's plan is validated before solving ("Solve planner <name>
-returned an invalid plan: ...") and recorded: `plan.planner`, the run
-record's strategies and a `DecisionSubject::SolvePlanner` decision of the
-iteration.
+Both drivers run one shared step after a solve or window
+(`fem/adaptivity_core.hpp`): estimate, mark, plan the mesh (mesh planner),
+change the mesh (`MeshAdaptation`, checked by `apply_mesh_adaptation`: its
+record must describe the returned mesh), transfer, then refresh the plan
+for the new mesh: a mesh-bound `plan.analysis` is recomputed, `plan.mesh`
+(when set) is replaced by the mesh plan of the refinement options when they
+differ from it (or by the mesh planner's plan), and the solve planner, if
+any, plans the next solve with that mesh and the previous `AdaptiveStep`
+(`PlanningContext::previous`). Planners' plans are validated ("Solve
+planner <name> returned an invalid plan: ...") and recorded: `plan.planner`,
+the run record's strategies and a `SolvePlanner`/`MeshPlanner` decision of
+the step.
 
-The loop stops, checked after every solve and estimate in this order, with
+`adapt` stops, checked after every solve and estimate in this order, with
 `AdaptiveStop::ToleranceReached`, `MaxIterations`, `NothingMarked` (the
-strategy marked no element) or `UnsatisfiedRefinement` (the refined mesh
-missed its size target; that mesh is not solved on). The initial
+strategy marked no element) or `UnsatisfiedRefinement` (the changed mesh
+missed its size target; that mesh is not solved on). `adapt_evolution`
+splits the plan's interval into `windows` equal windows
+(`adaptive_window_times`), evolves each on the current mesh, estimates its
+last frame at the window's end, and except after the last window (stop
+`EndReached`) runs the shared step; the moved last frame (and velocity,
+when the initial conditions have one) becomes a nodal restart whose
+Dirichlet nodes are set to the problem's Dirichlet data (and its time
+derivative) at the restart time, from `PreparedAssembly` on the new mesh.
+Without a change (within tolerance, nothing marked, a discarded mesh) the
+next window restarts on the same mesh. The plan must have time settings and
+uniform steps ("adapt_evolution needs uniform time steps"). The initial
 `MeshResult` must meet its size target or be passed as
-`accept_unsatisfied(result)`. The driver adds no numerics: the same calls
+`accept_unsatisfied(result)`. The drivers add no numerics: the same calls
 composed by hand give the same meshes and values bit for bit
-(`tests/fem/adaptive_loop.cpp` checks this).
+(`tests/fem/adaptive_loop.cpp`, `transient_adaptivity.cpp`).
 
-`AdaptiveHistory` holds the `settings` it ran with (`AdaptiveSettings`:
-estimator and marker names, descriptors and whether they were the defaults,
-`max_iterations`, `tolerance`, the requested `refinement` options,
-`warm_start`, `transfer` options, `time`, `accept_unsatisfied_refinement`
-and the planners' names), the final `mesh`, `solution` and `estimate`, the
-`stop` reason and message, and one `AdaptiveIteration` per solve: its
-`RunRecord` (plan, mesh fingerprint and provenance with the refinement
-report that produced the mesh), solver iterations and initial-guess use,
-the `TransferRecord` that seeded it (source and target nodes, extrapolated
-nodes, largest outside distance), an `EstimateSummary` (estimator name and
-descriptor, global estimate, elements, largest and mean indicator) and,
-unless it was the last, a `MarkingRecord` (strategy name, descriptor,
-marked and total elements), the `MeshOptions` refine_mesh was called with
-(`refinement_options`, kept even when the refined mesh missed its size
-target and was never solved on), the `MeshReport` of the refined mesh (with
-`MarkedRefinementReport` counters), the refined result's mesh run record
-(`refinement_run`) and its `Decision`s (with planners, a
-`SolvePlanner` decision first and a `MeshPlanner` decision before the
-refinement):
-`DecisionSubject::Marking` (choice `Bulk(fraction=0.6)`, or
-`<name> (not replayable)` without a descriptor) and
-`DecisionSubject::Refinement` (choice `marked longest-edge bisection
-(<algorithm>, <boundary treatment>)`).
+`AdaptiveHistory` holds the `options` it ran with (estimator, marker and
+adaptation set to what ran), the final `mesh`, `estimate` and `solution`
+(`adapt`) or `evolution` (`adapt_evolution`), the `stop` reason and message,
+and one `AdaptiveStep` per solve or window: its `RunRecord` (plan, mesh
+fingerprint and provenance, the stationary solve's initial guess and
+iterations, or the window's initial fields), `time` (of the estimate; the
+window's end) and `window_start` (windows only), the `TransferRecord`s that
+seeded it (`transfer`, `velocity_transfer`: source and target nodes,
+extrapolated nodes, largest outside distance, and on a restart the reset
+Dirichlet nodes and the largest correction), an `EstimateRecord`
+(estimator name and descriptor, global estimate, elements, largest and mean
+indicator) and, when it marked, a `MarkingRecord` (strategy name,
+descriptor, marked and total elements), a `MeshAdaptationRecord`
+(strategy, descriptor, `MeshReport` with `MarkedRefinementReport` counters,
+the mesh run record with the options the mesh was changed with, kept even
+when the mesh was not used, and `accepted`) and its `Decision`s (with
+planners, a `SolvePlanner` decision first and a `MeshPlanner` decision
+before the change): `DecisionSubject::Marking` (choice
+`Bulk(fraction=0.6)`, or `<name> (not replayable)` without a descriptor)
+and `DecisionSubject::Refinement` (choice `<adaptation name> (<algorithm>,
+<boundary treatment>)`, e.g. `marked longest-edge bisection
+(ConstrainedDelaunay, Fixed)`).
 
 `write_json(out, history)` (`fem/adaptivity_json.hpp`) writes
-`"schema": "pde2d.adaptive_history"`, `"schema_version": 1`, then `stop`
-(`reason`, `message`), `settings` (`estimator` and `marker` with `name`,
-`descriptor`, `default`; `max_iterations`, `tolerance`, `refinement`,
-`warm_start`, `transfer` (`max_outside_distance`, `execution`), `time`,
-`accept_unsatisfied_refinement`, `solve_planner`, `mesh_planner`),
-`iterations` (each: `index`, `record` = the full
-run record document, `solver` (`iterations`, `initial_guess`), `transfer`,
-`estimate`, `marking`, `refinement`, `refinement_options`,
-`refinement_run` (a mesh run record document), `decisions`) and `final`
-(`mesh_fingerprint`, `nodes`, `elements`, `estimate`), with the run-record
-conventions (absent values `null`, `max_digits10` numbers).
+`"schema": "pde2d.adaptive_history"`, `"schema_version": 2` (version 2
+merged the stationary and the former `pde2d.evolution_adaptive_history`
+documents), `kind` (`stationary` or `transient`), `stop` (`reason`,
+`message`), `settings` (`estimator`, `marker`, `adaptation`,
+`solve_planner`, `mesh_planner` with `name` and `descriptor` (planners
+`null` when unset); `tolerance`, `refinement`, `transfer`
+(`max_outside_distance`, `execution`), `accept_unsatisfied_refinement`;
+stationary: `max_iterations`, `warm_start`, `time`; transient: `windows`,
+`start`, `end`, `step`), `steps` (each: `index`, `window_start`, `time`,
+`record` = the full run record document, `transfer`, `velocity_transfer`,
+`estimate`, `marking`, `adaptation` (`strategy`, `descriptor`, `report`,
+`run` = a mesh run record document, `accepted`), `decisions`) and `final`
+(`mesh_fingerprint`, `nodes`, `elements`, `time`, `estimate`), with the
+run-record conventions (absent values `null`, `max_digits10` numbers).
 `read_adaptive_history_json` checks the schema; `diff_records` compares two
 histories leaf by leaf and ignores nested `timings`. Indicators and nodal
 values are not written.
-
-## Transient adaptive loop
-
-`adapt_evolution` (`fem/adaptivity.hpp`) composes the same components for
-an evolution. It splits the plan's interval into `windows` equal windows
-(`adaptive_window_times`) and, per window: `evolve` on the current mesh,
-`estimate_error` of the last frame at the window's end, then (except after
-the last window, and only while the estimate exceeds `tolerance` when one
-is set) mark, `refine_mesh` and move the last frame to the new mesh with
-`transfer_field` as a nodal restart (`InitialConditions` with nodal
-`Field`s; the velocity too when the initial conditions have one). The
-restart's Dirichlet nodes are set to the problem's Dirichlet data (and its
-time derivative) at the restart time, from `PreparedAssembly` on the new
-mesh: interpolated boundary values would fail `evolve`'s compatibility
-check.
-
-```cpp
-EvolutionAdaptOptions options;
-options.windows = 6;
-options.marker = std::make_shared<BulkMarking>(0.6);
-auto history = adapt_evolution(mesh_result, problem, initial, plan, options);
-history.evolution.frames.back();          // final state on history.mesh
-write_json(out, history);                 // "pde2d.evolution_adaptive_history"
-```
-
-| `EvolutionAdaptOptions` field | Default | Meaning |
-| --- | --- | --- |
-| `windows` | 4 | equal windows of `[plan.time->start, plan.time->end]` |
-| `estimator`, `marker` | gradient recovery, `BulkMarking{0.5}` | as in `AdaptOptions` |
-| `tolerance` | 0 | refine after a window only when its estimate exceeds this (0: always) |
-| `refinement` | each result's own options | `MeshOptions` of the marked refinement |
-| `transfer` | `{}` | `TransferOptions` of the restart |
-| `accept_unsatisfied_refinement` | false | evolve on a refined mesh that missed its size target; otherwise it is discarded and the next window stays on the current mesh |
-| `output` | `{}` | `EvolutionOutput` of every window's `evolve` |
-
-The plan must have time settings and uniform steps (a step controller
-throws "adapt_evolution needs uniform time steps"); each window runs the
-plan with that window's `start` and `end`, `plan.mesh` updated as in
-`adapt` and `plan.analysis` refreshed for every new mesh. No planners run.
-`EvolutionAdaptiveHistory` holds the `settings`, one `EvolutionWindow` per
-window (bounds, the window's `RunRecord`, the `RestartRecord` that started
-it: transfers, Dirichlet nodes and the largest correction of a transferred
-value; the end-of-window `EstimateSummary`, `MarkingRecord`, requested
-refinement options, `MeshReport`, mesh run record, whether the refinement
-was accepted, and the `Marking`/`Refinement` decisions) and the final `mesh`,
-`evolution` (of the last window) and `estimate`. The driver adds no
-numerics: `tests/fem/transient_adaptivity.cpp` composes the loop by hand and
-compares bit for bit, and shows on the `heat_moving_peak` reference problem
-that the adapted error ends well below the unadapted coarse mesh's, at about
-the accuracy of a uniform mesh with more nodes.
 
 ## Reference problems and plan comparisons
 
@@ -614,6 +592,8 @@ c.entries[1].errors.l2;            // L2 and H1-seminorm error (error_norms)
 c.entries[1].work.solver_iterations;
 c.entries[1].record;               // the full RunRecord
 auto m = compare_mesh_plans(reference, {coarse, fine}, plan);
+auto p = compare_planners(reference, {{mesh_planner, nullptr}}, plan);
+p.entries[1].relative->l2;         // error relative to the identity baseline
 write_json(out, c);                // "pde2d.plan_comparison", version 1
 ```
 
@@ -627,10 +607,27 @@ Each `ComparisonEntry` has its `index`, a `label` (`comparison_label`), the
 `RunRecord`, `errors` (`l2`, `h1_seminorm`, `time`), `work` (nodes,
 elements, assembly calls, linear solves, solver preparations and
 iterations, time steps, mesh refinement steps and edge flips) and `timings`
-(mesh and solve seconds). The JSON writes `reference`, `notes`, `kind`
-(`solve plans` or `mesh plans`) and `entries` (each with the same groups and
-the full run record under `record`); `read_plan_comparison_json` checks the
-schema and `diff_records` skips the timings.
+(mesh, planning and solve seconds).
+
+`compare_planners(reference, {PlannerSet...}, defaults)` judges planners:
+entry 0 is always the identity `UserPlanner` (label `User (baseline)`),
+then one entry per set (an unset planner is the identity). Each entry plans
+and meshes with `plan_mesh` (geometry and sampled boundary in the
+`PlanningContext`), plans the solve on that mesh with `run_planner` and
+solves, so an entry equals the plain comparison of the plans its planners
+chose. Meshing starts from `defaults.mesh` (unset: the reference's
+suggested options). Each entry also has `planner_decisions` (the decisions
+the planners changed, mesh plan first), `timings.planning_seconds` (the
+planners' own time, without meshing), `timings.relative_seconds` and
+`relative` (`ComparisonRelative`: L2 and H1 errors, nodes, linear solves
+and solver iterations divided by the baseline's; 1 when both are 0, inf
+when only the baseline's is); `PlanComparison::baseline` is 0.
+
+The JSON writes `reference`, `notes`, `kind` (`solve plans`, `mesh plans`
+or `planners`), `entries` (each with the same groups, `planner_decisions`,
+`relative` and the full run record under `record`) and `baseline`;
+`read_plan_comparison_json` checks the schema and `diff_records` skips the
+timings.
 
 ## Optional parallel execution and verification
 
