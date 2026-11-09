@@ -214,11 +214,12 @@ inline FieldRecord field_record(const Field &field) {
 inline Evolution run(const discretization::TriangleMesh &mesh,
                      const Problem &problem, const InitialConditions &initial,
                      const SolvePlan &plan, const EvolutionOutput &output,
-                     const discretization::MeshResult *mesh_result) {
+                     const discretization::MeshResult *mesh_result,
+                     bool accepted = false) {
   const auto started = timing::Clock::now();
   if (!plan.time)
     throw std::invalid_argument("Evolution plan has no time settings");
-  solver_detail::checked_plan(plan, mesh_result);
+  solver_detail::checked_plan(plan, mesh_result, accepted);
   const auto &time = *plan.time;
   const auto &assembly_options = plan.assembly;
   const auto &solver_options = plan.solver;
@@ -411,7 +412,9 @@ inline Evolution evolve(const discretization::TriangleMesh &mesh,
                 output_options(options));
 }
 // From a MeshResult: the record also carries its options and report, and
-// plan.mesh (if set) must match result.options.
+// plan.mesh (if set) must match result.options. The result must meet its
+// size target (report.size_satisfied); wrap it in accept_unsatisfied() to
+// evolve on it anyway.
 inline Evolution evolve(const discretization::MeshResult &result,
                         const Problem &problem,
                         const InitialConditions &initial, const SolvePlan &plan,
@@ -421,6 +424,18 @@ inline Evolution evolve(const discretization::MeshResult &result,
 }
 inline Evolution evolve(const discretization::MeshResult &result,
                         const Problem &problem,
+                        const InitialConditions &initial,
+                        const TimeOptions &options = {}) {
+  return evolve(result, problem, initial, plan_from_user(options),
+                output_options(options));
+}
+inline Evolution evolve(AcceptedMesh result, const Problem &problem,
+                        const InitialConditions &initial, const SolvePlan &plan,
+                        const EvolutionOutput &output = {}) {
+  return evolution_detail::run(result.result().mesh, problem, initial, plan,
+                               output, &result.result(), true);
+}
+inline Evolution evolve(AcceptedMesh result, const Problem &problem,
                         const InitialConditions &initial,
                         const TimeOptions &options = {}) {
   return evolve(result, problem, initial, plan_from_user(options),

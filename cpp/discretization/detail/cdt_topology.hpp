@@ -6,6 +6,7 @@
 #include "../geometry_base.hpp"
 #include "../mesh_validation.hpp"
 #include "../predicates.hpp"
+#include "../size_criterion.hpp"
 #include "../spatial_index.hpp"
 #include <algorithm>
 #include <array>
@@ -34,40 +35,8 @@ inline bool in_triangle(Point2 p, Point2 a, Point2 b, Point2 c) {
          predicates::orient(c, a, p) >= 0;
 }
 
-// Refinement priority of an edge that fails a size criterion: higher tiers
-// go first, then larger values, then longer edges; equal priorities go to
-// the first lexicographic edge. The constant target uses {0, length,
-// length}. A size field uses {0, length / target, length}: for a constant
-// field the length tie-break restores exactly the constant-target order,
-// even where the division rounds two lengths to one ratio.
-struct SizePriority {
-  int tier = 0;
-  double value = 0;
-  double length = 0;
-  bool operator==(const SizePriority &) const = default;
-  bool operator<(const SizePriority &b) const {
-    if (tier != b.tier)
-      return tier < b.tier;
-    if (value != b.value)
-      return value < b.value;
-    return length < b.length;
-  }
-};
-// Every size criterion (constant target, size field, marked edges) plugs into
-// the refinement loop through this one interface: nullopt means the edge
-// between the two points meets it, otherwise its splitting priority.
-using SizeCriterion =
-    std::function<std::optional<SizePriority>(Point2, Point2)>;
-inline SizeCriterion constant_size_criterion(double h) {
-  if (!(h > 0))
-    return {};
-  return [h](Point2 a, Point2 b) -> std::optional<SizePriority> {
-    double d = distance(a, b);
-    if (d > h * (1 + 1e-12))
-      return SizePriority{0, d, d};
-    return std::nullopt;
-  };
-}
+// SizePriority, SizeCriterion and constant_size_criterion are public
+// (size_criterion.hpp): every size criterion plugs into the queue below.
 
 class Topology {
 public:

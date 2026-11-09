@@ -6,6 +6,7 @@ pde2d_add_cpp_test(NAME mesh_fingerprint SOURCE mesh_fingerprint.cpp)
 pde2d_add_cpp_test(NAME geometry_query_threads SOURCE geometry_query_threads.cpp)
 pde2d_add_cpp_test(NAME mesh_refinement_cdt SOURCE mesh_refinement_cdt.cpp)
 pde2d_add_cpp_test(NAME size_field SOURCE size_field.cpp)
+pde2d_add_cpp_test(NAME refinement_criterion SOURCE refinement_criterion.cpp)
 pde2d_add_cpp_test(NAME marked_refinement SOURCE marked_refinement.cpp)
 pde2d_add_cpp_test(NAME point_location SOURCE point_location.cpp)
 # Domains with holes; also writes the version 5 fixtures read by the Node and

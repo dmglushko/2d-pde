@@ -130,16 +130,16 @@ void combined_targets_and_errors() {
   bad.boundary_treatment = BoundaryTreatment::SplitPolygonEdges;
   bad.refinement.size_field = [](Point2 p) { return p.x - 0.5; };
   expect_throws<std::invalid_argument>(
-      [&] { generate_mesh(unit_square(), bad); },
+      [&] { (void)generate_mesh(unit_square(), bad); },
       "Size field must return a finite positive length");
   bad.refinement.size_field = [](Point2) { return std::nan(""); };
   expect_throws<std::invalid_argument>(
-      [&] { generate_mesh(unit_square(), bad); }, "finite positive");
+      [&] { (void)generate_mesh(unit_square(), bad); }, "finite positive");
   MeshOptions ear;
   ear.algorithm = InteriorAlgorithm::EarClipping;
   ear.refinement.size_field = [](Point2) { return 0.2; };
   expect_throws<std::invalid_argument>(
-      [&] { generate_mesh(unit_square(), ear); },
+      [&] { (void)generate_mesh(unit_square(), ear); },
       "Ear clipping has no interior");
   // A step budget still reports an unmet target honestly.
   o.refinement.max_steps = 10;

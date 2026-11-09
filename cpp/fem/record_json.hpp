@@ -79,6 +79,11 @@ inline JsonValue mesh_options(const discretization::MeshOptions &o) {
                  json_bool(static_cast<bool>(o.refinement.size_field)));
   refinement.set("size_field_descriptor",
                  descriptor(o.refinement.size_field_descriptor));
+  refinement.set("criterion", json_bool(o.refinement.criterion.has_value()));
+  refinement.set("criterion_descriptor",
+                 o.refinement.criterion
+                     ? descriptor(o.refinement.criterion->descriptor)
+                     : JsonValue::null());
   auto v = JsonValue::object();
   v.set("algorithm",
         json_string(discretization::interior_algorithm_name(o.algorithm)));
@@ -357,7 +362,9 @@ struct RecordDifference {
   bool operator==(const RecordDifference &) const = default;
 };
 struct RecordDiffOptions {
-  // Skip "timings.*", the only field that differs between identical runs.
+  // Skip "timings.*", the only field that differs between identical runs
+  // (also nested, as in the run records of an adaptive history:
+  // "iterations[0].record.timings.total_seconds").
   bool ignore_timings = true;
 };
 // Leaves that differ, in the order of `left`, then leaves only `right` has.
@@ -369,7 +376,9 @@ diff_records(const JsonValue &left, const JsonValue &right,
   record_json_detail::flatten(right, "", b);
   const auto ignored = [&](const std::string &path) {
     return options.ignore_timings &&
-           (path == "timings" || path.starts_with("timings."));
+           (path == "timings" || path.starts_with("timings.") ||
+            path.ends_with(".timings") ||
+            path.find(".timings.") != std::string::npos);
   };
   std::map<std::string, std::string> rhs(b.begin(), b.end());
   std::vector<RecordDifference> differences;

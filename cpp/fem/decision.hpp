@@ -59,7 +59,14 @@ enum class DecisionSubject {
   SizeField,
   // A mesh chosen as a whole (for example "graded" by a preprocessor); it
   // explains MeshPlan::options together, not one field.
-  Mesh
+  Mesh,
+  // A user refinement criterion (RefinementOptions::criterion; mesh plan).
+  RefinementCriterion,
+  // Adaptive loop (adaptivity.hpp): which elements an iteration marks and
+  // how the marked mesh is refined. Recorded in AdaptiveIteration, never in
+  // a SolvePlan or MeshPlan.
+  Marking,
+  Refinement
 };
 inline constexpr DecisionSubject decision_subjects[] = {
     DecisionSubject::TimeIntegrator,
@@ -72,7 +79,10 @@ inline constexpr DecisionSubject decision_subjects[] = {
     DecisionSubject::BoundaryTreatment,
     DecisionSubject::MeshSize,
     DecisionSubject::SizeField,
-    DecisionSubject::Mesh};
+    DecisionSubject::Mesh,
+    DecisionSubject::RefinementCriterion,
+    DecisionSubject::Marking,
+    DecisionSubject::Refinement};
 
 inline std::string_view decision_subject_name(DecisionSubject subject) {
   switch (subject) {
@@ -98,6 +108,12 @@ inline std::string_view decision_subject_name(DecisionSubject subject) {
     return "size field";
   case DecisionSubject::Mesh:
     return "mesh";
+  case DecisionSubject::RefinementCriterion:
+    return "refinement criterion";
+  case DecisionSubject::Marking:
+    return "marking";
+  case DecisionSubject::Refinement:
+    return "refinement";
   }
   return "invalid";
 }

@@ -26,7 +26,7 @@
 #include "fem/analysis_types.hpp"
 #include "fem/assembly.hpp"
 #include "fem/decision.hpp"
-#include "fem/linear_solver.hpp"
+#include "fem/linear_solver_types.hpp"
 #include "fem/mesh_plan.hpp"
 #include "fem/step_control.hpp"
 #include "fem/time_integration.hpp"

@@ -41,6 +41,16 @@ size_field_choice(const discretization::RefinementOptions &o) {
     return "undescribed (not replayable)";
   return pde2d::describe_strategy(*o.size_field_descriptor);
 }
+// The user refinement criterion: "none", its descriptor, or "undescribed
+// (not replayable)".
+inline std::string
+refinement_criterion_choice(const discretization::RefinementOptions &o) {
+  if (!o.criterion)
+    return "none";
+  if (!o.criterion->descriptor)
+    return "undescribed (not replayable)";
+  return pde2d::describe_strategy(*o.criterion->descriptor);
+}
 inline std::string mesh_decision_choice(const discretization::MeshOptions &o,
                                         DecisionSubject subject) {
   switch (subject) {
@@ -59,6 +69,8 @@ inline std::string mesh_decision_choice(const discretization::MeshOptions &o,
                        o.refinement.max_edge_length, o.refinement.max_steps);
   case DecisionSubject::SizeField:
     return size_field_choice(o.refinement);
+  case DecisionSubject::RefinementCriterion:
+    return refinement_criterion_choice(o.refinement);
   default:
     throw std::invalid_argument("Decision subject " +
                                 std::string(decision_subject_name(subject)) +
@@ -67,9 +79,11 @@ inline std::string mesh_decision_choice(const discretization::MeshOptions &o,
 }
 
 // The user's meshing options as decision records, in a fixed order.
+// A refinement criterion decision follows only when a criterion is set, so
+// the decisions of plain options are unchanged.
 inline std::vector<Decision>
 mesh_decisions(const discretization::MeshOptions &o) {
-  return {
+  std::vector<Decision> decisions{
       user_decision(DecisionSubject::MeshAlgorithm,
                     mesh_decision_choice(o, DecisionSubject::MeshAlgorithm),
                     "MeshOptions::algorithm"),
@@ -82,6 +96,12 @@ mesh_decisions(const discretization::MeshOptions &o) {
       user_decision(DecisionSubject::SizeField,
                     mesh_decision_choice(o, DecisionSubject::SizeField),
                     "RefinementOptions::size_field")};
+  if (o.refinement.criterion)
+    decisions.push_back(user_decision(
+        DecisionSubject::RefinementCriterion,
+        mesh_decision_choice(o, DecisionSubject::RefinementCriterion),
+        "RefinementOptions::criterion"));
+  return decisions;
 }
 inline MeshPlan mesh_plan_from_user(const discretization::MeshOptions &o) {
   return {o, mesh_decisions(o)};

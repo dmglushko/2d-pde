@@ -5,7 +5,7 @@ endif()
 foreach(name IN ITEMS
     adaptive_loop analysis annulus assembly boundary_binding boundary_classification convergence custom_integrator dirichlet_time_derivatives
     error_diagnostics estimation expression moving_convergence nodal_state oblique_conditions p1_kernels parallel_assembly
-    plan_settings prepared_assembly prepared_stationary quadrature reporting reusable_evolution run_records solver solver_backends
+    mesh_acceptance plan_settings prepared_assembly prepared_stationary quadrature reporting reusable_evolution run_records solver solver_backends
     step_control step_rejection symbol_contexts time_grid transfer transient)
   pde2d_add_cpp_test(NAME fem_${name} SOURCE ${name}.cpp FEM)
 endforeach()

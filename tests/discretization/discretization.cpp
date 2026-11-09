@@ -105,11 +105,11 @@ void meshing_and_io(const std::string &dir) {
                          InteriorAlgorithm::ConstrainedDelaunay}) {
     MeshOptions options;
     options.algorithm = algorithm;
-    rejects([&] { generate_mesh(shifted_sources, options); },
+    rejects([&] { (void)generate_mesh(shifted_sources, options); },
             "Shifted source intervals accepted");
     auto missing = discretize_boundary(CircleGeometry{});
     missing.context->edge_sources.clear();
-    rejects([&] { generate_mesh(missing, options); },
+    rejects([&] { (void)generate_mesh(missing, options); },
             "Missing source intervals accepted");
   }
   const auto path = (std::filesystem::path(dir) / "roundtrip.pde2d").string();
@@ -242,7 +242,7 @@ void meshing_and_io(const std::string &dir) {
   check_size(reversed_refinement, .25);
   auto malformed_context = coarse;
   malformed_context.boundary_context->edge_sources[0][0].end *= .5;
-  rejects([&] { refine_mesh(malformed_context, options); },
+  rejects([&] { (void)refine_mesh(malformed_context, options); },
           "Missing source interval accepted");
   rejects([&] { export_mesh(malformed_context, path); },
           "Invalid source context exported");
@@ -278,7 +278,7 @@ void meshing_and_io(const std::string &dir) {
   rejects([&] { export_mesh(missing_corners, path); },
           "Missing geometric corner anchors accepted");
   options.preserve_regions = true;
-  rejects([&] { refine_mesh(untagged, options); },
+  rejects([&] { (void)refine_mesh(untagged, options); },
           "Region preservation enabled without junctions");
   options = {};
   options.preserve_regions = false;
@@ -295,7 +295,7 @@ void meshing_and_io(const std::string &dir) {
             restored.mesh.boundary_edges.size() == 3,
         "Unprotected corner roundtrip failed");
   options.boundary.preserve_corners = true;
-  rejects([&] { refine_mesh(restored, options); },
+  rejects([&] { (void)refine_mesh(restored, options); },
           "Enabling protection after corner removal accepted");
   auto protected_mesh = generate_mesh(RectangleGeometry(2, 1), options);
   check(protected_mesh.mesh.boundary_edges.size() == 4,
@@ -323,19 +323,20 @@ void meshing_and_io(const std::string &dir) {
   options.boundary = {0, 0};
   check(generate_mesh(RectangleGeometry{}, options).mesh.nodes.size() == 4,
         "Disabled line constraints");
-  rejects([&] { generate_mesh(CircleGeometry{}, options); },
+  rejects([&] { (void)generate_mesh(CircleGeometry{}, options); },
           "Both curve constraints disabled accepted");
   options = {};
   options.boundary.max_edge_length = -1;
-  rejects([&] { generate_mesh(regions, options); }, "Negative length accepted");
+  rejects([&] { (void)generate_mesh(regions, options); },
+          "Negative length accepted");
   options = {};
   options.boundary.max_curve_deviation =
       std::numeric_limits<double>::quiet_NaN();
-  rejects([&] { generate_mesh(regions, options); }, "NaN accepted");
+  rejects([&] { (void)generate_mesh(regions, options); }, "NaN accepted");
   options = {};
   options.algorithm = InteriorAlgorithm::EarClipping;
   options.refinement.max_edge_length = .3;
-  rejects([&] { generate_mesh(regions, options); },
+  rejects([&] { (void)generate_mesh(regions, options); },
           "Ear clipping ignored refinement");
   options = {};
   options.refinement.max_edge_length = .2;
@@ -365,7 +366,7 @@ void meshing_and_io(const std::string &dir) {
   check(std::abs(area(subdivided.mesh) - 1) < 1e-12,
         "Subdivision changed area");
   options.boundary_treatment = BoundaryTreatment::RefineOnCurves;
-  rejects([&] { refine_mesh(square(), options); },
+  rejects([&] { (void)refine_mesh(square(), options); },
           "Missing source curves accepted");
   // CW boundary, collinear samples and translated coordinates.
   for (bool clockwise : {false, true}) {
@@ -383,18 +384,18 @@ void meshing_and_io(const std::string &dir) {
        std::vector<Boundary>{{{{0, 0}, {2, 0}, {1, 0}, {1, 1}, {0, 1}}},
                              {{{0, 0}, {2, 2}, {0, 2}, {2, 0}}},
                              {{{0, 0}, {1, 0}, {2, 0}}}})
-    rejects([&] { generate_mesh(b); }, "Invalid polygon accepted");
+    rejects([&] { (void)generate_mesh(b); }, "Invalid polygon accepted");
   auto bad = square();
   bad.nodes.push_back({2, 2});
-  rejects([&] { refine_mesh(bad); }, "Unused node accepted");
+  rejects([&] { (void)refine_mesh(bad); }, "Unused node accepted");
   rejects([&] { export_mesh(bad, path); }, "Unused node exported");
   bad = square();
   bad.elements.push_back(bad.elements[0]);
-  rejects([&] { refine_mesh(bad); }, "Duplicate triangle accepted");
+  rejects([&] { (void)refine_mesh(bad); }, "Duplicate triangle accepted");
   rejects([&] { export_mesh(bad, path); }, "Duplicate triangle exported");
   bad = square();
   bad.boundary_edges.pop_back();
-  rejects([&] { refine_mesh(bad); }, "Open boundary accepted");
+  rejects([&] { (void)refine_mesh(bad); }, "Open boundary accepted");
   rejects([&] { export_mesh(bad, path); }, "Open boundary exported");
   auto serializationResult = generate_mesh(RectangleGeometry{});
   serializationResult.mesh.boundary_tags.clear();

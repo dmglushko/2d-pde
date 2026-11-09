@@ -23,6 +23,7 @@
 #include "fem/assembly.hpp"
 #include "fem/fingerprint.hpp"
 #include "fem/linear_solver.hpp"
+#include "fem/mesh_acceptance.hpp"
 #include "fem/plan.hpp"
 #include "fem/record.hpp"
 #include "fem/timing.hpp"
@@ -49,14 +50,20 @@ struct StationaryStatistics {
 
 namespace solver_detail {
 // The solve plan's decisions, and its mesh plan against the mesh's options.
+// A MeshResult must meet its size target unless the caller accepted it
+// (accept_unsatisfied, mesh_acceptance.hpp).
 inline const SolvePlan &checked_plan(const SolvePlan &plan,
-                                     const discretization::MeshResult *mesh) {
+                                     const discretization::MeshResult *mesh,
+                                     bool accepted = false) {
+  if (mesh && !accepted)
+    require_size_satisfied(*mesh);
   validate_decisions(plan);
   if (plan.mesh && mesh) {
     validate_decisions(*plan.mesh, mesh->options);
     for (const auto subject :
          {DecisionSubject::MeshAlgorithm, DecisionSubject::BoundaryTreatment,
-          DecisionSubject::MeshSize, DecisionSubject::SizeField})
+          DecisionSubject::MeshSize, DecisionSubject::SizeField,
+          DecisionSubject::RefinementCriterion})
       if (mesh_decision_choice(plan.mesh->options, subject) !=
           mesh_decision_choice(mesh->options, subject))
         throw std::invalid_argument(
@@ -123,8 +130,8 @@ class PreparedStationary {
 
   PreparedStationary(const discretization::TriangleMesh &mesh,
                      const Problem &problem, const SolvePlan &plan,
-                     const discretization::MeshResult *result)
-      : plan_(solver_detail::checked_plan(plan, result)),
+                     const discretization::MeshResult *result, bool accepted)
+      : plan_(solver_detail::checked_plan(plan, result, accepted)),
         assembly_(mesh, problem, plan_.assembly),
         mesh_fingerprint_(discretization::mesh_fingerprint(mesh)),
         problem_fingerprint_(fem::problem_fingerprint(problem)) {
@@ -135,22 +142,33 @@ class PreparedStationary {
 public:
   PreparedStationary(const discretization::TriangleMesh &mesh,
                      const Problem &problem, const SolvePlan &plan)
-      : PreparedStationary(mesh, problem, plan, nullptr) {}
+      : PreparedStationary(mesh, problem, plan, nullptr, false) {}
   PreparedStationary(const discretization::TriangleMesh &mesh,
                      const Problem &problem,
                      const AssemblyOptions &assembly = {},
                      const SolverOptions &solver = {})
       : PreparedStationary(mesh, problem, plan_from_user(assembly, solver)) {}
   // A mesh with provenance: records carry its MeshOptions and MeshReport,
-  // and plan.mesh (if set) must match result.options.
+  // and plan.mesh (if set) must match result.options. The result must meet
+  // its size target (report.size_satisfied), otherwise this throws; pass
+  // accept_unsatisfied(result) to use it anyway.
   PreparedStationary(const discretization::MeshResult &result,
                      const Problem &problem, const SolvePlan &plan)
-      : PreparedStationary(result.mesh, problem, plan, &result) {}
+      : PreparedStationary(result.mesh, problem, plan, &result, false) {}
   PreparedStationary(const discretization::MeshResult &result,
                      const Problem &problem,
                      const AssemblyOptions &assembly = {},
                      const SolverOptions &solver = {})
       : PreparedStationary(result, problem, plan_from_user(assembly, solver)) {}
+  PreparedStationary(AcceptedMesh accepted, const Problem &problem,
+                     const SolvePlan &plan)
+      : PreparedStationary(accepted.result().mesh, problem, plan,
+                           &accepted.result(), true) {}
+  PreparedStationary(AcceptedMesh accepted, const Problem &problem,
+                     const AssemblyOptions &assembly = {},
+                     const SolverOptions &solver = {})
+      : PreparedStationary(accepted, problem,
+                           plan_from_user(assembly, solver)) {}
 
   // Assemble at `time`, lift Dirichlet data and solve. Throws
   // std::runtime_error ("Stationary solve: ...") when the solve fails.
@@ -194,7 +212,9 @@ solve_stationary(const discretization::TriangleMesh &mesh,
                  const Vector &guess) {
   return PreparedStationary(mesh, problem, plan).solve(0, guess);
 }
-// From a MeshResult: the record also carries its options and report.
+// From a MeshResult: the record also carries its options and report. The
+// result must meet its size target; wrap it in accept_unsatisfied() to
+// solve on it anyway.
 inline StationarySolution
 solve_stationary(const discretization::MeshResult &result,
                  const Problem &problem, const AssemblyOptions &assembly = {},
@@ -210,6 +230,23 @@ inline StationarySolution
 solve_stationary(const discretization::MeshResult &result,
                  const Problem &problem, const SolvePlan &plan,
                  const Vector &guess) {
+  return PreparedStationary(result, problem, plan).solve(0, guess);
+}
+inline StationarySolution solve_stationary(AcceptedMesh result,
+                                           const Problem &problem,
+                                           const AssemblyOptions &assembly = {},
+                                           const SolverOptions &solver = {}) {
+  return PreparedStationary(result, problem, assembly, solver).solve();
+}
+inline StationarySolution solve_stationary(AcceptedMesh result,
+                                           const Problem &problem,
+                                           const SolvePlan &plan) {
+  return PreparedStationary(result, problem, plan).solve();
+}
+inline StationarySolution solve_stationary(AcceptedMesh result,
+                                           const Problem &problem,
+                                           const SolvePlan &plan,
+                                           const Vector &guess) {
   return PreparedStationary(result, problem, plan).solve(0, guess);
 }
 } // namespace pde2d::fem

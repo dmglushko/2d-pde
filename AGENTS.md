@@ -12,9 +12,9 @@ heading and which directions to keep open.
 | --- | --- |
 | `cpp/execution.hpp` | `pde2d::ExecutionOptions`, `parallel_for` (serial/OpenMP) |
 | `cpp/provenance.hpp` | `pde2d::Fingerprint` (portable FNV-1a), `StrategyDescriptor`, `library_version()` (reads the CMake-generated `pde2d_version.hpp`, from `cmake/pde2d_version.hpp.in`) |
-| `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing (size fields, marked refinement; criteria and boundary policies in `detail/refinement_policy.hpp`), point location (`point_location.hpp`), mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solver backends (`linear_solver.hpp`), time integration and step control (`step_control.hpp`), boundary region binding shared by assembly and analysis (`boundary_assignment.hpp`), boundary edge forms with one unit per form (`detail/edge_forms/`: Dirichlet, natural, oblique), problem analysis (`analysis.hpp`, types in `analysis_types.hpp`), decision records (`decision.hpp`), solve plans (`plan.hpp`), prepared stationary solves (`solver.hpp`), run records (`record.hpp`), error estimation and marking (`estimation.hpp`), field transfer between meshes (`transfer.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
-| `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
+| `cpp/discretization/` | geometry, curves, regions, boundary sampling, ear clipping/CDT meshing (size fields, marked refinement, public refinement criteria in `size_criterion.hpp`; one unit per interior algorithm with declared capabilities in `detail/interior_algorithms.hpp`, the generic loop in `detail/refinement_loop.hpp`, boundary policies in `detail/refinement_policy.hpp`), point location (`point_location.hpp`), mesh validation, `.pde2d` and SVG IO. Private meshing helpers in `detail/`. [README](cpp/discretization/README.md) (header map), [EXTENDING](cpp/discretization/EXTENDING.md) |
+| `cpp/fem/` | equations, boundary conditions, assembly (`system.hpp` + private `detail/assembly_*.hpp`), linear solvers (`linear_solver.hpp` facade over `linear_solver_types.hpp` contracts, `constraints.hpp`, `prepared_linear_solver.hpp` and private `detail/eigen_backends.hpp`), time integration and step control (`step_control.hpp`), boundary region binding shared by assembly and analysis (`boundary_assignment.hpp`), boundary edge forms with one unit per form (`detail/edge_forms/`: Dirichlet, natural, oblique), problem analysis (`analysis.hpp`, types in `analysis_types.hpp`), decision records (`decision.hpp`), solve plans (`plan.hpp`), prepared stationary solves (`solver.hpp`), run records (`record.hpp`), error estimation (`estimation.hpp`), marking strategies (`marking.hpp`), field transfer between meshes (`transfer.hpp`), the optional adaptive driver (`adaptivity.hpp`, JSON in `adaptivity_json.hpp`), the checked `MeshResult` boundary (`mesh_acceptance.hpp`). [README](cpp/fem/README.md) (header map), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `tests/` | `discretization/`, `fem/`, `core/`, `tools/` (Node tests and the CMake README header-map check `readme_headers.cmake`), `support/` (shared helpers). Registered in each module directory's `CMakeLists.txt`; `pde2d_add_cpp_test` is defined in `tests/CMakeLists.txt` |
 | `examples/` | runnable programs (learning, meshing showcase, FEM showcase, long waves). Built as CTest smoke tests |
 | `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
 | `tools/` | mesh viewer (`mesh_viewer/`), `plot_mesh.py`, `render_solutions.mjs`, independent references (`reference/`), `format.sh`, `test*.sh` |
@@ -44,8 +44,13 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   `tests/<module>/internal/` (e.g. `tests/discretization/internal/`), which
   must state what they check that the public API cannot observe.
 - Extension seams that need no library edit: `SolverOptions::backend`
-  (`LinearSolverBackend`) and `TimeOptions::integrator` (`TimeIntegrator`).
-  The enums `LinearSolver`/`TimeMethod` select the built-ins.
+  (`LinearSolverBackend`), `TimeOptions::integrator` (`TimeIntegrator`),
+  `TimeOptions::step_controller`, `RefinementOptions::criterion`
+  (`RefinementCriterion`), `AdaptOptions::estimator`/`marker`
+  (`ErrorEstimator`, `MarkingStrategy`). The enums `LinearSolver`/`TimeMethod`
+  select the built-ins. An `InteriorAlgorithm` is a unit with declared
+  capabilities; compatibility errors come from them, never from comparing
+  enum values.
 - Dependencies point downward: `fem` may include `discretization`, never the
   reverse. Only `svg_geometry.hpp` needs libxml2.
 - Style: clang-format (LLVM, 80 columns). FEM and meshing free functions use
@@ -91,19 +96,22 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   own, outer first; meshes with holes are `.pde2d` version 5, one-loop meshes
   must keep writing versions 4/2 byte for byte.
 - `MeshResult::report` must be checked: meshing can return a mesh that misses
-  its size target.
+  its size target. The meshing functions are `[[nodiscard]]`, and FEM entry
+  points taking a `MeshResult` throw on an unsatisfied report unless given
+  `accept_unsatisfied(result)`; keep new `MeshResult` overloads checked.
 - **Decisions match options.** Solves throw "Stale decision" when a recorded
   `Decision` no longer matches its option. Change plan options with the
   `SolvePlan` setters (or update the decision), and give a new setting a
   `DecisionSubject` plus a case in `validate_decisions`.
-- **Run record JSON is a format.** `record_json.hpp` keys and
+- **Run record JSON is a format** (and so is the adaptive history,
+  `adaptivity_json.hpp`, schema `pde2d.adaptive_history`). `record_json.hpp` keys and
   `DecisionSubject` names are stable; renaming or removing a key bumps
   `run_record_schema_version`. Fingerprint encodings carry a version tag
   (`pde2d.mesh.v1`, `pde2d.problem.v1`); changing one needs a new tag.
 - **Time settings live in `TimePlan`.** `TimeOptions` derives from it; do not
   re-declare a time setting elsewhere.
-- **Request-time options are not serialized:** `RefinementOptions::size_field`
-  and `MeshReport::marked` have no `.pde2d` record. Do not add one without a
+- **Request-time options are not serialized:** `RefinementOptions::size_field`,
+  `RefinementOptions::criterion` and `MeshReport::marked` have no `.pde2d` record. Do not add one without a
   format version (docs/formats/pde2d-mesh.md).
 - **Refinement determinism:** a constant size field must give the scalar
   `max_edge_length` result bit for bit (`SizePriority` length tie-break).
@@ -141,3 +149,5 @@ update them to match current code.
 2. `tools/test.sh`, and `tools/test_fem.sh` if `cpp/fem`, FEM tests or examples changed.
 3. Update the module README or EXTENDING guide when you change a public API or
    an extension point, and this file when you change layout or conventions.
+   Every public header must appear in its module README header map (the
+   `docs_header_map` test fails otherwise).

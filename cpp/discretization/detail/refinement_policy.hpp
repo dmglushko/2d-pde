@@ -2,15 +2,17 @@
 // Private (mesh_detail) part of triangulate.hpp: what the generic refinement
 // loop plugs together.
 //
-// * Size criteria (RefinementCriterion): the constant max_edge_length, a
-//   SizeField and marked edges all reduce to one SizeCriterion that accepts
-//   an edge or gives its splitting priority.
+// * Size criteria (RefinementCriterion, public in size_criterion.hpp): the
+//   constant max_edge_length, a SizeField, a user criterion and marked edges
+//   all reduce to one SizeCriterion that accepts an edge or gives its
+//   splitting priority. size_criterion() turns RefinementOptions into one.
 // * Boundary policies: one struct per BoundaryTreatment (FixedBoundary,
 //   SplitPolygonBoundary, CurveBoundary) holding everything that treatment
 //   decides: required context, preparation, the boundary conflict check and
 //   how a boundary edge is split. with_boundary_policy() is the only
 //   dispatch.
 #include "../mesh_types.hpp"
+#include "../size_criterion.hpp"
 #include "cdt_topology.hpp"
 #include "curved_boundary.hpp"
 #include <cmath>
@@ -26,48 +28,19 @@
 #include <vector>
 
 namespace pde2d::discretization::mesh_detail {
-struct RefinementCriterion {
-  SizeCriterion size;
-  // Report message when a Fixed boundary edge fails the criterion.
-  std::string fixed_conflict;
-  // Called with the endpoints of every edge the loop splits.
-  std::function<void(Point2, Point2)> split_hook{};
-  bool active() const { return static_cast<bool>(size); }
-};
-
-inline double size_field_value(const SizeField &field, Point2 p) {
-  const double h = field(p);
-  if (!std::isfinite(h) || !(h > 0))
-    throw std::invalid_argument("Size field must return a finite positive "
-                                "length");
-  return h;
-}
-// Local target of the edge (a, b): min(h(a), h(midpoint), h(b)), further
-// limited by a positive constant max_edge_length.
-inline double local_size_target(const RefinementOptions &o, Point2 a,
-                                Point2 b) {
-  Point2 mid{std::midpoint(a.x, b.x), std::midpoint(a.y, b.y)};
-  double target = std::min({size_field_value(o.size_field, a),
-                            size_field_value(o.size_field, mid),
-                            size_field_value(o.size_field, b)});
-  if (o.max_edge_length > 0)
-    target = std::min(target, o.max_edge_length);
-  return target;
-}
-// Without a size field this is exactly the constant-target criterion (ranked
-// by length). A field ranks edges by length relative to the local target.
+// The criterion of a refinement request. Without a size field this is
+// exactly the constant-target criterion (ranked by length); a field ranks
+// edges by length relative to the local target. A user criterion
+// (RefinementOptions::criterion) replaces both; validateMeshOptionValues
+// rejects setting it together with either.
 inline RefinementCriterion size_criterion(const RefinementOptions &o) {
+  if (o.criterion)
+    return *o.criterion;
   if (!o.size_field)
     return {constant_size_criterion(o.max_edge_length),
             "Fixed boundary edge exceeds requested maximum triangle-edge "
             "length"};
-  return {[o](Point2 a, Point2 b) -> std::optional<SizePriority> {
-            const double target = local_size_target(o, a, b),
-                         d = distance(a, b);
-            if (d > target * (1 + 1e-12))
-              return SizePriority{0, d / target, d};
-            return std::nullopt;
-          },
+  return {size_field_criterion(o.size_field, o.max_edge_length),
           "Fixed boundary edge exceeds the local size target"};
 }
 
@@ -138,6 +111,7 @@ inline RefinementCriterion marked_criterion(std::shared_ptr<MarkedState> state,
                                             RefinementCriterion size) {
   RefinementCriterion c;
   c.fixed_conflict = std::move(size.fixed_conflict);
+  c.descriptor = std::move(size.descriptor);
   c.size = [state, inner = std::move(size.size)](
                Point2 a, Point2 b) -> std::optional<SizePriority> {
     auto it = state->pending.find(coordinate_edge(a, b));
@@ -149,9 +123,12 @@ inline RefinementCriterion marked_criterion(std::shared_ptr<MarkedState> state,
       return inner(a, b);
     return std::nullopt;
   };
-  c.split_hook = [state](Point2 a, Point2 b) {
+  c.split_hook = [state, inner = std::move(size.split_hook)](Point2 a,
+                                                             Point2 b) {
     if (state->pending.erase(coordinate_edge(a, b)))
       ++state->bisected;
+    if (inner)
+      inner(a, b);
   };
   return c;
 }

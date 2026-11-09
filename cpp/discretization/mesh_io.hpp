@@ -405,7 +405,7 @@ inline void export_mesh(const TriangleMesh &mesh, const std::string &path) {
 
 // Load a mesh saved by export_mesh. Rejects truncated, malformed, unsupported,
 // or structurally inconsistent data before returning it to the caller.
-inline MeshResult import_mesh_result(const std::string &path) {
+[[nodiscard]] inline MeshResult import_mesh_result(const std::string &path) {
   std::ifstream in(path);
   if (!in)
     throw std::runtime_error("Cannot open mesh file: " + path);

@@ -189,13 +189,13 @@ void polygon_nesting_validation() {
   Boundary bow{{{0, 0}, {10, 0}, {10, 10}, {0, 10}},
                {},
                {{{{1, 1}, {3, 3}, {3, 1}, {1, 3}}, {}}}};
-  expect_throws<std::invalid_argument>([&] { generate_mesh(bow); },
+  expect_throws<std::invalid_argument>([&] { (void)generate_mesh(bow); },
                                        "Boundary self-intersects");
   // Hole tags must match their own loop.
   Boundary tags{{{0, 0}, {10, 0}, {10, 10}, {0, 10}},
                 {},
                 {{{{1, 1}, {3, 1}, {3, 3}}, {"x"}}}};
-  expect_throws<std::invalid_argument>([&] { generate_mesh(tags); },
+  expect_throws<std::invalid_argument>([&] { (void)generate_mesh(tags); },
                                        "Boundary tag count mismatch");
 }
 

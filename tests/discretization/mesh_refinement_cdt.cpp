@@ -22,10 +22,12 @@ TriangleMesh witness() {
 }
 void invalid_inputs() {
   // Collinear overlap and self-intersection are rejected before ear clipping.
-  expect_throws(
-      [] { generate_mesh(Boundary{{{0, 0}, {2, 0}, {1, 0}, {1, 1}}, {}}); });
-  expect_throws(
-      [] { generate_mesh(Boundary{{{0, 0}, {2, 2}, {0, 2}, {2, 0}}, {}}); });
+  expect_throws([] {
+    (void)generate_mesh(Boundary{{{0, 0}, {2, 0}, {1, 0}, {1, 1}}, {}});
+  });
+  expect_throws([] {
+    (void)generate_mesh(Boundary{{{0, 0}, {2, 2}, {0, 2}, {2, 0}}, {}});
+  });
   auto m = witness();
   m.elements.push_back({0, 1, 2});
   expect_throws([&] { validate_mesh_geometry(m); });
@@ -36,7 +38,7 @@ void invalid_inputs() {
   expect_throws([&] { validate_mesh_geometry(nonmanifold); });
   MeshOptions o;
   o.refinement.max_edge_length = .1;
-  expect_throws([&] { refine_mesh(nonmanifold, o); });
+  expect_throws([&] { (void)refine_mesh(nonmanifold, o); });
 }
 // Longest edge of a mesh by full scan; equal lengths go to the first edge in
 // lexicographic (sorted endpoint) order.

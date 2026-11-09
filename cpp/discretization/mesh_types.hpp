@@ -2,6 +2,7 @@
 
 #include "curve_geometry.hpp"
 #include "provenance.hpp"
+#include "size_criterion.hpp"
 #include <functional>
 #include <optional>
 
@@ -20,12 +21,7 @@ struct BoundaryOptions {
   double max_curve_deviation = 0.02;
   bool preserve_corners = false;
 };
-// Local target edge length at a point, for spatially graded meshes. An edge
-// (a, b) meets the field when its length is at most
-// min(h(a), h((a+b)/2), h(b)); values must be finite and positive. A size
-// field is a request-time option: .pde2d files do not store it (a callable
-// cannot be serialized), so an imported result has an empty field.
-using SizeField = std::function<double(Point2)>;
+// SizeField (a local target length) is declared in size_criterion.hpp.
 struct RefinementOptions {
   double max_edge_length = 0.0; // Zero disables the constant target.
   int max_steps = 10000;
@@ -36,9 +32,15 @@ struct RefinementOptions {
   // be compared or serialized). Without it a size field is recorded as "not
   // replayable". Request-time like the field itself: files do not store it.
   std::optional<pde2d::StrategyDescriptor> size_field_descriptor{};
+  // A user refinement criterion (size_criterion.hpp), for example a
+  // problem-aware or anisotropic length test. It replaces max_edge_length
+  // and size_field, which must then be unset; its descriptor names it in
+  // records. Request-time like the size field: files do not store it.
+  std::optional<RefinementCriterion> criterion{};
 };
 inline bool size_refinement_requested(const RefinementOptions &o) {
-  return o.max_edge_length > 0 || static_cast<bool>(o.size_field);
+  return o.max_edge_length > 0 || static_cast<bool>(o.size_field) ||
+         o.criterion.has_value();
 }
 struct MeshOptions {
   InteriorAlgorithm algorithm = InteriorAlgorithm::ConstrainedDelaunay;
@@ -46,6 +48,26 @@ struct MeshOptions {
   bool preserve_regions = true;
   BoundaryOptions boundary{};
   RefinementOptions refinement{};
+};
+// What an interior algorithm can do. Each algorithm is one unit
+// (detail/interior_algorithms.hpp) declaring these; requests outside them
+// throw with the unit's message. interior_algorithm_capabilities()
+// (triangulate.hpp) returns them.
+struct InteriorAlgorithmCapabilities {
+  // Size refinement during generate_mesh: a constant max_edge_length, a
+  // SizeField, a user RefinementCriterion.
+  bool supports_size_target = false;
+  bool supports_size_field = false;
+  bool supports_size_criterion = false;
+  // refine_mesh(mesh | result, options) and refine_mesh(result, marked, ...).
+  bool supports_refinement = false;
+  bool supports_marked_refinement = false;
+  // Its meshes are constrained Delaunay (MeshReport::delaunay_verified).
+  bool constrained_delaunay = false;
+  // generate_mesh needs analytical boundary context (a DiscretizedBoundary
+  // from discretize_boundary, not a raw Boundary).
+  bool requires_boundary_context = false;
+  bool operator==(const InteriorAlgorithmCapabilities &) const = default;
 };
 // Report names of the enum values (not wire IDs; those are the numbers).
 inline const char *interior_algorithm_name(InteriorAlgorithm value) {
@@ -103,6 +125,14 @@ inline void validateMeshOptionValues(const MeshOptions &o) {
   validateNonnegative(o.refinement.max_edge_length, "Refinement edge length");
   if (o.refinement.max_steps < 0)
     throw std::invalid_argument("Refinement step budget must be nonnegative");
+  if (o.refinement.criterion) {
+    if (!o.refinement.criterion->active())
+      throw std::invalid_argument("Refinement criterion has no size test");
+    if (o.refinement.max_edge_length > 0 || o.refinement.size_field)
+      throw std::invalid_argument(
+          "A refinement criterion replaces max_edge_length and size_field; "
+          "combine them in the criterion (strictest_of)");
+  }
 }
 struct CurveInterval {
   std::size_t curve;

@@ -151,7 +151,11 @@ reader to rebuild it.
 - Linear solver backend: override `LinearSolverBackendFactory::descriptor()`
   or pass one to `make_linear_solver_backend(name, creator, descriptor)`.
 - Size field: set `RefinementOptions::size_field_descriptor` next to the
-  field.
+  field. A refinement criterion (`RefinementOptions::criterion`) carries
+  its own `RefinementCriterion::descriptor`; it is recorded under
+  `DecisionSubject::RefinementCriterion`.
+- Marking strategy: override `MarkingStrategy::descriptor()`; adaptive
+  histories record it in each iteration's marking.
 
 `RunRecord::strategies` then says `described` with the descriptor; without
 one it says `not replayable` and `record.replayable()` is false. Tests: the
@@ -204,18 +208,50 @@ finiteness ("returned invalid indicators"). No library change is needed.
   indicators where the exact element errors are largest, and serial/OpenMP
   equality.
 
-Marking strategies are plain functions from indicators to ascending element
-indices (`mark_bulk`); the result feeds
-`discretization::refine_mesh(result, marked, options)`.
+## A marking strategy
+
+`marking.hpp` defines `MarkingStrategy`: `name()`, `descriptor()` and
+`mark(estimate, mesh)` returning ascending, distinct element indices.
+`BulkMarking` (Dörfler, `mark_bulk`) is the default. No library change is
+needed: pass `AdaptOptions::marker = std::make_shared<MyMarking>(...)` to
+`adapt()`, or call `mark_elements(strategy, estimate, mesh)` (which checks
+the indices) and feed the result to
+`discretization::refine_mesh(result, marked, options)` yourself.
+
+- Deterministic: the same estimate gives the same marks (break ties by
+  element index, as `mark_bulk` does).
+- Override `descriptor()` so the "marking" decision of every adaptive
+  iteration is replayable; without one the choice says "<name> (not
+  replayable)".
+- Tests: the marked set against a hand-computed one on small indicator
+  vectors, and an `adapt()` run whose iterations record the strategy
+  (`tests/fem/adaptive_loop.cpp`).
+
+## The adaptive driver
+
+`adaptivity.hpp` composes the public components and adds no numerics of
+its own; keep it that way, so the hand-composed loop in
+`tests/fem/adaptive_loop.cpp` stays its bit-for-bit oracle. A new stopping
+rule is an `AdaptiveStop` value with a stable name in
+`adaptive_stop_name`, a check in `adaptivity_detail::run` in the documented
+order and a case in that test. A new per-iteration field goes into
+`AdaptiveIteration` and its key into `adaptivity_json.hpp` (adding a key
+keeps `adaptive_history_schema_version`; renaming or removing one bumps it)
+and docs/fem/README.md.
 
 ## A linear solver backend or preconditioner
 
-`linear_solver.hpp` splits a solve into a shared driver
+The linear solver layer is split by role (`linear_solver.hpp` includes all
+of it): the contracts in `linear_solver_types.hpp` (options, enums,
+reports, `LinearSolverBackend`, the factory), Dirichlet lifting in
+`constraints.hpp`, the shared driver in `prepared_linear_solver.hpp`
 (`PreparedLinearSolver`: option and matrix validation, SparseQR rank check,
-tolerances, true-residual check, timings, `matches()` reuse) and a
-`LinearSolverBackend` that owns only `prepare(matrix, options)` (return `""`
-or a failure message) and `solve(rhs, relative_tolerance)` (values,
-iterations, optional failure).
+tolerances, true-residual check, timings, `matches()` reuse) and the private
+Eigen backends in `detail/eigen_backends.hpp`. A backend owns only
+`prepare(matrix, options)` (return `""` or a failure message) and
+`solve(rhs, relative_tolerance)` (values, iterations, optional failure).
+Headers that only describe settings (plans, records) include only the
+contracts.
 
 - **Initial guess:** an iterative backend overrides
   `solve_with_guess(rhs, tolerance, guess)` and sets
@@ -227,9 +263,12 @@ iterations, optional failure).
   every option including `preconditioner`, and works with `solve_linear`,
   `solve_stationary` and `evolve`. Factories compare by identity, so keep one
   factory object to reuse factorizations. See `tests/fem/solver_backends.cpp`.
-- **Built-in backend:** a class in `solver_detail` with `name`,
-  `supports(Preconditioner)`, `prepare` and `solve`, a `LinearSolver` value
-  and one case in `solver_detail::with_builtin` (the only dispatch).
+- **Built-in backend:** a class in `solver_detail`
+  (`detail/eigen_backends.hpp`) with `name` (from
+  `linear_solver_method_name`), `supports(Preconditioner)`, `prepare` and
+  `solve`, a `LinearSolver` value with its name in
+  `linear_solver_method_name` (`linear_solver_types.hpp`) and one case in
+  `solver_detail::with_builtin` (the only dispatch).
 - **Preconditioner:** add a `Preconditioner` value (and its name and the
   validation switch), construct it in the iterative backends that support
   it (`EigenIterativeBackend<Solver<SparseMatrix, P>>`) and extend their

@@ -195,11 +195,11 @@ void empty_and_invalid_marks() {
   check(twice.report.marked->marked_elements == 1);
   check(twice.report.marked->bisected_edges == 1);
   expect_throws<std::invalid_argument>(
-      [&] { refine_mesh(r, {r.mesh.elements.size()}, o); },
+      [&] { (void)refine_mesh(r, {r.mesh.elements.size()}, o); },
       "Marked element index is out of range");
   auto ear = o;
   ear.algorithm = InteriorAlgorithm::EarClipping;
-  expect_throws<std::invalid_argument>([&] { refine_mesh(r, {0}, ear); },
+  expect_throws<std::invalid_argument>([&] { (void)refine_mesh(r, {0}, ear); },
                                        "constrained Delaunay");
   // The step budget bounds marked refinement as well.
   auto budget = o;

@@ -31,8 +31,10 @@ PreparedAssembly(mesh, problem)                 assembly.hpp
    ▼
 AssembledSystem {K, M1, M2, F, Dirichlet}       system.hpp (element independent)
    ▼
-constrain() + PreparedLinearSolver              linear_solver.hpp
+constrain() + PreparedLinearSolver              constraints.hpp, prepared_linear_solver.hpp
    │   LinearSolverBackend (LU / CG / GMRES / user), optional initial guess
+   │   contracts: linear_solver_types.hpp; Eigen backends: detail/eigen_backends.hpp
+   │   (linear_solver.hpp includes all of them)
    ▼
 stationary: PreparedStationary(mesh, problem, plan).solve(t[, guess])
             solve_stationary() = one-shot wrapper                solver.hpp
@@ -53,14 +55,20 @@ L2 / H1 errors against exact solutions          error_norms.hpp
 
 Adaptivity (stationary): solve → estimate → mark → refine → transfer → seed
    estimate_error → ErrorEstimate {indicators, global}   estimation.hpp
-   mark_bulk(indicators, θ) → element indices            estimation.hpp
+   MarkingStrategy (BulkMarking = mark_bulk, Dörfler)    marking.hpp
    discretization::refine_mesh(result, marked, options)  triangulate.hpp
    transfer_field(old mesh, values, new mesh)            transfer.hpp
    PreparedStationary(new mesh, …).solve(t, transferred) solver.hpp
+   adapt(result, problem, plan, AdaptOptions) → AdaptiveHistory
+       optional driver composing the above            adaptivity.hpp
+       write_json(out, history)                       adaptivity_json.hpp
 Transient restart: transfer_field(last frame) → InitialConditions{Vector}
+MeshResult entry points refuse report.size_satisfied == false unless
+   wrapped in accept_unsatisfied(result)          mesh_acceptance.hpp
 ```
 
-One adaptive iteration (see `tests/fem/adaptive_loop.cpp`):
+One adaptive iteration composed by hand (see `tests/fem/adaptive_loop.cpp`,
+where this is the oracle of the driver below):
 
 ```cpp
 auto plan = plan_from_user(AssemblyOptions{}, cg); // an iterative solver
@@ -72,6 +80,21 @@ auto start = transfer_field(result.mesh, u, finer.mesh,
                             {.max_outside_distance = 0.02}); // curved domain
 auto next = PreparedStationary(finer.mesh, problem, plan)
                 .solve(0, start.values); // the transfer seeds the solve
+```
+
+The same loop as one call; the driver gives the same meshes and values bit
+for bit and records every iteration:
+
+```cpp
+AdaptOptions adapt_options;
+adapt_options.marker = std::make_shared<BulkMarking>(0.6); // default 0.5
+adapt_options.max_iterations = 8;                         // refinements
+adapt_options.transfer.max_outside_distance = 0.02;      // curved domain
+auto history = adapt(result, problem, plan, adapt_options);
+// history.mesh, history.solution, history.estimate: the final state
+// history.iterations[k]: RunRecord, transfer, estimate summary, marking,
+//                        refinement report, decisions; history.stop
+write_json(std::cout, history);                           // adaptivity_json.hpp
 ```
 
 `fem.hpp` includes everything. Parallel loops use `pde2d::parallel_for`
@@ -99,14 +122,19 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `detail/assembly_elements.hpp` | private: interior coefficients, quadrature points, element blocks | p1_element, weak_form |
 | `detail/assembly_edges.hpp` | private: classification and preparation of the bound edges, per-time evaluation, all through the form units | boundary_assignment, boundary_classification, edge_forms |
 | `detail/assembly_scatter.hpp` | private: deterministic serial scatter (edges through their units) | system, edge_forms |
-| `linear_solver.hpp` | Dirichlet lifting, `SolverOptions`, `LinearSolverBackend` (+ built-in LU/CG/GMRES, preconditioners, `solve_with_guess`), backend factory `descriptor()`, `PreparedLinearSolver`, initial guesses (`InitialGuess`), reuse, `solver_decisions` | system, timing, decision, provenance |
-| `mesh_plan.hpp` | `MeshPlan` (MeshOptions + decisions), `mesh_plan_from_user`, `mesh_decisions`, `validate_decisions(MeshPlan[, used options])` | decision, discretization/mesh_types |
-| `plan.hpp` | `TimePlan` (the one source of time settings), `SolvePlan` (assembly, solver, time, decisions, `mesh`, `analysis`) and its setters, `AnalysisRecord`, `plan_from_user`, `time_decisions`, `validate_decisions` (stale/duplicate/misplaced decisions throw) | assembly, linear_solver, step_control, mesh_plan, analysis_types |
+| `linear_solver_types.hpp` | Contracts only: `LinearSolver`, `Preconditioner`, `SolverValidation`, `SolverOptions`, `InitialGuess`, `SolverReport`, `LinearSolution`, `BackendSolution`, `LinearSolverBackend` (`prepare`, `solve`, `solve_with_guess`), `LinearSolverBackendFactory` (`descriptor()`), `make_linear_solver_backend`, report names (`linear_solver_name`, `linear_solver_method_name`, `preconditioner_name`, `solver_validation_name`), `solver_decisions`. Included by plans and records | system, timing, decision, provenance |
+| `constraints.hpp` | `constrain(A, b, dirichlet)`: Dirichlet lifting; the shared linear-system check | system |
+| `prepared_linear_solver.hpp` | `PreparedLinearSolver` (validation, rank check, backend setup, true-residual check, reuse via `matches()`), `solve_linear` | linear_solver_types, constraints, detail/eigen_backends |
+| `detail/eigen_backends.hpp` | private: built-in Eigen backends (SparseLU, CG, GMRES and their preconditioners), `with_builtin` (the only dispatch on `LinearSolver`), option validation, backend creation | linear_solver_types |
+| `linear_solver.hpp` | Compatibility facade: includes `linear_solver_types.hpp`, `constraints.hpp` and `prepared_linear_solver.hpp` | the three |
+| `mesh_plan.hpp` | `MeshPlan` (MeshOptions + decisions), `mesh_plan_from_user`, `mesh_decisions` (a refinement criterion decision only when `RefinementOptions::criterion` is set), `size_field_choice`, `refinement_criterion_choice`, `validate_decisions(MeshPlan[, used options])` | decision, discretization/mesh_types |
+| `mesh_acceptance.hpp` | The mesh-report invariant by type: `AcceptedMesh`, `accept_unsatisfied(result)`, `require_size_satisfied` (MeshResult entry points refuse an unsatisfied report: "MeshResult misses its size target (...)") | discretization/mesh_types |
+| `plan.hpp` | `TimePlan` (the one source of time settings), `SolvePlan` (assembly, solver, time, decisions, `mesh`, `analysis`) and its setters, `AnalysisRecord`, `plan_from_user`, `time_decisions`, `validate_decisions` (stale/duplicate/misplaced decisions throw) | assembly, linear_solver_types, step_control, mesh_plan, analysis_types |
 | `fingerprint.hpp` | `problem_fingerprint`, `field_fingerprint`, `field_kind`, `expression_text` (canonical SymEngine string) | problem, interpolation, provenance |
 | `record.hpp` | `RunRecord` (plan, execution, workload, work, `EvidenceSummary`, `VersionRecord`, `MeshRecord` with fingerprint and `MeshProvenance`, problem fingerprint, stationary time, `InitialRecord`, `StrategyRecord`s with `StrategyReplay`, `TimingRecord`), `make_run_record`, `summarize_evidence` | plan, execution, provenance, discretization/mesh_fingerprint |
 | `json.hpp` | `JsonValue` (number tokens kept as text), `json_number` (classic locale, max_digits10), `write_json(JsonValue)`, `parse_json` | — |
 | `record_json.hpp` | `to_json(RunRecord)`, `write_json(std::ostream &, const RunRecord &)` (schema `pde2d.run_record`, version 1), `read_run_record_json`, `diff_records` → `RecordDifference` | record, json, analysis_types |
-| `solver.hpp` | `PreparedStationary` (prepared assembly + reused linear solver, `StationaryStatistics`; from a mesh or a `MeshResult`; validates the plan), `StationarySolution`, `solve_stationary` wrappers (includes linear_solver.hpp) | assembly, linear_solver, plan, record, fingerprint |
+| `solver.hpp` | `PreparedStationary` (prepared assembly + reused linear solver, `StationaryStatistics`; from a mesh, a checked `MeshResult` or an `AcceptedMesh`; validates the plan), `StationarySolution`, `solve_stationary` wrappers (includes linear_solver.hpp) | assembly, linear_solver, mesh_acceptance, plan, record, fingerprint |
 | `interpolation.hpp` | nodal interpolation of a field (rejects normals); `Field` (Expr or nodal Vector), `validate_field`, `nodal_values` | system, expression |
 | `time_grid.hpp` | time stamps and step sizes | — |
 | `time_integration.hpp` | `TimeIntegrator` interface (transactional `trial`/`accept`/`reject`, `descriptor()`), `IntegratorServices`, schemes, `TimeIntegratorFactory` | system, provenance |
@@ -120,6 +148,9 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `report.hpp` | text summaries of solves, evolutions, run records, decisions and analyses | evolution, solver, record, analysis |
 | `error_norms.hpp` | prepared L2/H1 error norms (rejects normals) | system, quadrature |
 | `estimation.hpp` | `ErrorEstimator` interface (with `descriptor()`), `GradientRecoveryEstimator` (ZZ, H1 seminorm), `estimate_error`, Dörfler `mark_bulk` | p1_element, problem, system |
+| `marking.hpp` | `MarkingStrategy` interface (`name()`, `descriptor()`, `mark(estimate, mesh)`), `BulkMarking` (Dörfler via `mark_bulk`, default fraction 0.5), `mark_elements` (runs a strategy, checks ascending in-range indices) | estimation, provenance |
+| `adaptivity.hpp` | Optional adaptive driver: `adapt(MeshResult | AcceptedMesh, problem, plan, AdaptOptions)` → `AdaptiveHistory` (per-iteration `AdaptiveIteration`: `RunRecord`, `TransferRecord`, `EstimateSummary`, `MarkingRecord`, refinement `MeshReport`, marking/refinement `Decision`s; `AdaptiveStop`; final mesh, solution and estimate) | solver, estimation, marking, transfer, mesh_acceptance, discretization/triangulate |
+| `adaptivity_json.hpp` | `to_json(AdaptiveHistory)`, `write_json` (schema `pde2d.adaptive_history`, version 1; each iteration embeds its run record), `read_adaptive_history_json` | adaptivity, record_json |
 | `transfer.hpp` | `transfer_field`: P1 nodal field onto another mesh (point location + interpolation, documented outside rule) | discretization/point_location, system |
 
 ## Invariants
@@ -177,8 +208,15 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
   `edge_form_detail::Unit<Form>`; `forms.hpp` fails to compile for an
   `EdgeForm` alternative without its unit.
 - **Estimators report, they do not decide.** `estimate_error` returns
-  indicators and a global value; marking and refinement are separate calls
-  the user (or a future automatic loop, recording a `Decision`) makes.
+  indicators and a global value; marking (`MarkingStrategy`) and refinement
+  are separate calls. The optional driver `adapt()` only composes them and
+  records each marking and refinement as a `Decision`
+  (`DecisionSubject::Marking`, `Refinement`) in its `AdaptiveIteration`;
+  every component stays usable on its own.
+- **Unsatisfied meshes are refused at the type boundary.** Entry points
+  taking a `MeshResult` (`PreparedStationary`, `solve_stationary`, `evolve`,
+  `adapt`) throw when `report.size_satisfied` is false; the caller opts in
+  with `accept_unsatisfied(result)`. `TriangleMesh` overloads never check.
 - **Normals only on boundaries.** `nx`, `ny` are bound in boundary
   expressions; interior coefficients, interpolated and initial fields and
   exact solutions are checked with `require_symbols(..., field_symbols, ...)`.

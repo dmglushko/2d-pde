@@ -213,13 +213,16 @@ int main(int argc, char **argv) {
       if (ex.transient) {
         const Expr initial =
             ex.exact.subs({{t.get_basic(), Expr(0).get_basic()}});
+        // The MeshResult overloads refuse a mesh that missed its size
+        // target (and record where the mesh came from).
         auto solution =
-            evolve(mesh, ex.problem, {initial, ex.initial_velocity}, ex.time);
+            evolve(meshed, ex.problem, {initial, ex.initial_velocity}, ex.time);
         frames = std::move(solution.frames);
         for (const auto &report : solution.reports)
           residual = std::max(residual, report.relative_residual);
       } else {
-        auto solution = solve_stationary(mesh, ex.problem, AssemblyOptions{6});
+        auto solution =
+            solve_stationary(meshed, ex.problem, AssemblyOptions{6});
         residual = solution.report.relative_residual;
         frames.push_back({0, solution.values, Vector{}});
       }

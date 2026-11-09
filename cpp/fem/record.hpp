@@ -191,13 +191,18 @@ inline void set_strategy(RunRecord &record, StrategyRecord strategy) {
   else
     list.insert(at, std::move(strategy));
 }
-// The size field of these mesh options, if one is set.
+// The size field and refinement criterion of these mesh options, if set.
 inline void set_size_field_strategy(RunRecord &record,
                                     const discretization::MeshOptions &o) {
   if (o.refinement.size_field)
     set_strategy(record, strategy_record(DecisionSubject::SizeField,
                                          size_field_choice(o.refinement), false,
                                          o.refinement.size_field_descriptor));
+  if (o.refinement.criterion)
+    set_strategy(record,
+                 strategy_record(DecisionSubject::RefinementCriterion,
+                                 refinement_criterion_choice(o.refinement),
+                                 false, o.refinement.criterion->descriptor));
 }
 // Attach where the mesh came from (and its size field strategy).
 inline void set_mesh_provenance(RunRecord &record, MeshProvenance provenance) {

@@ -243,7 +243,8 @@ solver.backend=make_linear_solver_backend("MyBackend",
 ```
 
 `MyBackend` implements `LinearSolverBackend` (`prepare` once per matrix,
-`solve` per right-hand side; see `fem/linear_solver.hpp` and
+`solve` per right-hand side; the interface is in
+`fem/linear_solver_types.hpp`, included by `fem/linear_solver.hpp`; see
 [cpp/fem/EXTENDING.md](../../cpp/fem/EXTENDING.md)). Validation, the rank
 check, the true-residual check, timings and factorization reuse stay shared,
 and the same options work for `solve_linear`, `solve_stationary` and
@@ -408,10 +409,86 @@ plus assembly and solver options, so every time setting is declared once.
 
 A `MeshPlan` (`fem/mesh_plan.hpp`, `mesh_plan_from_user(mesh_options)`) is
 the meshing counterpart: `MeshOptions` with decisions for the mesh algorithm,
-boundary treatment, mesh size and size field. Put it in `plan.mesh`; a solve
+boundary treatment, mesh size and size field (and a refinement criterion
+when `RefinementOptions::criterion` is set). Put it in `plan.mesh`; a solve
 given the `MeshResult` (`solve_stationary(result,problem,plan)`,
 `evolve(result,...)`) checks it against `result.options`. `plan.analysis`
 holds the `analyze` options and result a chooser used.
+
+A solve given a `MeshResult` also checks its report: meshing can return a
+mesh that misses its size target (`report.size_satisfied == false`), and
+`PreparedStationary`, `solve_stationary`, `evolve` and `adapt` then throw
+`MeshResult misses its size target (<report.message>); check
+report.size_satisfied or pass accept_unsatisfied(result)`. Pass
+`accept_unsatisfied(result)` (`fem/mesh_acceptance.hpp`) to solve on it
+anyway; the record keeps the unsatisfied report. `TriangleMesh` overloads do
+not check.
+
+## Adaptive loop
+
+The adaptive loop of a stationary problem is a composition of public
+components, each usable on its own: `PreparedStationary` (solve, warm
+started from a guess), `estimate_error` (an `ErrorEstimator`, default the
+gradient-recovery estimator), a `MarkingStrategy` (`fem/marking.hpp`;
+`BulkMarking` is Dörfler marking with `mark_bulk`),
+`discretization::refine_mesh(result, marked, options)` and
+`transfer_field`. `adapt` (`fem/adaptivity.hpp`) runs them in that order:
+
+```cpp
+AdaptOptions options;
+options.marker = std::make_shared<BulkMarking>(0.6); // unset: BulkMarking{0.5}
+options.max_iterations = 8;          // refine-and-solve iterations after the first
+options.tolerance = 1e-3;            // stop once estimate.global <= tolerance
+options.transfer.max_outside_distance = 0.02;   // curved boundary
+auto history = adapt(mesh_result, problem, plan, options);
+auto &u = history.solution.values;   // on history.mesh.mesh
+```
+
+| `AdaptOptions` field | Default | Meaning |
+| --- | --- | --- |
+| `estimator` | gradient recovery (plan's execution) | `std::shared_ptr<const ErrorEstimator>` |
+| `marker` | `BulkMarking{0.5}` | `std::shared_ptr<const MarkingStrategy>` |
+| `max_iterations` | 10 | refine-and-solve iterations after the first solve |
+| `tolerance` | 0 (off) | stop once the global estimate is at most this |
+| `refinement` | each result's own options | `MeshOptions` of `refine_mesh(result, marked, options)` |
+| `warm_start`, `transfer` | true, `{}` | seed each solve with `transfer_field` of the previous solution |
+| `time` | 0 | time at which the stationary problem is solved and estimated |
+| `accept_unsatisfied_refinement` | false | keep going on a refined mesh that missed its size target |
+
+The loop stops, checked after every solve and estimate in this order, with
+`AdaptiveStop::ToleranceReached`, `MaxIterations`, `NothingMarked` (the
+strategy marked no element) or `UnsatisfiedRefinement` (the refined mesh
+missed its size target; that mesh is not solved on). The initial
+`MeshResult` must meet its size target or be passed as
+`accept_unsatisfied(result)`. The driver adds no numerics: the same calls
+composed by hand give the same meshes and values bit for bit
+(`tests/fem/adaptive_loop.cpp` checks this).
+
+`AdaptiveHistory` holds the final `mesh`, `solution` and `estimate`, the
+`stop` reason and message, and one `AdaptiveIteration` per solve: its
+`RunRecord` (plan, mesh fingerprint and provenance with the refinement
+report that produced the mesh), solver iterations and initial-guess use,
+the `TransferRecord` that seeded it (source and target nodes, extrapolated
+nodes, largest outside distance), an `EstimateSummary` (estimator name and
+descriptor, global estimate, elements, largest and mean indicator) and,
+unless it was the last, a `MarkingRecord` (strategy name, descriptor,
+marked and total elements), the `MeshReport` of the refined mesh (with
+`MarkedRefinementReport` counters) and two `Decision`s:
+`DecisionSubject::Marking` (choice `Bulk(fraction=0.6)`, or
+`<name> (not replayable)` without a descriptor) and
+`DecisionSubject::Refinement` (choice `marked longest-edge bisection
+(<algorithm>, <boundary treatment>)`).
+
+`write_json(out, history)` (`fem/adaptivity_json.hpp`) writes
+`"schema": "pde2d.adaptive_history"`, `"schema_version": 1`, then `stop`
+(`reason`, `message`), `iterations` (each: `index`, `record` = the full
+run record document, `solver` (`iterations`, `initial_guess`), `transfer`,
+`estimate`, `marking`, `refinement`, `decisions`) and `final`
+(`mesh_fingerprint`, `nodes`, `elements`, `estimate`), with the run-record
+conventions (absent values `null`, `max_digits10` numbers).
+`read_adaptive_history_json` checks the schema; `diff_records` compares two
+histories leaf by leaf and ignores nested `timings`. Indicators and nodal
+values are not written.
 
 ## Optional parallel execution and verification
 
@@ -469,8 +546,8 @@ what is needed to reproduce and compare a run, as fields:
 - mesh provenance (`MeshOptions`, `MeshReport`, whether a boundary context was
   kept) when the solve was given a `MeshResult`;
 - the stationary evaluation time;
-- `strategies`: what ran for the time integrator, step sequence, linear solver
-  and size field, each `built-in` (the options rebuild it), `described` (a
+- `strategies`: what ran for the time integrator, step sequence, linear solver,
+  size field and refinement criterion, each `built-in` (the options rebuild it), `described` (a
   `StrategyDescriptor` names it and its parameters) or `not replayable` (a
   factory without descriptor); `record.replayable()` is true when all are
   built-in;
@@ -505,8 +582,10 @@ for (const auto &d : pde2d::fem::diff_records(old_record, new_record))
 ```
 
 `diff_records` compares two records or parsed documents leaf by leaf (paths
-such as `plan.decisions[2].choice`) and ignores `timings` unless
-`{.ignore_timings = false}`.
+such as `plan.decisions[2].choice`) and ignores `timings` (also nested, as
+in adaptive histories) unless `{.ignore_timings = false}`. Mesh options in
+records include `refinement.criterion` (whether a user refinement criterion
+was set) and `refinement.criterion_descriptor`.
 
 These overloads return `std::ostream&`, emit one summary without per-step output,
 and preserve the caller's formatting flags, precision, fill, width and locale.

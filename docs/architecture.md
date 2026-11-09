@@ -40,9 +40,12 @@ CurveGeometry ──discretize_boundary──▶ DiscretizedBoundary ──gener
 MeshResult ──export_mesh/import_mesh_result──▶ .pde2d file   (docs/formats/pde2d-mesh.md)
 MeshResult ──refine_mesh──▶ MeshResult        (resumes from the stored boundary context)
 MeshResult + marked elements ──refine_mesh──▶ MeshResult   (report.marked: what was bisected)
-RefinementOptions: max_edge_length and/or size_field h(x,y)  (size field is request-time, not in files)
+RefinementOptions: max_edge_length and/or size_field h(x,y), or a user
+    RefinementCriterion (size_criterion.hpp)   (request-time, not in files)
+MeshOptions::algorithm ──with_interior_algorithm──▶ unit {capabilities, generate, refine}
 TriangleMesh ──PointLocator──▶ element + barycentric        (outside rule: max_outside_distance)
 
+MeshResult ──(report.size_satisfied, or accept_unsatisfied(result))──▶ FEM entry points
 TriangleMesh + Problem ──bind_boundary──▶ BoundaryBinding (owned snapshot: regions, conditions, edge frames)
      │                                      shared by assembly and analysis
      ├──analyze──▶ ProblemProperties   (each property: value + Evidence + reason)
@@ -55,11 +58,15 @@ results carry RunRecord {plan, inputs (fingerprints, mesh provenance), strategie
                          versions, execution, workload, work, evidence, timings}
 RunRecord ──write_json──▶ versioned JSON ──read_run_record_json / diff_records
 
-Adaptive loop (stationary):
-  solve_stationary ──▶ values ──estimate_error──▶ ErrorEstimate {indicators, global}
-     ──mark_bulk──▶ marked elements ──refine_mesh(result, marked)──▶ MeshResult
+Adaptive loop (stationary), by hand or as adapt(result, problem, plan, AdaptOptions):
+  PreparedStationary(result, plan).solve ──▶ values ──estimate_error──▶ ErrorEstimate
+     ──MarkingStrategy (BulkMarking = mark_bulk)──▶ marked elements
+     ──refine_mesh(result, marked)──▶ MeshResult
      ──transfer_field(old mesh, values, new mesh)──▶ values on the new mesh
-     ──PreparedStationary(new mesh, plan).solve(t, guess = transferred)──▶ values
+     ──PreparedStationary(new result, plan).solve(t, guess = transferred)──▶ values
+  adapt ──▶ AdaptiveHistory {iterations: RunRecord, transfer, estimate summary,
+                             marking, refinement report, Decisions; stop; final state}
+        ──write_json (adaptivity_json.hpp)──▶ versioned JSON
 Restart (transient): last frame ──transfer_field──▶ InitialConditions{Vector} ──evolve
 Time steps: StepController.next ──▶ trial (TimeIntegrator.trial) ──judge──▶
      accept (commit, frame, observer) | reject (discard, next() proposes a retry)
@@ -72,16 +79,24 @@ Ear clipping bridges holes into one ring and every loop's edges are CDT
 constraints; validation accepts one connected domain whose boundary is
 several closed loops. Files with holes use format version 5.
 
-Inside meshing, refinement is one generic loop (`refine_with`) with two
-seams in `detail/refinement_policy.hpp`: a size criterion (constant target,
-size field or marked edges, all as one `SizeCriterion`) and a boundary
-policy per `BoundaryTreatment`. Point location (`point_location.hpp`) is a
+Inside meshing, each `InteriorAlgorithm` is one unit with declared
+capabilities (`detail/interior_algorithms.hpp`, the only dispatch on the
+algorithm; `interior_algorithm_capabilities` exposes them). Refinement is
+one generic loop (`refine_with`, `detail/refinement_loop.hpp`) with two
+seams: a size criterion (constant target, size field, a user
+`RefinementCriterion` or marked edges, all as one `SizeCriterion`; public in
+`size_criterion.hpp`) and a boundary policy per `BoundaryTreatment`
+(`detail/refinement_policy.hpp`). Point location (`point_location.hpp`) is a
 discretization facility; field transfer and error estimation are FEM
 (`transfer.hpp`, `estimation.hpp`).
 
 `AssembledSystem` and the sparse aliases live in the element-independent
-`cpp/fem/system.hpp`; linear solvers (`linear_solver.hpp`) and time
-integrators (`time_integration.hpp`) depend only on it. Both are strategies:
+`cpp/fem/system.hpp`; linear solvers and time integrators
+(`time_integration.hpp`) depend only on it. The linear solver layer is split
+by role: contracts (`linear_solver_types.hpp`, which plans and records
+include), Dirichlet lifting (`constraints.hpp`), the shared driver
+(`prepared_linear_solver.hpp`) and the private Eigen backends
+(`detail/eigen_backends.hpp`); `linear_solver.hpp` includes them all. Both are strategies:
 `SolverOptions::backend` plugs in a `LinearSolverBackend` and
 `TimeOptions::integrator` a `TimeIntegrator`, with the enums as the built-in
 convenience selectors. The step sequence is a third strategy:
@@ -133,6 +148,17 @@ Boundary region tags connect the two halves: geometry regions become
 attaches boundary conditions to them. Every tagged region needs exactly one
 condition.
 
+Meshing results cross into FEM with their report: entry points that take a
+`MeshResult` refuse one whose `report.size_satisfied` is false unless the
+caller wraps it in `accept_unsatisfied(result)` (`fem/mesh_acceptance.hpp`),
+and the meshing functions returning `MeshResult` are `[[nodiscard]]`.
+
+The adaptive driver `adapt` (`fem/adaptivity.hpp`) is an optional
+composition of the public solve, estimate, mark, refine and transfer
+components; it adds no numerics (the hand-composed loop is its bit-for-bit
+test oracle) and records each iteration and its marking and refinement
+decisions in an `AdaptiveHistory`.
+
 ## Build configurations
 
 | Configuration | Command | Needs |
@@ -173,7 +199,9 @@ The intended direction is in [vision.md](vision.md).
 
 
 - CDT refinement has no minimum-angle guarantee. Marked refinement only refines (no coarsening or node
-  movement), and the only built-in estimator is gradient recovery.
+  movement), the only built-in estimator is gradient recovery and the only
+  built-in marking strategy is Dörfler (`BulkMarking`). The adaptive driver
+  is stationary only.
 - FEM is scalar, linear and P1. Extension points are in
   [cpp/fem/EXTENDING.md](../cpp/fem/EXTENDING.md) and
   [cpp/discretization/EXTENDING.md](../cpp/discretization/EXTENDING.md).

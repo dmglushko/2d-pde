@@ -11,14 +11,6 @@ namespace mesh_detail {
 inline void nonnegative(double value, const char *name) {
   validateNonnegative(value, name);
 }
-inline void validate_options(const MeshOptions &o) {
-  validateMeshOptionValues(o);
-  if (o.algorithm == InteriorAlgorithm::EarClipping &&
-      size_refinement_requested(o.refinement))
-    throw std::invalid_argument(
-        "Ear clipping has no interior refinement; use constrained Delaunay or "
-        "refine_mesh with subdivision");
-}
 inline CurveSegment world_curve(const CurveSegment &segment,
                                 const Geometry2D &geometry) {
   return transformCurve(segment, {1, geometry.rotation(), geometry.center()});

@@ -28,17 +28,55 @@ auto finer = refine_mesh(restored, options);
 See [Extending analytical geometry](EXTENDING.md) for curve contracts, proven
 interval bounds, format adapters, and stable serialization IDs.
 
+## Headers
+
+Every public header, its role and main entry points. Private helpers
+(`mesh_detail` and other `*_detail` namespaces) are in `detail/` and the
+detail namespaces of these headers; tests and examples do not use them.
+`tests/tools/readme_headers.cmake` fails when a public header is missing
+from this table.
+
+| Header | Role | Main entry points |
+| --- | --- | --- |
+| `geometry_base.hpp` | Basic geometry and mesh types | `Point2`, `Boundary` (outer loop + `BoundaryLoop` holes), `TriangleMesh`, `Geometry2D` (center, rotation) |
+| `curve_segment.hpp` | Curve mathematics | `LineCurve`, `EllipticalArc`, `QuadraticBezier`, `CubicBezier`, `CurveSegment`; `curvePoint`, `curveDerivative`, `splitCurve`, `reverseCurve`, `transformCurve`, `curveDerivativeBounds`, `curveIsLinear` |
+| `curve_length.hpp` | Arc length and its inversion | `curveLength`, `curveParameterAtLengthFraction` |
+| `curve_geometry.hpp` | Editable analytical boundary with regions and loops | `CurveGeometry` (`setRegions`, `renameRegion`, `splitRegion`, `splitCurve`, `moveCurve`, `curveIdAt`, `regionGroups`, `length`), `CurveId`, `CurveRegion`, `BoundaryCurve` |
+| `geometry.hpp` | Built-in shapes | `CircleGeometry`, `EllipseGeometry`, `RectangleGeometry`, `RectangleWithSemicircleGeometry`, `RegularPolygonGeometry`, `PolygonGeometry`, `AnnulusGeometry` |
+| `size_criterion.hpp` | Public refinement criteria (what makes an edge too long, which is split first) | `SizePriority`, `SizeCriterion`, `SizeField`, `RefinementCriterion` (size, Fixed-conflict message, split hook, descriptor), `constant_size_criterion`, `size_field_criterion`, `local_size_target`, `strictest_of` |
+| `mesh_types.hpp` | Meshing options and results; wire IDs | `InteriorAlgorithm`, `BoundaryTreatment`, `BoundaryOptions`, `RefinementOptions` (`size_field`, `criterion`), `MeshOptions`, `InteriorAlgorithmCapabilities`, `MeshReport`, `MarkedRefinementReport`, `MeshResult`, `BoundaryContext`, `interior_algorithm_name`, `boundary_treatment_name`, `validateMeshOptionValues` |
+| `predicates.hpp` | Exact geometric predicates (filtered, exact binary64 fallback; needs Boost) | `predicates::orient`, `predicates::incircle`, `predicates::intersects`, `predicates::on_segment` |
+| `spatial_index.hpp` | Box broad phase used by validation and point location | `mesh_detail::Box`, `mesh_detail::BoxIndex` |
+| `mesh_validation.hpp` | Polygon and mesh validation, boundary loops | `validate_polygon`, `validate_mesh_geometry`, `boundary_loops`, `boundary_points` |
+| `boundary_context.hpp` | Consistency of a mesh with its analytical boundary context | `validate_boundary_context` |
+| `boundary_discretization.hpp` | Sampling analytical boundaries into polygons with source intervals | `discretize_boundary`, `DiscretizedBoundary` |
+| `triangulate.hpp` | Meshing entry points | `generate_mesh`, `refine_mesh` (size or marked), `subdivide_mesh`, `is_constrained_delaunay`, `interior_algorithm_capabilities` |
+| `point_location.hpp` | Locating points in a mesh | `PointLocator`, `PointLocation`, `PointLocationOptions`, `locate_point` |
+| `mesh_fingerprint.hpp` | Deterministic mesh fingerprints for records | `mesh_fingerprint` |
+| `curve_io.hpp` | Wire IDs and codecs of curve kinds in `.pde2d` files | `curve_io::Codec` (permanent IDs) |
+| `mesh_io.hpp` | `.pde2d` export and import (format versions 1 to 5) | `export_mesh`, `import_mesh_result`, `import_mesh` |
+| `svg_geometry.hpp` | SVG import and export of analytical geometry (needs libxml2) | `importSvg`, `exportSvg`, `SvgOptions`, `SvgScaleMode` |
+| `square_mesh.hpp` | Structured meshes of the unit square (tests, examples) | `square_mesh` |
+
+Private headers in `detail/`: `ear_clipping.hpp` (seed triangulation with
+hole bridges), `cdt_topology.hpp` (incremental constrained Delaunay
+topology, the size queue, `cdt_verified`), `curved_boundary.hpp`
+(splitting source intervals, rebuilding on curves), `refinement_policy.hpp`
+(options to criterion, marked selection, one policy per
+`BoundaryTreatment`), `refinement_loop.hpp` (the generic refinement loop)
+and `interior_algorithms.hpp` (one unit per `InteriorAlgorithm` with its
+capabilities, the only dispatch).
+
 ## Free functions and options
 
 `generate_mesh(CurveGeometry | Boundary | DiscretizedBoundary, MeshOptions = {})`
 returns `MeshResult`: `.mesh`, optional `.boundary_context`, `.options`, and
-`.report`. Include `triangulate.hpp` for the meshing entry points. Its private
-helpers (`mesh_detail`) live in `detail/`: `ear_clipping.hpp` (seed
-triangulation), `cdt_topology.hpp` (incremental constrained Delaunay topology,
-flips, splits, priority queue of edges failing the size criterion,
-`cdt_verified`), `curved_boundary.hpp` (splitting source intervals and
-rebuilding on analytical curves) and `refinement_policy.hpp` (size criteria
-and one policy per boundary treatment, see [EXTENDING](EXTENDING.md)).
+`.report`. Include `triangulate.hpp` for the meshing entry points; their
+private helpers are listed under [Headers](#headers). The meshing functions
+returning `MeshResult` are `[[nodiscard]]`: a result must be inspected
+(`report.size_satisfied`), and FEM entry points that take a `MeshResult`
+refuse an unsatisfied one unless it is wrapped in
+`pde2d::fem::accept_unsatisfied(result)`.
 
 `discretize_boundary(geometry, BoundaryOptions = {}, bool preserve_regions = true)`
 returns `DiscretizedBoundary { boundary, context }`. Analytical source curves and
@@ -64,7 +102,12 @@ zero. `max_steps` is nonnegative. Boundary tolerances control initial sampling;
 the refinement target controls all triangle edges.
 
 Ear clipping triangulates the sampled polygon without interior refinement.
-Selecting ear clipping with a positive interior target or a size field throws.
+Selecting ear clipping with a positive interior target, a size field or a
+refinement criterion throws. What each algorithm supports is declared, not
+implied: `interior_algorithm_capabilities(algorithm)` returns
+`InteriorAlgorithmCapabilities` (size targets, size fields, criteria,
+refinement, marked refinement, constrained Delaunay output, required
+context), and the compatibility errors come from them.
 CDT starts with ear clipping and fully legalizes eligible interior edges under
 the constrained Delaunay criterion. Size refinement inserts the midpoint of
 the edge that fails its target worst and legalizes again. It is not classical
@@ -91,6 +134,36 @@ options.boundary_treatment = BoundaryTreatment::RefineOnCurves;
 options.refinement.size_field = [](Point2 p) { return 0.05 + 0.3 * p.x; };
 auto graded = generate_mesh(shape, options);
 ```
+
+### Refinement criteria
+
+`size_criterion.hpp` makes the size test public. A `RefinementCriterion`
+holds a `SizeCriterion` (`std::optional<SizePriority>(Point2 a, Point2 b)`:
+`nullopt` accepts the edge, otherwise its splitting priority `{tier, value,
+length}`, higher first), the report message for a Fixed boundary edge that
+fails it, an optional split hook and a `pde2d::StrategyDescriptor` naming it
+for run records. Set it as `RefinementOptions::criterion` to refine by a rule
+of your own, for example a problem-aware target or an anisotropic length:
+
+```cpp
+RefinementCriterion wide;   // refine edges whose x extent exceeds 0.1
+wide.size = [](Point2 a, Point2 b) -> std::optional<SizePriority> {
+  double dx = std::abs(b.x - a.x);
+  if (dx > 0.1) return SizePriority{0, dx / 0.1, std::hypot(dx, b.y - a.y)};
+  return std::nullopt;
+};
+wide.descriptor = pde2d::StrategyDescriptor{"XExtent", {{"hx", "0.1"}}};
+options.refinement.criterion = wide;
+```
+
+A criterion replaces `max_edge_length` and `size_field` (setting either as
+well throws "A refinement criterion replaces max_edge_length and
+size_field"); combine them in the criterion with `constant_size_criterion`,
+`size_field_criterion` and `strictest_of`. A criterion equal to a built-in
+target (`RefinementCriterion{constant_size_criterion(h)}`) gives the same
+mesh bit for bit. It must be deterministic. Marked refinement enforces it
+after the marked bisections. Like the size field it is request-time and not
+written to `.pde2d` files.
 
 | Boundary treatment | During size refinement |
 | --- | --- |
