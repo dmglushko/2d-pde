@@ -7,7 +7,7 @@ foreach(name IN ITEMS
     custom_integrator dirichlet_time_derivatives error_diagnostics expression
     moving_convergence nodal_state oblique_conditions p1_kernels
     parallel_assembly prepared_assembly prepared_stationary quadrature
-    reporting reusable_evolution solver solver_backends symbol_contexts
-    time_grid transient)
+    reference_problems reporting reusable_evolution run_records solver
+    solver_backends symbol_contexts time_grid transient)
   pde2d_add_cpp_test(NAME fem_${name} SOURCE ${name}.cpp FEM)
 endforeach()

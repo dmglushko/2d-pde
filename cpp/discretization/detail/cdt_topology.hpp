@@ -55,6 +55,9 @@ public:
   std::priority_queue<SizeEntry> sizes;
   double target = 0;
   std::set<std::pair<double, double>> coordinates;
+  // Work counters of the meshing call (MeshRunRecord::work), when set.
+  // Counting never changes the mesh.
+  MeshWork *work = nullptr;
   void queue_size(Edge e) {
     auto g = ++generation;
     generations[e] = g;
@@ -160,6 +163,8 @@ public:
         continue;
       if (++flips > limit)
         throw std::runtime_error("Delaunay legalization work budget exhausted");
+      if (work)
+        ++work->edge_flips;
       const auto own = owners.at(edge);
       auto i = *own.begin(), j = *std::next(own.begin()), c = opposite(i, edge),
            d = opposite(j, edge);

@@ -14,10 +14,16 @@
 // observer, work/timing accounting and the checks of what integrators
 // return. The numerical recurrence of each scheme lives in
 // time_integration.hpp and the step sequence in time_grid.hpp.
+// Evolution::record (RunRecord, record.hpp) holds the options and time
+// settings that ran, the integrator's name, workload, work, input
+// fingerprints (mesh, problem, initial fields) and versions.
+#include "discretization/mesh_fingerprint.hpp"
 #include "fem/assembly.hpp"
 #include "fem/constraints.hpp"
+#include "fem/fingerprint.hpp"
 #include "fem/interpolation.hpp"
 #include "fem/prepared_linear_solver.hpp"
+#include "fem/record.hpp"
 #include "fem/solver.hpp"
 #include "fem/time_grid.hpp"
 #include "fem/time_integration.hpp"
@@ -58,25 +64,15 @@ struct TimeOptions {
   // Called for every time stamp, retained or not.
   std::function<void(const Frame &)> observer{};
 };
-struct EvolutionMetadata {
-  // Selected policy, not an observation of actual OpenMP team sizes. Zero
-  // threads delegates the choice to the runtime; small loops may stay serial.
-  pde2d::ExecutionOptions execution;
-  bool openmp_available = false;
-  std::size_t nodes = 0, elements = 0, boundary_edges = 0;
-  int quadrature_degree = 2;
-  // TimeOptions::method, and the name of the integrator that ran (a user
-  // integrator's name() when TimeOptions::integrator is set).
-  TimeMethod method = TimeMethod::BackwardEuler;
-  std::string integrator{};
-  SolverOptions solver;
-  double start = 0, end = 0, step = 0;
-};
 struct Evolution {
   std::vector<Frame> frames;
   std::vector<SolverReport> reports;
   EvolutionTimings timings;
-  EvolutionMetadata metadata;
+  // What ran (record.hpp): options, time settings and the integrator's name
+  // (a user integrator's name() when TimeOptions::integrator is set),
+  // workload, work, fingerprints and versions. record.assembly.execution is
+  // the selected policy, not an observation of actual OpenMP team sizes.
+  RunRecord record;
 };
 
 namespace evolution_detail {
@@ -103,6 +99,8 @@ inline Vector solve_step(const SparseMatrix &a, const Vector &b,
   }();
   result.timings.solver += solution.report.timings;
   ++result.timings.linear_solves;
+  result.record.work.solver_iterations +=
+      record_detail::iterations(solution.report);
   if (!solution.report.converged)
     throw std::runtime_error("Evolution solve: " + solution.report.message);
   if (store_report)
@@ -123,6 +121,43 @@ inline void check_state(const IntegratorState &state, Eigen::Index nodes,
                              phase);
 }
 
+// Complete result.record once the evolution has finished (the solve
+// iterations were summed by solve_step).
+inline void record(Evolution &result, const discretization::TriangleMesh &mesh,
+                   const Problem &problem, const InitialConditions &initial,
+                   const TimeOptions &options,
+                   const TimeIntegrator &integrator) {
+  auto &r = result.record;
+  const auto &t = result.timings;
+  r.assembly = options.assembly;
+  r.solver = options.solver;
+  r.linear_solver = record_detail::linear_solver(options.solver);
+  r.time =
+      TimeRecord{options.method,
+                 {integrator.name(), static_cast<bool>(options.integrator)},
+                 options.start,
+                 options.end,
+                 options.step,
+                 options.frame_stride,
+                 options.store_reports,
+                 static_cast<bool>(options.observer)};
+  r.openmp_available = pde2d::openmp_available();
+  r.workload = record_detail::workload(mesh);
+  r.work.assembly_calls = t.assembly_calls;
+  r.work.linear_solves = t.linear_solves;
+  r.work.solver_preparations = t.solver.preparations;
+  r.work.solver_reuses = t.solver_reuses;
+  r.work.time_steps = t.time_steps;
+  const auto field = [](const Field &f) {
+    return FieldRecord{field_kind(f), field_fingerprint(f)};
+  };
+  r.initial = InitialRecord{field(initial.value), std::nullopt};
+  if (initial.velocity)
+    r.initial->velocity = field(*initial.velocity);
+  r.mesh_fingerprint = discretization::mesh_fingerprint(mesh);
+  r.problem_fingerprint = problem_fingerprint(problem);
+  r.timings = {t.total_seconds, t.assembly_seconds, t.solver_seconds};
+}
 } // namespace evolution_detail
 
 inline Evolution evolve(const discretization::TriangleMesh &mesh,
@@ -138,18 +173,6 @@ inline Evolution evolve(const discretization::TriangleMesh &mesh,
     throw std::invalid_argument(
         "Time integrator factory returned no integrator");
   Evolution result;
-  result.metadata = {options.assembly.execution,
-                     pde2d::openmp_available(),
-                     mesh.nodes.size(),
-                     mesh.elements.size(),
-                     mesh.boundary_edges.size(),
-                     options.assembly.quadrature_degree,
-                     options.method,
-                     integrator->name(),
-                     options.solver,
-                     options.start,
-                     options.end,
-                     options.step};
   if (options.frame_stride == 0)
     throw std::invalid_argument("Frame stride must be positive");
   solver_detail::validate(options.solver);
@@ -234,6 +257,8 @@ inline Evolution evolve(const discretization::TriangleMesh &mesh,
       0., result.timings.total_seconds - result.timings.assembly_seconds -
               result.timings.constraints_seconds -
               result.timings.solver_seconds - result.timings.observer_seconds);
+  evolution_detail::record(result, mesh, problem, initial, options,
+                           *integrator);
   return result;
 }
 } // namespace pde2d::fem

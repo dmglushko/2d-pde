@@ -159,12 +159,16 @@ void theta_method() {
   for (std::size_t k = 0; k < custom.frames.size(); ++k)
     pde2d_test::near_vector(custom.frames[k].values, expected.frames[k].values,
                             1e-12);
-  check(custom.metadata.integrator == "Theta", "Custom integrator name");
+  check(custom.record.time->integrator.name == "Theta" &&
+            custom.record.time->integrator.user_supplied &&
+            !custom.record.replayable(),
+        "Custom integrator name");
   std::ostringstream text;
   write_report(text, custom);
   check(text.str().find("method=Theta") != std::string::npos,
         "Report lost the integrator name");
-  check(expected.metadata.integrator == "BackwardEuler",
+  check(expected.record.time->integrator.name == "BackwardEuler" &&
+            expected.record.replayable(),
         "Built-in integrator name");
 }
 
@@ -279,7 +283,7 @@ void stage_assembly_service() {
   // start_dirichlet requests in Midpoint::start().
   check(e.timings.assembly_calls == 2 * e.timings.time_steps + 3,
         "Stage assemblies must be counted");
-  check(e.metadata.integrator == "Midpoint", "Integrator name");
+  check(e.record.time->integrator.name == "Midpoint", "Integrator name");
 }
 
 void invalid_integrators() {

@@ -86,19 +86,22 @@ void reports() {
             w.solver.rhs_solves == w.linear_solves &&
             w.solver.preparations + w.solver_reuses == w.linear_solves,
         "Aggregates lost with store_reports=false");
-  const auto &m = evolution.metadata;
-  check(m.nodes == mesh.nodes.size() && m.elements == mesh.elements.size() &&
-            m.boundary_edges == mesh.boundary_edges.size() &&
-            m.quadrature_degree == 2 && m.start == 0 && m.end == options.end &&
-            m.step == options.step && m.method == options.method &&
-            m.integrator == time_method_name(options.method) &&
+  const auto &m = evolution.record;
+  check(m.workload.nodes == mesh.nodes.size() &&
+            m.workload.elements == mesh.elements.size() &&
+            m.workload.boundary_edges == mesh.boundary_edges.size() &&
+            m.assembly.quadrature_degree == 2 && m.time && m.time->start == 0 &&
+            m.time->end == options.end && m.time->step == options.step &&
+            m.time->method == options.method &&
+            m.time->integrator.name == time_method_name(options.method) &&
+            !m.time->integrator.user_supplied &&
             m.solver.method == options.solver.method &&
             m.solver.validation == options.solver.validation,
-        "Evolution workload metadata mismatch");
-  check(m.execution.backend == pde2d::ExecutionBackend::Serial &&
-            m.execution.threads == 0 &&
+        "Evolution workload record mismatch");
+  check(m.assembly.execution.backend == pde2d::ExecutionBackend::Serial &&
+            m.assembly.execution.threads == 0 &&
             m.openmp_available == pde2d::openmp_available(),
-        "Default execution metadata mismatch");
+        "Default execution record mismatch");
   const auto text = formatted(evolution);
   for (const char *token :
        {"FEM evolution:", "selected_backend=Serial", "requested_threads=0",
@@ -152,11 +155,11 @@ void reports() {
   if (pde2d::openmp_available()) {
     options.assembly.execution.backend = pde2d::ExecutionBackend::OpenMP;
     options.assembly.execution.threads = 2;
-    // Force serial loops despite selected OpenMP; metadata must record policy.
+    // Force serial loops despite selected OpenMP; the record keeps the policy.
     options.assembly.execution.min_parallel_size = 1000000;
     auto parallel = evolve(mesh, p, {0, 0}, options);
     accounting(parallel);
-    const auto &selected = parallel.metadata.execution;
+    const auto &selected = parallel.record.assembly.execution;
     check(selected.threads == 2 && selected.min_parallel_size == 1000000 &&
               selected.backend == pde2d::ExecutionBackend::OpenMP,
           "Selected policy lost");

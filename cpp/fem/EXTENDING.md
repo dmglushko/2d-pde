@@ -9,7 +9,8 @@ preparation, deterministic serial scatter, explicit exceptions.
 A user scheme needs no library change. Implement `TimeIntegrator` in your
 own code and pass a factory: `options.integrator = [] { return
 std::make_unique<MyScheme>(); };`. `evolve()` calls it once per evolution and
-ignores `options.method`; reports and `Evolution::metadata.integrator` use
+ignores `options.method`; reports and `Evolution::record.time->integrator`
+(with `user_supplied` set, so the record is not replayable) use
 `name()` (override it; the default is "Custom", and `method()` defaults to
 `TimeMethod::Custom`). See `tests/fem/custom_integrator.cpp`.
 
@@ -85,6 +86,9 @@ Eigen backends in `detail/eigen_backends.hpp`. A backend owns only
   change.
 - A new `SolverOptions` field needs nothing else for reuse: `operator==` is
   defaulted, so `matches()` compares every field.
+  Add its key to the solver object of `record_json.hpp` (a new key keeps
+  `run_record_schema_version`). A user backend is recorded by its factory's
+  `name()` with `user_supplied`; it cannot be rebuilt from a record.
 
 ## A new interior term
 
@@ -157,3 +161,36 @@ reduction), `quadrature.hpp`, `system.hpp` (produce an `AssembledSystem`),
 assembly seam there. Mesh files
 are fixed at `ORDER 1` (docs/formats/pde2d-mesh.md); a higher-order mesh
 needs a new format version.
+
+## Run records and reference problems
+
+`RunRecord` (`record.hpp`) is filled where the result is made:
+`PreparedStationary::record` (`solver.hpp`, per solve; fingerprints
+computed once in the constructor) and `evolution_detail::record`
+(`evolution.hpp`, after the last step; solve iterations are summed in
+`solve_step`). A new option or counter is a field in `RunRecord` (or
+`WorkRecord`, `TimeRecord`, ...), set in those two places, a key in
+`record_json.hpp` and a line in the "Run records" key table of
+docs/fem/README.md. Rules:
+
+- Records observe only: no decision may read them, no user callback
+  (coefficients, observers, factories) is called again to fill them, and
+  fingerprints are one O(n) pass. Results are bit-identical with and
+  without them.
+- A new `Problem` field enters `problem_fingerprint` (`fingerprint.hpp`)
+  under a new label; a changed encoding needs a new tag
+  (`pde2d.problem.v2`), since stored records compare fingerprints.
+- Adding a JSON key keeps the schema version; renaming or removing one, or
+  changing a value's meaning, increments it (`run_record_schema_version`,
+  `comparison_schema_version`).
+- Wall clock goes under a `timings` object and solve results under an
+  `outcome` object: `diff_records` skips both by default.
+
+A new reference problem (`reference/problems.hpp`) is a function returning
+a `ReferenceProblem` with a stable `name`, appended to
+`reference_problems()`. Its exact solution must satisfy the strong form and
+every boundary condition; `tests/fem/reference_problems.cpp` checks that
+independently (finite differences of the evaluated solution) for every
+problem in the list, and checks that it converges under `compare` with a
+halved mesh size. `compare` only runs named configurations; it does not
+choose one.

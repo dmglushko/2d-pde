@@ -13,9 +13,9 @@ test).
 
 | Path | Contents |
 | --- | --- |
-| `cpp/execution.hpp` | `ExecutionOptions`, `parallel_for` (serial/OpenMP) |
-| `cpp/discretization/` | geometry, curves, meshing, refinement, mesh IO: [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | problems, assembly, solvers, time integration: [README](cpp/fem/README.md), [EXTENDING](cpp/fem/EXTENDING.md) |
+| `cpp/*.hpp` (core) | `execution.hpp` (`ExecutionOptions`, `parallel_for`), `json.hpp` (record documents, `diff_records`), `provenance.hpp` (`Fingerprint`, `library_version`): [README](cpp/README.md) |
+| `cpp/discretization/` | geometry, curves, meshing, refinement, mesh IO, mesh run records: [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
+| `cpp/fem/` | problems, assembly, solvers, time integration, run records, reference problems (`reference/`): [README](cpp/fem/README.md), [EXTENDING](cpp/fem/EXTENDING.md) |
 | `tests/` | one directory per module, `headers/` (standalone headers), `tools/`, `support/` (shared helpers) |
 | `examples/` | runnable programs (`fem/minimal.cpp` is the shortest FEM program); built as CTest smoke tests |
 | `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
@@ -82,9 +82,19 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
   `velocity`.
 - **Not yet implemented, on purpose:** problem-aware preprocessing and
   adaptive postprocessing (docs/vision.md goals 2 and 3) are left to the
-  project owner. Do not add analysis, plans, decision records, run records,
+  project owner. Do not add analysis, plans, decision records, planners,
   error estimators, marking, adaptive drivers, size fields or step
-  controllers unless a task asks for them.
+  controllers unless a task asks for them. What exists for that work:
+  run records (`MeshResult::record`, `RunRecord`), their JSON and
+  `diff_records`, and reference problems with `compare` of named
+  configurations (no automatic choice).
+- **Records only observe:** recording must never change a mesh or a
+  solution (bit-identical with and without), never re-evaluate user
+  callbacks, and stay O(n) (one fingerprint/quality pass). New counters go
+  into `MeshWork`/`WorkRecord`; new JSON keys keep the schema version,
+  renamed or removed keys increment it. The `Fingerprint` encodings are
+  pinned (`tests/discretization/mesh_fingerprint.cpp`): change them only with
+  a new encoding tag.
 - **Boundaries have loops:** an outer loop plus holes (`BoundaryCurve::loop`,
   `Boundary::holes`, `boundary_loops(mesh)`). Walk and close each loop on its
   own, outer first; meshes with holes are `.pde2d` version 5, one-loop meshes
@@ -98,7 +108,8 @@ to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
 - The `header_standalone` (syntax-only, at build time) and
   `docs_header_map` checks glob every public header (everything but
   `detail/`); a header in a public subdirectory is named in the module
-  README with its relative path.
+  README with its relative path (e.g. `reference/compare.hpp`), and the
+  top-level core headers in `cpp/README.md`.
 - Put a new test in the module directory and register it in that directory's
   `CMakeLists.txt` with `pde2d_add_cpp_test(NAME ... SOURCE ... [FEM] [LIBXML2] ...)`.
   White-box tests of `*_detail` code go in `tests/<module>/internal/` with an

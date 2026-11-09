@@ -329,8 +329,8 @@ Each scheme is a `TimeIntegrator` (`fem/time_integration.hpp`). Step stamps
 come from `TimeGrid` (`fem/time_grid.hpp`). A user scheme runs through
 `evolve` without library changes: set `time.integrator=[]{ return
 std::make_unique<MyIntegrator>(); };` (called once per evolution; `method` is
-then ignored, and reports and `Evolution::metadata.integrator` use
-`TimeIntegrator::name()`). See
+then ignored, and reports and `Evolution::record.time->integrator` use
+`TimeIntegrator::name()`, marked `user_supplied`). See
 [cpp/fem/EXTENDING.md](../../cpp/fem/EXTENDING.md).
 
 Backward Euler and Crank–Nicolson handle first-order evolution. Newmark uses
@@ -433,12 +433,108 @@ initial acceleration solves for Newmark, although per-step reports do not.
 Observers still receive the initial state and every accepted step independently
 of frame stride; callback exceptions propagate to the caller.
 
-`Evolution::metadata` records mesh node, element and boundary-edge counts,
-quadrature degree, time method/interval/step, the name of the integrator that
-ran, solver options, OpenMP build availability, and the selected `execution`
-policy. Its `execution.threads` is
-the requested count (zero means runtime default), **not** measured team size.
+`Evolution::record` (see [Run records](#run-records)) holds mesh node,
+element and boundary-edge counts, the assembly options with the selected
+`execution` policy, time method/interval/step, the name of the integrator
+that ran, solver options and OpenMP build availability.
+`record.assembly.execution.threads` is the requested count (zero means runtime default), **not** measured team size.
 Small loops, nested execution and runtime limits may cause serial or smaller
 teams. The formatter labels this distinction explicitly. The default selected
 backend remains serial in both builds. These timings measure elapsed time,
 not CPU consumption, and overlapping application activity can affect them.
+
+## Run records
+
+Every `StationarySolution` (`solve_stationary`, `PreparedStationary::solve`)
+and every `Evolution` carries `record`, a `RunRecord` (`fem/record.hpp`):
+what ran, on which inputs, with how much work. Inputs are identified by
+fingerprints, not stored, and options are the ones that ran, so a record
+replays a run with built-in strategies:
+
+```cpp
+#include "fem/record_json.hpp"
+
+auto s = solve_stationary(mesh_result.mesh, problem, assembly, solver);
+attach_mesh_record(s.record, mesh_result);  // where the mesh came from
+write_json(std::cout, s.record);            // schema "pde2d.run_record"
+auto again = solve_stationary(mesh_result.mesh, problem, s.record.assembly,
+                              s.record.solver);   // bit-identical
+for (const auto &d : diff_records(s.record, other.record))
+  std::cout << d.path << ": " << d.left << " -> " << d.right << '\n';
+```
+
+User strategies are factories and are recorded by name only: a
+`SolverOptions::backend` by its factory's `name()`, a
+`TimeOptions::integrator` by the integrator's `name()`, each with
+`user_supplied: true`; `replayable()` (JSON `replayable`) is then false.
+Recording only observes (counters the run already keeps, one O(n)
+fingerprint pass, no user callback is called again), so results are
+bit-identical with and without it.
+
+| JSON key | Content |
+| --- | --- |
+| `schema`, `schema_version` | `"pde2d.run_record"`, `1` |
+| `kind` | `"stationary"` or `"evolution"` |
+| `versions` | `pde2d` (CMake project version), `git_sha` (configure time), `eigen`, `symengine` |
+| `replayable` | no user-supplied strategy |
+| `problem.fingerprint` | `problem_fingerprint`: every equation and condition field (canonical SymEngine text), assignments in order |
+| `mesh.fingerprint`, `mesh.run` | `mesh_fingerprint` of the mesh; the attached mesh run record (`pde2d.mesh_run_record` document) or null |
+| `workload` | `nodes`, `elements`, `boundary_edges` |
+| `initial` | evolutions: `value`, `velocity` (null when omitted), each `{kind: "expression" or "nodal", fingerprint}`; null for stationary runs |
+| `options.assembly` | `quadrature_degree`, `boundary_tolerance`, `execution` {`backend`, `threads`, `min_parallel_size`} (the selected policy) |
+| `options.solver` | `name`, `user_supplied`, `method`, `relative_tolerance`, `absolute_tolerance`, `max_iterations`, `restart`, `validation`, `preconditioner` |
+| `options.time` | evolutions: `method`, `integrator` {`name`, `user_supplied`}, `start`, `end`, `step`, `frame_stride`, `store_reports`, `observer` (set or not); null for stationary runs |
+| `execution.openmp_available` | built with OpenMP |
+| `stationary` | stationary runs: `time`, `initial_guess` (`None`/`Used`/`Ignored`), `guess` (field record of the vector as passed, or null), `outcome` {`iterations`, `converged`, `residual_norm`, `relative_residual`}; null for evolutions |
+| `work` | `assembly_calls`, `linear_solves`, `solver_preparations`, `solver_reuses`, `time_steps`, `solver_iterations` (summed) |
+| `timings` | `total_seconds`, `assembly_seconds`, `solver_seconds` |
+
+A stationary record describes one solve (`work.linear_solves == 1`;
+`solver_reuses == 1` when `PreparedStationary` reused the factorization).
+Numbers are written in the classic locale with `max_digits10` digits, so a
+parsed record holds the run's doubles exactly and re-serializes byte for
+byte; non-finite values are the strings `"nan"`, `"inf"`, `"-inf"`.
+`read_run_record_json` checks schema and version. `diff_records` skips
+`timings` and `outcome` objects by default (`RecordDiffOptions`): two runs
+of the same inputs give no differences, and one changed coefficient changes
+only `problem.fingerprint`. Adding a key keeps the schema version; renaming
+or removing one increments it. `write_report(out, record)` prints a short
+summary.
+
+## Reference problems and comparisons
+
+`fem/reference/problems.hpp` holds seven problems with exact solutions
+(`reference_problems()`, `find_reference_problem(name)`):
+`l_shape_corner` (r^(2/3) corner singularity), `boundary_layer`
+(convection–diffusion layers of width 0.05), `variable_anisotropic_diffusion`
+(mixed term, conormal flux conditions), `oblique_square` (oblique
+derivative condition), `annulus_mixed` (hole with a Robin condition),
+`heat_moving_peak` (time-dependent Dirichlet data) and `wave_standing`
+(Newmark with an initial velocity). Each holds its geometry, `Problem`,
+exact solution, suggested `MeshOptions`, notes and, when transient,
+initial conditions and a time window.
+
+`fem/reference/compare.hpp` runs named configurations on one mesh of a
+reference problem:
+
+```cpp
+auto r = find_reference_problem("annulus_mixed");
+SolverOptions cg;
+cg.method = LinearSolver::ConjugateGradient;
+auto c = compare(r, r.mesh, {{"LU", {}, {}}, {"CG", {}, cg}});
+c.entries[1].errors.l2;                 // against the exact solution
+c.entries[1].record.work.solver_iterations;
+write_json(std::cout, c);               // schema "pde2d.comparison"
+```
+
+A `ComparisonConfiguration` is `{name, AssemblyOptions, SolverOptions,
+optional TimeOptions}`. Transient problems need time options whose
+`start`/`end` equal the reference window (their assembly and solver options
+are replaced by the configuration's; only the last frame is kept);
+stationary ones reject them. The mesh must meet its size target unless
+`ComparisonOptions::accept_unsatisfied`. Each entry holds the run's
+`RunRecord` (with the mesh run record attached) and its L2 and
+H1-seminorm errors at the end of the window. The document has `schema`,
+`schema_version`, `reference`, `notes` and `entries` [{`name`, `errors`
+{`l2`, `h1_seminorm`, `time`}, `record`}]; `read_comparison_json` checks
+it. Choosing a configuration is left to the caller.

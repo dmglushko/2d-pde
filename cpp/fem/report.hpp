@@ -2,6 +2,7 @@
 // Text summaries of solves and evolutions. Nothing in the library prints
 // unless one of these is called.
 #include "fem/evolution.hpp"
+#include "fem/record.hpp"
 #include "fem/solver.hpp"
 #include <iomanip>
 #include <locale>
@@ -56,22 +57,26 @@ inline std::ostream &write_report(std::ostream &out,
 inline std::ostream &write_report(std::ostream &out,
                                   const Evolution &evolution) {
   return report_detail::write(out, [&](std::ostream &s) {
-    const auto &m = evolution.metadata;
+    const auto &r = evolution.record;
+    const auto time = r.time.value_or(TimeRecord{});
+    const auto &execution = r.assembly.execution;
     const auto &t = evolution.timings;
-    s << "FEM evolution: method=" << m.integrator
-      << " solver=" << linear_solver_name(m.solver)
-      << " preconditioner=" << preconditioner_name(m.solver.preconditioner)
-      << " validation=" << solver_validation_name(m.solver.validation) << '\n'
+    s << "FEM evolution: method=" << time.integrator.name
+      << " solver=" << linear_solver_name(r.solver)
+      << " preconditioner=" << preconditioner_name(r.solver.preconditioner)
+      << " validation=" << solver_validation_name(r.solver.validation) << '\n'
       << "  execution: selected_backend="
-      << report_detail::backend_name(m.execution.backend)
-      << " requested_threads=" << m.execution.threads
+      << report_detail::backend_name(execution.backend)
+      << " requested_threads=" << execution.threads
       << " (0=runtime default; actual team size not measured)"
-      << " min_parallel_size=" << m.execution.min_parallel_size
-      << " openmp_available=" << m.openmp_available << '\n'
-      << "  workload: nodes=" << m.nodes << " elements=" << m.elements
-      << " boundary_edges=" << m.boundary_edges
-      << " quadrature_degree=" << m.quadrature_degree << " start=" << m.start
-      << " end=" << m.end << " step=" << m.step << '\n'
+      << " min_parallel_size=" << execution.min_parallel_size
+      << " openmp_available=" << r.openmp_available << '\n'
+      << "  workload: nodes=" << r.workload.nodes
+      << " elements=" << r.workload.elements
+      << " boundary_edges=" << r.workload.boundary_edges
+      << " quadrature_degree=" << r.assembly.quadrature_degree
+      << " start=" << time.start << " end=" << time.end << " step=" << time.step
+      << '\n'
       << "  work: time_steps=" << t.time_steps
       << " assembly_calls=" << t.assembly_calls
       << " linear_solves=" << t.linear_solves
@@ -83,6 +88,34 @@ inline std::ostream &write_report(std::ostream &out,
       << " solver=" << t.solver_seconds << " observer=" << t.observer_seconds
       << " other=" << t.other_seconds << " total=" << t.total_seconds << '\n';
     report_detail::solver_timings(s, t.solver);
+  });
+}
+// What a record identifies: kind, replayability, strategies, fingerprints,
+// versions and work (record_json.hpp writes everything).
+inline std::ostream &write_report(std::ostream &out, const RunRecord &r) {
+  return report_detail::write(out, [&](std::ostream &s) {
+    s << "FEM run record: kind=" << (r.time ? "evolution" : "stationary")
+      << " replayable=" << r.replayable() << '\n'
+      << "  strategies: linear_solver=" << r.linear_solver.name
+      << " user_supplied=" << r.linear_solver.user_supplied;
+    if (r.time)
+      s << " time_integrator=" << r.time->integrator.name
+        << " user_supplied=" << r.time->integrator.user_supplied;
+    s << '\n'
+      << "  inputs: mesh=" << r.mesh_fingerprint
+      << " problem=" << r.problem_fingerprint
+      << " mesh_run=" << (r.mesh_run ? "attached" : "none") << '\n'
+      << "  versions: pde2d=" << r.versions.library.version
+      << " git_sha=" << r.versions.library.git_sha
+      << " eigen=" << r.versions.eigen << " symengine=" << r.versions.symengine
+      << '\n'
+      << "  work: assembly_calls=" << r.work.assembly_calls
+      << " linear_solves=" << r.work.linear_solves
+      << " solver_preparations=" << r.work.solver_preparations
+      << " solver_reuses=" << r.work.solver_reuses
+      << " time_steps=" << r.work.time_steps
+      << " solver_iterations=" << r.work.solver_iterations
+      << " total_seconds=" << r.timings.total_seconds << '\n';
   });
 }
 } // namespace pde2d::fem

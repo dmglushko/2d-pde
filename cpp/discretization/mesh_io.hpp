@@ -2,6 +2,7 @@
 
 #include "boundary_context.hpp"
 #include "curve_io.hpp"
+#include "mesh_record.hpp"
 #include "mesh_types.hpp"
 #include "mesh_validation.hpp"
 #include "triangulate.hpp"
@@ -405,7 +406,11 @@ inline void export_mesh(const TriangleMesh &mesh, const std::string &path) {
 
 // Load a mesh saved by export_mesh. Rejects truncated, malformed, unsupported,
 // or structurally inconsistent data before returning it to the caller.
+// The result's record (MeshResult::record) says MeshOperation::Import, with
+// the fingerprint, the stored options and the quality of the imported mesh;
+// files store no work counters, so they are zero.
 [[nodiscard]] inline MeshResult import_mesh_result(const std::string &path) {
+  const auto started = mesh_record_detail::Clock::now();
   std::ifstream in(path);
   if (!in)
     throw std::runtime_error("Cannot open mesh file: " + path);
@@ -510,6 +515,8 @@ inline void export_mesh(const TriangleMesh &mesh, const std::string &path) {
   }
   if (has_result)
     detail::validate_result(result);
+  const double seconds = mesh_record_detail::seconds_since(started);
+  finish_mesh_run_record(result, MeshOperation::Import, {}, seconds);
   return result;
 }
 

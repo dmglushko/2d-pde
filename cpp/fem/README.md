@@ -38,10 +38,14 @@ evolve(mesh, problem, InitialConditions, TimeOptions)            evolution.hpp
    │    IntegratorServices: solve, start_dirichlet, assemble(t)
    └─ initial fields: Expr or nodal Vector      interpolation.hpp (Field)
    ▼
-StationarySolution {values, report}             solver.hpp
-Evolution {frames, reports, timings, metadata}  evolution.hpp
+StationarySolution {values, report, record}     solver.hpp
+Evolution {frames, reports, timings, record}    evolution.hpp
+   → RunRecord (options, work, fingerprints)    record.hpp, fingerprint.hpp
+   → write_json(), diff_records()               record_json.hpp
    → write_report()                             report.hpp, timing.hpp
 L2 / H1 errors against exact solutions          error_norms.hpp
+Reference problems, named-configuration         reference/problems.hpp,
+  comparisons                                   reference/compare.hpp
 ```
 
 `fem.hpp` includes everything. Parallel loops use `pde2d::parallel_for`
@@ -71,17 +75,22 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 | `prepared_linear_solver.hpp` | `PreparedLinearSolver` (validation, rank check, backend setup, true-residual check, reuse via `matches()`), `solve_linear` | linear_solver_types, constraints, detail/eigen_backends |
 | `detail/eigen_backends.hpp` | private: built-in Eigen backends (SparseLU, CG, GMRES and their preconditioners), `with_builtin` (the only dispatch on `LinearSolver`), option validation, backend creation | linear_solver_types |
 | `linear_solver.hpp` | Umbrella: includes `linear_solver_types.hpp`, `constraints.hpp` and `prepared_linear_solver.hpp` (include it for `solve_linear`) | the three |
-| `solver.hpp` | `PreparedStationary` (prepared assembly + reused linear solver, `StationaryStatistics`, optional initial guess), `StationarySolution`, `solve_stationary` wrappers | assembly, constraints, prepared_linear_solver |
+| `solver.hpp` | `PreparedStationary` (prepared assembly + reused linear solver, `StationaryStatistics`, optional initial guess), `StationarySolution` (`LinearSolution` + `RunRecord record`), `solve_stationary` wrappers | assembly, constraints, prepared_linear_solver, record, fingerprint |
 | `interpolation.hpp` | nodal interpolation of a field (rejects normals); `Field` (Expr or nodal Vector), `validate_field`, `nodal_values` | system, expression |
 | `time_grid.hpp` | time stamps and step sizes | — |
 | `time_integrator.hpp` | `TimeMethod`, `TimeIntegrator` interface, `IntegratorState`, `IntegratorServices`, `impose_compatible`, `TimeIntegratorFactory` | system |
 | `detail/time_schemes/{backward_euler,crank_nicolson,newmark}.hpp` | one unit per built-in `TimeMethod`: `method`, `name`, `order`, `Integrator` (the public class, e.g. `NewmarkIntegrator`), `make()`; the classes take `method()`/`name()`/`order()` from their unit (`BuiltinScheme`) | time_schemes/interface |
 | `detail/time_schemes/{interface,schemes}.hpp` | private: the `TimeSchemeUnit` concept, `BuiltinScheme`, `FirstOrder`; the unit list `Units` with a `static_assert` that every `TimeMethod` before `Custom` has its unit in order, and `with_time_method` (the only dispatch on `TimeMethod`) | time_integrator |
 | `time_integration.hpp` | the built-in schemes and `time_method_name`, `time_method_order`, `make_time_integrator`, all read from the units | time_integrator, detail/time_schemes |
-| `evolution.hpp` | `evolve()` driver, `TimeOptions` (method or user `integrator` factory, interval, step, assembly/solver options, output), `InitialConditions`, frames, observer, accounting, integrator output checks, `EvolutionMetadata` | all above |
+| `evolution.hpp` | `evolve()` driver, `TimeOptions` (method or user `integrator` factory, interval, step, assembly/solver options, output), `InitialConditions`, frames, observer, accounting, integrator output checks; `Evolution::record` (`RunRecord`) | all above |
 | `timing.hpp` | timing structs, `timing::Accumulate` | — |
-| `report.hpp` | text summaries of solves and evolutions | evolution, solver |
+| `report.hpp` | text summaries of solves, evolutions and run records | evolution, solver, record |
 | `error_norms.hpp` | prepared L2/H1 error norms (rejects normals) | system, quadrature |
+| `fingerprint.hpp` | `problem_fingerprint` (every equation and condition field, assignments in order), `field_fingerprint`, `field_kind`, `expression_text` (canonical SymEngine text) | problem, interpolation, `cpp/provenance.hpp` |
+| `record.hpp` | `RunRecord` (options that ran, `StrategyRecord` name + `user_supplied`, `TimeRecord`, workload, `WorkRecord`, `StationaryRecord`, `InitialRecord`, fingerprints, `VersionRecord`, `TimingRecord`, `replayable()`), `attach_mesh_record` | assembly, linear_solver_types, time_integrator, `discretization/mesh_types.hpp` |
+| `record_json.hpp` | `to_json`/`write_json(RunRecord)` (schema `pde2d.run_record` v1), `read_run_record_json`, `diff_records(RunRecord, RunRecord)` | record, `cpp/json.hpp`, `discretization/mesh_record_json.hpp` |
+| `reference/problems.hpp` | `ReferenceProblem`, `ReferenceTransient`; seven problems with exact solutions (`reference_l_shape_corner`, `reference_boundary_layer`, `reference_variable_anisotropic`, `reference_oblique_square`, `reference_annulus_mixed`, `reference_heat_moving_peak`, `reference_wave_standing`), `reference_problems`, `find_reference_problem` | problem, evolution, `discretization/geometry.hpp` |
+| `reference/compare.hpp` | `compare(reference, MeshOptions, {ComparisonConfiguration})` → `Comparison` (per entry: `RunRecord`, L2/H1 `ComparisonErrors`); JSON schema `pde2d.comparison` v1, `read_comparison_json` | reference/problems, solver, evolution, error_norms, record_json |
 
 ## Invariants
 
@@ -116,6 +125,10 @@ from `cpp/execution.hpp`; meshes are `discretization::TriangleMesh`.
 - **Normals only on boundaries.** `nx`, `ny` are bound in boundary
   expressions; interior coefficients, interpolated and initial fields and
   exact solutions are checked with `require_symbols(..., field_symbols, ...)`.
+- **Records only observe.** Run records are filled from counters and
+  options the solve already has, plus O(n) fingerprints computed once per
+  solve (per `PreparedStationary`): no user callback is evaluated again and
+  no numerical result changes.
 - **The `header_standalone` test** parses every public header in its own
   translation unit (syntax only, at build time).
 

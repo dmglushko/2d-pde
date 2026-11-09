@@ -161,3 +161,24 @@ longer than the target makes the request impossible) and `split_boundary`.
 in `mesh_types.hpp`, its case in `validBoundaryTreatment` and
 `with_boundary_policy`, the format readers and viewer registry, and tests
 comparing it with the existing treatments.
+A new treatment also gets its name in `boundary_treatment_name` (mesh run
+records write it).
+
+## Mesh run records
+
+Every meshing entry point returns a `MeshResult` whose `record` is
+completed by `mesh_detail::recorded` (`triangulate.hpp`) or, for an
+import, `finish_mesh_run_record` (`mesh_record.hpp`). A new operation (an
+entry point that returns a new mesh) needs a `MeshOperation` value with its
+stable `mesh_operation_name` and the same wrapping: take the start time,
+run the operation, then finish the record with the source mesh's
+fingerprint (empty when it creates a mesh). A new work counter goes into
+`MeshWork` and its JSON key into `mesh_record_json.hpp` (adding a key keeps
+`mesh_run_record_schema_version`; renaming or removing one increments it).
+Count next to the work: `refine_result` resets the record, the refinement
+loop points every `Topology` it creates at `result.record.work`
+(`Topology::work`, which counts flips) and `rebuild_curved` counts its
+rebuilds. Counting must never influence a decision of the algorithm:
+meshes are bit-identical with or without records. Test the relation the
+counter obeys (`tests/discretization/mesh_run_record.cpp`), not an exact
+number.

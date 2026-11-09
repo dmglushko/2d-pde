@@ -1,7 +1,9 @@
 #pragma once
 
 #include "curve_geometry.hpp"
+#include "provenance.hpp"
 #include <optional>
+#include <string>
 
 namespace pde2d::discretization {
 
@@ -53,6 +55,17 @@ inline const char *interior_algorithm_name(InteriorAlgorithm value) {
     return "EarClipping";
   case InteriorAlgorithm::ConstrainedDelaunay:
     return "ConstrainedDelaunay";
+  }
+  return "Unknown";
+}
+inline const char *boundary_treatment_name(BoundaryTreatment value) {
+  switch (value) {
+  case BoundaryTreatment::Fixed:
+    return "Fixed";
+  case BoundaryTreatment::SplitPolygonEdges:
+    return "SplitPolygonEdges";
+  case BoundaryTreatment::RefineOnCurves:
+    return "RefineOnCurves";
   }
   return "Unknown";
 }
@@ -116,10 +129,81 @@ struct MeshReport {
   std::size_t refinement_steps = 0;
   std::string message;
 };
+// What produced a MeshResult (MeshRunRecord::operation). Stable names:
+// mesh_operation_name (mesh run record JSON).
+enum class MeshOperation {
+  None, // a hand-built MeshResult: no meshing call filled the record
+  Generate,
+  Refine,
+  Subdivide,
+  Import
+};
+inline const char *mesh_operation_name(MeshOperation operation) {
+  switch (operation) {
+  case MeshOperation::None:
+    return "none";
+  case MeshOperation::Generate:
+    return "generate";
+  case MeshOperation::Refine:
+    return "refine";
+  case MeshOperation::Subdivide:
+    return "subdivide";
+  case MeshOperation::Import:
+    return "import";
+  }
+  return "invalid";
+}
+// Work counters of one meshing call. Counting never changes the mesh.
+struct MeshWork {
+  // Edge splits of the refinement loop (MeshReport::refinement_steps); each
+  // inserts one vertex, so inserted_vertices == refinement_steps.
+  std::size_t refinement_steps = 0, inserted_vertices = 0;
+  // Of those, splits of a boundary edge (chord or curve).
+  std::size_t boundary_splits = 0;
+  // Delaunay edge flips of every legalization, curved rebuilds included.
+  std::size_t edge_flips = 0;
+  // RefineOnCurves triangulation rebuilds, the interior vertices they
+  // reinserted and those they dropped (outside or on the updated boundary).
+  std::size_t curved_rebuilds = 0, reinserted_vertices = 0,
+              removed_vertices = 0;
+  bool operator==(const MeshWork &) const = default;
+};
+// Shape and size statistics of a mesh (mesh_quality, mesh_record.hpp).
+struct MeshQuality {
+  std::size_t nodes = 0, elements = 0, boundary_edges = 0;
+  // Interior angles in degrees, over every triangle (0 without triangles).
+  double min_angle_degrees = 0, max_angle_degrees = 0;
+  // Triangle edge lengths (0 without triangles).
+  double min_edge_length = 0, max_edge_length = 0;
+  // max_edge_length over RefinementOptions::max_edge_length; unset without
+  // a size target. At most 1 (to rounding) when the target was met.
+  std::optional<double> max_target_ratio{};
+  bool operator==(const MeshQuality &) const = default;
+};
+// The reproducibility record of the meshing call that produced a
+// MeshResult (MeshResult::record). Filled by generate_mesh, refine_mesh,
+// subdivide_mesh and import_mesh_result (mesh_record.hpp); serialized by
+// mesh_record_json.hpp; a FEM run record can carry it
+// (fem/record.hpp, attach_mesh_record). .pde2d files do not store it. Two
+// identical calls differ only in `total_seconds`.
+struct MeshRunRecord {
+  MeshOperation operation = MeshOperation::None;
+  // discretization::mesh_fingerprint of the produced mesh, and of the mesh
+  // that was refined or subdivided (empty for generate and import).
+  std::string fingerprint{}, source_fingerprint{};
+  MeshOptions options{};
+  pde2d::LibraryVersion library{};
+  MeshWork work{};
+  MeshQuality quality{};
+  // Wall-clock seconds of the call. Never reproducible.
+  double total_seconds = 0;
+};
 struct MeshResult {
   TriangleMesh mesh;
   std::optional<BoundaryContext> boundary_context;
   MeshOptions options{};
   MeshReport report{};
+  // What produced this result (MeshRunRecord).
+  MeshRunRecord record{};
 };
 } // namespace pde2d::discretization

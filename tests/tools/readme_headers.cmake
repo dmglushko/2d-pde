@@ -2,7 +2,8 @@
 # (any directory but detail/, which is private; a header in a public
 # subdirectory is named with its relative path, e.g. `sub/nested.hpp`) must
 # be named, in backticks, in its module README (`cpp/<module>/README.md`, the
-# header map). Fails with the list of missing headers.
+# header map); the top-level core headers (cpp/*.hpp) must be named in
+# cpp/README.md. Fails with the list of missing headers.
 #
 #   cmake -DPDE2D_ROOT=<repository> -P tests/tools/readme_headers.cmake
 if(NOT PDE2D_ROOT)
@@ -27,6 +28,21 @@ foreach(module IN ITEMS discretization fem)
       list(APPEND missing "cpp/${module}/${header}")
     endif()
   endforeach()
+endforeach()
+# Core headers at the top of cpp/ (not recursive): named in cpp/README.md.
+set(core_readme "${PDE2D_ROOT}/cpp/README.md")
+if(NOT EXISTS "${core_readme}")
+  message(FATAL_ERROR "Missing core README: cpp/README.md")
+endif()
+file(READ "${core_readme}" readme)
+file(GLOB headers RELATIVE "${PDE2D_ROOT}/cpp" "${PDE2D_ROOT}/cpp/*.hpp")
+list(SORT headers)
+foreach(header IN LISTS headers)
+  math(EXPR checked "${checked} + 1")
+  string(FIND "${readme}" "`${header}`" position)
+  if(position EQUAL -1)
+    list(APPEND missing "cpp/${header}")
+  endif()
 endforeach()
 if(checked EQUAL 0)
   message(FATAL_ERROR "No public headers found under ${PDE2D_ROOT}/cpp")

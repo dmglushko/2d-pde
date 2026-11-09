@@ -22,4 +22,7 @@
 #include "time_integration.hpp"
 #include "evolution.hpp"
 #include "error_norms.hpp"
+#include "fingerprint.hpp"
+#include "record.hpp"
+#include "record_json.hpp"
 #include "report.hpp"

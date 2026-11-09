@@ -1,6 +1,7 @@
 # Architecture
 
 Current structure of the project. Module-level detail lives next to the code:
+[cpp/README.md](../cpp/README.md) (core headers),
 [cpp/discretization/README.md](../cpp/discretization/README.md) and
 [cpp/fem/README.md](../cpp/fem/README.md). Where the project is heading is in
 [vision.md](vision.md).
@@ -18,7 +19,9 @@ Current structure of the project. Module-level detail lives next to the code:
                             │ TriangleMesh, validate_mesh_geometry
  cpp/discretization/ ───────┤  geometry, curves, meshing, mesh IO   core
                             │
- cpp/execution.hpp  ────────┘  ExecutionOptions, parallel_for (OpenMP opt-in)
+ cpp/*.hpp (core)   ────────┘  execution.hpp: ExecutionOptions, parallel_for
+                               json.hpp, provenance.hpp: record documents,
+                               fingerprints, library version
 ```
 
 Dependencies point downward only. `cpp/discretization` must never include
@@ -44,8 +47,26 @@ MeshOptions::algorithm ──with_interior_algorithm──▶ unit {capabilities
 TriangleMesh + Problem ──bind_boundary──▶ BoundaryBinding (owned snapshot: regions, conditions, edge frames)
      └──PreparedAssembly──▶ AssembledSystem ──constrain + PreparedLinearSolver──▶ values
 PreparedStationary(mesh, problem, assembly, solver).solve(t[, guess]) / solve_stationary ──▶ StationarySolution
-evolve(mesh, problem, InitialConditions (Expr or nodal Vector), TimeOptions) ──▶ Evolution {frames, metadata}
+evolve(mesh, problem, InitialConditions (Expr or nodal Vector), TimeOptions) ──▶ Evolution {frames, record}
+
+MeshResult.record (MeshRunRecord) ──attach_mesh_record──▶ RunRecord (StationarySolution/Evolution .record)
+   both ──write_json / read_*_json / diff_records──▶ versioned JSON (pde2d.mesh_run_record, pde2d.run_record)
+ReferenceProblem + MeshOptions + {named configurations} ──compare──▶ Comparison (records + L2/H1 errors)
 ```
+
+Records only observe. Every meshing call fills `MeshResult::record`
+(operation, fingerprints, options, version, work counters, quality); every
+stationary solve and evolution fills a `RunRecord` (the options that ran,
+workload, work, fingerprints of mesh, problem and initial fields, versions,
+timings). Counting and the O(n) fingerprint and quality passes read what
+the algorithms already have; meshes and solutions are bit-identical with
+or without them. User backends and integrators are factories: records name
+them (`user_supplied`) and say they are not replayable. The library
+version and git commit come from a header CMake generates at configure
+time (`cmake/pde2d_version.hpp.in`). Reference problems
+(`cpp/fem/reference/`) are problems with exact solutions on which named
+configurations are compared in accuracy for the work spent; choosing a
+configuration automatically is not part of the library.
 
 Domains are multiply connected: an outer loop plus holes, carried
 explicitly through every layer (`CurveGeometry` loops, `Boundary::holes`,
@@ -118,7 +139,8 @@ the algorithm under test.
 Two checks cover the headers themselves: `header_standalone`
 (`tests/headers/`) parses every public header in its own translation unit
 with `-fsyntax-only` at build time, and `docs_header_map` checks that every
-public header is in its module README.
+public header is in its module README (top-level core headers in
+`cpp/README.md`).
 
 ## Generated and historical files
 

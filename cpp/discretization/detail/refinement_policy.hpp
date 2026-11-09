@@ -92,6 +92,7 @@ struct CurveBoundary {
     split_boundary_record(s.result, index, n);
     rebuild_curved(s.result);
     s.topology = std::make_unique<Topology>(s.result.mesh);
+    s.topology->work = &s.result.record.work;
     s.topology->initialize_size(s.target);
   }
 };

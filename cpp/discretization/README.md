@@ -43,13 +43,16 @@ from this table.
 | `curve_length.hpp` | Arc length and its inversion | `curveLength`, `curveParameterAtLengthFraction` |
 | `curve_geometry.hpp` | Editable analytical boundary with regions and loops | `CurveGeometry` (`setRegions`, `renameRegion`, `splitRegion`, `splitCurve`, `moveCurve`, `curveIdAt`, `regionGroups`, `length`), `CurveId`, `CurveRegion`, `BoundaryCurve` |
 | `geometry.hpp` | Built-in shapes | `CircleGeometry`, `EllipseGeometry`, `RectangleGeometry`, `RectangleWithSemicircleGeometry`, `RegularPolygonGeometry`, `PolygonGeometry`, `AnnulusGeometry` |
-| `mesh_types.hpp` | Meshing options and results; wire IDs | `InteriorAlgorithm`, `BoundaryTreatment`, `BoundaryOptions`, `RefinementOptions`, `MeshOptions`, `InteriorAlgorithmCapabilities`, `MeshReport`, `MeshResult`, `BoundaryContext`, `interior_algorithm_name`, `validateMeshOptionValues` |
+| `mesh_types.hpp` | Meshing options and results; wire IDs | `InteriorAlgorithm`, `BoundaryTreatment`, `BoundaryOptions`, `RefinementOptions`, `MeshOptions`, `InteriorAlgorithmCapabilities`, `MeshReport`, `MeshResult`, `BoundaryContext`, `interior_algorithm_name`, `boundary_treatment_name`, `validateMeshOptionValues`; records: `MeshRunRecord`, `MeshOperation`, `MeshWork`, `MeshQuality`, `mesh_operation_name` |
 | `predicates.hpp` | Exact geometric predicates (filtered, exact binary64 fallback; needs Boost) | `predicates::orient`, `predicates::incircle`, `predicates::intersects`, `predicates::on_segment` |
 | `spatial_index.hpp` | Box broad phase used by validation and ear clipping | `mesh_detail::Box`, `mesh_detail::BoxIndex` |
 | `mesh_validation.hpp` | Polygon and mesh validation, boundary loops | `validate_polygon`, `validate_mesh_geometry`, `boundary_loops`, `boundary_points` |
 | `boundary_context.hpp` | Consistency of a mesh with its analytical boundary context | `validate_boundary_context` |
 | `boundary_discretization.hpp` | Sampling analytical boundaries into polygons with source intervals | `discretize_boundary`, `DiscretizedBoundary` |
-| `triangulate.hpp` | Meshing entry points | `generate_mesh`, `refine_mesh`, `subdivide_mesh`, `is_constrained_delaunay`, `interior_algorithm_capabilities` |
+| `triangulate.hpp` | Meshing entry points (each fills `MeshResult::record`) | `generate_mesh`, `refine_mesh`, `subdivide_mesh`, `is_constrained_delaunay`, `interior_algorithm_capabilities` |
+| `mesh_fingerprint.hpp` | Deterministic fingerprint of a mesh's arrays (nodes by bit pattern, elements, boundary edges, tags) | `mesh_fingerprint` |
+| `mesh_record.hpp` | Mesh run records: quality statistics and completing a record | `mesh_quality`, `finish_mesh_run_record` |
+| `mesh_record_json.hpp` | Versioned JSON of mesh run records (schema `pde2d.mesh_run_record` v1) | `to_json`, `write_json`, `read_mesh_run_record_json`, `mesh_options_json`, `diff_records` |
 | `curve_io.hpp` | Wire IDs and codecs of curve kinds in `.pde2d` files | `curve_io::Codec` (permanent IDs) |
 | `mesh_io.hpp` | `.pde2d` export and import (format versions 1 to 5) | `export_mesh`, `import_mesh_result`, `import_mesh` |
 | `svg_geometry.hpp` | SVG import and export of analytical geometry (needs libxml2) | `importSvg`, `exportSvg`, `SvgOptions`, `SvgScaleMode` |
@@ -124,6 +127,31 @@ conflict returns `false` with an explanation. Exhausting `max_steps` returns a
 partial mesh with an explicit unmet-size report. Invalid inputs throw.
 `report.refinement_steps` counts insertions; `report.delaunay_verified` describes
 the CDT check, not a minimum-angle certificate.
+
+## Mesh run records
+
+Every `MeshResult` carries `record` (`MeshRunRecord`), filled by
+`generate_mesh`, `refine_mesh`, `subdivide_mesh` and `import_mesh_result`:
+
+| Field | Meaning |
+| --- | --- |
+| `operation` | `MeshOperation::Generate`, `Refine`, `Subdivide`, `Import`; `None` for a hand-built result |
+| `fingerprint`, `source_fingerprint` | `mesh_fingerprint` of the produced mesh and of the mesh that was refined or subdivided (empty for generate and import) |
+| `options`, `library` | the options of the call, `pde2d::library_version()` |
+| `work` (`MeshWork`) | `refinement_steps`, `inserted_vertices` (one per step), `boundary_splits`, `edge_flips` (every legalization, rebuilds included), `curved_rebuilds`, `reinserted_vertices`, `removed_vertices` |
+| `quality` (`MeshQuality`) | node, element and boundary-edge counts; min/max interior angle in degrees; min/max edge length; `max_target_ratio` = longest edge / `refinement.max_edge_length` (unset without a target; at most 1 when the target was met) |
+| `total_seconds` | wall clock of the call (with boundary sampling for a geometry); the only field that differs between identical calls |
+
+Recording only reads: the counters are increments next to the work they
+count, and the fingerprint and quality are one O(n) pass after the call, so
+meshes are bit-identical with or without it. `.pde2d` files do not store
+records; an import records its own (no work). `write_json(out,
+result.record)` writes the versioned document (keys as in the table; null
+for an unset `max_target_ratio` or `source_fingerprint`; doubles with
+`max_digits10` digits in the classic locale), `read_mesh_run_record_json`
+checks schema and version, and `diff_records(a, b)` lists differing leaves
+(timings ignored by default, see [cpp/README.md](../README.md)). A FEM run
+record can carry it (`fem::attach_mesh_record`).
 
 ## Domains with holes
 
