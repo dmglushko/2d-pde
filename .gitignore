@@ -1,21 +1,10 @@
 # Local builds and scratch programs
 /build/
+/build-*/
 *.tmp
 *.tmp.*
 a.out
 
-# LaTeX build intermediates; retain the readable PDF and its source
-*.aux
-*.log
-*.out
-*.synctex.gz
-*.toc
-*.fls
-*.fdb_latexmk
-
-# Default output of the learning example
-/rectangle.pde2d
-
-# Local Python visualization environment
+# Local Python environment
 /.venv/
 __pycache__/

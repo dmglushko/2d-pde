@@ -5,6 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mapfile -t files < <(git ls-files '*.hpp' '*.cpp')
+if [[ ${#files[@]} -eq 0 ]]; then
+  exit 0
+fi
 if [[ "${1:-}" == "--check" ]]; then
   clang-format --dry-run --Werror "${files[@]}"
 else

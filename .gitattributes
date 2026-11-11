@@ -1,16 +1,3 @@
 * text=auto eol=lf
 *.pdf binary
 *.png binary
-
-# Generated artifacts: regenerate with the commands in the adjacent README
-# instead of editing (see AGENTS.md). Collapsed in GitHub diffs.
-docs/showcase/** linguist-generated
-docs/fem/showcase.html linguist-generated
-docs/fem/long-waves.html linguist-generated
-docs/fem/long-waves-timings.json linguist-generated
-docs/performance/*.json linguist-generated
-docs/performance/*.html linguist-generated
-examples/mesh_viewer/example_mesh.js linguist-generated
-
-# Dated historical reports.
-docs/archive/** linguist-documentation
