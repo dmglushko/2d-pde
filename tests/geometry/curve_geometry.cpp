@@ -79,7 +79,8 @@ int main() {
          Loop outer = square_loop(0, 0, 4, true);
          CurveGeometry g({outer, circle_loop({2, 2}, 1, false, "hole")});
          const auto *first = std::get_if<Line>(&g.loops()[0].curves[0].curve);
-         check(first && first->start == Point{0, 0} && first->end == Point{4, 0},
+         check(first && first->start == Point{0, 0} &&
+                   first->end == Point{4, 0},
                "outer loop unchanged");
          check_closed_and_oriented(g);
        }},
@@ -140,10 +141,10 @@ int main() {
        }},
       {"invalid_input",
        [] {
-         expect_throws<std::invalid_argument>(
-             [] { CurveGeometry g({}); }, "at least one loop");
-         expect_throws<std::invalid_argument>(
-             [] { CurveGeometry g({Loop{}}); }, "Loop 0 has no curves");
+         expect_throws<std::invalid_argument>([] { CurveGeometry g({}); },
+                                              "at least one loop");
+         expect_throws<std::invalid_argument>([] { CurveGeometry g({Loop{}}); },
+                                              "Loop 0 has no curves");
          Loop bad_name = square_loop(0, 0, 1, true, "has space");
          expect_throws<std::invalid_argument>(
              [&] { CurveGeometry g({bad_name}); },
@@ -152,7 +153,8 @@ int main() {
          zero.curves.insert(zero.curves.begin() + 1,
                             {Line{{1, 0}, {1, 0}}, "wall"});
          expect_throws<std::invalid_argument>(
-             [&] { CurveGeometry g({zero}); }, "Loop 0, curve 1 has zero length");
+             [&] { CurveGeometry g({zero}); },
+             "Loop 0, curve 1 has zero length");
          Loop arc{{{EllipticalArc{{0, 0}, -1, 1, 0, 0, 2 * pi}, "a"}}};
          expect_throws<std::invalid_argument>(
              [&] { CurveGeometry g({arc}); },

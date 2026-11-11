@@ -31,8 +31,8 @@ int main() {
          std::vector<std::vector<Point>> bowtie = {
              {{0, 0}, {2, 2}, {2, 0}, {0, 2}}};
          check(find_crossing(bowtie).has_value(), "bowtie");
-         std::vector<std::vector<Point>> touching = {
-             square, {{2, 1}, {3, 0}, {3, 2}}};
+         std::vector<std::vector<Point>> touching = {square,
+                                                     {{2, 1}, {3, 0}, {3, 2}}};
          check(find_crossing(touching).has_value(), "touching loops");
          std::vector<std::vector<Point>> spike = {
              {{0, 0}, {2, 0}, {1, 0}, {1, 1}}};

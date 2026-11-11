@@ -46,8 +46,7 @@ int main() {
                "collinear overlap");
          check(!segments_intersect({0, 0}, {1, 0}, {2, 0}, {3, 0}),
                "collinear apart");
-         check(!segments_intersect({0, 0}, {1, 1}, {1, 0}, {2, 1}),
-               "parallel");
+         check(!segments_intersect({0, 0}, {1, 1}, {1, 0}, {2, 1}), "parallel");
          check(on_segment({0, 0}, {2, 2}, {1, 1}), "on segment");
          check(!on_segment({0, 0}, {2, 2}, {3, 3}), "beyond the end");
        }},

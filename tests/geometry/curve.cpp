@@ -19,7 +19,8 @@ void same_point(Point a, Point b, double tol, std::string_view what) {
 double polyline_length(const Curve &c, int n) {
   double total = 0;
   for (int i = 0; i < n; ++i)
-    total += distance(point_at(c, double(i) / n), point_at(c, double(i + 1) / n));
+    total +=
+        distance(point_at(c, double(i) / n), point_at(c, double(i + 1) / n));
   return total;
 }
 } // namespace
@@ -68,8 +69,7 @@ int main() {
       {"split_is_continuous_and_exact",
        [] {
          std::vector<Curve> curves = {
-             Line{{0, 0}, {1, 1}},
-             QuadraticBezier{{0, 0}, {1, 2}, {3, 0}},
+             Line{{0, 0}, {1, 1}}, QuadraticBezier{{0, 0}, {1, 2}, {3, 0}},
              CubicBezier{{0, 0}, {1, 3}, {2, -3}, {3, 0}},
              EllipticalArc{{0, 0}, 2, 1, 0.3, 0.2, 2.5}};
          for (const auto &c : curves) {
@@ -91,9 +91,9 @@ int main() {
          same_point(point_at(reversed(c), 0.25), point_at(c, 0.75), 1e-15,
                     "reversed");
          Curve arc = EllipticalArc{{0, 0}, 1, 1, 0, 0, pi / 2};
-         same_point(point_at(reversed(arc), 0), {0, 1}, 1e-15,
-                    "reversed arc");
-         CurveTransform f{.scale = 2, .rotation = pi / 2, .translation = {1, 0}};
+         same_point(point_at(reversed(arc), 0), {0, 1}, 1e-15, "reversed arc");
+         CurveTransform f{
+             .scale = 2, .rotation = pi / 2, .translation = {1, 0}};
          same_point(point_at(transformed(arc, f), 0), {1, 2}, 1e-15, "moved");
          near(curve_length(transformed(arc, f)), pi, 1e-14, "scaled length");
        }},
@@ -119,7 +119,9 @@ int main() {
          expect_throws<std::invalid_argument>(
              [] { (void)split(Line{{0, 0}, {1, 0}}, 1.0); }, "between 0 and 1");
          expect_throws<std::invalid_argument>(
-             [] { (void)parameter_at_length_fraction(Line{{0, 0}, {0, 0}}, .5); },
+             [] {
+               (void)parameter_at_length_fraction(Line{{0, 0}, {0, 0}}, .5);
+             },
              "zero-length");
        }},
   });

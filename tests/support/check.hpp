@@ -27,8 +27,9 @@ inline std::string location(const std::source_location &where) {
   return std::string(where.file_name()) + ":" + std::to_string(where.line());
 }
 
-inline void check(bool condition, std::string_view what,
-                  std::source_location where = std::source_location::current()) {
+inline void
+check(bool condition, std::string_view what,
+      std::source_location where = std::source_location::current()) {
   if (!condition)
     throw Failure(location(where) + ": check failed: " + std::string(what));
 }
@@ -48,8 +49,9 @@ inline void near(double actual, double expected, double tolerance,
 // Expects f() to throw an exception of type E whose message contains
 // `fragment`.
 template <class E = std::exception, class F>
-void expect_throws(F &&f, std::string_view fragment,
-                   std::source_location where = std::source_location::current()) {
+void expect_throws(
+    F &&f, std::string_view fragment,
+    std::source_location where = std::source_location::current()) {
   try {
     f();
   } catch (const Failure &) {
@@ -60,8 +62,7 @@ void expect_throws(F &&f, std::string_view fragment,
                     "' does not contain '" + std::string(fragment) + "'");
     return;
   } catch (const std::exception &e) {
-    throw Failure(location(where) + ": unexpected exception type: " +
-                  e.what());
+    throw Failure(location(where) + ": unexpected exception type: " + e.what());
   }
   throw Failure(location(where) + ": expected an exception containing '" +
                 std::string(fragment) + "'");

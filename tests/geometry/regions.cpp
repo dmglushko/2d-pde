@@ -86,8 +86,7 @@ int main() {
          auto g = annulus(2, 1);
          g.merge_region_into("inner", "outer");
          expect_throws<std::invalid_argument>(
-             [&] { g.split_region("outer", 0.5, "a", "b"); },
-             "several loops");
+             [&] { g.split_region("outer", 0.5, "a", "b"); }, "several loops");
          auto r = rectangle(2, 1);
          r.merge_region_into("top", "bottom");
          expect_throws<std::invalid_argument>(

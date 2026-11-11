@@ -23,8 +23,8 @@ Loop single(const std::string &region, Curve curve) {
 
 CurveGeometry circle(double radius) {
   require_positive(radius, "Circle radius");
-  return CurveGeometry(
-      {single("boundary", EllipticalArc{{0, 0}, radius, radius, 0, 0, 2 * pi})});
+  return CurveGeometry({single(
+      "boundary", EllipticalArc{{0, 0}, radius, radius, 0, 0, 2 * pi})});
 }
 
 CurveGeometry ellipse(double a, double b) {
@@ -51,10 +51,10 @@ CurveGeometry annulus(double outer_radius, double inner_radius) {
     throw std::invalid_argument(
         "Annulus inner radius must be smaller than the outer radius");
   return CurveGeometry(
-      {single("outer", EllipticalArc{{0, 0}, outer_radius, outer_radius, 0, 0,
-                                     2 * pi}),
-       single("inner", EllipticalArc{{0, 0}, inner_radius, inner_radius, 0, 0,
-                                     2 * pi})});
+      {single("outer",
+              EllipticalArc{{0, 0}, outer_radius, outer_radius, 0, 0, 2 * pi}),
+       single("inner", EllipticalArc{
+                           {0, 0}, inner_radius, inner_radius, 0, 0, 2 * pi})});
 }
 
 CurveGeometry rectangle_with_semicircle(double width, double height,

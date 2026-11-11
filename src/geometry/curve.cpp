@@ -72,19 +72,18 @@ Point point_of(const QuadraticBezier &c, double t) {
           a * c.start.y + b * c.control.y + d * c.end.y};
 }
 Point first_of(const QuadraticBezier &c, double t) {
-  return {2 * ((1 - t) * (c.control.x - c.start.x) +
-               t * (c.end.x - c.control.x)),
-          2 * ((1 - t) * (c.control.y - c.start.y) +
-               t * (c.end.y - c.control.y))};
+  return {
+      2 * ((1 - t) * (c.control.x - c.start.x) + t * (c.end.x - c.control.x)),
+      2 * ((1 - t) * (c.control.y - c.start.y) + t * (c.end.y - c.control.y))};
 }
 Point second_of(const QuadraticBezier &c, double) {
   return second_difference(c.start, c.control, c.end, 2);
 }
 DerivativeBounds bounds_of(const QuadraticBezier &c) {
   // The derivative's control polygon encloses the whole derivative curve.
-  return {2 * std::max(distance(c.start, c.control),
-                       distance(c.control, c.end)),
-          norm(second_of(c, 0))};
+  return {
+      2 * std::max(distance(c.start, c.control), distance(c.control, c.end)),
+      norm(second_of(c, 0))};
 }
 std::pair<Curve, Curve> split_of(const QuadraticBezier &c, double t) {
   auto a = mix(c.start, c.control, t), b = mix(c.control, c.end, t),
@@ -105,8 +104,7 @@ void validate_of(const QuadraticBezier &c) {
 std::optional<double> exact_length(const QuadraticBezier &, double) {
   return std::nullopt;
 }
-std::optional<double> exact_length_parameter(const QuadraticBezier &,
-                                             double) {
+std::optional<double> exact_length_parameter(const QuadraticBezier &, double) {
   return std::nullopt;
 }
 
@@ -167,9 +165,8 @@ std::optional<double> exact_length_parameter(const CubicBezier &, double) {
 
 Point point_of(const EllipticalArc &c, double t) {
   const double a = c.start_angle + t * c.sweep_angle;
-  return c.center +
-         rotate({c.radius_x * std::cos(a), c.radius_y * std::sin(a)},
-                c.rotation);
+  return c.center + rotate({c.radius_x * std::cos(a), c.radius_y * std::sin(a)},
+                           c.rotation);
 }
 Point first_of(const EllipticalArc &c, double t) {
   const double a = c.start_angle + t * c.sweep_angle;
@@ -180,8 +177,9 @@ Point first_of(const EllipticalArc &c, double t) {
 Point second_of(const EllipticalArc &c, double t) {
   const double a = c.start_angle + t * c.sweep_angle,
                w2 = c.sweep_angle * c.sweep_angle;
-  return rotate({-c.radius_x * std::cos(a) * w2, -c.radius_y * std::sin(a) * w2},
-                c.rotation);
+  return rotate(
+      {-c.radius_x * std::cos(a) * w2, -c.radius_y * std::sin(a) * w2},
+      c.rotation);
 }
 DerivativeBounds bounds_of(const EllipticalArc &c) {
   const double r = std::max(c.radius_x, c.radius_y),
@@ -219,8 +217,7 @@ std::optional<double> exact_length(const EllipticalArc &c, double t) {
     return t * std::abs(c.sweep_angle) * c.radius_x;
   return std::nullopt;
 }
-std::optional<double> exact_length_parameter(const EllipticalArc &c,
-                                             double f) {
+std::optional<double> exact_length_parameter(const EllipticalArc &c, double f) {
   if (c.radius_x == c.radius_y)
     return f;
   return std::nullopt;
@@ -302,9 +299,7 @@ Point end_point(const Curve &curve) { return point_at(curve, 1.0); }
 DerivativeBounds derivative_bounds(const Curve &curve) {
   return std::visit([](const auto &c) { return bounds_of(c); }, curve);
 }
-bool is_line(const Curve &curve) {
-  return std::holds_alternative<Line>(curve);
-}
+bool is_line(const Curve &curve) { return std::holds_alternative<Line>(curve); }
 
 std::pair<Curve, Curve> split(const Curve &curve, double t) {
   validate_split(t);
@@ -334,8 +329,8 @@ Curve reversed(const Curve &curve) {
 
 Curve transformed(const Curve &curve, const CurveTransform &transform) {
   transform.validate();
-  return std::visit(
-      [&](const auto &c) { return transformed_of(c, transform); }, curve);
+  return std::visit([&](const auto &c) { return transformed_of(c, transform); },
+                    curve);
 }
 
 double curve_length(const Curve &curve, double end) {
@@ -375,8 +370,8 @@ double parameter_at_length_fraction(const Curve &curve, double fraction) {
     // equal lengths would lose precision near the end point.
     double ratio = from_end ? curve_length(split(curve, t).second) / length
                             : curve_length(curve, t) / length;
-    double roundoff = 4 * std::numeric_limits<double>::epsilon() *
-                      std::abs(t) * (speed(curve, t) / length);
+    double roundoff = 4 * std::numeric_limits<double>::epsilon() * std::abs(t) *
+                      (speed(curve, t) / length);
     if (std::abs(ratio - target) <= 1e-11 * target + roundoff)
       return t;
     if (from_end ? ratio > target : ratio < target)

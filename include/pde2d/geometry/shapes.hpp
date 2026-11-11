@@ -28,8 +28,9 @@ enum class SemicircleEnd { positive_x, negative_x };
 // semicircle of diameter `height`, so the total length is
 // width + height / 2. Regions "bottom", "top", "cap", and "left" or
 // "right" for the straight short end.
-CurveGeometry rectangle_with_semicircle(
-    double width, double height, SemicircleEnd end = SemicircleEnd::positive_x);
+CurveGeometry
+rectangle_with_semicircle(double width, double height,
+                          SemicircleEnd end = SemicircleEnd::positive_x);
 
 // A simple polygon through the vertices, in either direction; region
 // "boundary".

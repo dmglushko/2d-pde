@@ -94,9 +94,8 @@ find_crossing(std::span<const std::vector<Point>> loops) {
   std::vector<std::size_t> active;
   for (std::size_t k = 0; k < segments.size(); ++k) {
     const auto &s = segments[k];
-    std::erase_if(active, [&](std::size_t j) {
-      return segments[j].xmax < s.xmin;
-    });
+    std::erase_if(active,
+                  [&](std::size_t j) { return segments[j].xmax < s.xmin; });
     for (std::size_t j : active) {
       const auto &t = segments[j];
       if (t.ymax < s.ymin || s.ymax < t.ymin)

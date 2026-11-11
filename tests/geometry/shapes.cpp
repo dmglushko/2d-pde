@@ -82,8 +82,8 @@ int main() {
        [] {
          expect_throws<std::invalid_argument>([] { (void)circle(0); },
                                               "finite and positive");
-         expect_throws<std::invalid_argument>(
-             [] { (void)rectangle(1, -1); }, "finite and positive");
+         expect_throws<std::invalid_argument>([] { (void)rectangle(1, -1); },
+                                              "finite and positive");
        }},
   });
 }

@@ -32,6 +32,7 @@ struct Crossing {
 // nothing else. A zero-length segment is reported as a crossing with
 // itself. Every loop needs at least three points (std::invalid_argument
 // otherwise). Uses exact predicates; the result is deterministic.
-std::optional<Crossing> find_crossing(std::span<const std::vector<Point>> loops);
+std::optional<Crossing>
+find_crossing(std::span<const std::vector<Point>> loops);
 
 } // namespace pde2d::geometry

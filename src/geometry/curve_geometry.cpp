@@ -137,14 +137,14 @@ Analysis analyze(const std::vector<Loop> &loops) {
     std::size_t ca = curve_of[a.loop][a.segment];
     std::size_t cb = curve_of[b.loop][b.segment];
     if (a.loop == b.loop)
-      throw std::invalid_argument(
-          "Loop " + std::to_string(a.loop) +
-          " intersects or touches itself near curves " + std::to_string(ca) +
-          " and " + std::to_string(cb));
-    throw std::invalid_argument(
-        "Loops " + std::to_string(a.loop) + " and " + std::to_string(b.loop) +
-        " intersect or touch (" + where(a.loop, ca) + " and " +
-        where(b.loop, cb) + ")");
+      throw std::invalid_argument("Loop " + std::to_string(a.loop) +
+                                  " intersects or touches itself near curves " +
+                                  std::to_string(ca) + " and " +
+                                  std::to_string(cb));
+    throw std::invalid_argument("Loops " + std::to_string(a.loop) + " and " +
+                                std::to_string(b.loop) +
+                                " intersect or touch (" + where(a.loop, ca) +
+                                " and " + where(b.loop, cb) + ")");
   }
   Analysis result;
   const std::size_t n = loops.size();
