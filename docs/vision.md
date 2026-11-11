@@ -3,7 +3,7 @@
 Where this project is heading. This page sets the direction and does not
 prescribe designs: how each goal is reached is decided when the work is done.
 The current state of the code is described in [architecture.md](architecture.md)
-and the module READMEs.
+and the decisions behind it in [decisions.md](decisions.md).
 
 ## Scope
 
@@ -79,6 +79,7 @@ off. Finding out which ones do is part of the work.
 - When a change would make one of these goals harder, for example by fixing a
   value that preprocessing or adaptivity would need to choose, prefer a
   flexible form or raise the conflict instead of deciding it silently.
-- Keep this page short and about direction. Record designs in the module
-  READMEs and EXTENDING guides once they exist, and update this page when the
-  direction changes.
+- Keep this page short and about direction. Design decisions belong to the
+  owner and are recorded in [decisions.md](decisions.md); the current design
+  is described in [architecture.md](architecture.md). Update this page when
+  the direction changes.

@@ -1,146 +1,124 @@
 # Agent guide
 
-C++23 header-only library for 2D geometry, triangle meshing and scalar P1
-finite elements, plus JavaScript/Python tools that read its files. Read
-[docs/architecture.md](docs/architecture.md) first for the layer diagram and
-data flow, and [docs/vision.md](docs/vision.md) for where the project is
-heading and which directions to keep open.
+C++23 library (compiled, not header-only) for 2D geometry and triangle
+meshing, the first slice of a from-scratch rewrite that will grow into one
+linear scalar PDE with P1 finite elements. Read
+[docs/decisions.md](docs/decisions.md) (the owner's decisions: your
+specification), then [docs/architecture.md](docs/architecture.md) (modules,
+types, data flow) and [docs/vision.md](docs/vision.md) (direction).
+
+## Architecture decisions belong to the owner
+
+**Architecture decisions belong to the owner. Do not make a design choice
+implicitly (types, interfaces, data flow, defaults, fallbacks, error
+policy). Present options, trade-offs and a recommendation, and wait. If a
+task needs a choice that docs/decisions.md doesn't cover, raise it instead
+of picking.**
+
+The project exists so the owner learns; a choice made silently is one the
+owner never understood. Private details (helper names, loop structure)
+are yours. Never contradict `docs/decisions.md`; if something there is
+impossible or unclear, ask.
 
 ## Where things are
 
-Module READMEs hold the header maps (checked by the `docs_header_map`
-test).
-
 | Path | Contents |
 | --- | --- |
-| `cpp/*.hpp` (core) | `execution.hpp` (`ExecutionOptions`, `parallel_for`), `json.hpp` (record documents, `diff_records`), `provenance.hpp` (`Fingerprint`, `library_version`): [README](cpp/README.md) |
-| `cpp/discretization/` | geometry, curves, meshing, refinement, mesh IO, mesh run records: [README](cpp/discretization/README.md), [EXTENDING](cpp/discretization/EXTENDING.md) |
-| `cpp/fem/` | problems, assembly, solvers, time integration, run records, reference problems (`reference/`): [README](cpp/fem/README.md), [EXTENDING](cpp/fem/EXTENDING.md) |
-| `tests/` | one directory per module, `headers/` (standalone headers), `tools/`, `support/` (shared helpers) |
-| `examples/` | runnable programs (`fem/minimal.cpp` is the shortest FEM program); built as CTest smoke tests |
-| `benchmarks/` | opt-in timing programs; may use internals; never CTest tests |
-| `tools/` | mesh viewer, plotting, independent references, `format.sh`, `test*.sh` |
-| `docs/` | `architecture.md`, `vision.md`, user docs (`fem/`, `learning/`, `showcase/`, `formats/`), performance; `archive/` = dated reports |
+| `include/pde2d/geometry/` | `point.hpp`, `predicates.hpp` (exact `orient`, `incircle`), `curve.hpp` (curve kinds and math), `polygon.hpp`, `curve_geometry.hpp` (`Loop`, `CurveGeometry`), `shapes.hpp` |
+| `src/geometry/` | their implementation; Boost.Multiprecision only in `predicates.cpp` |
+| `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`), `mesh_spec.hpp`, `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, capabilities, `check_compatibility`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
+| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp` |
+| `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt` |
+| `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles), `shapes.hpp` (test geometries) |
+| `tools/` | `test.sh` (configure, build, ctest), `format.sh` |
+| `docs/` | `decisions.md`, `architecture.md`, `vision.md` |
+
+The previous code is on the branch `archive/header-only-v1`. It is a
+reference, not a source: only the predicates and curve math were ported.
+Read it with `git show archive/header-only-v1:<path>`; do not check it out
+in this checkout.
 
 ## Build and test
 
-Run builds inside WSL/Linux (the checkout is on ext4; Windows git refuses it).
+Run builds inside Linux/WSL with native tools (the checkout is on ext4).
 
 ```sh
-tools/test.sh                         # geometry only: no Eigen/SymEngine needed
-tools/test_fem.sh -DPDE2D_FETCH_SYMENGINE=ON          # + FEM (fetches pinned SymEngine)
-tools/test_fem.sh -DSymEngine_DIR=<prefix>/lib/cmake/symengine   # installed SymEngine
-tools/test_fem.sh -DPDE2D_ENABLE_OPENMP=ON            # parallel kernels
-tools/format.sh --check               # clang-format; run tools/format.sh to fix
-ctest --test-dir build -R fem_assembly --output-on-failure   # one test
+tools/test.sh                          # configure, build, run all tests
+tools/test.sh -DPDE2D_WARNINGS_AS_ERRORS=ON
+tools/format.sh --check                # clang-format; tools/format.sh fixes
+ctest --test-dir build -R mesh_pipeline --output-on-failure   # one test
 ```
 
-Set `PDE2D_BUILD_JOBS`/`PDE2D_TEST_JOBS` for parallelism and `PDE2D_BUILD_DIR`
-to choose a build directory. Each C++ test binary prints `PASS/FAIL <case>`.
+`PDE2D_BUILD_DIR` picks the build directory, `PDE2D_BUILD_JOBS` the build
+parallelism (capped at 4; run one build at a time), `PDE2D_TEST_JOBS` the
+test parallelism. Every test program prints `PASS/FAIL <case>`.
 
 ## Conventions
 
-- Namespaces: `pde2d` (execution), `pde2d::discretization`, `pde2d::fem`.
-  `*_detail` namespaces and `cpp/*/detail/` headers are private: tests and
-  examples must use public API. Exceptions: benchmarks, and white-box tests in
-  `tests/<module>/internal/` (e.g. `tests/discretization/internal/`), which
-  must state what they check that the public API cannot observe.
-- Extension seams that need no library edit: `SolverOptions::backend`
-  (`LinearSolverBackend`) and `TimeOptions::integrator` (`TimeIntegrator`).
-  The enums `LinearSolver`/`TimeMethod` select the built-ins. An
-  `InteriorAlgorithm` is a unit with declared capabilities; compatibility
-  errors come from them, never from comparing enum values.
-- Dependencies point downward: `fem` may include `discretization`, never the
-  reverse. Only `svg_geometry.hpp` needs libxml2.
-- Style: clang-format (LLVM, 80 columns). FEM and meshing free functions use
-  snake_case. The geometry/curve API is camelCase (`setCenter`, `curveLength`)
-  for compatibility; don't rename it piecemeal.
-- Errors are exceptions with specific messages. Tests match message
-  fragments, so keep messages stable or update the tests.
-- Numerical code is deterministic: parallel loops write per-item slots and
-  reductions/scatter run serially in a fixed order. Keep it that way. Serial
-  and OpenMP results must be bit-identical.
-- Symbolic (`SymEngine`) work happens only during preparation, never inside
-  `parallel_for` bodies.
-- Boundary forms are `EdgeForm` alternatives dispatched with `std::visit`
-  and a `static_assert` fallback; add an alternative, not a flag.
+- Names: snake_case for functions, variables and members; PascalCase for
+  types; enumerators in snake_case.
+- One CMake library per module (`pde2d_geometry`, `pde2d_mesh`; later
+  `pde2d_io`, `pde2d_fem`). Dependencies point one way: mesh may include
+  geometry, never the reverse. Heavy dependencies (Boost, later Eigen,
+  SymEngine, libxml2) only in `.cpp` files, never in public headers.
+- Public headers in `include/pde2d/<module>/`; private code and private
+  headers in `src/<module>/`. Tests use only public headers.
+- Mesh components are virtual interfaces (`components.hpp`). Each
+  component owns its options struct, set with designated initializers in
+  its constructor, and validates it there. A component declares its
+  capabilities or effects; compatibility is decided from those
+  declarations, never from names or type checks.
+- Steps an algorithm needs for correctness belong inside the component
+  (Ruppert makes its own input Delaunay). Optional quality passes are
+  improvers. Shared routines are plain functions (`delaunay.hpp`).
+- Errors are exceptions with specific messages: `std::invalid_argument`
+  for bad input or configuration, `std::runtime_error` for an algorithm
+  that cannot finish. Report messages only mean "worked, but…". Tests
+  match message fragments, so keep messages stable or update the tests.
+- Deterministic results: no dependence on hash iteration order or
+  addresses; process in index order, break ties by index.
+- Style: clang-format (LLVM, 80 columns).
 
 ## Invariants that are easy to break
 
-- **P1 only.** No element-order switch; higher order is a separate module.
-- **Wire IDs are permanent:** `InteriorAlgorithm`, `BoundaryTreatment` and
-  curve-kind IDs in `curve_io.hpp`. The `.pde2d` format is specified in
-  [docs/formats/pde2d-mesh.md](docs/formats/pde2d-mesh.md) and parsed by
-  C++, `tools/mesh_viewer/mesh.js` and `tools/plot_mesh.py`. Change all three
-  together.
-- **Sign convention:** `Equation` is `a_xx u_xx + a_xy u_xy + a_yy u_yy + ... = source`
-  with default `a_xx = a_yy = -1` (that is, −Δu). Natural flux is
-  `q_n = -n·A∇u`. See `cpp/fem/problem.hpp` and `weak_form.hpp`.
-- **Initial conditions** are not part of `Problem`. They are passed to
-  `evolve(mesh, problem, InitialConditions{value, velocity}, options)`;
-  each is an `Expr` or a nodal `Vector` (`Field`). Newmark requires
-  `velocity`.
-- **Not yet implemented, on purpose:** problem-aware preprocessing and
-  adaptive postprocessing (docs/vision.md goals 2 and 3) are left to the
-  project owner. Do not add analysis, plans, decision records, planners,
-  error estimators, marking, adaptive drivers, size fields or step
-  controllers unless a task asks for them. What exists for that work:
-  run records (`MeshResult::record`, `RunRecord`), their JSON and
-  `diff_records`, and reference problems with `compare` of named
-  configurations (no automatic choice).
-- **Records only observe:** recording must never change a mesh or a
-  solution (bit-identical with and without), never re-evaluate user
-  callbacks, and stay O(n) (one fingerprint/quality pass). New counters go
-  into `MeshWork`/`WorkRecord`; new JSON keys keep the schema version,
-  renamed or removed keys increment it. The `Fingerprint` encodings are
-  pinned (`tests/discretization/mesh_fingerprint.cpp`): change them only with
-  a new encoding tag.
-- **Boundaries have loops:** an outer loop plus holes (`BoundaryCurve::loop`,
-  `Boundary::holes`, `boundary_loops(mesh)`). Walk and close each loop on its
-  own, outer first; meshes with holes are `.pde2d` version 5, one-loop meshes
-  must keep writing versions 4/2 byte for byte.
-- `MeshResult::report` must be checked: meshing can return a mesh that misses
-  its size target. The meshing functions are `[[nodiscard]]`; FEM entry
-  points take a `TriangleMesh` (`result.mesh`).
+- **Domain on the left.** `CurveGeometry` normalizes loops (even depth
+  counterclockwise, odd depth clockwise); `BoundaryPolygon`, `WorkingMesh`
+  and `Mesh` boundary edges all have the domain on their left. Triangles
+  are counterclockwise.
+- **Depth and parent are computed**, stored apart from `Loop`, never set by
+  the user.
+- **WorkingMesh edge convention:** edge `i` of a triangle is opposite
+  vertex `i`. Edits never delete triangles or nodes, and must leave the
+  mesh valid or throw without changing it.
+- **Boundary edges carry region tags and optional curve links**; a refiner
+  must update them when it splits (use `split_boundary_edge`). A linked
+  edge is split at the curve point, an unlinked one at the chord midpoint.
+- **The Mesher never sees FEM data.** Its only external input is the
+  `MeshSpec`.
+- **`MeshResult::target_met` must be checked**: a mesh can miss its target
+  (for example after smoothing or without a refiner).
+- **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
+  FEM, problems and boundary conditions, anisotropic meshing, planners,
+  the simple-options facade, and IO (SVG, `.pde2d`, Gmsh) and the viewer.
+  Do not add them unless a task asks.
 
 ## Tests
 
-- The `header_standalone` (syntax-only, at build time) and
-  `docs_header_map` checks glob every public header (everything but
-  `detail/`); a header in a public subdirectory is named in the module
-  README with its relative path (e.g. `reference/compare.hpp`), and the
-  top-level core headers in `cpp/README.md`.
-- Put a new test in the module directory and register it in that directory's
-  `CMakeLists.txt` with `pde2d_add_cpp_test(NAME ... SOURCE ... [FEM] [LIBXML2] ...)`.
-  White-box tests of `*_detail` code go in `tests/<module>/internal/` with an
-  `_internal` test name; prefer a public-API check whenever behavior is
-  observable.
-- Use `tests/support/check.hpp` (`check`, `near`, `expect_throws`, `run`).
-  Use `check_eigen.hpp` for vectors, `cdt.hpp` (`independent_cdt`) for
-  meshes and `edge_forms.hpp` (`region_forms`) for the edge forms of each
-  boundary region. Use `discretization/square_mesh.hpp` for
-  structured meshes and `fem/error_norms.hpp` for L2/H1 errors.
-- Oracles: exact or manufactured solutions, convergence rates, invariants, or
-  independent implementations (`tools/reference/`, `tests/support/error_norms_reference.hpp`).
-  Don't copy the algorithm under test into the test. To test caching, drive
-  the same public components without the cache (see
-  `tests/fem/reusable_evolution.cpp`).
-- Exact work counters (`solver_reuses`, `preparations`) are performance
-  contracts. Assert them as relations (`== time_steps - 1`), with a comment.
-
-## Generated files (regenerate, don't hand-edit)
-
-`docs/showcase/*`, `docs/fem/showcase.html`, `docs/fem/long-waves.html`,
-`docs/fem/long-waves-timings.json`, `docs/performance/*.json|html`,
-`examples/mesh_viewer/example_mesh.js`. The commands are in the README next
-to each artifact. Files in `docs/archive/` are historical snapshots: don't
-update them to match current code.
+- Register a test with
+  `pde2d_add_test(NAME <module>_<topic> SOURCE <file> LIBS <library>)` in
+  `tests/<module>/CMakeLists.txt`.
+- Use `tests/support/check.hpp` (`check`, `near`, `expect_throws`, `run`)
+  and, for meshes, `tests/support/mesh_checks.hpp`.
+- Oracles: exact values, invariants (orientation, conformity, edges used
+  once equal the boundary edges, area, Delaunay, minimum angle, edge
+  lengths) or independent computations. Do not copy the algorithm under
+  test into the test.
+- `header_standalone` compiles every public header on its own.
 
 ## Before finishing a change
 
 1. `tools/format.sh --check`
-2. `tools/test.sh`, and `tools/test_fem.sh` if `cpp/fem`, FEM tests or examples changed.
-3. Update the module README or EXTENDING guide when you change a public API or
-   an extension point, and this file when you change layout or conventions.
-   Every public header must appear in its module README header map (the
-   `docs_header_map` test fails otherwise).
+2. `tools/test.sh` (all tests pass)
+3. Update `docs/architecture.md` when you change a public type, interface
+   or the data flow, and this file when you change layout or conventions.
+   Decisions go to the owner, not into the docs on your own.
