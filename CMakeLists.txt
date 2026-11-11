@@ -26,6 +26,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 add_subdirectory(src/geometry)
+add_subdirectory(src/mesh)
 
 if(PDE2D_BUILD_TESTS)
   enable_testing()

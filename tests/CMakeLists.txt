@@ -9,6 +9,7 @@ function(pde2d_add_test)
 endfunction()
 
 add_subdirectory(geometry)
+add_subdirectory(mesh)
 
 # Every public header must compile on its own. One generated source per
 # header is compiled (not linked) into an object library.
@@ -23,4 +24,4 @@ foreach(header IN LISTS PDE2D_PUBLIC_HEADERS)
   list(APPEND PDE2D_HEADER_SOURCES ${source})
 endforeach()
 add_library(header_standalone OBJECT ${PDE2D_HEADER_SOURCES})
-target_link_libraries(header_standalone PRIVATE pde2d_geometry pde2d_warnings)
+target_link_libraries(header_standalone PRIVATE pde2d_mesh pde2d_warnings)
