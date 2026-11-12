@@ -67,8 +67,10 @@ std::size_t lawson(WorkingMesh &mesh, std::span<const std::size_t> seeds,
 } // namespace detail
 
 std::size_t flip_to_delaunay(WorkingMesh &mesh) {
-  std::vector<std::size_t> all(mesh.triangles().size());
-  std::iota(all.begin(), all.end(), std::size_t{0});
+  std::vector<std::size_t> all;
+  for (std::size_t t = 0; t < mesh.triangles().size(); ++t)
+    if (!mesh.is_triangle_deleted(t))
+      all.push_back(t);
   return detail::lawson(mesh, all, nullptr);
 }
 

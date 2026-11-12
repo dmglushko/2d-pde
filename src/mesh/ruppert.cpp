@@ -64,6 +64,8 @@ void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
     bad.push_back(t);
 
   std::size_t inserted = 0, flips = 0, boundary_splits = 0, circumcenters = 0;
+  std::size_t retriangulated = 0, deleted_nodes = 0, failed_splits = 0,
+              abandoned = 0;
   detail::LocalImproverCalls local(local_improvers);
   auto count_insertion = [&] {
     if (++inserted > options_.max_points)
@@ -89,19 +91,39 @@ void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
     }
   };
   auto segment_needs_split = [&](std::size_t k) {
+    if (mesh.is_unsplittable(k))
+      return false;
     auto [a, b] = mesh.boundary_edges()[k].nodes;
     if (geometry::distance(P[a], P[b]) > h)
       return true;
     auto [t, edge] = mesh.boundary_edge_location(k);
     return encroaches(P[a], P[b], P[T[t][static_cast<std::size_t>(edge)]]);
   };
+  // Splits boundary edge k; false if it cannot be split (it is then
+  // marked, never retried, and the report says so).
   auto split_segment = [&](std::size_t k) {
+    if (mesh.is_unsplittable(k))
+      return false;
+    auto [a, b] = mesh.boundary_edges()[k].nodes;
+    auto r = mesh.split_boundary_edge(k);
+    if (!r.split) {
+      ++failed_splits;
+      report.messages.push_back(
+          "boundary edge (" + std::to_string(a) + ", " + std::to_string(b) +
+          ") of region '" +
+          mesh.region_names()[mesh.boundary_edges()[k].region] +
+          "' cannot be split: " + r.failure +
+          "; it stays as it is, so the targets may not be met near it");
+      return false;
+    }
     count_insertion();
-    auto created = mesh.split_boundary_edge(k);
     ++boundary_splits;
+    retriangulated += r.retriangulated;
+    deleted_nodes += r.deleted_nodes;
     segments.push_back(k);
     segments.push_back(mesh.boundary_edges().size() - 1);
-    after(created);
+    after(r.touched);
+    return true;
   };
   auto is_bad = [&](std::size_t t) {
     Point a = P[T[t][0]], b = P[T[t][1]], c = P[T[t][2]];
@@ -148,22 +170,30 @@ void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
       break;
     std::size_t t = bad.front();
     bad.pop_front();
-    if (!is_bad(t))
+    if (mesh.is_triangle_deleted(t) || !is_bad(t))
       continue;
     Point c = circumcenter(P[T[t][0]], P[T[t][1]], P[T[t][2]]);
     Location loc = mesh.locate(c, t);
+    // A triangle whose fix needs an unsplittable boundary edge is left
+    // as it is.
     if (loc.kind == Location::Kind::blocked) {
-      split_segment(mesh.boundary_edge_index(loc.triangle, loc.index));
-      bad.push_back(t);
+      if (split_segment(mesh.boundary_edge_index(loc.triangle, loc.index)))
+        bad.push_back(t);
+      else
+        ++abandoned;
       continue;
     }
     if (loc.kind == Location::Kind::on_node)
       throw std::logic_error("ruppert: a circumcenter coincides with a node");
     auto encroached = encroached_by(loc.triangle, c);
     if (!encroached.empty()) {
+      bool any = false;
       for (auto k : encroached)
-        split_segment(k);
-      bad.push_back(t);
+        any = split_segment(k) || any;
+      if (any)
+        bad.push_back(t);
+      else
+        ++abandoned;
       continue;
     }
     count_insertion();
@@ -181,6 +211,15 @@ void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
   report.metrics["flips"] = static_cast<double>(flips);
   report.metrics["boundary_splits"] = static_cast<double>(boundary_splits);
   report.metrics["circumcenters"] = static_cast<double>(circumcenters);
+  report.metrics["retriangulated_splits"] = static_cast<double>(retriangulated);
+  report.metrics["deleted_nodes"] = static_cast<double>(deleted_nodes);
+  report.metrics["unsplittable_edges"] = static_cast<double>(failed_splits);
+  report.metrics["abandoned_triangles"] = static_cast<double>(abandoned);
+  if (abandoned > 0)
+    report.messages.push_back(
+        std::to_string(abandoned) +
+        " bad triangles were left because fixing them needs a boundary edge "
+        "that cannot be split; the angle bound may not hold there");
   local.record(report);
 }
 

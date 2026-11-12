@@ -54,21 +54,26 @@ void LongestEdgeBisection::run(
     StageReport &report) const {
   validate(spec);
   const double h = spec.max_edge_length;
-  std::size_t splits = 0, boundary_splits = 0;
+  std::size_t splits = 0, boundary_splits = 0, retriangulated = 0,
+              deleted_nodes = 0, failed_splits = 0;
   detail::LocalImproverCalls local(local_improvers);
   std::deque<std::size_t> queue;
-  // Sweeps repeat until one finds no long edge: a local improver may
-  // create long edges in triangles the refiner did not touch.
-  while (true) {
+  // Sweeps repeat while one finds a long edge and makes progress: a local
+  // improver may create long edges in triangles the refiner did not
+  // touch, and a triangle whose path ends at an unsplittable boundary edge
+  // is skipped.
+  bool progress = true;
+  while (progress) {
+    progress = false;
     for (std::size_t t = 0; t < mesh.triangles().size(); ++t)
-      if (longest_length(mesh, t) > h)
+      if (!mesh.is_triangle_deleted(t) && longest_length(mesh, t) > h)
         queue.push_back(t);
     if (queue.empty())
       break;
     while (!queue.empty()) {
       std::size_t t = queue.front();
       queue.pop_front();
-      if (longest_length(mesh, t) <= h)
+      if (mesh.is_triangle_deleted(t) || longest_length(mesh, t) <= h)
         continue;
       if (splits >= options_.max_points)
         throw std::runtime_error(
@@ -77,13 +82,31 @@ void LongestEdgeBisection::run(
       // Follow the longest-edge propagation path to its terminal edge.
       std::size_t u = t;
       std::vector<std::size_t> created;
+      bool split = false;
       while (true) {
         int e = longest(mesh, u);
         std::size_t n = mesh.neighbour(u, e);
         if (n == no_index) {
-          auto c = mesh.split_boundary_edge(mesh.boundary_edge_index(u, e));
-          created.assign(c.begin(), c.end());
+          std::size_t k = mesh.boundary_edge_index(u, e);
+          if (mesh.is_unsplittable(k))
+            break;
+          auto [a, b] = mesh.boundary_edges()[k].nodes;
+          auto r = mesh.split_boundary_edge(k);
+          if (!r.split) {
+            ++failed_splits;
+            report.messages.push_back(
+                "boundary edge (" + std::to_string(a) + ", " +
+                std::to_string(b) + ") of region '" +
+                mesh.region_names()[mesh.boundary_edges()[k].region] +
+                "' cannot be split: " + r.failure +
+                "; it stays as it is, so the target may not be met near it");
+            break;
+          }
+          created = std::move(r.touched);
           ++boundary_splits;
+          retriangulated += r.retriangulated;
+          deleted_nodes += r.deleted_nodes;
+          split = true;
           break;
         }
         if (edge_key(mesh, n, longest(mesh, n)) == edge_key(mesh, u, e)) {
@@ -93,19 +116,27 @@ void LongestEdgeBisection::run(
               mesh.nodes()[v[static_cast<std::size_t>((e + 2) % 3)]]);
           auto c = mesh.split_interior_edge(u, e, mid);
           created.assign(c.begin(), c.end());
+          split = true;
           break;
         }
         u = n;
       }
+      if (!split)
+        continue; // left for a later sweep, if anything else changes
+      progress = true;
       ++splits;
       local.after_change(mesh, created);
       for (auto s : created)
-        queue.push_back(s);
+        if (!mesh.is_triangle_deleted(s))
+          queue.push_back(s);
       queue.push_back(t);
     }
   }
   report.metrics["splits"] = static_cast<double>(splits);
   report.metrics["boundary_splits"] = static_cast<double>(boundary_splits);
+  report.metrics["retriangulated_splits"] = static_cast<double>(retriangulated);
+  report.metrics["deleted_nodes"] = static_cast<double>(deleted_nodes);
+  report.metrics["unsplittable_edges"] = static_cast<double>(failed_splits);
   local.record(report);
 }
 

@@ -12,6 +12,36 @@ using pde2d::geometry::EllipticalArc;
 
 namespace {
 
+using std::numbers::pi;
+
+// The circular arc from (0, 0) to (1, 0) through (0.5, top): it bulges
+// into the domain above the chord when top > 0, out of it when top < 0.
+// The arc-length middle is (0.5, top).
+CurveChain bulge(double top) {
+  // Center (0.5, k) at the same distance from (0, 0) and (0.5, top).
+  double k = (top * top - 0.25) / (2 * top);
+  double r = std::abs(top - k);
+  double start = std::atan2(-k, -0.5), end = std::atan2(-k, 0.5);
+  double sweep = end - start; // through the top of the circle
+  if (top > 0 && sweep > 0)
+    sweep -= 2 * pi;
+  if (top < 0 && sweep < 0)
+    sweep += 2 * pi;
+  return CurveChain({EllipticalArc{{0.5, k}, r, r, 0, start, sweep}});
+}
+
+// Unit square (0,0)-(1,1) with one more node `extra` inside, the edge
+// (0,0) -> (1,0) linked to `chain`. Triangles around `extra`.
+WorkingMesh square_with(Point extra, const CurveChain &chain) {
+  return WorkingMesh({{0, 0}, {1, 0}, extra, {1, 1}, {0, 1}},
+                     {{0, 1, 2}, {1, 3, 2}, {2, 3, 4}, {0, 2, 4}},
+                     {{{0, 1}, 0, CurveLink{0, 0, chain.length()}},
+                      {{1, 3}, 0, {}},
+                      {{3, 4}, 0, {}},
+                      {{4, 0}, 0, {}}},
+                     {"r"}, {chain});
+}
+
 // The unit square split along the diagonal 0-2.
 //   3 --- 2
 //   |   / |
@@ -199,10 +229,22 @@ int main() {
                         {{2, 0}, 0, {}}},
                        {"r"}, {chain});
          expect_throws<std::runtime_error>(
-             [&] { w.split_boundary_edge(0); },
+             [&] { w.split_boundary_edge_directly(0); },
              "Splitting boundary edge (0, 1) of region 'r' at its curve point "
              "would invert a triangle");
          check(w.nodes().size() == 3, "mesh unchanged");
+         // The policy cannot re-triangulate either: the region it would
+         // cut off contains node 2, a boundary node. Step (c): nothing
+         // changes and the edge is marked.
+         auto split = w.split_boundary_edge(0);
+         check(!split.split, "not split");
+         check(split.failure ==
+                   "the curve bulges in past another boundary node",
+               "reason");
+         check(w.nodes().size() == 3 && w.triangles().size() == 1,
+               "mesh unchanged");
+         check(w.is_unsplittable(0) && !w.is_unsplittable(1), "edge marked");
+         check(!w.split_boundary_edge(0).split, "not retried");
        }},
       {"split_point_at_arc_length_middle",
        [] {
@@ -239,6 +281,76 @@ int main() {
          check(before.curve == 0 && before.t == 1, "end of the earlier one");
          expect_throws<std::invalid_argument>([] { CurveChain c({}); },
                                               "at least one curve");
+       }},
+      {"split_retriangulates_inward_bulge",
+       [] {
+         // The opposite node (0.95, 0.05) is close to the end of the
+         // chord: joining it to the curve point (0.5, 0.2) would invert a
+         // triangle, but it lies outside the region to cut off.
+         auto chain = bulge(0.2);
+         auto w = square_with({0.95, 0.05}, chain);
+         auto r = w.split_boundary_edge(0);
+         check(r.split && r.retriangulated, "split by re-triangulation");
+         check(r.deleted_nodes == 0, "no node in the cut-off region");
+         check(!w.has_deleted() || r.deleted_triangles > 0, "bookkeeping");
+         Mesh m = w.to_mesh();
+         check_valid_mesh(m);
+         // The square minus the straight triangle (0,0), (1,0), (0.5, 0.2).
+         near(mesh_area(m), 1 - 0.1, 1e-15, "area");
+         near(m.nodes.back().x, 0.5, 1e-15, "new node at the curve point");
+         near(m.nodes.back().y, 0.2, 1e-15, "new node at the curve point");
+         check(m.boundary_edges.size() == 5, "five boundary edges");
+         for (auto t : r.touched)
+           check(!w.is_triangle_deleted(t), "touched triangles are live");
+         // Links: the halves of the arc.
+         const auto &e = w.boundary_edges();
+         near(e[0].link->s1, chain.length() / 2, 0, "first half");
+         near(e[4].link->s0, chain.length() / 2, 0, "second half");
+       }},
+      {"split_deletes_nodes_in_the_cut_off_region",
+       [] {
+         // The interior node (0.5, 0.08) lies between the chord and the
+         // curve point (0.5, 0.2): outside the true domain, so it goes.
+         auto w = square_with({0.5, 0.08}, bulge(0.2));
+         auto r = w.split_boundary_edge(0);
+         check(r.split && r.retriangulated, "split by re-triangulation");
+         check(r.deleted_nodes == 1, "one node deleted");
+         check(w.is_node_deleted(2), "node 2 is a tombstone");
+         Mesh m = w.to_mesh();
+         check_valid_mesh(m);
+         check(m.nodes.size() == 5, "four corners and the curve point");
+         for (auto p : m.nodes)
+           check(!(p == Point{0.5, 0.08}), "the node is gone");
+         near(mesh_area(m), 0.9, 1e-15, "area");
+         // compact() gives the same numbering as to_mesh().
+         w.compact();
+         check(!w.has_deleted() && w.nodes().size() == 5, "compacted");
+         check(same_mesh(w.to_mesh(), m), "same mesh");
+         WorkingMesh copy(w.nodes(), w.triangles(), w.boundary_edges(),
+                          w.region_names(), w.chains());
+         check(copy.triangles().size() == w.triangles().size(),
+               "a compacted mesh passes full validation");
+       }},
+      {"split_adds_a_cap_for_an_outward_bulge",
+       [] {
+         // The opposite node (-0.5, 0.1) lies beyond the chord's end, so
+         // joining it to the curve point (0.5, -0.3) would invert a
+         // triangle. The point lies outside the mesh: a triangle is added.
+         auto chain = bulge(-0.3);
+         WorkingMesh w({{0, 0}, {1, 0}, {-0.5, 0.1}}, {{0, 1, 2}},
+                       {{{0, 1}, 0, CurveLink{0, 0, chain.length()}},
+                        {{1, 2}, 0, {}},
+                        {{2, 0}, 0, {}}},
+                       {"r"}, {chain});
+         expect_throws<std::runtime_error>(
+             [&] { w.split_boundary_edge_directly(0); }, "would invert");
+         auto r = w.split_boundary_edge(0);
+         check(r.split && r.retriangulated, "split with a cap");
+         Mesh m = w.to_mesh();
+         check_valid_mesh(m);
+         // Old triangle 0.05 plus the cap (0,0), (0.5,-0.3), (1,0): 0.15.
+         near(mesh_area(m), 0.2, 1e-15, "area");
+         check(m.triangles.size() == 2, "one triangle added");
        }},
       {"delaunay_routines",
        [] {

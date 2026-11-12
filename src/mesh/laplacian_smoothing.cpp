@@ -18,7 +18,7 @@ void LaplacianSmoothing::run(WorkingMesh &mesh, const MeshSpec &,
   std::size_t moves = 0, rejected = 0;
   for (int pass = 0; pass < options_.iterations; ++pass)
     for (std::size_t node = 0; node < mesh.nodes().size(); ++node) {
-      if (mesh.is_boundary_node(node))
+      if (mesh.is_node_deleted(node) || mesh.is_boundary_node(node))
         continue;
       std::vector<std::size_t> neighbours;
       for (auto t : mesh.triangles_around(node))

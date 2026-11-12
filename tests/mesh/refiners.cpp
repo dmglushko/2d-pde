@@ -209,6 +209,41 @@ int main() {
            check_area(r.mesh, pi, 0.01);
          }
        }},
+      {"coarse_hole_refined_without_inversions",
+       [] {
+         // The hole of the annulus starts as a triangle (sagitta 0.2), so
+         // its curve points bulge far into the domain and many simple
+         // splits would invert a triangle.
+         double retriangulated = 0, deleted = 0;
+         for (double inner : {0.4, 0.6})
+           for (auto triangulator : {std::shared_ptr<const InitialTriangulator>(
+                                         std::make_shared<EarClipping>()),
+                                     std::shared_ptr<const InitialTriangulator>(
+                                         std::make_shared<Cdt>())})
+             for (auto refiner :
+                  {std::shared_ptr<const Refiner>(std::make_shared<Ruppert>()),
+                   std::shared_ptr<const Refiner>(
+                       std::make_shared<LongestEdgeBisection>())})
+               for (double h : {0.3, 0.1, 0.04}) {
+                 Mesher mesher(std::make_shared<CoarseBoundary>(1.5),
+                               triangulator, refiner);
+                 auto r = mesher.run(annulus(1, inner), {h});
+                 check_valid_mesh(r.mesh);
+                 check(r.target_met, "target met");
+                 check_on_circle(r.mesh, "outer", {0, 0}, 1);
+                 check_on_circle(r.mesh, "inner", {0, 0}, inner);
+                 // The straight-edged mesh lies between the true area and
+                 // the polygon through its boundary nodes.
+                 check_area(r.mesh, pi * (1 - inner * inner), 4 * pi * h * h);
+                 const auto &m = r.reports[3].metrics;
+                 near(m.at("unsplittable_edges"), 0, 0, "every split worked");
+                 retriangulated += m.at("retriangulated_splits");
+                 deleted += m.at("deleted_nodes");
+               }
+         std::cout << "retriangulated " << retriangulated << ", deleted nodes "
+                   << deleted << '\n';
+         check(retriangulated > 0, "local re-triangulation was needed");
+       }},
       {"regions_survive_refinement",
        [] {
          auto r = mesh_with(std::make_shared<Cdt>(),

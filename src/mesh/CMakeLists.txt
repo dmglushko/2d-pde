@@ -1,11 +1,13 @@
 add_library(pde2d_mesh
   boundary_polygon.cpp
+  boundary_split_policy.cpp
   cdt.cpp
   chord_length_discretizer.cpp
   components.cpp
   curve_chain.cpp
   delaunay.cpp
   delaunay_flips.cpp
+  edge_recovery.cpp
   ear_clipping.cpp
   laplacian_smoothing.cpp
   longest_edge_bisection.cpp

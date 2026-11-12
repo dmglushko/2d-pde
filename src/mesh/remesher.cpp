@@ -265,6 +265,8 @@ MeshResult Remesher::run(WorkingMesh mesh, const MeshSpec &spec) const {
     detail::timed_stage(report, refiner_->name(), [&](auto &r) {
       refiner_->run(mesh, spec, local_improvers_, r);
     });
+    // Final passes see a mesh without deleted triangles or nodes.
+    mesh.compact();
     result.reports.push_back(std::move(report));
   }
   for (auto i : plan_.final_passes) {

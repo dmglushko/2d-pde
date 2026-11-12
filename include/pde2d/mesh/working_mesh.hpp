@@ -40,6 +40,21 @@ struct Location {
   int index = -1;
 };
 
+// What WorkingMesh::split_boundary_edge did.
+struct BoundarySplitResult {
+  // False: the edge could not be split, the mesh is unchanged, `failure`
+  // says why, and the edge is now marked unsplittable.
+  bool split = false;
+  // The simple split would have inverted a triangle, so the mesh around
+  // the edge was re-triangulated.
+  bool retriangulated = false;
+  // Live triangles that were created or changed.
+  std::vector<std::size_t> touched;
+  std::size_t deleted_nodes = 0;
+  std::size_t deleted_triangles = 0;
+  std::string failure;
+};
+
 // The mutable mesh that the meshing stages work on.
 //
 // Triangles are counterclockwise. Edge i of a triangle is the edge
@@ -48,11 +63,15 @@ struct Location {
 // that edge, or no_index on the boundary. Every edge without a neighbour is
 // exactly one boundary edge with the same direction.
 //
-// Edits keep these invariants. They never delete a triangle or a node:
-// a split reuses the old triangle's index and appends new ones, a flip
-// reuses both indices. Each edit returns the triangles it changed or
-// created. An edit that would create an inverted triangle throws and
-// leaves the mesh unchanged.
+// Edits keep these invariants. A split reuses the old triangle's index and
+// appends new ones, a flip reuses both indices. Splitting a curved
+// boundary edge may delete triangles and nodes (see split_boundary_edge).
+// A deleted triangle or node keeps its index as a tombstone
+// (is_triangle_deleted, is_node_deleted), so indices held by a refiner
+// stay valid; boundary edges are never deleted. compact() renumbers
+// without the tombstones, and to_mesh() never contains them. Each edit
+// returns the triangles it changed or created. An edit that would create
+// an inverted triangle throws and leaves the mesh unchanged.
 class WorkingMesh {
 public:
   using TriangleNodes = std::array<std::size_t, 3>;
@@ -70,8 +89,16 @@ public:
   static WorkingMesh from_mesh(const Mesh &mesh);
 
   // --- reading -------------------------------------------------------------
+  // Both lists may contain deleted entries until compact() is called.
   const std::vector<geometry::Point> &nodes() const { return nodes_; }
   const std::vector<TriangleNodes> &triangles() const { return triangles_; }
+  bool is_triangle_deleted(std::size_t t) const {
+    return triangles_[t][0] == no_index;
+  }
+  bool is_node_deleted(std::size_t v) const {
+    return node_triangle_[v] == no_index;
+  }
+  bool has_deleted() const { return deleted_triangles_ > 0; }
   const std::vector<WorkingBoundaryEdge> &boundary_edges() const {
     return boundary_edges_;
   }
@@ -93,8 +120,9 @@ public:
   std::pair<std::size_t, int> find_edge(std::size_t a, std::size_t b) const;
   // All triangles that contain the node.
   std::vector<std::size_t> triangles_around(std::size_t node) const;
-  // Walks from `start` towards p (a visibility walk). Stops at the triangle
-  // containing p, or at the first boundary edge it would have to cross.
+  // Walks from `start` (a live triangle) towards p (a visibility walk).
+  // Stops at the triangle containing p, or at the first boundary edge it
+  // would have to cross.
   Location locate(geometry::Point p, std::size_t start) const;
 
   // --- editing -------------------------------------------------------------
@@ -116,18 +144,62 @@ public:
   // midpoint (the same point, without the rounding of the curve). An
   // unlinked edge is split at its chord midpoint.
   geometry::Point boundary_split_point(std::size_t k) const;
-  // Splits boundary edge k at boundary_split_point(k). The two halves keep
-  // the region; their links cover the two halves of the arc-length
-  // interval. Throws std::runtime_error if the curve point would invert a
-  // triangle (the chord is too coarse for the curve there).
-  std::array<std::size_t, 2> split_boundary_edge(std::size_t k);
+  // Splits boundary edge k at boundary_split_point(k), using the
+  // library's boundary split policy (fixed, internal). The v1 policy:
+  //  (a) split directly (split_boundary_edge_directly) if that inverts no
+  //      triangle;
+  //  (b) otherwise re-triangulate locally: for a point outside the mesh
+  //      (the curve bulges outwards) add the triangle a, p, b on the edge
+  //      (add_boundary_cap); for a point inside it, insert it, force the
+  //      edges a-p and p-b by flips and cut off everything between them
+  //      and the old edge, including the nodes there, which lie outside
+  //      the true domain (cut_off_boundary_edge);
+  //  (c) if that is impossible too, change nothing, mark the edge
+  //      unsplittable and say why.
+  // The two halves keep the region; their links cover the two halves of
+  // the arc-length interval. An edge already marked unsplittable fails at
+  // once.
+  BoundarySplitResult split_boundary_edge(std::size_t k);
+  // True if a split of boundary edge k has failed before.
+  bool is_unsplittable(std::size_t k) const { return unsplittable_.at(k); }
+
+  // The building blocks of split_boundary_edge. Each keeps the mesh valid
+  // or throws without changing it.
+  //
+  // Step (a): connects the split point to the vertex opposite the edge.
+  // Throws std::runtime_error if the point would invert a triangle.
+  std::array<std::size_t, 2> split_boundary_edge_directly(std::size_t k);
+  // Adds the triangle (a, p, b) on boundary edge a -> b, where p is its
+  // split point and must lie strictly on the right of the edge (outside
+  // the mesh; std::invalid_argument otherwise). The boundary becomes
+  // a -> p -> b. It does not check that the new triangle stays clear of
+  // distant parts of the mesh. Returns the old and the new triangle.
+  std::array<std::size_t, 2> add_boundary_cap(std::size_t k);
+  // Makes a -> q -> b the boundary in place of boundary edge k = a -> b
+  // and deletes everything between them: the triangles in the region
+  // bounded by a -> b, b -> q and q -> a, and the nodes inside it. q must
+  // be an interior node at boundary_split_point(k), joined to a and b by
+  // edges, and the region must contain no other boundary edge or boundary
+  // node (std::invalid_argument otherwise). Returns the live triangles on
+  // the two new boundary edges; the counts of deleted nodes and triangles
+  // go to the optional out-parameters.
+  std::array<std::size_t, 2>
+  cut_off_boundary_edge(std::size_t k, std::size_t q,
+                        std::size_t *deleted_nodes = nullptr,
+                        std::size_t *deleted_triangles = nullptr);
+
   // Moves an interior node if every triangle around it stays
   // counterclockwise; returns false (and changes nothing) otherwise.
   // Boundary nodes cannot be moved (std::invalid_argument).
   bool try_move_node(std::size_t node, geometry::Point p);
 
-  // The output mesh. Boundary edges are listed loop by loop in walking
-  // order; loops in order of their lowest boundary edge index.
+  // Removes deleted triangles and nodes and renumbers the rest, keeping
+  // their order. Boundary edge indices do not change.
+  void compact();
+
+  // The output mesh, without deleted entries (numbered as after
+  // compact()). Boundary edges are listed loop by loop in walking order;
+  // loops in order of their lowest boundary edge index.
   Mesh to_mesh() const;
 
 private:
@@ -144,6 +216,8 @@ private:
   std::vector<std::size_t> outgoing_boundary_; // per node, or no_index
   std::vector<std::string> region_names_;
   std::vector<CurveChain> chains_;
+  std::vector<bool> unsplittable_; // per boundary edge
+  std::size_t deleted_triangles_ = 0;
 };
 
 } // namespace pde2d::mesh
