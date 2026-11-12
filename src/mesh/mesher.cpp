@@ -55,8 +55,9 @@ MeshResult Mesher::run(const geometry::CurveGeometry &geometry,
       [&](auto &r) { return triangulator_->run(polygon, r); });
 
   MeshResult result = remesher_.run(std::move(working), spec);
+  // After the pipeline report, which the Remesher puts first.
   result.reports.insert(
-      result.reports.begin(),
+      result.reports.begin() + 1,
       {std::move(boundary_report), std::move(triangulation_report)});
   return result;
 }

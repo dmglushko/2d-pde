@@ -12,15 +12,25 @@
 
 namespace pde2d::mesh {
 
-// Refines and improves a mesh that already exists: the optional refiner,
-// then the improvers in order. Checks "target met" on the final mesh.
+// Refines and improves a mesh that already exists: the optional refiner
+// (calling the local improvers after each change), then the final passes
+// in order. Checks "target met" on the final mesh.
+//
+// The first report of every run is the "pipeline" report: the plan
+// resolved at construction and its warnings (see pipeline_report()).
 class Remesher {
 public:
-  // Checks the components against each other (check_compatibility) and
-  // throws std::invalid_argument on a mismatch. The refiner may be null.
+  // Resolves the improvers' use modes against the refiner (plan_pipeline).
+  // A mode that cannot be honoured is a warning in the pipeline report.
+  // The refiner may be null; a null improver throws
+  // std::invalid_argument.
   explicit Remesher(
       std::shared_ptr<const Refiner> refiner,
       std::vector<std::shared_ptr<const Improver>> improvers = {});
+
+  // Which improvers run locally inside the refiner and which as final
+  // passes, and the warnings found when the plan was made.
+  const PipelinePlan &plan() const { return plan_; }
 
   // A mesh without geometry: split boundary edges get their new point at
   // the chord midpoint.
@@ -41,9 +51,20 @@ public:
   // calls this after triangulation.
   [[nodiscard]] MeshResult run(WorkingMesh mesh, const MeshSpec &spec) const;
 
+  // The "pipeline" report that starts every run's reports. Messages are
+  // the plan's warnings. Metrics: "local_improvers" and "final_passes"
+  // (counts); "refiner.<name>" = 1 if there is a refiner; one
+  // "local.<k>.<name>" per local improver and one "final.<k>.<name>" per
+  // final pass, where k is the position in call order and the value is
+  // the improver's index in the improver list.
+  const StageReport &pipeline_report() const { return pipeline_report_; }
+
 private:
   std::shared_ptr<const Refiner> refiner_;
   std::vector<std::shared_ptr<const Improver>> improvers_;
+  PipelinePlan plan_;
+  std::vector<const LocalImprover *> local_improvers_;
+  StageReport pipeline_report_;
 };
 
 } // namespace pde2d::mesh

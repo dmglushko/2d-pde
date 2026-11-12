@@ -13,6 +13,7 @@
 #include "pde2d/mesh/remesher.hpp"
 #include "pde2d/mesh/ruppert.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <numbers>
 
@@ -44,30 +45,61 @@ public:
   }
 };
 
-// A refiner that tolerates nothing, with a local improver.
+// A refiner that tolerates nothing and does nothing; it records the names
+// of the local improvers it was given.
 class Strict final : public Refiner {
 public:
-  explicit Strict(std::shared_ptr<const LocalImprover> local)
-      : local_(std::move(local)) {}
   std::string name() const override { return "strict"; }
   RefinerCapabilities capabilities() const override { return {}; }
-  const LocalImprover *local_improver() const override { return local_.get(); }
-  void run(WorkingMesh &, const MeshSpec &, StageReport &) const override {}
-
-private:
-  std::shared_ptr<const LocalImprover> local_;
-};
-
-// A local improver that moves nodes (does nothing here).
-class Mover final : public LocalImprover {
-public:
-  std::string name() const override { return "mover"; }
-  ImproverEffects effects() const override { return {.moves_nodes = true}; }
-  std::size_t improve_around(WorkingMesh &,
-                             std::span<const std::size_t>) const override {
-    return 0;
+  void run(WorkingMesh &, const MeshSpec &,
+           std::span<const LocalImprover *const> local,
+           StageReport &report) const override {
+    for (const auto *l : local)
+      report.messages.push_back("local " + l->name());
   }
 };
+
+// An improver with a local version and declared effects; it does nothing
+// but count its calls.
+class Probe final : public Improver, public LocalImprover {
+public:
+  Probe(std::string name, ImproverEffects effects, ImproverUse use)
+      : name_(std::move(name)), effects_(effects), use_(use) {}
+  std::string name() const override { return name_; }
+  ImproverEffects effects() const override { return effects_; }
+  ImproverUse use() const override { return use_; }
+  const LocalImprover *as_local_improver() const override { return this; }
+  void run(WorkingMesh &, const MeshSpec &, StageReport &) const override {}
+  std::size_t improve_around(WorkingMesh &,
+                             std::span<const std::size_t>) const override {
+    return 1;
+  }
+
+private:
+  std::string name_;
+  ImproverEffects effects_;
+  ImproverUse use_;
+};
+
+auto probe(std::string name, ImproverEffects effects, ImproverUse use) {
+  return std::make_shared<Probe>(std::move(name), effects, use);
+}
+
+auto flips(ImproverUse use) {
+  return std::make_shared<DelaunayFlips>(DelaunayFlipsOptions{.use = use});
+}
+
+bool has_message(const std::vector<std::string> &messages,
+                 const std::string &text) {
+  return std::find(messages.begin(), messages.end(), text) != messages.end();
+}
+
+std::vector<std::string> stage_names(const MeshResult &r) {
+  std::vector<std::string> stages;
+  for (const auto &s : r.reports)
+    stages.push_back(s.stage);
+  return stages;
+}
 
 // True if p is a point of the closed segment ab, up to rounding.
 bool on_chord(Point a, Point b, Point p) {
@@ -81,36 +113,116 @@ bool on_chord(Point a, Point b, Point p) {
 
 int main() {
   return run({
-      {"compatibility_checked_at_construction",
+      {"improver_modes_resolved_at_construction",
        [] {
-         expect_throws<std::invalid_argument>(
-             [] { Mesher m(chords(), ears(), ruppert(), {flips()}); },
-             "ruppert already maintains Delaunay; delaunay_flips is "
-             "redundant");
-         expect_throws<std::invalid_argument>(
-             [] { Remesher r(nullptr, {flips(), flips()}); },
-             "delaunay_flips already maintains Delaunay");
-         expect_throws<std::invalid_argument>(
-             [] { Remesher r(std::make_shared<Strict>(flips()), {}); },
-             "strict does not tolerate edge flips");
-         expect_throws<std::invalid_argument>(
-             [] {
-               Remesher r(std::make_shared<Strict>(std::make_shared<Mover>()),
-                          {});
-             },
-             "strict does not tolerate node moves");
+         using U = ImproverUse;
+         // Ruppert maintains Delaunay: flips cannot be local there.
+         Mesher m1(chords(), ears(), ruppert(), {flips()});
+         check(m1.plan().local_improvers.empty(), "no local improver");
+         check(m1.plan().final_passes == std::vector<std::size_t>{0},
+               "flips as the final pass");
+         check(has_message(m1.plan().warnings,
+                           "delaunay_flips: ruppert already maintains "
+                           "Delaunay, so it runs only as a final pass"),
+               "local use refused");
+         check(has_message(m1.plan().warnings,
+                           "delaunay_flips: the mesh is already Delaunay "
+                           "after ruppert, so this final pass changes "
+                           "nothing"),
+               "redundant final pass");
+         // local_only with nothing to run it: it does not run at all.
+         Remesher r1(nullptr, {flips(U::local_only)});
+         check(r1.plan().final_passes.empty(), "not a final pass");
+         check(has_message(r1.plan().warnings,
+                           "delaunay_flips: there is no refiner to run it "
+                           "locally, so it does not run at all"),
+               "no refiner");
+         // Smoothing has no local version.
+         Remesher r2(
+             bisection(),
+             {std::make_shared<LaplacianSmoothing>(
+                 LaplacianSmoothingOptions{.use = U::local_and_final})});
+         check(has_message(r2.plan().warnings,
+                           "laplacian_smoothing: it has no local version, "
+                           "so it runs only as a final pass"),
+               "no local version");
+         // A refiner that tolerates nothing refuses flips and moves.
+         auto strict = std::make_shared<Strict>();
+         Remesher r3(strict,
+                     {probe("flipper", {.flips_edges = true}, U::local_only),
+                      probe("mover", {.moves_nodes = true}, U::local_only),
+                      probe("counter", {}, U::local_and_final)});
+         check(has_message(r3.plan().warnings,
+                           "flipper: strict does not tolerate edge flips, so "
+                           "it does not run at all"),
+               "flips refused");
+         check(has_message(r3.plan().warnings,
+                           "mover: strict does not tolerate node moves, so it "
+                           "does not run at all"),
+               "moves refused");
+         check(r3.plan().local_improvers == std::vector<std::size_t>{2},
+               "an improver without effects is accepted");
+         check(r3.plan().final_passes == std::vector<std::size_t>{2},
+               "and runs as a final pass too");
+         // Defaults: smoothing is final only, flips local and final.
+         check(LaplacianSmoothingOptions{}.use == U::final_only, "smoothing");
+         check(DelaunayFlipsOptions{}.use == U::local_and_final, "flips");
+         Remesher r4(bisection(), {flips(), smoothing(), flips()});
+         check(r4.plan().local_improvers == std::vector<std::size_t>{0, 2},
+               "local improvers in list order");
+         check(r4.plan().final_passes == std::vector<std::size_t>{0, 1, 2},
+               "final passes in list order");
+         check(r4.plan().warnings.empty(), "nothing to warn about");
+         // Only configurations that cannot work at all still throw.
          expect_throws<std::invalid_argument>([] { Mesher m(nullptr, ears()); },
                                               "boundary discretizer");
          expect_throws<std::invalid_argument>(
              [] { Remesher r(nullptr, {nullptr}); }, "null");
-         // Allowed: a flip or move in between makes Delaunay flips useful
-         // again, and bisection tolerates both kinds of local improver.
-         Mesher ok1(chords(), ears(), ruppert(), {smoothing(), flips()});
-         Mesher ok2(chords(), ears(), nullptr, {flips(), smoothing(), flips()});
-         Mesher ok3(chords(), ears(),
-                    std::make_shared<LongestEdgeBisection>(
-                        LongestEdgeBisectionOptions{.local_improver = flips()}),
-                    {});
+       }},
+      {"pipeline_report",
+       [] {
+         auto strict = std::make_shared<Strict>();
+         Mesher mesher(chords(), ears(), strict,
+                       {probe("counter", {}, ImproverUse::local_and_final),
+                        probe("mover", {.moves_nodes = true},
+                              ImproverUse::local_and_final),
+                        smoothing()});
+         auto r = mesher.run(rectangle(1, 1), {0.5});
+         check(stage_names(r) ==
+                   std::vector<std::string>{"pipeline", "chord_length",
+                                            "ear_clipping", "strict", "counter",
+                                            "mover", "laplacian_smoothing"},
+               "pipeline report once, first; final passes in list order");
+         const auto &p = r.reports[0];
+         check(p.messages == mesher.plan().warnings, "warnings as messages");
+         check(p.messages.size() == 1, "one warning (mover)");
+         near(p.metrics.at("local_improvers"), 1, 0, "one local improver");
+         near(p.metrics.at("final_passes"), 3, 0, "three final passes");
+         near(p.metrics.at("refiner.strict"), 1, 0, "the refiner");
+         near(p.metrics.at("local.0.counter"), 0, 0, "local: improver 0");
+         near(p.metrics.at("final.0.counter"), 0, 0, "final pass 0");
+         near(p.metrics.at("final.1.mover"), 1, 0, "final pass 1");
+         near(p.metrics.at("final.2.laplacian_smoothing"), 2, 0,
+              "final pass 2");
+         // The refiner received exactly the resolved local improvers.
+         check(r.reports[3].messages ==
+                   std::vector<std::string>{"local counter"},
+               "local improvers passed to the refiner");
+         // Every run copies the same report; so does a Remesher run.
+         auto again = mesher.run(rectangle(1, 1), {0.5});
+         check(again.reports[0].messages == p.messages, "copied per run");
+         Remesher remesher(nullptr, {flips(), flips()});
+         auto rr = remesher.run(r.mesh, {0.5});
+         check(stage_names(rr) == std::vector<std::string>{"pipeline",
+                                                           "delaunay_flips",
+                                                           "delaunay_flips"},
+               "remesher reports");
+         check(rr.reports[0].messages.size() == 3,
+               "two refused local uses and one redundant pass");
+         auto rg = remesher.run(r.mesh, rectangle(1, 1), {0.5});
+         check(rg.reports[0].stage == "pipeline" &&
+                   rg.reports[1].stage == "curve_links",
+               "pipeline, then curve links");
        }},
       {"input_checked_when_run_starts",
        [] {
@@ -207,17 +319,18 @@ int main() {
        [] {
          auto r = Mesher(chords(), ears(), bisection(), {flips(), smoothing()})
                       .run(rectangle(2, 1), {0.3});
-         std::vector<std::string> stages;
-         for (const auto &s : r.reports) {
-           stages.push_back(s.stage);
+         for (const auto &s : r.reports)
            check(s.time.count() >= 0, "time recorded");
-         }
-         check(stages ==
+         check(stage_names(r) ==
                    std::vector<std::string>{
-                       "chord_length", "ear_clipping", "longest_edge_bisection",
+                       "pipeline", "chord_length", "ear_clipping",
+                       "longest_edge_"
+                       "bisection",
                        "delaunay_flips", "laplacian_smoothing"},
                "stage order");
-         check(r.reports[0].metrics.at("points") ==
+         check(r.reports[3].metrics.at("local_improver_changes") > 0,
+               "flips ran locally inside bisection");
+         check(r.reports[1].metrics.at("points") ==
                    double(boundary_nodes(r.mesh).size()),
                "boundary points");
        }},
@@ -261,8 +374,8 @@ int main() {
            auto fine = Remesher(refiner).run(coarse.mesh, g, {0.1});
            check_valid_mesh(fine.mesh);
            check(fine.target_met, "target met");
-           check(fine.reports.front().stage == "curve_links", "first report");
-           near(fine.reports.front().metrics.at("unlinked_edges"), 0, 0,
+           check(fine.reports[1].stage == "curve_links", "after pipeline");
+           near(fine.reports[1].metrics.at("unlinked_edges"), 0, 0,
                 "every edge linked");
            check(fine.mesh.boundary_edges.size() >
                      coarse.mesh.boundary_edges.size(),
@@ -282,7 +395,7 @@ int main() {
          auto rotated = circle(1).transformed({.rotation = 0.1});
          auto fine = Remesher(bisection()).run(m, rotated, {0.05});
          check_valid_mesh(fine.mesh);
-         const auto &links = fine.reports.front();
+         const auto &links = fine.reports[1];
          near(links.metrics.at("unlinked_edges"), 1, 0, "one edge");
          check(links.messages.size() == 1, "message about it");
          std::size_t off = 0;

@@ -25,7 +25,9 @@ struct RuppertOptions {
 //     boundary edges are split instead.
 // Every insertion is followed by flips, so the mesh stays constrained
 // Delaunay. A boundary edge with a curve link is split at the curve point.
-// Metrics: "initial_flips", "flips", "boundary_splits", "circumcenters".
+// Local improvers it is given run after every insertion and its flips.
+// Metrics: "initial_flips", "flips", "boundary_splits", "circumcenters",
+// "local_improver_changes" and "local_improver_changes.<name>".
 class Ruppert final : public Refiner {
 public:
   explicit Ruppert(RuppertOptions options = {});
@@ -34,12 +36,14 @@ public:
   std::string name() const override { return "ruppert"; }
   RefinerCapabilities capabilities() const override {
     // It keeps its own Delaunay invariant, so it accepts no outside
-    // changes during refinement.
+    // changes during refinement: only local improvers that neither flip
+    // nor move nor make the mesh Delaunay.
     return {.tolerates_flips = false,
             .tolerates_node_moves = false,
             .maintains_delaunay = true};
   }
   void run(WorkingMesh &mesh, const MeshSpec &spec,
+           std::span<const LocalImprover *const> local_improvers,
            StageReport &report) const override;
 
 private:

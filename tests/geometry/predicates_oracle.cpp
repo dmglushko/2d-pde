@@ -88,8 +88,8 @@ struct Random {
     return lo + (hi - lo) * unit;
   }
   int integer(int lo, int hi) {
-    return lo + static_cast<int>(engine() % static_cast<std::uint64_t>(
-                                                 hi - lo + 1));
+    return lo +
+           static_cast<int>(engine() % static_cast<std::uint64_t>(hi - lo + 1));
   }
   // x moved by up to `ulps` units in the last place, either way.
   double nudge(double x, int ulps) {
@@ -100,7 +100,9 @@ struct Random {
       x = std::nextafter(x, -INFINITY);
     return x;
   }
-  Point nudge(Point p, int ulps) { return {nudge(p.x, ulps), nudge(p.y, ulps)}; }
+  Point nudge(Point p, int ulps) {
+    return {nudge(p.x, ulps), nudge(p.y, ulps)};
+  }
 };
 
 struct Tally {
@@ -112,15 +114,14 @@ void compare_orient(Point a, Point b, Point c, Tally &tally) {
   ++tally.cases;
   tally.zeros += expected == 0;
   // All six orders: the sign flips with odd permutations.
-  int got[6] = {orient(a, b, c), orient(b, c, a), orient(c, a, b),
+  int got[6] = {orient(a, b, c),  orient(b, c, a),  orient(c, a, b),
                 -orient(b, a, c), -orient(a, c, b), -orient(c, b, a)};
   for (int g : got)
     if (g != expected)
       throw Failure("orient disagrees with the exact oracle at (" +
-                    std::to_string(a.x) + ", " + std::to_string(a.y) +
-                    "), (" + std::to_string(b.x) + ", " +
-                    std::to_string(b.y) + "), (" + std::to_string(c.x) +
-                    ", " + std::to_string(c.y) + ")");
+                    std::to_string(a.x) + ", " + std::to_string(a.y) + "), (" +
+                    std::to_string(b.x) + ", " + std::to_string(b.y) + "), (" +
+                    std::to_string(c.x) + ", " + std::to_string(c.y) + ")");
 }
 
 void compare_incircle(Point a, Point b, Point c, Point d, Tally &tally) {
@@ -195,8 +196,8 @@ int main() {
          for (double offset : {0.0, 1.0, 1e4, 1e9, 1e15, 1e25})
            for (int k = 0; k < 3000; ++k) {
              // Not so small that the offset rounds the points together.
-             double radius =
-                 std::max(std::ldexp(1.0, r.integer(-30, 30)), offset * 0x1p-40);
+             double radius = std::max(std::ldexp(1.0, r.integer(-30, 30)),
+                                      offset * 0x1p-40);
              Point center{offset + radius * r.uniform(-3, 3),
                           offset + radius * r.uniform(-3, 3)};
              auto on_circle = [&](double angle) {
@@ -215,9 +216,9 @@ int main() {
        [] {
          // Integer points on x^2 + y^2 = 25 and 65^2, scaled by a power of
          // two and moved by an exact offset: exactly cocircular.
-         const Point five[] = {{5, 0},  {4, 3},   {3, 4},   {0, 5},
-                               {-3, 4}, {-4, 3},  {-5, 0},  {-4, -3},
-                               {-3, -4}, {0, -5}, {3, -4},  {4, -3}};
+         const Point five[] = {{5, 0},   {4, 3},  {3, 4},  {0, 5},
+                               {-3, 4},  {-4, 3}, {-5, 0}, {-4, -3},
+                               {-3, -4}, {0, -5}, {3, -4}, {4, -3}};
          const Point sixty_five[] = {{65, 0},   {63, 16},  {60, 25},
                                      {56, 33},  {52, 39},  {39, 52},
                                      {33, -56}, {-25, 60}, {-16, -63}};
@@ -228,8 +229,8 @@ int main() {
            Point offset{std::ldexp(r.integer(-999, 999), r.integer(0, 30)),
                         std::ldexp(r.integer(-999, 999), r.integer(0, 30))};
            auto pick = [&] {
-             Point p = k % 2 ? five[r.integer(0, 11)]
-                             : sixty_five[r.integer(0, 8)];
+             Point p =
+                 k % 2 ? five[r.integer(0, 11)] : sixty_five[r.integer(0, 8)];
              if (r.integer(0, 1))
                p.x = -p.x;
              return Point{offset.x + unit * p.x, offset.y + unit * p.y};
@@ -270,8 +271,8 @@ int main() {
            Point d{s * r.integer(-3, 3), s * r.integer(-3, 3)};
            Point b{a.x + 2 * d.x, a.y + 2 * d.y};
            compare_orient(a, b, r.nudge(Point{a.x + d.x, a.y + d.y}, 1), tally);
-           Point q[4] = {{5 * s, 0}, {0, 5 * s}, {-3 * s, 4 * s},
-                         {4 * s, -3 * s}};
+           Point q[4] = {
+               {5 * s, 0}, {0, 5 * s}, {-3 * s, 4 * s}, {4 * s, -3 * s}};
            compare_incircle(q[0], q[1], q[2], r.nudge(q[3], 1), tally);
          }
          check(tally.cases > 4000, "cases ran");

@@ -7,6 +7,9 @@ namespace pde2d::mesh {
 struct LaplacianSmoothingOptions {
   // Number of passes over all interior nodes. Must be at least 1.
   int iterations = 3;
+  // Smoothing has no local version, so a final pass is the only use that
+  // can be honoured.
+  ImproverUse use = ImproverUse::final_only;
 };
 
 // Moves each interior node to the average of its neighbours, one node at a
@@ -22,6 +25,7 @@ public:
   ImproverEffects effects() const override {
     return {.flips_edges = false, .moves_nodes = true, .makes_delaunay = false};
   }
+  ImproverUse use() const override { return options_.use; }
   void run(WorkingMesh &mesh, const MeshSpec &spec,
            StageReport &report) const override;
 

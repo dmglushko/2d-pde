@@ -207,7 +207,27 @@ WorkingMesh link_to_geometry(const Mesh &mesh,
 Remesher::Remesher(std::shared_ptr<const Refiner> refiner,
                    std::vector<std::shared_ptr<const Improver>> improvers)
     : refiner_(std::move(refiner)), improvers_(std::move(improvers)) {
-  check_compatibility(refiner_.get(), improvers_);
+  detail::timed_stage(pipeline_report_, "pipeline", [&](StageReport &r) {
+    plan_ = plan_pipeline(refiner_.get(), improvers_);
+    for (auto i : plan_.local_improvers)
+      local_improvers_.push_back(improvers_[i]->as_local_improver());
+    r.messages = plan_.warnings;
+    r.metrics["local_improvers"] =
+        static_cast<double>(plan_.local_improvers.size());
+    r.metrics["final_passes"] = static_cast<double>(plan_.final_passes.size());
+    if (refiner_)
+      r.metrics["refiner." + refiner_->name()] = 1;
+    for (std::size_t k = 0; k < plan_.local_improvers.size(); ++k) {
+      std::size_t i = plan_.local_improvers[k];
+      r.metrics["local." + std::to_string(k) + "." + improvers_[i]->name()] =
+          static_cast<double>(i);
+    }
+    for (std::size_t k = 0; k < plan_.final_passes.size(); ++k) {
+      std::size_t i = plan_.final_passes[k];
+      r.metrics["final." + std::to_string(k) + "." + improvers_[i]->name()] =
+          static_cast<double>(i);
+    }
+  });
 }
 
 MeshResult Remesher::run(const Mesh &mesh, const MeshSpec &spec) const {
@@ -225,20 +245,24 @@ MeshResult Remesher::run(const Mesh &mesh,
         return link_to_geometry(mesh, geometry, r);
       });
   MeshResult result = run(std::move(working), spec);
-  result.reports.insert(result.reports.begin(), std::move(report));
+  // After the pipeline report.
+  result.reports.insert(result.reports.begin() + 1, std::move(report));
   return result;
 }
 
 MeshResult Remesher::run(WorkingMesh mesh, const MeshSpec &spec) const {
   validate(spec);
   MeshResult result;
+  result.reports.push_back(pipeline_report_);
   if (refiner_) {
     StageReport report;
-    detail::timed_stage(report, refiner_->name(),
-                        [&](auto &r) { refiner_->run(mesh, spec, r); });
+    detail::timed_stage(report, refiner_->name(), [&](auto &r) {
+      refiner_->run(mesh, spec, local_improvers_, r);
+    });
     result.reports.push_back(std::move(report));
   }
-  for (const auto &improver : improvers_) {
+  for (auto i : plan_.final_passes) {
+    const auto &improver = improvers_[i];
     StageReport report;
     detail::timed_stage(report, improver->name(),
                         [&](auto &r) { improver->run(mesh, spec, r); });

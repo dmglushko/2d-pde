@@ -1,6 +1,7 @@
 #include "pde2d/mesh/ruppert.hpp"
 
 #include "delaunay_internal.hpp"
+#include "local_improvers.hpp"
 
 #include "pde2d/geometry/predicates.hpp"
 #include "pde2d/mesh/delaunay.hpp"
@@ -46,6 +47,7 @@ Ruppert::Ruppert(RuppertOptions options) : options_(options) {
 }
 
 void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
+                  std::span<const LocalImprover *const> local_improvers,
                   StageReport &report) const {
   validate(spec);
   const double h = spec.max_edge_length;
@@ -62,6 +64,7 @@ void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
     bad.push_back(t);
 
   std::size_t inserted = 0, flips = 0, boundary_splits = 0, circumcenters = 0;
+  detail::LocalImproverCalls local(local_improvers);
   auto count_insertion = [&] {
     if (++inserted > options_.max_points)
       throw std::runtime_error(
@@ -75,6 +78,7 @@ void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
   auto after = [&](std::span<const std::size_t> created) {
     std::vector<std::size_t> touched;
     flips += detail::lawson(mesh, created, &touched);
+    local.after_change(mesh, touched);
     for (auto t : touched) {
       bad.push_back(t);
       for (int i = 0; i < 3; ++i) {
@@ -177,6 +181,7 @@ void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
   report.metrics["flips"] = static_cast<double>(flips);
   report.metrics["boundary_splits"] = static_cast<double>(boundary_splits);
   report.metrics["circumcenters"] = static_cast<double>(circumcenters);
+  local.record(report);
 }
 
 } // namespace pde2d::mesh

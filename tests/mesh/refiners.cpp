@@ -110,9 +110,9 @@ int main() {
        [] {
          auto r = mesh_with(std::make_shared<EarClipping>(),
                             std::make_shared<Ruppert>(), rectangle(2, 1), 0.3);
-         check(r.reports.size() == 3, "three stages ran");
-         check(r.reports[2].stage == "ruppert", "stage name");
-         check(r.reports[2].metrics.at("initial_flips") > 0,
+         check(r.reports.size() == 4, "pipeline and three stages");
+         check(r.reports[3].stage == "ruppert", "stage name");
+         check(r.reports[3].metrics.at("initial_flips") > 0,
                "ruppert made the ear-clipped input Delaunay");
        }},
       {"ruppert_options",
@@ -147,17 +147,23 @@ int main() {
        }},
       {"bisection_with_local_flips_stays_delaunay",
        [] {
-         auto flips = std::make_shared<DelaunayFlips>();
-         auto r = mesh_with(
-             std::make_shared<Cdt>(),
-             std::make_shared<LongestEdgeBisection>(
-                 LongestEdgeBisectionOptions{.local_improver = flips}),
-             l_shape(), 0.15);
+         // Local only: the mesh is Delaunay without a final pass.
+         auto flips = std::make_shared<DelaunayFlips>(
+             DelaunayFlipsOptions{.use = ImproverUse::local_only});
+         Mesher mesher(std::make_shared<ChordLengthDiscretizer>(),
+                       std::make_shared<Cdt>(),
+                       std::make_shared<LongestEdgeBisection>(), {flips});
+         auto r = mesher.run(l_shape(), {0.15});
+         check(r.reports.size() == 4, "no final pass");
          check_valid_mesh(r.mesh);
          check(r.target_met, "target met");
          check(is_delaunay(r.mesh), "local flips after every split");
-         check(r.reports[2].metrics.at("local_improver_changes") > 0,
+         const auto &m = r.reports[3].metrics;
+         check(m.at("local_improver_changes") > 0,
                "the local improver did flip");
+         check(m.at("local_improver_changes.delaunay_flips") ==
+                   m.at("local_improver_changes"),
+               "per-improver count");
        }},
       {"regions_survive_refinement",
        [] {

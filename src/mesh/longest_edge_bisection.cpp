@@ -1,5 +1,7 @@
 #include "pde2d/mesh/longest_edge_bisection.hpp"
 
+#include "local_improvers.hpp"
+
 #include <algorithm>
 #include <deque>
 #include <stdexcept>
@@ -46,11 +48,14 @@ LongestEdgeBisection::LongestEdgeBisection(LongestEdgeBisectionOptions options)
         "LongestEdgeBisectionOptions::max_points must be positive");
 }
 
-void LongestEdgeBisection::run(WorkingMesh &mesh, const MeshSpec &spec,
-                               StageReport &report) const {
+void LongestEdgeBisection::run(
+    WorkingMesh &mesh, const MeshSpec &spec,
+    std::span<const LocalImprover *const> local_improvers,
+    StageReport &report) const {
   validate(spec);
   const double h = spec.max_edge_length;
-  std::size_t splits = 0, boundary_splits = 0, changes = 0;
+  std::size_t splits = 0, boundary_splits = 0;
+  detail::LocalImproverCalls local(local_improvers);
   std::deque<std::size_t> queue;
   // Sweeps repeat until one finds no long edge: a local improver may
   // create long edges in triangles the refiner did not touch.
@@ -93,8 +98,7 @@ void LongestEdgeBisection::run(WorkingMesh &mesh, const MeshSpec &spec,
         u = n;
       }
       ++splits;
-      if (options_.local_improver)
-        changes += options_.local_improver->improve_around(mesh, created);
+      local.after_change(mesh, created);
       for (auto s : created)
         queue.push_back(s);
       queue.push_back(t);
@@ -102,7 +106,7 @@ void LongestEdgeBisection::run(WorkingMesh &mesh, const MeshSpec &spec,
   }
   report.metrics["splits"] = static_cast<double>(splits);
   report.metrics["boundary_splits"] = static_cast<double>(boundary_splits);
-  report.metrics["local_improver_changes"] = static_cast<double>(changes);
+  local.record(report);
 }
 
 } // namespace pde2d::mesh

@@ -17,7 +17,7 @@ WorkingMesh refined(const CurveGeometry &g, double h) {
   StageReport r;
   auto polygon = ChordLengthDiscretizer().run(g, {h}, r);
   auto w = EarClipping().run(polygon, r);
-  LongestEdgeBisection().run(w, {h}, r);
+  LongestEdgeBisection().run(w, {h}, {}, r);
   return w;
 }
 
