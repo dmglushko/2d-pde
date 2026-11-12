@@ -373,7 +373,8 @@ It is called `MeshedProblem` (the owner left the name to Claude,
 2. classifies the conditions;
 3. decides the Dirichlet nodes, corners included;
 4. compiles the expressions into fast numeric functions;
-5. evaluates the initial conditions at the nodes;
+5. compiles the initial conditions, which are evaluated at the nodes on
+   request at a start time t₀ (`initial_values(t0)`);
 6. merges the facts.
 
 It stops just before matrix assembly.
@@ -472,9 +473,14 @@ marked "architecture" below are decided.
   singular and every time stepper (explicit ones need M⁻¹) would have to
   special-case those rows. Shrunk, time integration sees a plain system of
   ODEs in the free unknowns.
-- **"Right-hand side depends on t" also looks at the boundary data g**,
-  since a time-dependent Dirichlet value makes the right-hand side
-  time-dependent even when f is not.
+- **Each stage owns its facts** (clarified 2026-11-12). Facts of a later
+  stage are computed by that stage from what it actually builds, never
+  read off an earlier stage's summary. In particular, whether the **final
+  right-hand side** changes in time is a fact computed by assembly, from
+  every term that feeds it: f, the Dirichlet values g/α, the lifting term
+  A_FD·U_D (so also the left-hand side coefficients), and the natural
+  boundary load (g, β and A on the boundary). A time-dependent Dirichlet
+  value makes it time-dependent even when f is not.
 - **Matrices are rebuilt per matrix, from the facts:** a matrix is
   recomputed in time only if a coefficient it uses depends on t (K only if
   A does, M₁ only if m1 does, and so on).
