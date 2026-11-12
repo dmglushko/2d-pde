@@ -77,12 +77,27 @@ Started 2026-11-11. The previous header-only code is on the branch
 - **Region editing (split, merge, rename) stays as methods of
   `CurveGeometry`.** *Why:* these operations must preserve the class's
   invariants: unique names, closed loops and correct depths.
-- **SVG import:** `<path>` elements give the curves. `id` (or `data-region`)
-  gives the region name, and holes are found by depth.
-- **Input/output** (SVG import and export, `.pde2d`, Gmsh import) is built on
-  top of the core types once they exist. **`.pde2d` keeps the old format**,
-  so the old viewer works unchanged. If the new mesh cannot fill the format,
-  ask the owner before changing it.
+- **SVG import:** `<path>` elements give the curves. `data-region`, else
+  `id`, gives the region name, and holes are found by depth. **The y-axis is
+  flipped** (decided 2026-11-12): y points up, as in mathematics, so
+  coefficients written in x and y mean what they say. `transform`
+  attributes, basic shapes and `<use>` are rejected with a clear error;
+  units and `viewBox` are ignored. Open runs are joined end to start when
+  their ends meet (within 1e-9 of the drawing size). The remaining import
+  and export details in the implementation were accepted on 2026-11-12.
+- **Input/output** (library `pde2d_io`: SVG import and export, `.pde2d`
+  import and export, Gmsh 4.1 and 2.2 ASCII import) is implemented.
+  **`.pde2d` keeps the old format** (version 2 for one loop, version 5 for
+  several), so the old viewer works unchanged; curve links are dropped on
+  export because the format has no place for them. Gmsh boundary edges must
+  belong to a physical line group, which gives their region. If the new mesh
+  cannot fill the format, ask the owner before changing it.
+- **Imported meshes get a full geometric validity check** (decided
+  2026-11-12), not only a connectivity check: counterclockwise triangles,
+  conforming edges, no folds around interior nodes, no crossing boundary
+  edges and no piece lying inside another. The test oracle checks overlaps
+  independently. *Why:* a mesh can be connected correctly and still
+  overlap itself.
 
 ## Meshing
 
@@ -281,6 +296,11 @@ It stops just before matrix assembly.
 - Handling pure Neumann problems: to be discussed.
 - Anisotropic meshing (metric `MeshSpec`) and problem-aware planners.
 - Callables, interior regions and materials, well-posedness checks.
+- Robustness issues found in review, tracked as GitHub issues: a boundary
+  split may overlap a nearby piece of the mesh; point location can cycle on
+  some valid meshes; the inward split has no rollback if it fails half-way.
+- Gmsh export; turning the boundary context of old `.pde2d` files into
+  curve links.
 
 ## Open
 
