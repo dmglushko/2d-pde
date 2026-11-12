@@ -79,11 +79,13 @@ bool is_oblique(const BoundaryCondition &condition);
 // - lhs_depends_on_t: a coefficient of the left-hand side (the equation's
 //   a_*, b_*, c, m1, m2, or a condition's alpha, beta_*, gamma) depends on
 //   t;
-// - rhs_depends_on_t: f or the g of any boundary condition depends on t (a
-//   time-dependent Dirichlet value makes the right-hand side
-//   time-dependent even when f is not).
+// - data_depends_on_t: f or the g of any boundary condition depends on t,
+//   as written. This describes the input only, not the right-hand side of
+//   the assembled system: whether that changes in time is a fact of
+//   assembly (it also depends on alpha, beta, the lifting term and the
+//   left-hand side coefficients).
 int time_order(const Problem &problem);
 bool lhs_depends_on_t(const Problem &problem);
-bool rhs_depends_on_t(const Problem &problem);
+bool data_depends_on_t(const Problem &problem);
 
 } // namespace pde2d::fem

@@ -571,8 +571,8 @@ int main() {
                                     {"top", neumann()},
                                     {"left", neumann()}});
          const MeshedProblem p(square(), problem);
-         check(rhs_depends_on_t(p) && rhs_depends_on_t(problem),
-               "g makes the right-hand side depend on t");
+         check(data_depends_on_t(p) && data_depends_on_t(problem),
+               "g makes the data depend on t");
          check(!lhs_depends_on_t(p) && time_order(p) == 0, "left-hand side");
          problem.boundary_conditions["left"] = {.beta_n = e("1"),
                                                 .gamma = e("1 + t")};

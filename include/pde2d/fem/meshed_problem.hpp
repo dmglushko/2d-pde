@@ -135,6 +135,6 @@ private:
 // compiled functions.
 int time_order(const MeshedProblem &problem);
 bool lhs_depends_on_t(const MeshedProblem &problem);
-bool rhs_depends_on_t(const MeshedProblem &problem);
+bool data_depends_on_t(const MeshedProblem &problem);
 
 } // namespace pde2d::fem

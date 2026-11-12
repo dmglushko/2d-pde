@@ -47,8 +47,8 @@ bool lhs_depends_on_t(const Problem &problem) {
       problem.equation, std::views::values(problem.boundary_conditions));
 }
 
-bool rhs_depends_on_t(const Problem &problem) {
-  return detail::rhs_depends_on_t_of(
+bool data_depends_on_t(const Problem &problem) {
+  return detail::data_depends_on_t_of(
       problem.equation, std::views::values(problem.boundary_conditions));
 }
 

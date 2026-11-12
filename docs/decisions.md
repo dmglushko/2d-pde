@@ -359,7 +359,8 @@ Started 2026-11-11. The previous header-only code is on the branch
   without a final unconditional branch reads out of bounds.
 - **Facts are stored per coefficient** (`zero`, `depends_on_x/y/t`).
   Summaries such as `time_order`, "left-hand side depends on t" and
-  "right-hand side depends on t" are computed from them by functions, never
+  "the data depend on t" (`data_depends_on_t`: f or g as written, not the
+  assembled right-hand side) are computed from them by functions, never
   stored. "Zero" means zero as written.
 - **Well-posedness checks are deferred.**
 

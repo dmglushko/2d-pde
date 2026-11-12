@@ -38,8 +38,8 @@ bool lhs_depends_on_t_of(const Equation &equation,
 }
 
 template <class Equation, class Conditions>
-bool rhs_depends_on_t_of(const Equation &equation,
-                         const Conditions &conditions) {
+bool data_depends_on_t_of(const Equation &equation,
+                          const Conditions &conditions) {
   if (equation.f.facts().depends_on_t)
     return true;
   for (const auto &condition : conditions)

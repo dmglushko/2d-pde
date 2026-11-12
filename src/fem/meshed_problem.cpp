@@ -470,8 +470,8 @@ bool lhs_depends_on_t(const MeshedProblem &problem) {
   return detail::lhs_depends_on_t_of(problem.equation(), problem.conditions());
 }
 
-bool rhs_depends_on_t(const MeshedProblem &problem) {
-  return detail::rhs_depends_on_t_of(problem.equation(), problem.conditions());
+bool data_depends_on_t(const MeshedProblem &problem) {
+  return detail::data_depends_on_t_of(problem.equation(), problem.conditions());
 }
 
 } // namespace pde2d::fem
