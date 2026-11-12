@@ -102,8 +102,8 @@ public:
       return;
     const double c = static_cast<double>(std::max<std::size_t>(cells, 1));
     const double ratio = std::clamp(half_width_ / half_height_, 1 / c, c);
-    nx_ = static_cast<std::size_t>(std::clamp(std::ceil(std::sqrt(c * ratio)),
-                                              1.0, c));
+    nx_ = static_cast<std::size_t>(
+        std::clamp(std::ceil(std::sqrt(c * ratio)), 1.0, c));
     ny_ = static_cast<std::size_t>(
         std::clamp(std::ceil(c / static_cast<double>(nx_)), 1.0, c));
   }
