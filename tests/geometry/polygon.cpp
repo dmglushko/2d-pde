@@ -28,6 +28,28 @@ int main() {
              {1e15, 3}, {1e15 + 8, 3}, {1e15 + 8, 3.5}, {1e15, 3.5}};
          near(signed_area(thin), 4, 0, "thin rectangle at 1e15");
        }},
+      {"orientation_at_any_scale",
+       [&] {
+         check(polygon_orientation(square) == 1, "counterclockwise");
+         std::vector<Point> cw(square.rbegin(), square.rend());
+         check(polygon_orientation(cw) == -1, "clockwise");
+         // The area of these squares underflows, overflows or cancels.
+         for (double s : {1e-300, 1e300, 0x1p-1070}) {
+           std::vector<Point> p = {{0, 0}, {s, 0}, {s, s}, {0, s}};
+           check(polygon_orientation(p) == 1, "counterclockwise at any scale");
+           std::vector<Point> q(p.rbegin(), p.rend());
+           check(polygon_orientation(q) == -1, "clockwise at any scale");
+         }
+         std::vector<Point> far = {
+             {1e17, 1e17}, {1e17 + 16, 1e17}, {1e17 + 16, 1e17 + 16}};
+         check(polygon_orientation(far) == 1, "far from the origin");
+         // A non-convex polygon whose lowest point is a repeated vertex.
+         std::vector<Point> l_shape = {{0, 0}, {0, 0}, {2, 0}, {2, 1},
+                                       {1, 1}, {1, 2}, {0, 2}};
+         check(polygon_orientation(l_shape) == 1, "repeated lowest point");
+         check(polygon_orientation(std::vector<Point>{{0, 0}, {1, 1}}) == 0,
+               "too few points");
+       }},
       {"locate",
        [&] {
          check(locate_in_polygon(square, {1, 1}) == 1, "inside");

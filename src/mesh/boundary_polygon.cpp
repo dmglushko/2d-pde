@@ -39,8 +39,7 @@ void validate(const BoundaryPolygon &polygon) {
       throw std::invalid_argument(where + " has depth " +
                                   to_string(loop.depth) + " but no parent");
     }
-    double area = geometry::signed_area(loop.points);
-    bool ccw = area > 0;
+    bool ccw = geometry::polygon_orientation(loop.points) > 0;
     if (ccw != (loop.depth % 2 == 0))
       throw std::invalid_argument(
           where + " runs in the wrong direction for depth " +

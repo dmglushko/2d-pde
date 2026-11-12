@@ -20,6 +20,30 @@ double signed_area(std::span<const Point> polygon) {
   return twice / 2;
 }
 
+int polygon_orientation(std::span<const Point> polygon) {
+  const std::size_t n = polygon.size();
+  if (n < 3)
+    return 0;
+  auto lower = [](Point p, Point q) {
+    return p.y < q.y || (p.y == q.y && p.x < q.x);
+  };
+  std::size_t v = 0;
+  for (std::size_t i = 1; i < n; ++i)
+    if (lower(polygon[i], polygon[v]))
+      v = i;
+  // The nearest points before and after v that differ from it.
+  std::size_t u = (v + n - 1) % n, w = (v + 1) % n;
+  while (u != v && polygon[u] == polygon[v])
+    u = (u + n - 1) % n;
+  while (w != v && polygon[w] == polygon[v])
+    w = (w + 1) % n;
+  if (u == v || w == v)
+    return 0;
+  // Both neighbours lie on or above the line through v, so for a simple
+  // polygon the turn u -> v -> w has the polygon's orientation.
+  return orient(polygon[u], polygon[v], polygon[w]);
+}
+
 int locate_in_polygon(std::span<const Point> polygon, Point p) {
   // Crossing number with a half-open rule on y, so a ray through a vertex
   // is counted once. All decisions use exact orientation tests.

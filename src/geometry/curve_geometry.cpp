@@ -162,7 +162,7 @@ Analysis analyze(const std::vector<Loop> &loops) {
       if (inside[i][j] && result.depth[j] + 1 == result.depth[i])
         result.parent[i] = j;
   for (std::size_t i = 0; i < n; ++i)
-    result.counterclockwise.push_back(signed_area(polylines[i]) > 0);
+    result.counterclockwise.push_back(polygon_orientation(polylines[i]) > 0);
   return result;
 }
 

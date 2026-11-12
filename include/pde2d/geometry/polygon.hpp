@@ -16,6 +16,12 @@ namespace pde2d::geometry {
 // polygon, 0 for fewer than three points.
 double signed_area(std::span<const Point> polygon);
 
+// Exact orientation of a simple polygon: +1 counterclockwise, -1
+// clockwise, 0 for fewer than three distinct points. It is the turn at the
+// lowest (then leftmost) point, decided by orient, so it holds at every
+// scale, where the sign of signed_area can underflow, overflow or cancel.
+int polygon_orientation(std::span<const Point> polygon);
+
 // Exact point location: +1 strictly inside, 0 on the boundary, -1 outside.
 int locate_in_polygon(std::span<const Point> polygon, Point p);
 
