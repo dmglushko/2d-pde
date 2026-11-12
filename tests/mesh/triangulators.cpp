@@ -15,7 +15,8 @@ namespace {
 
 BoundaryPolygon discretize(const CurveGeometry &g, double h) {
   StageReport report;
-  auto polygon = ChordLengthDiscretizer().run(g, {h}, report);
+  auto polygon = ChordLengthDiscretizer().run(
+      g, {.max_edge_length = {.absolute = h}}, report);
   validate(polygon);
   return polygon;
 }

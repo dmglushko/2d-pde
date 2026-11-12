@@ -416,7 +416,8 @@ int main() {
        [] {
          auto m = mesh::Mesher(std::make_shared<mesh::ChordLengthDiscretizer>(),
                                std::make_shared<mesh::Cdt>())
-                      .run(holes_and_island(), {1.0})
+                      .run(holes_and_island(),
+                           {.max_edge_length = {.absolute = 1.0}})
                       .mesh;
          std::ostringstream out;
          io::export_mesh_svg(m, out);

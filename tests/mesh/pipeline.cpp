@@ -260,7 +260,8 @@ int main() {
                         probe("mover", {.moves_nodes = true},
                               ImproverUse::local_and_final),
                         smoothing()});
-         auto r = mesher.run(rectangle(1, 1), {0.5});
+         auto r = mesher.run(rectangle(1, 1),
+                             {.max_edge_length = {.absolute = 0.5}});
          check(stage_names(r) ==
                    std::vector<std::string>{"pipeline", "chord_length",
                                             "ear_clipping", "strict", "counter",
@@ -284,10 +285,11 @@ int main() {
                    std::vector<std::string>{"local counter"},
                "local improvers passed to the refiner");
          // Every run copies the same report; so does a Remesher run.
-         auto again = mesher.run(rectangle(1, 1), {0.5});
+         auto again = mesher.run(rectangle(1, 1),
+                                 {.max_edge_length = {.absolute = 0.5}});
          check(again.reports[0].messages == p.messages, "copied per run");
          Remesher remesher(nullptr, {flips(), flips()});
-         auto rr = remesher.run(r.mesh, {0.5});
+         auto rr = remesher.run(r.mesh, {.max_edge_length = {.absolute = 0.5}});
          check(stage_names(rr) == std::vector<std::string>{"pipeline",
                                                            "delaunay_flips",
                                                            "delaunay_flips"},
@@ -298,7 +300,8 @@ int main() {
                    "plan: no refiner; local: none; final: delaunay_flips, "
                    "delaunay_flips",
                "the plan without a refiner");
-         auto rg = remesher.run(r.mesh, rectangle(1, 1), {0.5});
+         auto rg = remesher.run(r.mesh, rectangle(1, 1),
+                                {.max_edge_length = {.absolute = 0.5}});
          check(rg.reports[0].stage == "pipeline" &&
                    rg.reports[1].stage == "curve_links",
                "pipeline, then curve links");
@@ -307,10 +310,14 @@ int main() {
        [] {
          Mesher mesher(chords(), std::make_shared<NoHoles>());
          // Constructing worked; the mismatch shows only with a hole.
-         auto r = mesher.run(rectangle(1, 1), {0.5});
+         auto r = mesher.run(rectangle(1, 1),
+                             {.max_edge_length = {.absolute = 0.5}});
          check_valid_mesh(r.mesh);
          expect_throws<std::invalid_argument>(
-             [&] { (void)mesher.run(annulus(1, 0.5), {0.5}); },
+             [&] {
+               (void)mesher.run(annulus(1, 0.5),
+                                {.max_edge_length = {.absolute = 0.5}});
+             },
              "no_holes does not support holes; the geometry has 1");
          expect_throws<std::invalid_argument>(
              [&] { (void)mesher.run(rectangle(1, 1), {}); },
@@ -423,19 +430,22 @@ int main() {
        [] {
          // Without a refiner only the boundary is fine; interior edges of
          // the ear-clipped circle are long.
-         auto r = Mesher(chords(), ears()).run(circle(1), {0.2});
+         auto r = Mesher(chords(), ears())
+                      .run(circle(1), {.max_edge_length = {.absolute = 0.2}});
          check(!r.target_met, "target missed");
          near(r.longest_edge, longest_edge(r.mesh), 0, "longest edge");
          check(r.longest_edge > 0.2, "longest edge above h");
-         auto ok = Mesher(chords(), ears(), bisection()).run(circle(1), {0.2});
+         auto ok = Mesher(chords(), ears(), bisection())
+                       .run(circle(1), {.max_edge_length = {.absolute = 0.2}});
          check(ok.target_met, "with a refiner");
        }},
       {"holes_and_islands",
        [] {
          auto g = holes_and_island();
-         for (auto r : {Mesher(chords(), cdt(), ruppert()).run(g, {0.3}),
+         for (auto r : {Mesher(chords(), cdt(), ruppert())
+                            .run(g, {.max_edge_length = {.absolute = 0.3}}),
                         Mesher(chords(), ears(), bisection(), {smoothing()})
-                            .run(g, {0.3})}) {
+                            .run(g, {.max_edge_length = {.absolute = 0.3}})}) {
            const Mesh &m = r.mesh;
            check_valid_mesh(m);
            check_area(m, holes_and_island_area(), 0.05);
@@ -459,7 +469,8 @@ int main() {
        [] {
          CurveGeometry g(
              {square_loop({0, 0}, 1, "a"), circle_loop({3, 0.5}, 0.5, "b")});
-         auto r = Mesher(chords(), cdt(), ruppert()).run(g, {0.2});
+         auto r = Mesher(chords(), cdt(), ruppert())
+                      .run(g, {.max_edge_length = {.absolute = 0.2}});
          check_valid_mesh(r.mesh);
          check_area(r.mesh, 1 + pi / 4, 0.03);
        }},
@@ -471,7 +482,8 @@ int main() {
          for (auto it = outer.curves.rbegin(); it != outer.curves.rend(); ++it)
            flipped.curves.push_back({reversed(it->curve), it->region});
          CurveGeometry g({flipped, square_loop({0.5, 0.5}, 1, "hole")});
-         auto r = Mesher(chords(), cdt()).run(g, {0.5});
+         auto r = Mesher(chords(), cdt())
+                      .run(g, {.max_edge_length = {.absolute = 0.5}});
          check_valid_mesh(r.mesh);
          near(mesh_area(r.mesh), 3, 1e-12, "area 4 - 1");
        }},
@@ -485,19 +497,24 @@ int main() {
          auto coarse =
              std::make_shared<ChordLengthDiscretizer>(ChordLengthOptions{});
          expect_throws<std::runtime_error>(
-             [&] { (void)Mesher(coarse, cdt()).run(g, {1.0}); },
+             [&] {
+               (void)Mesher(coarse, cdt())
+                   .run(g, {.max_edge_length = {.absolute = 1.0}});
+             },
              "chord_length produced an invalid boundary polygon: Boundary "
              "polygon edges cross or touch");
          // A curve deviation bound fixes it.
          auto fine = std::make_shared<ChordLengthDiscretizer>(
              ChordLengthOptions{.max_curve_deviation = {.absolute = 0.01}});
-         auto r = Mesher(fine, cdt()).run(g, {1.0});
+         auto r =
+             Mesher(fine, cdt()).run(g, {.max_edge_length = {.absolute = 1.0}});
          check_valid_mesh(r.mesh);
        }},
       {"reports",
        [] {
-         auto r = Mesher(chords(), ears(), bisection(), {flips(), smoothing()})
-                      .run(rectangle(2, 1), {0.3});
+         auto r =
+             Mesher(chords(), ears(), bisection(), {flips(), smoothing()})
+                 .run(rectangle(2, 1), {.max_edge_length = {.absolute = 0.3}});
          for (const auto &s : r.reports)
            check(s.time.count() >= 0, "time recorded");
          check(stage_names(r) ==
@@ -517,18 +534,22 @@ int main() {
        [] {
          auto g = holes_and_island();
          Mesher mesher(chords(), ears(), ruppert(), {smoothing(), flips()});
-         check(
-             same_mesh(mesher.run(g, {0.25}).mesh, mesher.run(g, {0.25}).mesh),
-             "same input, same mesh");
+         check(same_mesh(
+                   mesher.run(g, {.max_edge_length = {.absolute = 0.25}}).mesh,
+                   mesher.run(g, {.max_edge_length = {.absolute = 0.25}}).mesh),
+               "same input, same mesh");
        }},
       {"remesh_without_links_keeps_points_on_chords",
        [] {
-         auto coarse = Mesher(chords(), cdt(), ruppert()).run(circle(1), {0.5});
+         auto coarse =
+             Mesher(chords(), cdt(), ruppert())
+                 .run(circle(1), {.max_edge_length = {.absolute = 0.5}});
          // An imported mesh has no links.
          const Mesh c = without_links(coarse.mesh);
          for (auto refiner : {std::shared_ptr<const Refiner>(ruppert()),
                               std::shared_ptr<const Refiner>(bisection())}) {
-           auto fine = Remesher(refiner).run(c, {0.1});
+           auto fine =
+               Remesher(refiner).run(c, {.max_edge_length = {.absolute = 0.1}});
            check_valid_mesh(fine.mesh);
            check(fine.target_met, "target met");
            check(fine.mesh.boundary_edges.size() > c.boundary_edges.size(),
@@ -548,7 +569,8 @@ int main() {
       {"output_mesh_carries_its_links",
        [] {
          auto g = annulus(1, 0.5);
-         auto coarse = Mesher(chords(), cdt(), ruppert()).run(g, {0.5});
+         auto coarse = Mesher(chords(), cdt(), ruppert())
+                           .run(g, {.max_edge_length = {.absolute = 0.5}});
          const Mesh &m = coarse.mesh;
          check(m.chains.size() == 2, "one chain per circle");
          for (const auto &e : m.boundary_edges) {
@@ -565,7 +587,8 @@ int main() {
          // lie on the true circles.
          for (auto refiner : {std::shared_ptr<const Refiner>(ruppert()),
                               std::shared_ptr<const Refiner>(bisection())}) {
-           auto fine = Remesher(refiner).run(m, {0.1});
+           auto fine =
+               Remesher(refiner).run(m, {.max_edge_length = {.absolute = 0.1}});
            check_valid_mesh(fine.mesh);
            check(fine.target_met, "target met");
            check(fine.reports[1].stage == refiner->name(), "no curve_links");
@@ -577,7 +600,8 @@ int main() {
                near(norm(fine.mesh.nodes[v]), e.region == inner ? 0.5 : 1.0,
                     1e-12, "boundary node on its circle");
            // And again: the refined mesh carries its links too.
-           auto finer = Remesher(refiner).run(fine.mesh, {0.05});
+           auto finer = Remesher(refiner).run(
+               fine.mesh, {.max_edge_length = {.absolute = 0.05}});
            for (const auto &e : finer.mesh.boundary_edges)
              near(norm(finer.mesh.nodes[e.nodes[0]]),
                   e.region == inner ? 0.5 : 1.0, 1e-12, "still on the circle");
@@ -591,9 +615,11 @@ int main() {
          auto g = stadium();
          auto deviation = std::make_shared<ChordLengthDiscretizer>(
              ChordLengthOptions{.max_curve_deviation = {.absolute = 0.02}});
-         auto coarse = Mesher(deviation, cdt()).run(g, {0.5});
+         auto coarse = Mesher(deviation, cdt())
+                           .run(g, {.max_edge_length = {.absolute = 0.5}});
          const Mesh m = without_links(coarse.mesh);
-         auto fine = Remesher(bisection()).run(m, g, {0.1});
+         auto fine = Remesher(bisection())
+                         .run(m, g, {.max_edge_length = {.absolute = 0.1}});
          check_valid_mesh(fine.mesh);
          const auto &links = fine.reports[1];
          near(links.metrics.at("chains"), 1, 0, "one chain");
@@ -607,22 +633,29 @@ int main() {
          // equal pieces, so the junctions at the seam (s = 0) and at half
          // the length (s = 2 + pi) are nodes; the other two are crossed.
          check(m.boundary_edges.size() == 26, "26 boundary edges");
-         auto broken = Remesher(bisection()).run(m, g, {0.1}, 0.0);
+         auto broken =
+             Remesher(bisection())
+                 .run(m, g, {.max_edge_length = {.absolute = 0.1}}, 0.0);
          near(broken.reports[1].metrics.at("chains"), 4, 0, "four chains");
          near(broken.reports[1].metrics.at("unlinked_edges"), 2, 0,
               "two edges across junctions");
          expect_throws<std::invalid_argument>(
-             [&] { (void)Remesher(bisection()).run(m, g, {0.1}, 200); },
+             [&] {
+               (void)Remesher(bisection())
+                   .run(m, g, {.max_edge_length = {.absolute = 0.1}}, 200);
+             },
              "Remesher: corner_angle_degrees must be in [0, 180]");
        }},
       {"remesh_with_geometry_puts_points_on_curves",
        [] {
          auto g = annulus(1, 0.5);
-         auto coarse = Mesher(chords(), cdt(), ruppert()).run(g, {0.5});
+         auto coarse = Mesher(chords(), cdt(), ruppert())
+                           .run(g, {.max_edge_length = {.absolute = 0.5}});
          for (auto refiner : {std::shared_ptr<const Refiner>(ruppert()),
                               std::shared_ptr<const Refiner>(bisection())}) {
            auto fine =
-               Remesher(refiner).run(without_links(coarse.mesh), g, {0.1});
+               Remesher(refiner).run(without_links(coarse.mesh), g,
+                                     {.max_edge_length = {.absolute = 0.1}});
            check_valid_mesh(fine.mesh);
            check(fine.target_met, "target met");
            check(fine.reports[1].stage == "curve_links", "after pipeline");
@@ -642,9 +675,13 @@ int main() {
        [] {
          // The geometry's circle starts at angle 0.1, inside a mesh edge:
          // that edge cannot be linked to one parameter interval.
-         auto m = Mesher(chords(), cdt()).run(circle(1), {0.5}).mesh;
+         auto m = Mesher(chords(), cdt())
+                      .run(circle(1), {.max_edge_length = {.absolute = 0.5}})
+                      .mesh;
          auto rotated = circle(1).transformed({.rotation = 0.1});
-         auto fine = Remesher(bisection()).run(m, rotated, {0.05});
+         auto fine =
+             Remesher(bisection())
+                 .run(m, rotated, {.max_edge_length = {.absolute = 0.05}});
          check_valid_mesh(fine.mesh);
          const auto &links = fine.reports[1];
          near(links.metrics.at("unlinked_edges"), 1, 0, "one edge");
@@ -659,29 +696,46 @@ int main() {
        }},
       {"remesh_rejects_mismatched_geometry",
        [] {
-         auto m = Mesher(chords(), cdt()).run(circle(1), {0.5}).mesh;
+         auto m = Mesher(chords(), cdt())
+                      .run(circle(1), {.max_edge_length = {.absolute = 0.5}})
+                      .mesh;
          expect_throws<std::invalid_argument>(
-             [&] { (void)Remesher(bisection()).run(m, circle(2), {0.1}); },
+             [&] {
+               (void)Remesher(bisection())
+                   .run(m, circle(2), {.max_edge_length = {.absolute = 0.1}});
+             },
              "does not lie on a curve of that region");
          auto renamed = circle(1);
          renamed.rename_region("boundary", "wall");
          expect_throws<std::invalid_argument>(
-             [&] { (void)Remesher(bisection()).run(m, renamed, {0.1}); },
+             [&] {
+               (void)Remesher(bisection())
+                   .run(m, renamed, {.max_edge_length = {.absolute = 0.1}});
+             },
              "mesh region 'boundary' does not exist in the geometry");
        }},
       {"remesh_rejects_invalid_mesh",
        [] {
-         auto m = Mesher(chords(), cdt()).run(rectangle(1, 1), {0.5}).mesh;
+         auto m =
+             Mesher(chords(), cdt())
+                 .run(rectangle(1, 1), {.max_edge_length = {.absolute = 0.5}})
+                 .mesh;
          auto broken = m;
          broken.boundary_edges.pop_back();
          expect_throws<std::invalid_argument>(
-             [&] { (void)Remesher(bisection()).run(broken, {0.1}); },
+             [&] {
+               (void)Remesher(bisection())
+                   .run(broken, {.max_edge_length = {.absolute = 0.1}});
+             },
              "has no neighbour but is not a boundary edge");
          auto inverted = m;
          std::swap(inverted.triangles[0].nodes[0],
                    inverted.triangles[0].nodes[1]);
          expect_throws<std::invalid_argument>(
-             [&] { (void)Remesher(bisection()).run(inverted, {0.1}); },
+             [&] {
+               (void)Remesher(bisection())
+                   .run(inverted, {.max_edge_length = {.absolute = 0.1}});
+             },
              "not counterclockwise");
        }},
   });

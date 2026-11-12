@@ -25,7 +25,7 @@ MeshResult mesh_with(std::shared_ptr<const InitialTriangulator> triangulator,
                      const CurveGeometry &g, double h) {
   Mesher mesher(std::make_shared<ChordLengthDiscretizer>(), triangulator,
                 refiner);
-  return mesher.run(g, {h});
+  return mesher.run(g, {.max_edge_length = {.absolute = h}});
 }
 
 // Boundary nodes of each region lie on the true curve: a circle of the
@@ -179,7 +179,8 @@ int main() {
          Mesher mesher(std::make_shared<ChordLengthDiscretizer>(),
                        std::make_shared<Cdt>(),
                        std::make_shared<LongestEdgeBisection>(), {flips});
-         auto r = mesher.run(l_shape(), {0.15});
+         auto r =
+             mesher.run(l_shape(), {.max_edge_length = {.absolute = 0.15}});
          check(r.reports.size() == 4, "no final pass");
          check_valid_mesh(r.mesh);
          check(r.target_met, "target met");
@@ -201,7 +202,8 @@ int main() {
                    std::make_shared<LongestEdgeBisection>())}) {
            Mesher mesher(std::make_shared<CoarseBoundary>(1.0),
                          std::make_shared<Cdt>(), refiner);
-           auto r = mesher.run(four_quarter_circle(), {0.1});
+           auto r = mesher.run(four_quarter_circle(),
+                               {.max_edge_length = {.absolute = 0.1}});
            check_valid_mesh(r.mesh);
            check(r.target_met, "target met");
            check(r.mesh.boundary_edges.size() > 60, "boundary refined");
@@ -227,7 +229,8 @@ int main() {
                for (double h : {0.3, 0.1, 0.04}) {
                  Mesher mesher(std::make_shared<CoarseBoundary>(1.5),
                                triangulator, refiner);
-                 auto r = mesher.run(annulus(1, inner), {h});
+                 auto r = mesher.run(annulus(1, inner),
+                                     {.max_edge_length = {.absolute = h}});
                  check_valid_mesh(r.mesh);
                  check(r.target_met, "target met");
                  check_on_circle(r.mesh, "outer", {0, 0}, 1);

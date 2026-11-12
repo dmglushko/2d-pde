@@ -35,7 +35,7 @@ Mesh mesh_of(const geometry::CurveGeometry &g, double h) {
   return mesh::Mesher(std::make_shared<mesh::ChordLengthDiscretizer>(),
                       std::make_shared<mesh::Cdt>(),
                       std::make_shared<mesh::Ruppert>())
-      .run(g, {h})
+      .run(g, {.max_edge_length = {.absolute = h}})
       .mesh;
 }
 
