@@ -4,6 +4,7 @@
 #include "edge_recovery.hpp"
 #include "polygon_nodes.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
 #include "pde2d/geometry/predicates.hpp"
 #include "pde2d/mesh/delaunay.hpp"
 
@@ -31,15 +32,9 @@ WorkingMesh Cdt::run(const BoundaryPolygon &polygon,
                      StageReport &report) const {
   auto pn = detail::polygon_nodes(polygon);
   const auto &points = pn.nodes;
-  double xmin = INFINITY, xmax = -INFINITY, ymin = INFINITY, ymax = -INFINITY;
-  for (auto p : points) {
-    xmin = std::min(xmin, p.x);
-    xmax = std::max(xmax, p.x);
-    ymin = std::min(ymin, p.y);
-    ymax = std::max(ymax, p.y);
-  }
-  const double s = std::max(xmax - xmin, ymax - ymin);
-  const Point c{0.5 * (xmin + xmax), 0.5 * (ymin + ymax)};
+  const geometry::BoundingBox box = geometry::bounding_box(points);
+  const double s = std::max(width(box), height(box));
+  const Point c = midpoint(box.min, box.max);
   // Exact predicates make the size of the enclosing triangle harmless.
   WorkingMesh scratch({c + Point{0, 40 * s}, c + Point{-40 * s, -20 * s},
                        c + Point{40 * s, -20 * s}},

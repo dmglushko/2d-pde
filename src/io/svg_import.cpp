@@ -1,5 +1,7 @@
 #include "pde2d/io/svg.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
+
 #include "svg_path.hpp"
 #include "text.hpp"
 
@@ -120,16 +122,11 @@ private:
 
 // Joins runs into closed loops (see import_svg).
 std::vector<geometry::Loop> join_runs(std::vector<Run> runs) {
-  double xmin = INFINITY, xmax = -INFINITY, ymin = INFINITY, ymax = -INFINITY;
+  std::vector<geometry::Curve> all;
   for (const auto &r : runs)
-    for (const auto &c : r.curves)
-      for (Point p : {geometry::start_point(c), geometry::end_point(c)}) {
-        xmin = std::min(xmin, p.x);
-        xmax = std::max(xmax, p.x);
-        ymin = std::min(ymin, p.y);
-        ymax = std::max(ymax, p.y);
-      }
-  const double tolerance = 1e-9 * std::hypot(xmax - xmin, ymax - ymin);
+    all.insert(all.end(), r.curves.begin(), r.curves.end());
+  const double tolerance =
+      all.empty() ? 0.0 : 1e-9 * diagonal(geometry::bounding_box(all));
   auto near = [&](Point a, Point b) {
     return geometry::distance(a, b) <= tolerance;
   };

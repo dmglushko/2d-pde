@@ -18,10 +18,12 @@ public:
   virtual ~DomainSizePolicy() = default;
   // The size of a domain bounded by these exact curves (all of its
   // boundary). The list is not empty.
-  virtual double of_curves(const std::vector<geometry::Curve> &curves) const = 0;
+  virtual double
+  of_curves(const std::vector<geometry::Curve> &curves) const = 0;
   // The size of a domain bounded by straight edges through these points
   // (all of its boundary nodes). The list is not empty.
-  virtual double of_points(const std::vector<geometry::Point> &points) const = 0;
+  virtual double
+  of_points(const std::vector<geometry::Point> &points) const = 0;
 };
 
 // The policy the library uses: BoundingBoxDiagonal in domain_size.cpp, the

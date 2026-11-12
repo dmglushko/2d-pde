@@ -4,6 +4,8 @@
 
 #include <cmath>
 #include <numbers>
+#include <span>
+#include <stdexcept>
 #include <vector>
 
 using namespace pde2d::geometry;
@@ -53,6 +55,26 @@ int main() {
          check(merged(a, Point{-1, 4}) == BoundingBox{{-1, 0}, {1, 4}},
                "merged point");
          near(diagonal(BoundingBox{{1, 1}, {4, 5}}), 5, 0, "3-4-5 diagonal");
+         near(width(BoundingBox{{1, 1}, {4, 5}}), 3, 0, "width");
+         near(height(BoundingBox{{1, 1}, {4, 5}}), 4, 0, "height");
+         check(padded(a, 0.5) == BoundingBox{{-0.5, -0.5}, {1.5, 1.5}},
+               "padded");
+         check(contains(a, {1, 0}) && contains(a, {0.5, 0.5}), "closed box");
+         check(!contains(a, {1.5, 0.5}) && !contains(a, {0.5, -0.1}),
+               "outside");
+         const std::vector<Point> points{{2, 1}, {-1, 3}, {0, -2}};
+         check(bounding_box(points) == BoundingBox{{-1, -2}, {2, 3}},
+               "box of points");
+         expect_throws<std::invalid_argument>(
+             [] { (void)bounding_box(std::span<const Point>{}); }, "no points");
+         const std::vector<Curve> curves{Line{{0, 0}, {1, 1}},
+                                         Line{{3, -1}, {2, 0}}};
+         check(bounding_box(curves) == BoundingBox{{0, -1}, {3, 1}},
+               "box of curves");
+         expect_throws<std::invalid_argument>(
+             [] { (void)bounding_box(std::span<const Curve>{}); }, "no curves");
+         expect_throws<std::invalid_argument>(
+             [] { (void)bounding_box(std::span<const Loop>{}); }, "no curves");
        }},
       {"line",
        [] {

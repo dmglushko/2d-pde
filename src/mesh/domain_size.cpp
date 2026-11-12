@@ -14,16 +14,10 @@ namespace {
 class BoundingBoxDiagonal final : public DomainSizePolicy {
 public:
   double of_curves(const std::vector<geometry::Curve> &curves) const override {
-    geometry::BoundingBox box = geometry::bounding_box(curves.front());
-    for (const auto &c : curves)
-      box = geometry::merged(box, geometry::bounding_box(c));
-    return geometry::diagonal(box);
+    return geometry::diagonal(geometry::bounding_box(curves));
   }
   double of_points(const std::vector<geometry::Point> &points) const override {
-    geometry::BoundingBox box{points.front(), points.front()};
-    for (geometry::Point p : points)
-      box = geometry::merged(box, p);
-    return geometry::diagonal(box);
+    return geometry::diagonal(geometry::bounding_box(points));
   }
 };
 

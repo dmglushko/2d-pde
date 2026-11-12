@@ -1,5 +1,7 @@
 #include "pde2d/io/svg.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
+
 #include "svg_path.hpp"
 #include "text.hpp"
 
@@ -58,22 +60,13 @@ bool valid_id(const std::string &name) {
   return std::isalpha(c) || c == '_';
 }
 
-struct Bounds {
-  double xmin = INFINITY, xmax = -INFINITY, ymin = INFINITY, ymax = -INFINITY;
-  void add(Point p) {
-    xmin = std::min(xmin, p.x);
-    xmax = std::max(xmax, p.x);
-    ymin = std::min(ymin, p.y);
-    ymax = std::max(ymax, p.y);
-  }
-  // "x y width height" with a margin of 2% of the larger side.
-  std::string view_box() const {
-    double size = std::max({xmax - xmin, ymax - ymin, 1e-300});
-    double m = 0.02 * size;
-    return shortest(xmin - m) + " " + shortest(ymin - m) + " " +
-           shortest(xmax - xmin + 2 * m) + " " + shortest(ymax - ymin + 2 * m);
-  }
-};
+// "x y width height" with a margin of 2% of the larger side.
+std::string view_box(const geometry::BoundingBox &box) {
+  const double size = std::max({width(box), height(box), 1e-300});
+  const geometry::BoundingBox shown = padded(box, 0.02 * size);
+  return shortest(shown.min.x) + " " + shortest(shown.min.y) + " " +
+         shortest(width(shown)) + " " + shortest(height(shown));
+}
 
 } // namespace
 
@@ -83,7 +76,7 @@ void export_svg(const geometry::CurveGeometry &geometry, std::ostream &out) {
     std::string d;
   };
   std::vector<Run> runs;
-  Bounds bounds;
+  std::vector<geometry::Curve> drawn; // mirrored, for the view box
   for (const auto &loop : geometry.loops()) {
     const auto &curves = loop.curves;
     for (std::size_t i = 0; i < curves.size();) {
@@ -94,8 +87,7 @@ void export_svg(const geometry::CurveGeometry &geometry, std::ostream &out) {
       for (; i < curves.size() && curves[i].region == run.region; ++i) {
         const geometry::Curve curve = detail::mirrored_y(curves[i].curve);
         run.d += commands(curve);
-        for (int k = 0; k <= 16; ++k)
-          bounds.add(geometry::point_at(curve, k / 16.0));
+        drawn.push_back(curve);
       }
       runs.push_back(std::move(run));
     }
@@ -111,7 +103,7 @@ void export_svg(const geometry::CurveGeometry &geometry, std::ostream &out) {
   std::size_t serial = 0;
   out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
       << "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" "
-      << "viewBox=\"" << bounds.view_box() << "\">\n";
+      << "viewBox=\"" << view_box(geometry::bounding_box(drawn)) << "\">\n";
   for (const auto &r : runs) {
     out << "  <path";
     if (uses[r.region] == 1 && valid_id(r.region)) {
@@ -145,13 +137,12 @@ void export_mesh_svg(const mesh::Mesh &mesh, std::ostream &out) {
   // The nodes in SVG coordinates (y down), so the picture is the right
   // way up.
   std::vector<Point> svg_nodes;
-  Bounds bounds;
   for (Point p : mesh.nodes) {
     if (!geometry::is_finite(p))
       throw std::invalid_argument("Mesh SVG export: a node is not finite");
     svg_nodes.push_back(detail::mirrored_y(p));
-    bounds.add(svg_nodes.back());
   }
+  const geometry::BoundingBox bounds = geometry::bounding_box(svg_nodes);
   for (const auto &t : mesh.triangles)
     for (auto v : t.nodes)
       if (v >= n)
@@ -171,13 +162,13 @@ void export_mesh_svg(const mesh::Mesh &mesh, std::ostream &out) {
                                         "#ff7f0e", "#9467bd", "#8c564b",
                                         "#e377c2", "#17becf", "#bcbd22"};
   const double width = 800;
-  const double aspect = (bounds.ymax - bounds.ymin + 1e-300) /
-                        (bounds.xmax - bounds.xmin + 1e-300);
+  const double aspect =
+      (geometry::height(bounds) + 1e-300) / (geometry::width(bounds) + 1e-300);
   out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
       << "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\""
       << shortest(width) << "\" height=\""
       << shortest(std::clamp(width * aspect, 50.0, 4000.0)) << "\" viewBox=\""
-      << bounds.view_box() << "\">\n";
+      << view_box(bounds) << "\">\n";
   out << "  <path class=\"triangles\" fill=\"#eef2f8\" stroke=\"#8a8f99\" "
          "stroke-width=\"0.6\" stroke-linejoin=\"round\" "
          "vector-effect=\"non-scaling-stroke\" d=\"";

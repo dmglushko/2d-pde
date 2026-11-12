@@ -1,8 +1,11 @@
 #include "pde2d/geometry/polygon.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
+
 #include "pde2d/geometry/predicates.hpp"
 
 #include <algorithm>
+#include <array>
 #include <stdexcept>
 
 namespace pde2d::geometry {
@@ -67,7 +70,7 @@ namespace {
 
 struct SweepSegment {
   Point a, b;
-  double xmin, xmax, ymin, ymax;
+  BoundingBox box;
   SegmentRef ref;
 };
 
@@ -109,14 +112,13 @@ find_crossing(std::span<const std::vector<Point>> loops) {
       SegmentRef ref{l, i};
       if (a == b)
         return Crossing{ref, ref};
-      segments.push_back({a, b, std::min(a.x, b.x), std::max(a.x, b.x),
-                          std::min(a.y, b.y), std::max(a.y, b.y), ref});
+      segments.push_back({a, b, bounding_box(std::array{a, b}), ref});
     }
   }
   std::sort(segments.begin(), segments.end(),
             [](const SweepSegment &s, const SweepSegment &t) {
-              if (s.xmin != t.xmin)
-                return s.xmin < t.xmin;
+              if (s.box.min.x != t.box.min.x)
+                return s.box.min.x < t.box.min.x;
               if (s.ref.loop != t.ref.loop)
                 return s.ref.loop < t.ref.loop;
               return s.ref.segment < t.ref.segment;
@@ -124,11 +126,12 @@ find_crossing(std::span<const std::vector<Point>> loops) {
   std::vector<std::size_t> active;
   for (std::size_t k = 0; k < segments.size(); ++k) {
     const auto &s = segments[k];
-    std::erase_if(active,
-                  [&](std::size_t j) { return segments[j].xmax < s.xmin; });
+    std::erase_if(active, [&](std::size_t j) {
+      return segments[j].box.max.x < s.box.min.x;
+    });
     for (std::size_t j : active) {
       const auto &t = segments[j];
-      if (t.ymax < s.ymin || s.ymax < t.ymin)
+      if (t.box.max.y < s.box.min.y || s.box.max.y < t.box.min.y)
         continue;
       bool hit = adjacent(s, t, loops)
                      ? share_more_than_vertex(s, t, loops[s.ref.loop].size())

@@ -83,6 +83,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   for bad input or configuration, `std::runtime_error` for an algorithm
   that cannot finish. Report messages only mean "worked, but…". Tests
   match message fragments, so keep messages stable or update the tests.
+- One way to do a common thing: every axis-aligned box uses
+  `geometry::BoundingBox` and its functions (`bounding_box.hpp`), and a
+  `MeshSpec` or `LengthBound` is always spelled with designated
+  initializers (`{.max_edge_length = {.absolute = 0.5}}`, never `{0.5}`).
 - Deterministic results: no dependence on hash iteration order or
   addresses; process in index order, break ties by index.
 - Style: clang-format (LLVM, 80 columns).

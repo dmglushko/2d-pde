@@ -1,5 +1,6 @@
 #include "pde2d/mesh/remesher.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
 #include "pde2d/mesh/domain_size.hpp"
 
 #include "loop_chains.hpp"
@@ -27,35 +28,19 @@ double longest_edge(const Mesh &mesh) {
   return longest;
 }
 
-// A curve with a padded bounding box of its points.
+// A curve with its bounding box, padded by the tolerance.
 struct CandidateCurve {
   geometry::Curve curve;
   std::string region;
-  double xmin, xmax, ymin, ymax;
+  geometry::BoundingBox box;
 };
 
 constexpr int samples = 256;
 
 CandidateCurve candidate(const geometry::Curve &curve,
                          const std::string &region, double tolerance) {
-  CandidateCurve c{curve, region, INFINITY, -INFINITY, INFINITY, -INFINITY};
-  for (int k = 0; k <= samples; ++k) {
-    Point p = geometry::point_at(curve, double(k) / samples);
-    c.xmin = std::min(c.xmin, p.x);
-    c.xmax = std::max(c.xmax, p.x);
-    c.ymin = std::min(c.ymin, p.y);
-    c.ymax = std::max(c.ymax, p.y);
-  }
-  // Between samples the curve leaves the sample polygon by at most
-  // M h^2 / 8 (M bounds |c''|, h = 1 / samples).
-  double pad =
-      geometry::derivative_bounds(curve).second / (8.0 * samples * samples) +
-      tolerance;
-  c.xmin -= pad;
-  c.xmax += pad;
-  c.ymin -= pad;
-  c.ymax += pad;
-  return c;
+  return {curve, region,
+          geometry::padded(geometry::bounding_box(curve), tolerance)};
 }
 
 // Parameter of the curve point closest to p, and the distance.
@@ -119,14 +104,8 @@ WorkingMesh link_to_geometry(const Mesh &mesh,
         geometry_regions.end())
       throw std::invalid_argument("Remesher: mesh region '" + name +
                                   "' does not exist in the geometry");
-  double xmin = INFINITY, xmax = -INFINITY, ymin = INFINITY, ymax = -INFINITY;
-  for (auto p : mesh.nodes) {
-    xmin = std::min(xmin, p.x);
-    xmax = std::max(xmax, p.x);
-    ymin = std::min(ymin, p.y);
-    ymax = std::max(ymax, p.y);
-  }
-  const double tolerance = 1e-9 * std::hypot(xmax - xmin, ymax - ymin);
+  const double tolerance =
+      1e-9 * geometry::diagonal(geometry::bounding_box(mesh.nodes));
   // The chains, and for every geometry curve its chain and position in it.
   std::vector<GeometryChain> chains;
   std::vector<CandidateCurve> curves;
@@ -152,8 +131,7 @@ WorkingMesh link_to_geometry(const Mesh &mesh,
     std::vector<std::pair<std::size_t, double>> result;
     for (std::size_t j = 0; j < curves.size(); ++j) {
       const auto &c = curves[j];
-      if (c.region != region || p.x < c.xmin || p.x > c.xmax || p.y < c.ymin ||
-          p.y > c.ymax)
+      if (c.region != region || !geometry::contains(c.box, p))
         continue;
       auto [t, d] = project(c.curve, p);
       if (d > tolerance)

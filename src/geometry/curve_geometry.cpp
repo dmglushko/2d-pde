@@ -1,5 +1,6 @@
 #include "pde2d/geometry/curve_geometry.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
 #include "pde2d/geometry/polygon.hpp"
 
 #include <algorithm>
@@ -39,19 +40,9 @@ void check_region_name(const std::string &name, const std::string &context) {
         "'-' is reserved)");
 }
 
-// Size of the geometry, from the bounding box of sample points.
+// Size of the geometry: the diagonal of its exact bounding box.
 double geometry_scale(const std::vector<Loop> &loops) {
-  double xmin = INFINITY, xmax = -INFINITY, ymin = INFINITY, ymax = -INFINITY;
-  for (const auto &loop : loops)
-    for (const auto &c : loop.curves)
-      for (int k = 0; k <= 64; ++k) {
-        Point p = point_at(c.curve, k / 64.0);
-        xmin = std::min(xmin, p.x);
-        xmax = std::max(xmax, p.x);
-        ymin = std::min(ymin, p.y);
-        ymax = std::max(ymax, p.y);
-      }
-  double scale = std::hypot(xmax - xmin, ymax - ymin);
+  double scale = diagonal(bounding_box(loops));
   if (!std::isfinite(scale) || !(scale > 0))
     throw std::invalid_argument("Geometry has no extent or is too large");
   return scale;

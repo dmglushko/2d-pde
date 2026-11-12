@@ -56,10 +56,13 @@ small polygon far from the origin does not cancel), `polygon_orientation`
 and `BoundaryPolygon` decide loop directions with it, because the sign of
 an area underflows or overflows at extreme scales),
 `locate_in_polygon` and `find_crossing` for polygons.
-`bounding_box.hpp`: `BoundingBox{min, max}`, `merged`, `diagonal`, and
-`bounding_box` of a curve (end points plus the exact interior extremes:
-roots of the Bezier derivatives, axis extremes of arcs) and of a
-`CurveGeometry`.
+`bounding_box.hpp`: `BoundingBox{min, max}` with `merged`, `padded`,
+`contains`, `width`, `height`, `diagonal`, and `bounding_box` of points,
+of a curve (end points plus the exact interior extremes: roots of the
+Bezier derivatives, axis extremes of arcs), of curves, of loops and of a
+`CurveGeometry`. Every axis-aligned box in the library uses it (the
+geometry's validation scale, SVG view boxes, the CDT's enclosing
+triangle, the validity grid, the polygon sweep, curve linking).
 
 `CurveGeometry` construction:
 

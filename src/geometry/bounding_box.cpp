@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <optional>
+#include <stdexcept>
 #include <vector>
 
 namespace pde2d::geometry {
@@ -99,7 +101,29 @@ BoundingBox merged(const BoundingBox &box, Point p) {
   return merged(box, box_of(p));
 }
 
+BoundingBox padded(const BoundingBox &box, double margin) {
+  return {{box.min.x - margin, box.min.y - margin},
+          {box.max.x + margin, box.max.y + margin}};
+}
+
+bool contains(const BoundingBox &box, Point p) {
+  return p.x >= box.min.x && p.x <= box.max.x && p.y >= box.min.y &&
+         p.y <= box.max.y;
+}
+
+double width(const BoundingBox &box) { return box.max.x - box.min.x; }
+double height(const BoundingBox &box) { return box.max.y - box.min.y; }
+
 double diagonal(const BoundingBox &box) { return distance(box.min, box.max); }
+
+BoundingBox bounding_box(std::span<const Point> points) {
+  if (points.empty())
+    throw std::invalid_argument("bounding_box: no points");
+  BoundingBox box = box_of(points.front());
+  for (Point p : points)
+    box = merged(box, p);
+  return box;
+}
 
 BoundingBox bounding_box(const Curve &curve) {
   BoundingBox box = merged(box_of(start_point(curve)), end_point(curve));
@@ -107,13 +131,29 @@ BoundingBox bounding_box(const Curve &curve) {
   return box;
 }
 
-BoundingBox bounding_box(const CurveGeometry &geometry) {
-  // A CurveGeometry has at least one loop, and every loop a curve.
-  BoundingBox box = bounding_box(geometry.loops().front().curves.front().curve);
-  for (const auto &loop : geometry.loops())
-    for (const auto &c : loop.curves)
-      box = merged(box, bounding_box(c.curve));
+BoundingBox bounding_box(std::span<const Curve> curves) {
+  if (curves.empty())
+    throw std::invalid_argument("bounding_box: no curves");
+  BoundingBox box = bounding_box(curves.front());
+  for (const auto &c : curves)
+    box = merged(box, bounding_box(c));
   return box;
+}
+
+BoundingBox bounding_box(std::span<const Loop> loops) {
+  std::optional<BoundingBox> box;
+  for (const auto &loop : loops)
+    for (const auto &c : loop.curves) {
+      const BoundingBox b = bounding_box(c.curve);
+      box = box ? merged(*box, b) : b;
+    }
+  if (!box)
+    throw std::invalid_argument("bounding_box: no curves");
+  return *box;
+}
+
+BoundingBox bounding_box(const CurveGeometry &geometry) {
+  return bounding_box(geometry.loops());
 }
 
 } // namespace pde2d::geometry

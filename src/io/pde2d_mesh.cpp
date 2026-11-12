@@ -2,6 +2,7 @@
 
 #include "text.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
 #include "pde2d/geometry/curve_geometry.hpp"
 #include "pde2d/mesh/working_mesh.hpp"
 
@@ -34,14 +35,8 @@ void validate_for_export(const mesh::Mesh &m) {
   for (const auto &e : m.boundary_edges)
     plain.boundary_edges.push_back({e.nodes, e.region, std::nullopt});
   (void)mesh::WorkingMesh::from_mesh(plain);
-  double xmin = INFINITY, xmax = -INFINITY, ymin = INFINITY, ymax = -INFINITY;
-  for (Point p : m.nodes) {
-    xmin = std::min(xmin, p.x);
-    xmax = std::max(xmax, p.x);
-    ymin = std::min(ymin, p.y);
-    ymax = std::max(ymax, p.y);
-  }
-  double span = std::max(xmax - xmin, ymax - ymin);
+  const geometry::BoundingBox box = geometry::bounding_box(m.nodes);
+  double span = std::max(width(box), height(box));
   if (!std::isfinite(span) || !std::isfinite(span * span))
     throw std::invalid_argument(
         ".pde2d export: the coordinate range exceeds the format's numeric "

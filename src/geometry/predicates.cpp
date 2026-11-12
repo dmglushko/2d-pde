@@ -1,5 +1,7 @@
 #include "pde2d/geometry/predicates.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -778,9 +780,7 @@ int incircle(Point a, Point b, Point c, Point d) {
 }
 
 bool on_segment(Point a, Point b, Point p) {
-  return orient(a, b, p) == 0 && p.x >= std::min(a.x, b.x) &&
-         p.x <= std::max(a.x, b.x) && p.y >= std::min(a.y, b.y) &&
-         p.y <= std::max(a.y, b.y);
+  return orient(a, b, p) == 0 && contains(bounding_box(std::array{a, b}), p);
 }
 
 bool segments_intersect(Point a, Point b, Point c, Point d) {

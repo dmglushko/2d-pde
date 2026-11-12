@@ -1,8 +1,11 @@
 #include "mesh_validity.hpp"
 
+#include "pde2d/geometry/bounding_box.hpp"
+
 #include "pde2d/geometry/predicates.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -83,21 +86,14 @@ void check_folds(const std::vector<Point> &nodes,
 // their bounding box touches, in index order.
 class Grid {
 public:
-  Grid(const std::vector<Point> &nodes, std::size_t cells) {
-    xmin_ = xmax_ = nodes[0].x;
-    ymin_ = ymax_ = nodes[0].y;
-    for (Point p : nodes) {
-      xmin_ = std::min(xmin_, p.x);
-      xmax_ = std::max(xmax_, p.x);
-      ymin_ = std::min(ymin_, p.y);
-      ymax_ = std::max(ymax_, p.y);
-    }
+  Grid(const std::vector<Point> &nodes, std::size_t cells)
+      : box_(geometry::bounding_box(nodes)) {
     // Halves, so the extent cannot overflow for coordinates near the
     // largest double. They are positive (there is a nondegenerate
     // triangle) unless halving rounds subnormal coordinates together; one
     // cell then holds everything, which is slow but still correct.
-    half_width_ = xmax_ / 2 - xmin_ / 2;
-    half_height_ = ymax_ / 2 - ymin_ / 2;
+    half_width_ = box_.max.x / 2 - box_.min.x / 2;
+    half_height_ = box_.max.y / 2 - box_.min.y / 2;
     if (!(half_width_ > 0) || !(half_height_ > 0))
       return;
     const double c = static_cast<double>(std::max<std::size_t>(cells, 1));
@@ -112,22 +108,21 @@ public:
   // a monotone rounded operation), so a point inside a bounding box falls
   // in a cell of the box's range.
   std::size_t column(double x) const {
-    return index(x / 2 - xmin_ / 2, half_width_, nx_);
+    return index(x / 2 - box_.min.x / 2, half_width_, nx_);
   }
   std::size_t row(double y) const {
-    return index(y / 2 - ymin_ / 2, half_height_, ny_);
+    return index(y / 2 - box_.min.y / 2, half_height_, ny_);
   }
   std::size_t cell(Point p) const { return row(p.y) * nx_ + column(p.x); }
 
-  // Lists item k (k = 0, 1, ...) in the cells of its box; `box(k, lo, hi)`
-  // gives the box's corners. Builds compressed lists (offsets_, items_).
-  template <class Box> void fill(std::size_t count, Box box) {
+  // Lists item k (k = 0, 1, ...) in the cells of its box, `box_of(k)`.
+  // Builds compressed lists (offsets_, items_).
+  template <class BoxOf> void fill(std::size_t count, BoxOf box_of) {
     offsets_.assign(nx_ * ny_ + 1, 0);
     auto each_cell = [&](std::size_t k, auto f) {
-      Point lo, hi;
-      box(k, lo, hi);
-      for (std::size_t r = row(lo.y); r <= row(hi.y); ++r)
-        for (std::size_t c = column(lo.x); c <= column(hi.x); ++c)
+      const geometry::BoundingBox b = box_of(k);
+      for (std::size_t r = row(b.min.y); r <= row(b.max.y); ++r)
+        for (std::size_t c = column(b.min.x); c <= column(b.max.x); ++c)
           f(r * nx_ + c);
     };
     for (std::size_t k = 0; k < count; ++k)
@@ -159,7 +154,8 @@ private:
     return static_cast<std::size_t>(std::min(t, static_cast<double>(n - 1)));
   }
 
-  double xmin_, xmax_, ymin_, ymax_, half_width_ = 0, half_height_ = 0;
+  geometry::BoundingBox box_;
+  double half_width_ = 0, half_height_ = 0;
   std::size_t nx_ = 1, ny_ = 1;
   std::vector<std::size_t> offsets_, items_;
 };
@@ -176,10 +172,9 @@ std::string edge_text(const std::vector<WorkingBoundaryEdge> &edges,
 void check_boundary_edges(const std::vector<Point> &nodes,
                           const std::vector<WorkingBoundaryEdge> &edges,
                           Grid &grid) {
-  grid.fill(edges.size(), [&](std::size_t k, Point &lo, Point &hi) {
-    Point a = nodes[edges[k].nodes[0]], b = nodes[edges[k].nodes[1]];
-    lo = {std::min(a.x, b.x), std::min(a.y, b.y)};
-    hi = {std::max(a.x, b.x), std::max(a.y, b.y)};
+  grid.fill(edges.size(), [&](std::size_t k) {
+    return geometry::bounding_box(
+        std::array{nodes[edges[k].nodes[0]], nodes[edges[k].nodes[1]]});
   });
   for (std::size_t c = 0; c < grid.cells(); ++c)
     for (const std::size_t *i = grid.begin(c); i != grid.end(c); ++i)
@@ -208,11 +203,10 @@ void check_boundary_edges(const std::vector<Point> &nodes,
 void check_nodes_outside_other_triangles(
     const std::vector<Point> &nodes,
     const std::vector<std::array<std::size_t, 3>> &triangles, Grid &grid) {
-  grid.fill(triangles.size(), [&](std::size_t k, Point &lo, Point &hi) {
+  grid.fill(triangles.size(), [&](std::size_t k) {
     const auto &t = triangles[k];
-    Point a = nodes[t[0]], b = nodes[t[1]], c = nodes[t[2]];
-    lo = {std::min({a.x, b.x, c.x}), std::min({a.y, b.y, c.y})};
-    hi = {std::max({a.x, b.x, c.x}), std::max({a.y, b.y, c.y})};
+    return geometry::bounding_box(
+        std::array{nodes[t[0]], nodes[t[1]], nodes[t[2]]});
   });
   for (std::size_t v = 0; v < nodes.size(); ++v) {
     const Point p = nodes[v];
