@@ -366,6 +366,24 @@ marked "architecture" below are decided.
   Dirichlet handlings may become options later.
 - **Architecture: assembly fills a `StageReport`**, like the meshing
   stages (time, number of nonzeros, and so on).
+- **Architecture: each role keeps a constant part and a total** (decided
+  2026-11-12). For each operator of M₂U″ + B·U′ + A·U = b (and the
+  right-hand side), the terms whose coefficients do not depend on t are
+  assembled once into a constant part. At each t the total is the constant
+  part copied, plus the t-dependent terms added on top. If nothing depends
+  on t, the constant part is the total. *Why:* only coefficients that
+  depend on t are evaluated again (grouping everything would recompute
+  every term), while memory stays at most two arrays per role on one
+  shared pattern (storing every term would need up to eight or more).
+- **Architecture: the result holds `std::shared_ptr<const MeshedProblem>`**
+  (decided 2026-11-12). It keeps the problem and its mesh alive, and
+  `assemble` reuses `previous` only if it was built from the same problem
+  object (identity, not equal contents); otherwise it throws
+  `std::invalid_argument`.
+- **Architecture: the thread count will be a constructor option of the
+  `Assembler`, default 1** (decided 2026-11-12), added in a later slice.
+  The serial path already goes colour by colour, so the thread count never
+  changes the result.
 
 - **Weak form.** The second-order part is written as A : ∇²u with
   A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] and integrated by parts once:
@@ -452,10 +470,7 @@ marked "architecture" below are decided.
 - Quality guarantees: an improver that runs after a refiner can break the
   refiner's guarantee (smoothing after Ruppert can lower the minimum
   angle). Whether to declare, warn and measure this is not decided yet.
-- The rest of the assembly architecture: the matrix type in public
-  headers (own CSR struct or Eigen), which matrices the result stores
-  (every term, grouped by role, or a constant part plus a time-dependent
-  part), how a `previous` result is checked against the problem, and where
-  the thread count goes (constructor or `assemble`).
+- The matrix type in public headers: our own CSR struct (optionally with
+  an opt-in Eigen adapter header) or Eigen types.
 - How the sparsity pattern is built.
 - Solvers and time integration have not been discussed yet.
