@@ -1,4 +1,5 @@
 #include "pde2d/mesh/chord_length_discretizer.hpp"
+#include "pde2d/mesh/domain_size.hpp"
 
 #include "loop_chains.hpp"
 
@@ -81,9 +82,8 @@ double node_position(double L, std::size_t k, std::size_t n) {
 
 ChordLengthDiscretizer::ChordLengthDiscretizer(ChordLengthOptions options)
     : options_(options) {
-  if (!(options_.max_curve_deviation > 0))
-    throw std::invalid_argument(
-        "ChordLengthOptions::max_curve_deviation must be positive");
+  validate(options_.max_curve_deviation,
+           "ChordLengthOptions::max_curve_deviation");
   detail::validate_corner_angle(options_.corner_angle_degrees,
                                 "ChordLengthOptions::corner_angle_degrees");
 }
@@ -92,8 +92,14 @@ BoundaryPolygon
 ChordLengthDiscretizer::run(const geometry::CurveGeometry &geometry,
                             const MeshSpec &spec, StageReport &report) const {
   validate(spec);
-  const double h = spec.max_edge_length;
-  const double tolerance = options_.max_curve_deviation;
+  const double size = domain_size(geometry);
+  const double h = resolve(spec.max_edge_length, size);
+  // Infinity when unset: no piece is then refined for its deviation.
+  const double tolerance = resolve(options_.max_curve_deviation, size);
+  report.metrics["domain_size"] = size;
+  report.metrics["max_edge_length"] = h;
+  if (std::isfinite(tolerance))
+    report.metrics["max_curve_deviation"] = tolerance;
   BoundaryPolygon polygon;
   polygon.region_names = geometry.region_names();
   std::map<std::string, std::size_t> region_id;

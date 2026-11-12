@@ -6,6 +6,7 @@
 #include "pde2d/mesh/cdt.hpp"
 #include "pde2d/mesh/chord_length_discretizer.hpp"
 #include "pde2d/mesh/delaunay_flips.hpp"
+#include "pde2d/mesh/domain_size.hpp"
 #include "pde2d/mesh/ear_clipping.hpp"
 #include "pde2d/mesh/laplacian_smoothing.hpp"
 #include "pde2d/mesh/longest_edge_bisection.hpp"
@@ -14,6 +15,8 @@
 #include "pde2d/mesh/ruppert.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <numbers>
 
@@ -310,11 +313,111 @@ int main() {
              [&] { (void)mesher.run(annulus(1, 0.5), {0.5}); },
              "no_holes does not support holes; the geometry has 1");
          expect_throws<std::invalid_argument>(
-             [&] { (void)mesher.run(rectangle(1, 1), {0}); },
-             "max_edge_length must be finite and positive");
+             [&] { (void)mesher.run(rectangle(1, 1), {}); },
+             "MeshSpec::max_edge_length needs an absolute or a relative value");
          expect_throws<std::invalid_argument>(
-             [&] { (void)mesher.run(rectangle(1, 1), {INFINITY}); },
-             "max_edge_length");
+             [&] {
+               (void)mesher.run(rectangle(1, 1),
+                                {.max_edge_length = {.absolute = 0}});
+             },
+             "MeshSpec::max_edge_length.absolute must be finite and positive");
+         expect_throws<std::invalid_argument>(
+             [&] {
+               (void)mesher.run(rectangle(1, 1),
+                                {.max_edge_length = {.relative = INFINITY}});
+             },
+             "MeshSpec::max_edge_length.relative must be finite and positive");
+       }},
+      {"length_bound_resolves_to_the_smaller_value",
+       [] {
+         near(resolve({.absolute = 2}, 5), 2, 0, "absolute");
+         near(resolve({.relative = 0.1}, 5), 0.5, 0, "relative");
+         near(resolve({.absolute = 2, .relative = 0.1}, 5), 0.5, 0,
+              "relative smaller");
+         near(resolve({.absolute = 0.2, .relative = 0.1}, 5), 0.2, 0,
+              "absolute smaller");
+         check(resolve({}, 5) == std::numeric_limits<double>::infinity(),
+               "no value: no bound");
+         validate(LengthBound{}, "x"); // no value is valid for a bound
+         expect_throws<std::invalid_argument>(
+             [] { validate(LengthBound{.relative = -1}, "x"); },
+             "x.relative must be finite and positive");
+       }},
+      {"relative_edge_length_is_resolved_against_the_domain_size",
+       [] {
+         // A 2 x 1 rectangle: domain size sqrt(5).
+         auto r =
+             Mesher(chords(), cdt(), ruppert())
+                 .run(rectangle(2, 1), {.max_edge_length = {.relative = 0.1}});
+         const double size = std::sqrt(5.0);
+         near(r.domain_size, size, 1e-15, "domain size");
+         near(r.max_edge_length, 0.1 * size, 1e-15, "resolved edge length");
+         check(r.target_met && r.longest_edge <= 0.1 * size, "target met");
+         for (const auto &s : r.reports)
+           if (s.stage == "chord_length" || s.stage == "ruppert") {
+             near(s.metrics.at("domain_size"), size, 1e-15,
+                  "reported domain size");
+             near(s.metrics.at("max_edge_length"), 0.1 * size, 1e-15,
+                  "reported edge length");
+           }
+         // Without a refiner the result still says what h was.
+         auto plain =
+             Mesher(chords(), cdt())
+                 .run(rectangle(2, 1), {.max_edge_length = {.absolute = 0.3}});
+         near(plain.max_edge_length, 0.3, 0, "absolute edge length");
+       }},
+      {"relative_values_give_the_same_mesh_at_every_scale",
+       [] {
+         // Scaling by a power of two is exact in floating point, so with
+         // relative values every decision is the same and the mesh is the
+         // same mesh, scaled.
+         auto discretizer = std::make_shared<ChordLengthDiscretizer>(
+             ChordLengthOptions{.max_curve_deviation = {.relative = 0.002}});
+         Mesher mesher(discretizer, cdt(), ruppert());
+         const auto g = annulus(1, 0.4);
+         const MeshSpec spec{.max_edge_length = {.relative = 0.08}};
+         auto small = mesher.run(g, spec);
+         for (double scale : {1.0 / 1024, 1024.0}) {
+           auto big = mesher.run(g.transformed({.scale = scale}), spec);
+           check(big.mesh.triangles.size() == small.mesh.triangles.size(),
+                 "same triangle count");
+           check(big.mesh.nodes.size() == small.mesh.nodes.size(),
+                 "same node count");
+           for (std::size_t v = 0; v < small.mesh.nodes.size(); ++v) {
+             near(big.mesh.nodes[v].x, scale * small.mesh.nodes[v].x,
+                  1e-12 * scale, "scaled node");
+             near(big.mesh.nodes[v].y, scale * small.mesh.nodes[v].y,
+                  1e-12 * scale, "scaled node");
+           }
+         }
+       }},
+      {"domain_size_from_chains_or_boundary_nodes",
+       [] {
+         const auto g = circle(1);
+         auto r = Mesher(chords(), cdt())
+                      .run(g, {.max_edge_length = {.absolute = 0.5}});
+         // The output mesh carries the geometry's curves in its chains:
+         // exactly the same number.
+         check(domain_size(r.mesh) == domain_size(g), "chains: same size");
+         check(r.domain_size == domain_size(g), "result: same size");
+         near(domain_size(g), 2 * std::sqrt(2.0), 1e-15, "circle box");
+         // Without chains the boundary nodes are the boundary: a polygon
+         // inside the circle, so a smaller box.
+         const Mesh m = without_links(r.mesh);
+         check(domain_size(m) < domain_size(g), "nodes: smaller");
+         // Splitting boundary edges at their midpoints does not change it,
+         // so refinement keeps the same domain size.
+         auto fine = Remesher(bisection())
+                         .run(m, {.max_edge_length = {.relative = 0.02}});
+         check(fine.mesh.boundary_edges.size() > m.boundary_edges.size(),
+               "boundary refined");
+         check(domain_size(fine.mesh) == domain_size(m), "same after refining");
+         check(fine.domain_size == domain_size(m), "result size");
+         near(fine.max_edge_length, 0.02 * domain_size(m), 0,
+              "resolved against the nodes");
+         check(fine.target_met, "target met");
+         expect_throws<std::invalid_argument>([] { (void)domain_size(Mesh{}); },
+                                              "no boundary edges");
        }},
       {"target_met_is_checked_on_the_final_mesh",
        [] {
@@ -379,15 +482,15 @@ int main() {
          // circles cross.
          CurveGeometry g({circle_loop({0, 0}, 1, "outer"),
                           circle_loop({0, 0.05}, 0.9, "hole")});
-         auto coarse = std::make_shared<ChordLengthDiscretizer>(
-             ChordLengthOptions{.max_curve_deviation = INFINITY});
+         auto coarse =
+             std::make_shared<ChordLengthDiscretizer>(ChordLengthOptions{});
          expect_throws<std::runtime_error>(
              [&] { (void)Mesher(coarse, cdt()).run(g, {1.0}); },
              "chord_length produced an invalid boundary polygon: Boundary "
              "polygon edges cross or touch");
          // A curve deviation bound fixes it.
          auto fine = std::make_shared<ChordLengthDiscretizer>(
-             ChordLengthOptions{.max_curve_deviation = 0.01});
+             ChordLengthOptions{.max_curve_deviation = {.absolute = 0.01}});
          auto r = Mesher(fine, cdt()).run(g, {1.0});
          check_valid_mesh(r.mesh);
        }},
@@ -486,7 +589,9 @@ int main() {
          // it as one chain and its chords span the junctions. Linking to
          // the geometry builds the same chain, so every edge is linked.
          auto g = stadium();
-         auto coarse = Mesher(chords(), cdt()).run(g, {0.5});
+         auto deviation = std::make_shared<ChordLengthDiscretizer>(
+             ChordLengthOptions{.max_curve_deviation = {.absolute = 0.02}});
+         auto coarse = Mesher(deviation, cdt()).run(g, {0.5});
          const Mesh m = without_links(coarse.mesh);
          auto fine = Remesher(bisection()).run(m, g, {0.1});
          check_valid_mesh(fine.mesh);

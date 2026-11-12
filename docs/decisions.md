@@ -121,6 +121,37 @@ Started 2026-11-11. The previous header-only code is on the branch
 - **v1 `MeshSpec` = maximum edge length.** It is a struct so that it can grow:
   later a metric tensor field for anisotropic meshes, with the isotropic size
   as a special case.
+- **Length limits are `LengthBound{absolute, relative}`** (decided
+  2026-11-12), both `std::optional<double>`: an absolute length, a multiple
+  of the domain size, or both, and with both the smaller one applies. An
+  empty value is "no bound" (not 0, not infinity). Used for
+  `MeshSpec::max_edge_length` (at least one value required, else
+  `std::invalid_argument`) and `ChordLengthOptions::max_curve_deviation`.
+  Every set value must be finite and positive. *Why:* an absolute default
+  like 0.02 means "very strict" or "never active" depending on the units;
+  relative values give the same mesh at every scale.
+- **Settings stay settings.** `MeshSpec` and options know nothing about the
+  domain. Each component that uses a `LengthBound` resolves it itself, with
+  the shared `resolve(bound, domain_size)` and `domain_size(...)`; no
+  resolved spec type is passed between stages and `run()` signatures are
+  unchanged. *Why:* the spec is what is asked for, the domain size is a fact
+  about the input; and a component called on its own still behaves
+  correctly.
+- **The domain size is a fixed internal policy**, like the boundary split
+  policy: currently the diagonal of the axis-aligned bounding box of the
+  boundary (exact extremes of the curves). It is within a factor sqrt(2) of
+  the diameter but changes when the domain is rotated; a different
+  definition (for example the diameter) replaces the policy in one place.
+  It is measured on the geometry's curves, on a mesh's chains when it has
+  them, else on its boundary nodes, so every stage of a run sees the same
+  number and refinement does not change it.
+- **No caching of derived quantities** for now; they are recomputed (one
+  pass over the boundary). Caching on `Mesh` is not possible while it is a
+  public struct: GitHub issue #26.
+- **Resolved values are reported:** `MeshResult::max_edge_length` and
+  `domain_size`, and the metrics `domain_size`, `max_edge_length` (and
+  `max_curve_deviation` when set) in the discretizer's and refiners'
+  reports.
 - **Stages run in a fixed order:** `BoundaryDiscretizer` →
   `InitialTriangulator` → `Refiner` (optional) → `Improver`s (a list).
 - **Components are virtual interfaces.** Each component owns its own options
@@ -176,8 +207,8 @@ Started 2026-11-11. The previous header-only code is on the branch
   internally.
 - **v1 algorithms:**
   - boundary discretizer: every chord ≤ `max_edge_length`; the curve
-    deviation is the component's own option, on by default with
-    `max_curve_deviation = 0.02` (in geometry units);
+    deviation is the component's own option, off by default (changed
+    2026-11-12 from an absolute 0.02);
   - triangulators: ear clipping (bridging holes, run once per piece) and
     CDT;
   - refiners: Ruppert (keeps the mesh Delaunay internally, min-angle option)
@@ -374,6 +405,10 @@ where assembly lives) has not been discussed yet.
 - An arc type stored by its end points (exact end points for flat arcs).
 - The validity check also runs on meshes our own triangulators build, which
   the owner considers double work: GitHub issue #24.
+- A curve-deviation bound that resolves small features of a large domain
+  (relative to the chord or a turning angle, or local feature size):
+  GitHub issue #25.
+- Caching derived mesh quantities: GitHub issue #26.
 
 ## Open
 

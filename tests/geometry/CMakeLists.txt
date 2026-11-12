@@ -8,3 +8,5 @@ pde2d_add_test(NAME geometry_curve_geometry SOURCE curve_geometry.cpp
                LIBS pde2d_geometry)
 pde2d_add_test(NAME geometry_regions SOURCE regions.cpp LIBS pde2d_geometry)
 pde2d_add_test(NAME geometry_shapes SOURCE shapes.cpp LIBS pde2d_geometry)
+pde2d_add_test(NAME geometry_bounding_box SOURCE bounding_box.cpp
+               LIBS pde2d_geometry)

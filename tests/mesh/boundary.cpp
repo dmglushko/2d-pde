@@ -3,7 +3,9 @@
 
 #include "pde2d/mesh/chord_length_discretizer.hpp"
 
+#include <cmath>
 #include <numbers>
+#include <vector>
 
 using namespace pde2d::mesh;
 using namespace pde2d::test;
@@ -15,7 +17,8 @@ constexpr double pi = std::numbers::pi;
 BoundaryPolygon run_discretizer(const CurveGeometry &g, double h,
                                 ChordLengthOptions o = {}) {
   StageReport report;
-  return ChordLengthDiscretizer(o).run(g, {h}, report);
+  return ChordLengthDiscretizer(o).run(g, {.max_edge_length = {.absolute = h}},
+                                       report);
 }
 
 void check_chords(const BoundaryPolygon &p, double h) {
@@ -104,33 +107,84 @@ int main() {
        [] {
          // Large h: the deviation bound decides the count. The bound used is
          // r w^2 / 8 for a piece with sweep w, so w <= sqrt(8 d / r).
-         auto p =
-             run_discretizer(circle(1), 10, {.max_curve_deviation = 0.001});
+         auto p = run_discretizer(circle(1), 10,
+                                  {.max_curve_deviation = {.absolute = 0.001}});
          double w = 2 * pi / double(p.loops[0].points.size());
          check(w * w / 8 <= 0.001, "deviation bound met");
          // The real sagitta is smaller than the bound.
          check(1 - std::cos(w / 2) <= 0.001, "sagitta");
          check_chords(p, 10);
          expect_throws<std::invalid_argument>(
-             [] { ChordLengthDiscretizer({.max_curve_deviation = 0}); },
-             "must be positive");
+             [] {
+               ChordLengthDiscretizer({.max_curve_deviation = {.absolute = 0}});
+             },
+             "ChordLengthOptions::max_curve_deviation.absolute must be finite "
+             "and positive");
+         expect_throws<std::invalid_argument>(
+             [] {
+               ChordLengthDiscretizer(
+                   {.max_curve_deviation = {.relative = INFINITY}});
+             },
+             "ChordLengthOptions::max_curve_deviation.relative must be finite "
+             "and positive");
        }},
-      {"default_curve_deviation",
+      {"curve_deviation_is_off_by_default",
        [] {
-         check(ChordLengthOptions{}.max_curve_deviation == 0.02, "0.02");
-         // A huge h: only the default deviation bound sets the count, so
-         // the sweep w of each piece has w^2 / 8 <= 0.02.
-         auto p = run_discretizer(circle(1), 100);
-         double w = 2 * pi / double(p.loops[0].points.size());
-         check(w * w / 8 <= 0.02, "default bound met");
-         check(p.loops[0].points.size() > 3, "more than a triangle");
-       }},
-      {"at_least_three_points",
-       [] {
-         auto p =
-             run_discretizer(circle(1), 100, {.max_curve_deviation = INFINITY});
+         const auto d = ChordLengthOptions{}.max_curve_deviation;
+         check(!d.absolute && !d.relative, "neither value set");
+         // A huge h and no deviation bound: the minimum of three points.
+         StageReport r;
+         auto p = ChordLengthDiscretizer().run(
+             circle(1), {.max_edge_length = {.absolute = 100}}, r);
          check(p.loops[0].points.size() == 3, "a triangle");
+         check(!r.metrics.contains("max_curve_deviation"), "no metric");
          validate(p);
+       }},
+      {"relative_values_scale_with_the_domain",
+       [] {
+         // The domain size of a circle of radius r is its bounding-box
+         // diagonal, 2 r sqrt(2). Relative values give the same polygon,
+         // scaled, for every r.
+         for (double rel_h : {0.2, 10.0}) {
+           std::vector<std::size_t> counts;
+           for (double r : {1e-3, 1.0, 1e3}) {
+             StageReport report;
+             auto p =
+                 ChordLengthDiscretizer(
+                     {.max_curve_deviation = {.relative = 1e-3}})
+                     .run(circle(r), {.max_edge_length = {.relative = rel_h}},
+                          report);
+             const double size = 2 * r * std::sqrt(2.0);
+             near(report.metrics.at("domain_size"), size, 1e-12 * size,
+                  "domain size");
+             near(report.metrics.at("max_edge_length"), rel_h * size,
+                  1e-12 * size, "resolved edge length");
+             near(report.metrics.at("max_curve_deviation"), 1e-3 * size,
+                  1e-12 * size, "resolved deviation");
+             check_chords(p, rel_h * size);
+             counts.push_back(p.loops[0].points.size());
+           }
+           check(counts[0] == counts[1] && counts[1] == counts[2],
+                 "same count at every scale");
+         }
+       }},
+      {"absolute_and_relative_take_the_smaller",
+       [] {
+         // Unit square: domain size sqrt(2), perimeter 4.
+         auto count = [](LengthBound h) {
+           StageReport r;
+           return ChordLengthDiscretizer()
+               .run(rectangle(1, 1), {.max_edge_length = h}, r)
+               .loops[0]
+               .points.size();
+         };
+         const double s = std::sqrt(2.0);
+         check(count({.absolute = 0.5}) == 8, "absolute only");
+         check(count({.relative = 0.3 / s}) == 16, "relative only");
+         check(count({.absolute = 0.5, .relative = 0.3 / s}) == 16,
+               "relative smaller");
+         check(count({.absolute = 0.3, .relative = 0.5 / s}) == 16,
+               "absolute smaller");
        }},
       {"bezier_curves",
        [] {
@@ -225,7 +279,8 @@ int main() {
          CurveGeometry bend({polygon_loop(
              {{0, 0}, {1, 0}, {2, rise}, {2, 2}, {0, 2}}, "wall")});
          for (double d : {0.05, 0.01, 0.002}) {
-           auto p = run_discretizer(bend, 10, {.max_curve_deviation = d});
+           auto p = run_discretizer(bend, 10,
+                                    {.max_curve_deviation = {.absolute = d}});
            double worst = 0;
            const auto &pts = p.loops[0].points;
            for (std::size_t i = 0; i < pts.size(); ++i) {

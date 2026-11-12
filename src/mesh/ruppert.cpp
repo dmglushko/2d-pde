@@ -1,5 +1,7 @@
 #include "pde2d/mesh/ruppert.hpp"
 
+#include "pde2d/mesh/domain_size.hpp"
+
 #include "delaunay_internal.hpp"
 #include "local_improvers.hpp"
 
@@ -50,7 +52,10 @@ void Ruppert::run(WorkingMesh &mesh, const MeshSpec &spec,
                   std::span<const LocalImprover *const> local_improvers,
                   StageReport &report) const {
   validate(spec);
-  const double h = spec.max_edge_length;
+  const double size = domain_size(mesh);
+  const double h = resolve(spec.max_edge_length, size);
+  report.metrics["domain_size"] = size;
+  report.metrics["max_edge_length"] = h;
   const double alpha = options_.min_angle_degrees * std::numbers::pi / 180;
   const auto &P = mesh.nodes();
   const auto &T = mesh.triangles();

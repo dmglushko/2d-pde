@@ -1,5 +1,7 @@
 #include "pde2d/mesh/remesher.hpp"
 
+#include "pde2d/mesh/domain_size.hpp"
+
 #include "loop_chains.hpp"
 #include "stage.hpp"
 
@@ -295,6 +297,8 @@ MeshResult Remesher::run(const Mesh &mesh,
 MeshResult Remesher::run(WorkingMesh mesh, const MeshSpec &spec) const {
   validate(spec);
   MeshResult result;
+  result.domain_size = domain_size(mesh);
+  result.max_edge_length = resolve(spec.max_edge_length, result.domain_size);
   result.reports.push_back(pipeline_report_);
   if (refiner_) {
     StageReport report;
@@ -314,7 +318,7 @@ MeshResult Remesher::run(WorkingMesh mesh, const MeshSpec &spec) const {
   }
   result.mesh = mesh.to_mesh();
   result.longest_edge = longest_edge(result.mesh);
-  result.target_met = result.longest_edge <= spec.max_edge_length;
+  result.target_met = result.longest_edge <= result.max_edge_length;
   return result;
 }
 

@@ -7,6 +7,7 @@ add_library(pde2d_mesh
   components.cpp
   curve_chain.cpp
   delaunay.cpp
+  domain_size.cpp
   delaunay_flips.cpp
   edge_recovery.cpp
   ear_clipping.cpp

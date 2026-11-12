@@ -26,8 +26,10 @@ struct RuppertOptions {
 // Every insertion is followed by flips, so the mesh stays constrained
 // Delaunay. A boundary edge with a curve link is split at the curve point.
 // Local improvers it is given run after every insertion and its flips.
+// max_edge_length is resolved against domain_size(mesh).
 // Metrics: "initial_flips", "flips", "boundary_splits", "circumcenters",
-// "local_improver_changes" and "local_improver_changes.<name>".
+// "local_improver_changes" and "local_improver_changes.<name>",
+// "domain_size" and "max_edge_length" (resolved).
 class Ruppert final : public Refiner {
 public:
   explicit Ruppert(RuppertOptions options = {});

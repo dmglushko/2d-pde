@@ -62,16 +62,16 @@ void check_ruppert(const CurveGeometry &g, double h, double angle,
 }
 
 // Chord-length discretization at a fixed coarse edge length and without a
-// deviation bound, whatever the spec says, so that the refiner has to
-// split most boundary edges.
+// deviation bound (the default), whatever the spec says, so that the refiner
+// has to split most boundary edges.
 class CoarseBoundary final : public BoundaryDiscretizer {
 public:
   explicit CoarseBoundary(double h) : h_(h) {}
   std::string name() const override { return "coarse"; }
   BoundaryPolygon run(const CurveGeometry &g, const MeshSpec &,
                       StageReport &r) const override {
-    return ChordLengthDiscretizer({.max_curve_deviation = INFINITY})
-        .run(g, {h_}, r);
+    return ChordLengthDiscretizer().run(
+        g, {.max_edge_length = {.absolute = h_}}, r);
   }
 
 private:

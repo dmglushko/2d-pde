@@ -19,9 +19,11 @@ struct LongestEdgeBisectionOptions {
 // curve point). Keeps the mesh conforming without other changes. After
 // every split it calls the local improvers it is given (it tolerates
 // flips and node moves) on the touched triangles.
+// max_edge_length is resolved against domain_size(mesh).
 // Metrics: "splits", "boundary_splits", "local_improver_changes" (the sum
 // of the counts the local improvers return) and, per local improver,
-// "local_improver_changes.<name>".
+// "local_improver_changes.<name>", "domain_size" and "max_edge_length"
+// (resolved).
 class LongestEdgeBisection final : public Refiner {
 public:
   explicit LongestEdgeBisection(LongestEdgeBisectionOptions options = {});

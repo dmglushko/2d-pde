@@ -30,7 +30,8 @@ public:
   // input (for example a triangulator without hole support against a
   // geometry with holes) and throws std::invalid_argument on a mismatch.
   // Stage failures throw with a specific message. The result says whether
-  // every final edge is at most spec.max_edge_length. Reports, in order:
+  // every final edge is at most spec.max_edge_length, resolved against
+  // domain_size (MeshResult::max_edge_length). Reports, in order:
   // pipeline, discretizer, triangulator, refiner, final passes.
   [[nodiscard]] MeshResult run(const geometry::CurveGeometry &geometry,
                                const MeshSpec &spec) const;

@@ -56,6 +56,10 @@ small polygon far from the origin does not cancel), `polygon_orientation`
 and `BoundaryPolygon` decide loop directions with it, because the sign of
 an area underflows or overflows at extreme scales),
 `locate_in_polygon` and `find_crossing` for polygons.
+`bounding_box.hpp`: `BoundingBox{min, max}`, `merged`, `diagonal`, and
+`bounding_box` of a curve (end points plus the exact interior extremes:
+roots of the Bezier derivatives, axis extremes of arcs) and of a
+`CurveGeometry`.
 
 `CurveGeometry` construction:
 
@@ -97,7 +101,8 @@ the assembled pipeline, never from its own options.
 
 | Type | Role |
 | --- | --- |
-| `MeshSpec{max_edge_length}` | the mesher's only external input besides the geometry |
+| `LengthBound{absolute, relative}` | a length limit: optional absolute length, optional multiple of the domain size; the smaller applies, none set means no limit; `resolve(bound, domain_size)`, `validate(bound, name)`; in `mesh_spec.hpp` |
+| `MeshSpec{max_edge_length}` | the mesher's only external input besides the geometry; `max_edge_length` is a `LengthBound` with at least one value |
 | `CurveChain` | consecutive exact curves treated as one path, measured by arc length `s`; cumulative lengths, `position(s)`, `point_at(s)` |
 | `CurveLink{chain, s0, s1}` | which chain (index into the holder's chain list) and arc-length interval an edge approximates, `0 <= s0 < s1 <= length`; in `curve_chain.hpp`, with `default_corner_angle_degrees` (30) |
 | `BoundaryPolygon` | loops of straight edges; per edge a region id and an optional `CurveLink`; the chains; region names |
@@ -106,7 +111,23 @@ the assembled pipeline, never from its own options.
 | `ImproverUse` | `local_and_final`, `local_only`, `final_only`: in each improver's options |
 | `PipelinePlan` | resolved at construction: indices of the local improvers and of the final passes, and the warnings |
 | `StageReport` | `stage`, `time`, `messages`, `metrics` (name → number) |
-| `MeshResult` | `mesh`, `reports` (the first is always "pipeline"), `target_met`, `longest_edge` |
+| `MeshResult` | `mesh`, `reports` (the first is always "pipeline"), `target_met`, `longest_edge`, `max_edge_length` and `domain_size` (what the spec resolved to) |
+
+### Lengths and the domain size
+
+`domain_size(...)` (`domain_size.hpp`) is the length that relative values
+multiply. Its definition is a private policy (`domain_size_policy.hpp`,
+fixed by the library like the boundary split policy): currently the
+diagonal of the axis-aligned bounding box (`geometry::bounding_box`) of
+the boundary. It is measured on the geometry's curves, on a mesh's chains
+when it has them (the same curves, so exactly the same number), else on
+its boundary nodes (an imported mesh: splitting a boundary edge at its
+midpoint keeps the box). Settings never know the domain: the discretizer
+resolves `max_edge_length` and `max_curve_deviation` against
+`domain_size(geometry)`, each refiner resolves `max_edge_length` against
+`domain_size(mesh)`, and the `Remesher` does the same for `target_met`.
+Each reports `domain_size` and the resolved `max_edge_length` (and
+`max_curve_deviation`) as metrics. Nothing is cached (GitHub issue #26).
 
 ### Chains
 
@@ -123,7 +144,7 @@ always a node and links never wrap around.
 
 Each chain is sampled as one path: `ceil(length / h)` pieces of equal arc
 length, raised while a chord is longer than `h` or a piece may deviate from
-its chord by more than `max_curve_deviation`. For a piece across
+its chord by more than `max_curve_deviation` (when set). For a piece across
 junctions the bound is the maximum over its curve pieces of
 `(1 - u) d0 + u d1 + M u (1 - u) / 2` (`d0, d1` the distances of the curve
 piece's ends from the chord, `M` its second-derivative bound), which is
@@ -304,7 +325,8 @@ returned counts as `local_improver_changes` (and one
 Between stages the `Mesher` validates the `BoundaryPolygon` (no crossing
 chords, orientation by depth, nesting), so a discretizer's mistake is
 reported as such. After the last stage it checks the target: every edge of
-the final mesh at most `max_edge_length` (`target_met`, `longest_edge`).
+the final mesh at most the resolved `max_edge_length` (`target_met`,
+`longest_edge`, `MeshResult::max_edge_length`).
 Failures are exceptions with specific messages; report messages only mean
 "worked, but…".
 
@@ -312,7 +334,7 @@ Failures are exceptions with specific messages; report messages only mean
 
 | Component | File | Notes |
 | --- | --- | --- |
-| `ChordLengthDiscretizer` | `chord_length_discretizer.*` | chains sampled by equal arc length, chord ≤ h; options `max_curve_deviation` (0.02), `corner_angle_degrees` (30) |
+| `ChordLengthDiscretizer` | `chord_length_discretizer.*` | chains sampled by equal arc length, chord ≤ h; options `max_curve_deviation` (a `LengthBound`, off by default), `corner_angle_degrees` (30) |
 | `EarClipping` | `ear_clipping.*` | per piece: bridge holes, cut best-shaped ears first |
 | `Cdt` | `cdt.*` | incremental Delaunay in an enclosing triangle, edge recovery by flips, outside removed, final flips |
 | `Ruppert` | `ruppert.*` | makes its input Delaunay, splits encroached/long boundary edges, inserts circumcenters; options `min_angle_degrees`, `max_points`; accepts only local improvers without effects |

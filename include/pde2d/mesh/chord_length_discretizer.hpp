@@ -1,14 +1,17 @@
 #pragma once
 
 #include "pde2d/mesh/components.hpp"
+#include "pde2d/mesh/mesh_spec.hpp"
 
 namespace pde2d::mesh {
 
 struct ChordLengthOptions {
-  // Upper bound on the distance between a curve and its chords, in the
-  // geometry's length unit. Infinity means no bound beyond the edge
-  // length. Must be positive.
-  double max_curve_deviation = 0.02;
+  // Upper bound on the distance between a curve and its chords, absolute
+  // or relative to the domain size (domain_size.hpp). Off by default: then
+  // only the edge length bounds the chords. A relative bound is one number
+  // for the whole domain, so it cannot resolve small features of a large
+  // domain (a small hole may become a triangle; GitHub issue #25).
+  LengthBound max_curve_deviation{};
   // Consecutive curves of one loop are joined into one chain, sampled as a
   // single path, unless the region changes or the boundary turns by more
   // than this angle where they meet. In degrees, in [0, 180]: 0 breaks at
@@ -18,8 +21,10 @@ struct ChordLengthOptions {
   double corner_angle_degrees = default_corner_angle_degrees;
 };
 
-// Joins the curves of each loop into chains (see corner_angle_degrees)
-// and splits every chain into ceil(length / max_edge_length) pieces of
+// Resolves spec.max_edge_length and max_curve_deviation against
+// domain_size(geometry). Joins the curves of each loop into chains (see
+// corner_angle_degrees) and splits every chain into ceil(length /
+// max_edge_length) pieces of
 // equal arc length, so every chord is at most max_edge_length. It adds
 // pieces while a chord is longer after rounding, or while a piece may
 // deviate from its chord by more than max_curve_deviation (an analytic
@@ -36,7 +41,8 @@ struct ChordLengthOptions {
 // chord from its start to its end; a junction with no usable direction is
 // a break. A loop without any break is one chain that starts and ends at
 // the start of the loop's first curve, so that point is always a node.
-// Metrics: "points", "loops", "chains".
+// Metrics: "points", "loops", "chains", "domain_size", "max_edge_length"
+// (resolved) and, when it is set, "max_curve_deviation" (resolved).
 class ChordLengthDiscretizer final : public BoundaryDiscretizer {
 public:
   explicit ChordLengthDiscretizer(ChordLengthOptions options = {});

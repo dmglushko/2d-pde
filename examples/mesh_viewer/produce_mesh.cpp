@@ -41,7 +41,8 @@ int main(int argc, char **argv) {
                         std::make_shared<mesh::Cdt>(),
                         std::make_shared<mesh::Ruppert>(
                             mesh::RuppertOptions{.min_angle_degrees = 25}));
-    mesh::MeshResult result = mesher.run(geometry, {.max_edge_length = 0.2});
+    mesh::MeshResult result =
+        mesher.run(geometry, {.max_edge_length = {.absolute = 0.2}});
     if (!result.target_met)
       std::cerr << "warning: the longest edge is " << result.longest_edge
                 << ", above the target\n";

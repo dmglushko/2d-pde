@@ -1,5 +1,7 @@
 #include "pde2d/mesh/longest_edge_bisection.hpp"
 
+#include "pde2d/mesh/domain_size.hpp"
+
 #include "local_improvers.hpp"
 
 #include <algorithm>
@@ -53,7 +55,10 @@ void LongestEdgeBisection::run(
     std::span<const LocalImprover *const> local_improvers,
     StageReport &report) const {
   validate(spec);
-  const double h = spec.max_edge_length;
+  const double size = domain_size(mesh);
+  const double h = resolve(spec.max_edge_length, size);
+  report.metrics["domain_size"] = size;
+  report.metrics["max_edge_length"] = h;
   std::size_t splits = 0, boundary_splits = 0, retriangulated = 0,
               deleted_nodes = 0, failed_splits = 0;
   detail::LocalImproverCalls local(local_improvers);

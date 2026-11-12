@@ -1,4 +1,5 @@
 add_library(pde2d_geometry
+  bounding_box.cpp
   curve.cpp
   curve_geometry.cpp
   polygon.cpp
