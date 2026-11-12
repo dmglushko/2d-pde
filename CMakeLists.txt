@@ -26,6 +26,17 @@ add_subdirectory(src/geometry)
 add_subdirectory(src/mesh)
 add_subdirectory(src/io)
 
+# SymEngine parses and compiles expressions in pde2d_fem, only in its .cpp
+# files. Point CMake at an installation with -DSymEngine_DIR=<prefix>/lib/
+# cmake/symengine or CMAKE_PREFIX_PATH. Its config file still declares
+# compatibility with CMake 2.8, which CMake 4 refuses without a policy floor.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.0 AND NOT DEFINED
+                                               CMAKE_POLICY_VERSION_MINIMUM)
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+endif()
+find_package(SymEngine 0.14 CONFIG REQUIRED)
+add_subdirectory(src/fem)
+
 if(PDE2D_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()

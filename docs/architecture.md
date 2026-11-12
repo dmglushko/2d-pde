@@ -10,20 +10,23 @@ How the code is organized now. The decisions behind it are in
 include/pde2d/geometry/   src/geometry/   ->  library pde2d_geometry
 include/pde2d/mesh/       src/mesh/       ->  library pde2d_mesh
 include/pde2d/io/         src/io/         ->  library pde2d_io
+include/pde2d/fem/        src/fem/        ->  library pde2d_fem
 ```
 
-`pde2d_mesh` depends on `pde2d_geometry`, and `pde2d_io` on `pde2d_mesh`
-(so on both), never the reverse. Public headers are in
+`pde2d_mesh` depends on `pde2d_geometry`, and `pde2d_io` and `pde2d_fem`
+each on `pde2d_mesh` (so on both), never the reverse. Public headers are in
 `include/pde2d/<module>/`; everything in `src/` is private, including the
-private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`). `pde2d_geometry`
-and `pde2d_mesh` have no external dependencies; `pde2d_io` links libxml2
-privately (only `src/io/svg_import.cpp` includes it). The tests use
+private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`, `src/fem/*.hpp`).
+`pde2d_geometry` and `pde2d_mesh` have no external dependencies;
+`pde2d_io` links libxml2 privately (only `src/io/svg_import.cpp` includes
+it), and `pde2d_fem` links SymEngine 0.14 privately (only through the
+private header `src/fem/symengine_expression.hpp`). The tests use
 Boost.Multiprecision (header-only) in one place:
 `geometry_predicates_oracle` checks the adaptive predicates against an
 arbitrary-precision evaluation. The viewer tests need Node.js and are
 skipped without it.
 
-Namespaces: `pde2d::geometry`, `pde2d::mesh` and `pde2d::io`.
+Namespaces: `pde2d::geometry`, `pde2d::mesh`, `pde2d::io` and `pde2d::fem`.
 
 ## Geometry
 
@@ -423,9 +426,111 @@ conversion and the y mirror `mirrored_y`), `text.hpp` (files, exact number parsi
 The mesh viewer (`tools/mesh_viewer/`) is the previous code's viewer,
 unchanged. `examples/mesh_viewer/produce_mesh` writes a mesh for it.
 
+## Problems (`pde2d_fem`)
+
+```
+text ──► Expression ─┐
+                     ├─► Problem ──┐
+         Parameters ─┘             ├─► MeshedProblem ──► (assembly, later)
+                   Mesh (shared) ──┘
+```
+
+| Type | Header | Role |
+| --- | --- | --- |
+| `Expression` | `expression.hpp` | a scalar expression in x, y, t and named parameters, built from text (`Expression("1 + k*x*y")`); immutable, copies share the parsed form; `text()`, `facts()`; `Expression()` is zero |
+| `ExpressionFacts` | `expression.hpp` | `zero`, `depends_on_x/y/t`, as written |
+| `Parameters` | `expression.hpp` | `std::map<std::string, double>`: name → value |
+| `CompiledExpression` | `compiled_expression.hpp` | an `Expression` with its parameters substituted, compiled to a function `(x, y, t) -> double`; keeps the expression's facts; `CompiledExpression()` is zero |
+| `Equation` | `problem.hpp` | the coefficients `a_xx a_xy a_yy b_x b_y c m1 m2 f` of `a_xx u_xx + a_xy u_xy + a_yy u_yy + b_x u_x + b_y u_y + c u + m1 u_t + m2 u_tt = f`; unset ones are zero |
+| `BoundaryCondition` | `problem.hpp` | `alpha beta_n beta_tau beta_x beta_y gamma g` of `alpha u + beta_n u_n + beta_tau u_tau + beta_x u_x + beta_y u_y + gamma u_t = g`, and `priority` (default 0) |
+| `InitialConditions` | `problem.hpp` | `std::optional<Expression>` `u` and `u_t` |
+| `Problem` | `problem.hpp` | `equation`, `parameters`, `boundary_conditions` (region name → condition), `initial` |
+| `ConditionKind` | `problem.hpp` | `dirichlet`, `natural`, `dynamic`; `classify(condition)` and `is_oblique(condition)` |
+| `CompiledEquation`, `CompiledCondition` | `meshed_problem.hpp` | the same members as `CompiledExpression`s; a condition also has its `kind`, `oblique` and `priority` |
+| `DirichletNode` | `meshed_problem.hpp` | a node and the regions whose `g / alpha` is averaged there (one, or two at an equal-priority corner) |
+| `MeshedProblem` | `meshed_problem.hpp` | `Problem` + `std::shared_ptr<const Mesh>`, checked and compiled, up to assembly |
+
+```cpp
+using namespace pde2d::fem;
+Problem problem{
+    .equation = {.a_xx = Expression("-k"), .a_yy = Expression("-k"),
+                 .f = Expression("1")},
+    .parameters = {{"k", 1000.0}},
+    .boundary_conditions = {
+        {"wall", {.alpha = Expression("1"), .g = Expression("0")}},
+        {"inlet", {.beta_n = Expression("1"), .g = Expression("x*y")}}}};
+auto meshed = std::make_shared<const MeshedProblem>(mesh, problem);
+double a = meshed->equation().a_xx(0.5, 0.5, 0.0); // -1000
+```
+
+**Expressions.** SymEngine parses the text when an `Expression` is built
+(`parse`, with `^` as power). A parse error, an unknown function
+(`foo(x)`), an infinite or undefined constant (`oo`, `1/0`, `nan`) and a
+value that is not real (`I`, `sqrt(-1)`) throw `std::invalid_argument`
+there; the last is found by compiling the form once with every free
+symbol as an input. The facts are read off the parsed form: `zero` when
+it is the number zero (SymEngine's parser already combines like terms, so
+`x - x` is zero, but nothing more is simplified), `depends_on_*` when the
+symbol is free in it. Free symbols other than x, y, t are parameter names,
+unknown constants for the facts. `CompiledExpression` checks the
+parameters (a plain symbol name other than x, y, t, which the parser reads
+back as that symbol, so not `pi` or `E`; a finite value), substitutes the
+values (an unknown name throws), and prepares SymEngine's
+`LambdaRealDoubleVisitor` (a tree of `std::function`s; no LLVM in this
+build). A call does not check its result. SymEngine is built without
+thread-safe reference counting, so all symbolic work happens in one
+thread; calls only read the prepared functions.
+
+**Classification** (`classify`), by which coefficients are zero as
+written: no spatial derivative and no `gamma` is Dirichlet (`alpha` must
+be set: the value is `g / alpha`); a derivative with a normal part
+(`beta_n`, `beta_x` or `beta_y`) is natural, or dynamic with `gamma`.
+Rejected: no term at all, a boundary ODE (`gamma` without a spatial
+derivative) and tangential only (`beta_tau` alone). `is_oblique`: `beta_tau`,
+`beta_x` or `beta_y` is set.
+
+**Summaries** are functions, computed from the facts every time, for a
+`Problem` and for a `MeshedProblem` (one private template,
+`src/fem/fact_summaries.hpp`): `time_order` (2 with `m2`, else 1 with `m1`
+or any `gamma`, else 0), `lhs_depends_on_t`, `rhs_depends_on_t` (`f` or
+any `g`).
+
+**`MeshedProblem` construction.** `mesh::validate` runs first, then:
+
+1. region names are matched both ways (a condition for an unknown region
+   or a mesh region without a condition is an error);
+2. every condition is classified; `conditions()` is indexed by region id;
+3. Dirichlet nodes: each boundary node has one incoming and one outgoing
+   boundary edge; it is Dirichlet if either edge's region is. With one
+   Dirichlet region it takes that one (Dirichlet beats natural and
+   dynamic); with two, the higher `priority` wins and equal priorities are
+   averaged. The other nodes are the free nodes, in index order: unknown
+   `i` of the shrunk system is node `free_nodes()[i]`, and `free_index`
+   goes back;
+4. every expression is compiled with the parameters; an error names the
+   coefficient ("Region 'wall', coefficient g: ..."). The competing
+   values at Dirichlet corners are then compared: equal as written, never
+   reported; otherwise, if one depends on t, reported as "may differ";
+   otherwise evaluated at the node and reported when they differ;
+5. the initial conditions that `time_order` requires are evaluated at
+   every node (a missing or an unneeded one, one depending on t, or a
+   value that is not finite is an error);
+6. the facts stay with each compiled function, and the summaries read
+   them.
+
+`dirichlet_value(k, t)` is the average of `g / alpha` over the regions of
+`dirichlet_nodes()[k]` (an error if not finite). `report()` is a
+`mesh::StageReport` named "meshed_problem" with the time, the metrics
+`regions`, `dirichlet_nodes`, `free_nodes`, `corners`,
+`dirichlet_over_natural_corners`, `priority_corners`, `averaged_corners`,
+`differing_corners`, and one message per differing corner, for example
+"Corner at node 0 (0, 0): regions 'bottom' and 'left' (both priority 0)
+give 0 and 1; their average 0.5 is used".
+
 ## Determinism
 
-Results never depend on addresses or hash order: loops, curves, nodes,
+Results never depend on addresses or hash order (SymEngine's sets of
+symbols are sorted by name before use): loops, curves, nodes,
 triangles and boundary edges are processed in index order, queues are FIFO
 or ordered by explicit keys with index tie-breaks, maps are ordered, and
 `compact()` keeps the index order of what remains.

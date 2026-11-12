@@ -1,7 +1,7 @@
 # Agent guide
 
 C++23 library (compiled, not header-only) for 2D geometry, triangle
-meshing and their file formats, the first slice of a from-scratch rewrite that will grow into one
+meshing, their file formats and the problem description, the first slice of a from-scratch rewrite that will grow into one
 linear scalar PDE with P1 finite elements. Read
 [docs/decisions.md](docs/decisions.md) (the owner's decisions: your
 specification), then [docs/architecture.md](docs/architecture.md) (modules,
@@ -30,6 +30,8 @@ impossible or unclear, ask.
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) |
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
+| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts) |
+| `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`) and `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
@@ -55,7 +57,11 @@ ctest --test-dir build -R mesh_pipeline --output-on-failure   # one test
 ```
 
 Dependencies: Boost (tests only), libxml2 development files (`pde2d_io`),
-Node.js (optional: the viewer tests are skipped without it).
+SymEngine 0.14 (`pde2d_fem`; give its config directory on the first
+configure, for example `tools/test.sh
+-DSymEngine_DIR=$HOME/.local/opt/symengine-0.14/lib/cmake/symengine`; it
+is cached in the build directory), Node.js (optional: the viewer tests
+are skipped without it).
 `PDE2D_BUILD_EXAMPLES` (on by default) builds `examples/`.
 `PDE2D_BUILD_DIR` picks the build directory, `PDE2D_BUILD_JOBS` the build
 parallelism (capped at 4; run one build at a time), `PDE2D_TEST_JOBS` the
@@ -66,8 +72,9 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - Names: snake_case for functions, variables and members; PascalCase for
   types; enumerators in snake_case.
 - One CMake library per module (`pde2d_geometry`, `pde2d_mesh`,
-  `pde2d_io`; later `pde2d_fem`). Dependencies point one way: mesh may
-  include geometry, io may include mesh and geometry, never the reverse. Heavy dependencies (Boost, later Eigen,
+  `pde2d_io`, `pde2d_fem`). Dependencies point one way: mesh may include
+  geometry, io and fem may include mesh and geometry, never the reverse
+  (and io and fem not each other). Heavy dependencies (Boost, later Eigen,
   SymEngine, libxml2) only in `.cpp` files, never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
   headers in `src/<module>/`. Tests use only public headers.
@@ -152,8 +159,18 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   unchanged). If the `Mesh` cannot fill something the format needs, ask
   the owner; never change the format on your own. Curve links have no
   place in it and are dropped on export.
+- **SymEngine stays in `src/fem/symengine_expression.hpp`.** Public fem
+  headers hold expressions through a pimpl (`Expression::Impl`); a `.cpp`
+  that needs SymEngine includes that private header, never
+  `<symengine/...>` directly. Symbolic work happens in one thread (the
+  SymEngine build has no thread-safe reference counting).
+- **Facts are as written and summaries are never stored.** An
+  `Expression`'s `facts()` come from its parsed form; `time_order`,
+  `lhs_depends_on_t` and `rhs_depends_on_t` are computed from them each
+  time (`src/fem/fact_summaries.hpp`).
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
-  FEM, problems and boundary conditions, anisotropic meshing, planners,
+  assembly, matrices, solvers and time integration, well-posedness
+  checks, callables, anisotropic meshing, planners,
   the simple-options facade, Gmsh export, reading the old boundary
   context of `.pde2d` files as curve links. Do not add them unless a task
   asks.
