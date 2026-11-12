@@ -169,6 +169,12 @@ int main() {
                  "the file ends before");
          rejects(replace(tiny_text, "3 0 2 3", "3 0 3 2"),
                  "invalid mesh: Triangle 1 is not counterclockwise");
+         // Connected correctly, but one triangle lies inside the other.
+         rejects("PDE2D_MESH 5\nORDER 1\nNODES 6\n0 0\n2 0\n0 2\n"
+                 "0.2 0.2\n1 0.2\n0.2 1\nELEMENTS 2\n3 0 1 2\n3 3 4 5\n"
+                 "BOUNDARY_EDGES 6\n0 1 a\n1 2 a\n2 0 a\n3 4 a\n4 5 a\n"
+                 "5 3 a\nBOUNDARY_LOOPS 2\n3\n3\nRESULT 0\n",
+                 "invalid mesh: Node 3 lies in triangle 0");
          // Several loops need version 5; version 5 groups must be loops.
          Mesh holed = mesh_of(geometry::annulus(1, 0.5), 0.5);
          std::string v5 = to_text(holed);

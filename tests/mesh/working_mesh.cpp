@@ -128,6 +128,135 @@ int main() {
              },
              "region id out of range");
        }},
+      {"geometric_validation",
+       [] {
+         using P = std::vector<Point>;
+         using E = std::vector<WorkingBoundaryEdge>;
+         auto loop = [](std::vector<std::size_t> v) {
+           E edges;
+           for (std::size_t i = 0; i < v.size(); ++i)
+             edges.push_back({{v[i], v[(i + 1) % v.size()]}, 0, {}});
+           return edges;
+         };
+         auto join = [](E a, const E &b) {
+           a.insert(a.end(), b.begin(), b.end());
+           return a;
+         };
+         // Connected correctly, but the small triangle lies inside the big
+         // one: all six sides are boundary edges.
+         expect_throws<std::invalid_argument>(
+             [&] {
+               WorkingMesh w(
+                   P{{0, 0}, {2, 0}, {0, 2}, {0.2, 0.2}, {1, 0.2}, {0.2, 1}},
+                   {{0, 1, 2}, {3, 4, 5}},
+                   join(loop({0, 1, 2}), loop({3, 4, 5})), {"a"});
+             },
+             "Node 3 lies in triangle 0 but is not one of its nodes");
+         // A square ring (hole [1, 2]^2) with an island in the hole: valid.
+         const P ring = {{0, 0}, {3, 0}, {3, 3}, {0, 3},
+                         {1, 1}, {2, 1}, {2, 2}, {1, 2}};
+         const std::vector<WorkingMesh::TriangleNodes> ring_triangles = {
+             {0, 1, 5}, {0, 5, 4}, {1, 2, 6}, {1, 6, 5},
+             {2, 3, 7}, {2, 7, 6}, {3, 0, 4}, {3, 4, 7}};
+         const E ring_edges = join(loop({0, 1, 2, 3}), loop({4, 7, 6, 5}));
+         auto with_island = [&](P island) {
+           P nodes = ring;
+           nodes.insert(nodes.end(), island.begin(), island.end());
+           auto triangles = ring_triangles;
+           triangles.push_back({8, 9, 10});
+           return WorkingMesh(nodes, triangles,
+                              join(ring_edges, loop({8, 9, 10})), {"a"});
+         };
+         auto ok = with_island({{1.2, 1.2}, {1.8, 1.2}, {1.5, 1.8}});
+         check(ok.triangles().size() == 9, "an island in the hole is valid");
+         // The same island in the ring's material overlaps it.
+         expect_throws<std::invalid_argument>(
+             [&] { with_island({{2.3, 0.3}, {2.7, 0.3}, {2.5, 0.6}}); },
+             "Node 8 lies in triangle 0 but is not one of its nodes");
+         // An island bigger than the hole: its corners lie in the ring.
+         expect_throws<std::invalid_argument>(
+             [&] { with_island({{0.5, 0.5}, {2.5, 0.5}, {1.5, 2.5}}); },
+             "cross or touch");
+         // The same check on its own, for a Mesh.
+         Mesh overlapping = ok.to_mesh();
+         overlapping.nodes[8] = {2.3, 0.3};
+         overlapping.nodes[9] = {2.7, 0.3};
+         overlapping.nodes[10] = {2.5, 0.6};
+         validate(ok.to_mesh());
+         expect_throws<std::invalid_argument>([&] { validate(overlapping); },
+                                              "lies in triangle");
+         // The test oracle sees the overlap too, independently.
+         check_no_overlaps(ok.to_mesh());
+         bool oracle_saw_it = false;
+         try {
+           check_no_overlaps(overlapping);
+         } catch (const Failure &) {
+           oracle_saw_it = true;
+         }
+         check(oracle_saw_it, "the oracle finds the overlap");
+         // Two pieces apart: valid.
+         WorkingMesh apart(P{{0, 0}, {1, 0}, {0, 1}, {3, 0}, {4, 0}, {3, 1}},
+                           {{0, 1, 2}, {3, 4, 5}},
+                           join(loop({0, 1, 2}), loop({3, 4, 5})), {"a"});
+         check(apart.triangles().size() == 2, "two separate pieces");
+         // Two triangles crossing like a star: no node lies in the other
+         // triangle, but their boundary edges cross.
+         expect_throws<std::invalid_argument>(
+             [&] {
+               WorkingMesh w(P{{0, 0},
+                               {3, 0},
+                               {1.5, 2.6},
+                               {0, 1.7},
+                               {1.5, -0.9},
+                               {3, 1.7}},
+                             {{0, 1, 2}, {3, 4, 5}},
+                             join(loop({0, 1, 2}), loop({3, 4, 5})), {"a"});
+             },
+             "Boundary edges 0 (0 -> 1) and 3 (3 -> 4) cross or touch");
+         // Two triangles touching at a point through two distinct nodes.
+         expect_throws<std::invalid_argument>(
+             [&] {
+               WorkingMesh w(P{{0, 0}, {1, 0}, {0, 1}, {1, 0}, {2, 0}, {1, 1}},
+                             {{0, 1, 2}, {3, 4, 5}},
+                             join(loop({0, 1, 2}), loop({3, 4, 5})), {"a"});
+             },
+             "cross or touch");
+         // A fold around an interior node: six triangles whose outer nodes
+         // go round twice (120 degrees apart, at growing radii).
+         {
+           P nodes = {{0, 0}};
+           std::vector<WorkingMesh::TriangleNodes> fan;
+           std::vector<std::size_t> rim;
+           for (std::size_t i = 0; i < 6; ++i) {
+             double angle = static_cast<double>(i) * 2 * pi / 3,
+                    r = 1 + 0.1 * static_cast<double>(i);
+             nodes.push_back({r * std::cos(angle), r * std::sin(angle)});
+             fan.push_back({0, 1 + i, 1 + (i + 1) % 6});
+             rim.push_back(1 + i);
+           }
+           expect_throws<std::invalid_argument>(
+               [&] { WorkingMesh w(nodes, fan, loop(rim), {"a"}); },
+               "The triangles around node 0 overlap: they turn around it 2 "
+               "times");
+         }
+         // A boundary node whose fan turns 400 degrees.
+         {
+           P nodes = {{0, 0}};
+           std::vector<WorkingMesh::TriangleNodes> fan;
+           std::vector<std::size_t> rim = {0};
+           for (std::size_t i = 0; i < 5; ++i) {
+             double angle = static_cast<double>(i) * 100 * pi / 180,
+                    r = 1 + 0.2 * static_cast<double>(i);
+             nodes.push_back({r * std::cos(angle), r * std::sin(angle)});
+             if (i > 0)
+               fan.push_back({0, i, i + 1});
+             rim.push_back(1 + i);
+           }
+           expect_throws<std::invalid_argument>(
+               [&] { WorkingMesh w(nodes, fan, loop(rim), {"a"}); },
+               "The triangles around boundary node 0 overlap");
+         }
+       }},
       {"flip",
        [] {
          auto w = unit_square();

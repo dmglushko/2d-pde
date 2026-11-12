@@ -102,7 +102,7 @@ the assembled pipeline, never from its own options.
 | `CurveLink{chain, s0, s1}` | which chain (index into the holder's chain list) and arc-length interval an edge approximates, `0 <= s0 < s1 <= length`; in `curve_chain.hpp`, with `default_corner_angle_degrees` (30) |
 | `BoundaryPolygon` | loops of straight edges; per edge a region id and an optional `CurveLink`; the chains; region names |
 | `WorkingMesh` | the mutable mesh the stages edit |
-| `Mesh` | the output: `nodes`, `Triangle{nodes}`, `BoundaryEdge{nodes, region, link}`, `region_names`, `chains` (links and chains empty for an imported mesh) |
+| `Mesh` | the output: `nodes`, `Triangle{nodes}`, `BoundaryEdge{nodes, region, link}`, `region_names`, `chains` (links and chains empty for an imported mesh); `validate(const Mesh &)` checks it like `WorkingMesh::from_mesh` |
 | `ImproverUse` | `local_and_final`, `local_only`, `final_only`: in each improver's options |
 | `PipelinePlan` | resolved at construction: indices of the local improvers and of the final passes, and the warnings |
 | `StageReport` | `stage`, `time`, `messages`, `metrics` (name → number) |
@@ -163,11 +163,47 @@ geometry, so both build the same chains.
   halves of the arc-length interval.
 - The constructor validates everything (orientation, conformity, boundary
   edges matching the triangulation, no unused nodes, indices in range,
-  links inside their chains).
+  links inside their chains), then the geometry (see "Geometric validity"
+  below). So does `from_mesh()`, which the importers and the `Remesher`
+  use, and `validate(const Mesh &)` runs the same checks on their own.
 - `to_mesh()` lists boundary edges loop by loop in walking order, and
   copies the chains and each edge's link into the `Mesh`. `from_mesh()`
   takes them back, so a mesh refined once can be refined again on the
   true curves without the geometry.
+
+### Geometric validity
+
+A mesh can be connected correctly and still overlap itself, for example a
+small triangle lying inside a big one with all six sides as boundary
+edges. After the connectivity checks the constructor runs a geometric
+check (private, `src/mesh/mesh_validity.*`). It rests on one identity:
+when every triangle is counterclockwise and every interior edge is used
+once in each direction, the number of triangles covering a point equals
+the winding number of the boundary edges around it. So the triangles
+overlap nowhere exactly when:
+
+1. **no fold**: at every node, the triangles' angular sectors contain one
+   reference direction exactly once (an interior node's triangles turn
+   once around it, a boundary node's less than once; the reference is
+   the outgoing boundary edge's direction there), decided with `orient`;
+2. **no crossing boundary edges**: no two boundary edges cross or touch,
+   except consecutive edges at their common node (this also rejects two
+   nodes at the same place on the boundary and loops that touch);
+3. **no piece inside another**: no node lies in or on a triangle that
+   does not use it (exact `orient`), which also rejects a piece in the
+   material of another (an island is fine only inside a hole).
+
+Every decision uses exact predicates. Checks 2 and 3 use a uniform grid
+over the nodes' bounding box with about one cell per triangle; each
+triangle and boundary edge is listed in the cells its bounding box
+touches. The cost is O(n) for meshes whose triangles are of similar size;
+very long thin triangles or many boundary edges in one cell make it
+slower (worst case quadratic) but never wrong. Errors name the node,
+triangle or boundary edges ("Node 3 lies in triangle 0 but is not one of
+its nodes ...", "Boundary edges 0 (0 -> 1) and 3 (3 -> 4) cross or touch
+...", "The triangles around node 0 overlap: they turn around it 2 times
+..."). Edits (flips, splits, moves) keep validity by construction and are
+not re-checked.
 
 ### Splitting a boundary edge
 
@@ -291,7 +327,8 @@ Shared routines that components call are plain functions in
 (forcing an edge by flips), `local_improvers.hpp` (calling and counting a
 refiner's local improvers), `boundary_split_policy.*` and
 `boundary_split_steps.*` (the policy and its steps), `loop_chains.*`
-(joining a loop's curves into chains).
+(joining a loop's curves into chains), `mesh_validity.*` (the geometric
+validity check).
 
 ### Remesher and curve links
 
@@ -332,7 +369,7 @@ opened, read or written throws `std::runtime_error`.
 | `export_svg` | `svg.hpp` | points written as (x, −y), so `import_svg(export_svg(g))` gives the same numbers back; one `<path>` per run of one region in a loop; arcs in pieces of at most 90°; id = region name if unique and a valid XML id, else `pde2d_run_<k>` with `data-region`; shortest exact numbers |
 | `export_mesh_svg` | `svg.hpp` | nodes drawn at (x, −y), the right way up like `export_svg`; triangles (light fill, grey edges) and one coloured `<path>` per region with `data-region` and a `<title>`; no nodes, no links |
 | `export_pde2d` | `pde2d_mesh.hpp` | the old `PDE2D_MESH` format (`docs/formats/pde2d-mesh.md`): version 2 for one loop, 5 with `RESULT 0` for several; outer loop (through the lexicographically smallest boundary node) first; links dropped |
-| `import_pde2d` | `pde2d_mesh.hpp` | versions 2–5; v1 and untagged edges rejected; result trailers checked and ignored; validated like a `WorkingMesh`; no links |
+| `import_pde2d` | `pde2d_mesh.hpp` | versions 2–5; v1 and untagged edges rejected; result trailers checked and ignored; validated like a `WorkingMesh` (with the geometric check); records read as they come, never allocated for a claimed count first; no links |
 | `import_gmsh` | `gmsh.hpp` | MSH 4.1 and 2.2 ASCII; 3-node triangles only; boundary edges must lie on line elements of one physical group of dimension 1 (its name, or `physical_<tag>`); triangles made counterclockwise; unused nodes dropped; no links |
 
 Imported meshes have no chains or links, so the `Remesher` splits their

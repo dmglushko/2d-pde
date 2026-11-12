@@ -84,7 +84,10 @@ public:
 
   // Validates everything above (orientation, conformity, boundary edges
   // match the triangulation, no unused node, boundary loops do not touch,
-  // indices in range) and throws std::invalid_argument naming the problem.
+  // indices in range) and the geometry: no fold around a node, no
+  // crossing or touching boundary edges, no node inside a triangle that
+  // does not use it (so no piece lies inside another). Throws
+  // std::invalid_argument naming the problem.
   WorkingMesh(std::vector<geometry::Point> nodes,
               std::vector<TriangleNodes> triangles,
               std::vector<WorkingBoundaryEdge> boundary_edges,

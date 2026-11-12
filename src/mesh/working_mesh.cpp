@@ -1,6 +1,7 @@
 #include "pde2d/mesh/working_mesh.hpp"
 
 #include "boundary_split_policy.hpp"
+#include "mesh_validity.hpp"
 
 #include "pde2d/geometry/curve_geometry.hpp"
 #include "pde2d/geometry/predicates.hpp"
@@ -148,6 +149,11 @@ WorkingMesh::WorkingMesh(std::vector<Point> nodes,
           "Triangle edge " +
           edge_text(std::get<0>(open[i]), std::get<1>(open[i])) +
           " has no neighbour but is not a boundary edge");
+
+  // Connected correctly; now the geometry: no folds, no crossing boundary
+  // edges, no piece inside another.
+  detail::check_geometric_validity(nodes_, triangles_, boundary_edges_,
+                                   outgoing_boundary_);
 
   node_triangle_.assign(n, no_index);
   for (std::size_t t = 0; t < triangles_.size(); ++t)

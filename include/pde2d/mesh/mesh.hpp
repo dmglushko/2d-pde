@@ -44,4 +44,14 @@ struct Mesh {
   std::vector<CurveChain> chains;
 };
 
+// Checks that the mesh is valid, exactly as a WorkingMesh built from it
+// would (WorkingMesh::from_mesh, which the importers use): indices in
+// range, finite nodes, counterclockwise triangles, conforming edges, the
+// boundary edges are exactly the edges used by one triangle, every node
+// used, boundary loops that do not touch, valid links; and the geometry:
+// no fold around a node, no crossing or touching boundary edges, no node
+// inside a triangle that does not use it (no piece inside another).
+// Throws std::invalid_argument naming the problem.
+void validate(const Mesh &mesh);
+
 } // namespace pde2d::mesh

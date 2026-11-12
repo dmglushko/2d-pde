@@ -14,6 +14,7 @@ add_library(pde2d_mesh
   longest_edge_bisection.cpp
   loop_chains.cpp
   mesh.cpp
+  mesh_validity.cpp
   mesher.cpp
   remesher.cpp
   ruppert.cpp

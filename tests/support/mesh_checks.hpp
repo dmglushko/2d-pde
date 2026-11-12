@@ -9,11 +9,15 @@
 #include "pde2d/mesh/mesh.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <initializer_list>
 #include <map>
 #include <numbers>
 #include <set>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace pde2d::test {
 
@@ -45,8 +49,136 @@ inline double boundary_area(const Mesh &m) {
   return twice / 2;
 }
 
-// Positive orientation, conformity, and: the directed edges used by exactly
-// one triangle are exactly the boundary edges.
+// The oracles below are brute force on purpose: they compare every pair
+// (after a sort by x, which only skips pairs whose boxes are apart),
+// with long double arithmetic and a small relative tolerance, and share
+// nothing with the library's grid-and-predicates check.
+
+// (b - a) x (p - a), in long double.
+inline long double cross_ld(Point a, Point b, Point p) {
+  return (static_cast<long double>(b.x) - a.x) *
+             (static_cast<long double>(p.y) - a.y) -
+         (static_cast<long double>(b.y) - a.y) *
+             (static_cast<long double>(p.x) - a.x);
+}
+
+// A tolerance for cross_ld: values this small count as zero (relative to
+// the lengths of b - a and p - a, measured in the max norm).
+inline long double cross_tolerance(Point a, Point b, Point p) {
+  long double u = std::max(std::abs(static_cast<long double>(b.x) - a.x),
+                           std::abs(static_cast<long double>(b.y) - a.y)),
+              v = std::max(std::abs(static_cast<long double>(p.x) - a.x),
+                           std::abs(static_cast<long double>(p.y) - a.y));
+  return 1e-12L * u * v;
+}
+
+// Two counterclockwise triangles have overlapping interiors unless one of
+// the six edge lines separates them (all three corners of the other
+// triangle on or right of it).
+inline bool interiors_overlap(const std::array<Point, 3> &s,
+                              const std::array<Point, 3> &t) {
+  auto separates = [](const std::array<Point, 3> &u,
+                      const std::array<Point, 3> &v) {
+    for (int i = 0; i < 3; ++i) {
+      Point a = u[i], b = u[(i + 1) % 3];
+      bool all_right = true;
+      for (Point p : v)
+        if (cross_ld(a, b, p) > cross_tolerance(a, b, p))
+          all_right = false;
+      if (all_right)
+        return true;
+    }
+    return false;
+  };
+  return !separates(s, t) && !separates(t, s);
+}
+
+// Closed segments a-b and c-d meet (cross, touch or overlap).
+inline bool segments_meet(Point a, Point b, Point c, Point d) {
+  auto side = [](Point p, Point q, Point r) {
+    long double v = cross_ld(p, q, r);
+    return std::abs(v) <= cross_tolerance(p, q, r) ? 0 : (v > 0 ? 1 : -1);
+  };
+  int s1 = side(a, b, c), s2 = side(a, b, d), s3 = side(c, d, a),
+      s4 = side(c, d, b);
+  if (s1 * s2 > 0 || s3 * s4 > 0)
+    return false;
+  // Straddling or collinear: the bounding boxes must overlap too.
+  return std::max(a.x, b.x) >= std::min(c.x, d.x) &&
+         std::max(c.x, d.x) >= std::min(a.x, b.x) &&
+         std::max(a.y, b.y) >= std::min(c.y, d.y) &&
+         std::max(c.y, d.y) >= std::min(a.y, b.y);
+}
+
+// A closed bounding box.
+struct Box {
+  double xmin, xmax, ymin, ymax;
+  explicit Box(std::initializer_list<Point> points)
+      : xmin(INFINITY), xmax(-INFINITY), ymin(INFINITY), ymax(-INFINITY) {
+    for (Point p : points) {
+      xmin = std::min(xmin, p.x);
+      xmax = std::max(xmax, p.x);
+      ymin = std::min(ymin, p.y);
+      ymax = std::max(ymax, p.y);
+    }
+  }
+};
+
+// Calls visit(i, j) for every pair of boxes that overlap: every pair that
+// can meet, in a deterministic order.
+template <class F>
+void for_overlapping_pairs(const std::vector<Box> &box, F &&visit) {
+  std::vector<std::size_t> order(box.size());
+  for (std::size_t i = 0; i < order.size(); ++i)
+    order[i] = i;
+  std::sort(order.begin(), order.end(), [&](std::size_t i, std::size_t j) {
+    return box[i].xmin < box[j].xmin || (box[i].xmin == box[j].xmin && i < j);
+  });
+  for (std::size_t k = 0; k < order.size(); ++k) {
+    const Box &a = box[order[k]];
+    for (std::size_t l = k + 1;
+         l < order.size() && box[order[l]].xmin <= a.xmax; ++l) {
+      const Box &b = box[order[l]];
+      if (b.ymin <= a.ymax && a.ymin <= b.ymax)
+        visit(order[k], order[l]);
+    }
+  }
+}
+
+// No two triangles overlap and no two boundary edges that do not share a
+// node meet: an independent, brute-force check of the mesh's geometry.
+inline void check_no_overlaps(const Mesh &m) {
+  auto corners = [&](std::size_t t) {
+    const auto &v = m.triangles[t].nodes;
+    return std::array<Point, 3>{m.nodes[v[0]], m.nodes[v[1]], m.nodes[v[2]]};
+  };
+  std::vector<Box> tbox;
+  for (std::size_t t = 0; t < m.triangles.size(); ++t) {
+    auto c = corners(t);
+    tbox.push_back(Box{c[0], c[1], c[2]});
+  }
+  for_overlapping_pairs(tbox, [&](std::size_t s, std::size_t t) {
+    if (interiors_overlap(corners(s), corners(t)))
+      throw Failure("triangles " + std::to_string(s) + " and " +
+                    std::to_string(t) + " overlap");
+  });
+  const auto &edges = m.boundary_edges;
+  std::vector<Box> ebox;
+  for (const auto &e : edges)
+    ebox.push_back(Box{m.nodes[e.nodes[0]], m.nodes[e.nodes[1]]});
+  for_overlapping_pairs(ebox, [&](std::size_t i, std::size_t j) {
+    auto [a, b] = edges[i].nodes;
+    auto [c, d] = edges[j].nodes;
+    if (a == c || a == d || b == c || b == d)
+      return; // consecutive edges of a loop
+    if (segments_meet(m.nodes[a], m.nodes[b], m.nodes[c], m.nodes[d]))
+      throw Failure("boundary edges " + std::to_string(i) + " and " +
+                    std::to_string(j) + " meet");
+  });
+}
+
+// Positive orientation, conformity, the directed edges used by exactly one
+// triangle are exactly the boundary edges, and no overlaps.
 inline void check_valid_mesh(const Mesh &m) {
   check(!m.triangles.empty(), "mesh has triangles");
   std::map<std::pair<std::size_t, std::size_t>, int> directed;
@@ -80,6 +212,7 @@ inline void check_valid_mesh(const Mesh &m) {
       used[v] = true;
   check(std::all_of(used.begin(), used.end(), [](bool b) { return b; }),
         "every node is used");
+  check_no_overlaps(m);
 }
 
 inline void check_area(const Mesh &m, double expected, double tolerance) {

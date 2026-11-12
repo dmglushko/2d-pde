@@ -134,6 +134,15 @@ int main() {
                  "the file ends inside a section");
          expect_throws<std::runtime_error>(
              [] { (void)io::import_gmsh(data("missing.msh")); }, "Cannot open");
+         // Connected correctly, but the second triangle lies inside the
+         // first.
+         rejects("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n6\n"
+                 "1 0 0 0\n2 2 0 0\n3 0 2 0\n4 0.2 0.2 0\n5 1 0.2 0\n"
+                 "6 0.2 1 0\n$EndNodes\n$Elements\n8\n"
+                 "1 1 2 7 1 1 2\n2 1 2 7 1 2 3\n3 1 2 7 1 3 1\n"
+                 "4 1 2 7 1 4 5\n5 1 2 7 1 5 6\n6 1 2 7 1 6 4\n"
+                 "7 2 2 9 1 1 2 3\n8 2 2 9 1 4 5 6\n$EndElements\n",
+                 "invalid mesh: Node 3 lies in triangle 0");
          // Counts read from the file are never added to or multiplied
          // before they are compared with what the line really holds.
          rejects(replace(v2, "7 2 2 100 1 1 2 5", "7 2 18446744073709551615"),

@@ -1,5 +1,6 @@
 #include "pde2d/mesh/mesh.hpp"
 #include "pde2d/mesh/mesh_spec.hpp"
+#include "pde2d/mesh/working_mesh.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -13,5 +14,7 @@ void validate(const MeshSpec &spec) {
         "MeshSpec::max_edge_length must be finite and positive, got " +
         std::to_string(spec.max_edge_length));
 }
+
+void validate(const Mesh &mesh) { (void)WorkingMesh::from_mesh(mesh); }
 
 } // namespace pde2d::mesh
