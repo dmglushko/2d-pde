@@ -173,7 +173,7 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   state: compiled functions are called from several threads at once.
 - **Facts are as written and summaries are never stored.** An
   `Expression`'s `facts()` come from its parsed form; `time_order`,
-  `lhs_depends_on_t` and `data_depends_on_t` are computed from them each
+  `coefficients_depend_on_t` and `data_depends_on_t` are computed from them each
   time (`src/fem/fact_summaries.hpp`).
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   assembly, matrices, solvers and time integration, well-posedness

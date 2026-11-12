@@ -466,8 +466,9 @@ int time_order(const MeshedProblem &problem) {
   return detail::time_order_of(problem.equation(), problem.conditions());
 }
 
-bool lhs_depends_on_t(const MeshedProblem &problem) {
-  return detail::lhs_depends_on_t_of(problem.equation(), problem.conditions());
+bool coefficients_depend_on_t(const MeshedProblem &problem) {
+  return detail::coefficients_depend_on_t_of(problem.equation(),
+                                             problem.conditions());
 }
 
 bool data_depends_on_t(const MeshedProblem &problem) {

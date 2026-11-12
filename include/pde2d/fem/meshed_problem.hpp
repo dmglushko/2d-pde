@@ -134,7 +134,7 @@ private:
 // The summaries of problem.hpp, computed from the facts kept with the
 // compiled functions.
 int time_order(const MeshedProblem &problem);
-bool lhs_depends_on_t(const MeshedProblem &problem);
+bool coefficients_depend_on_t(const MeshedProblem &problem);
 bool data_depends_on_t(const MeshedProblem &problem);
 
 } // namespace pde2d::fem

@@ -102,21 +102,25 @@ int main() {
        [] {
          const Problem constant =
              with_condition({.alpha = e("1"), .g = e("x*y")});
-         check(!lhs_depends_on_t(constant) && !data_depends_on_t(constant),
+         check(!coefficients_depend_on_t(constant) &&
+                   !data_depends_on_t(constant),
                "nothing depends on t");
          Problem c_of_t = constant;
          c_of_t.equation.c = e("t");
-         check(lhs_depends_on_t(c_of_t) && !data_depends_on_t(c_of_t), "c(t)");
+         check(coefficients_depend_on_t(c_of_t) && !data_depends_on_t(c_of_t),
+               "c(t)");
          Problem f_of_t = constant;
          f_of_t.equation.f = e("sin(t)");
-         check(!lhs_depends_on_t(f_of_t) && data_depends_on_t(f_of_t), "f(t)");
+         check(!coefficients_depend_on_t(f_of_t) && data_depends_on_t(f_of_t),
+               "f(t)");
          const Problem alpha_of_t =
              with_condition({.alpha = e("1 + t"), .g = e("1")});
-         check(lhs_depends_on_t(alpha_of_t) && !data_depends_on_t(alpha_of_t),
+         check(coefficients_depend_on_t(alpha_of_t) &&
+                   !data_depends_on_t(alpha_of_t),
                "alpha(t)");
          const Problem beta_of_t =
              with_condition({.beta_n = e("1"), .beta_x = e("t")});
-         check(lhs_depends_on_t(beta_of_t), "beta_x(t)");
+         check(coefficients_depend_on_t(beta_of_t), "beta_x(t)");
        }},
       {"boundary data g alone makes the right-hand side depend on t",
        [] {
@@ -125,7 +129,7 @@ int main() {
                                                  .g = e("sin(t)")};
          check(!problem.equation.f.facts().depends_on_t, "f is constant");
          check(data_depends_on_t(problem), "Dirichlet g(t)");
-         check(!lhs_depends_on_t(problem), "left-hand side constant");
+         check(!coefficients_depend_on_t(problem), "left-hand side constant");
          Problem natural = with_condition({.beta_n = e("1"), .g = e("t*x")});
          check(data_depends_on_t(natural), "natural g(t)");
        }},

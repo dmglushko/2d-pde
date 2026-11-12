@@ -21,8 +21,8 @@ int time_order_of(const Equation &equation, const Conditions &conditions) {
 }
 
 template <class Equation, class Conditions>
-bool lhs_depends_on_t_of(const Equation &equation,
-                         const Conditions &conditions) {
+bool coefficients_depend_on_t_of(const Equation &equation,
+                                 const Conditions &conditions) {
   const auto t = [](const auto &coefficient) {
     return coefficient.facts().depends_on_t;
   };

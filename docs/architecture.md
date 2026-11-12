@@ -513,7 +513,7 @@ derivative) and tangential only (`beta_tau` alone). `is_oblique`: `beta_tau`,
 **Summaries** are functions, computed from the facts every time, for a
 `Problem` and for a `MeshedProblem` (one private template,
 `src/fem/fact_summaries.hpp`): `time_order` (2 with `m2`, else 1 with `m1`
-or any `gamma`, else 0), `lhs_depends_on_t`, `data_depends_on_t` (`f` or
+or any `gamma`, else 0), `coefficients_depend_on_t`, `data_depends_on_t` (`f` or
 any `g`).
 
 **`MeshedProblem` construction.** `mesh::validate` runs first, then:

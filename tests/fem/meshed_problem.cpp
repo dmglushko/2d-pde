@@ -573,15 +573,17 @@ int main() {
          const MeshedProblem p(square(), problem);
          check(data_depends_on_t(p) && data_depends_on_t(problem),
                "g makes the data depend on t");
-         check(!lhs_depends_on_t(p) && time_order(p) == 0, "left-hand side");
+         check(!coefficients_depend_on_t(p) && time_order(p) == 0,
+               "left-hand side");
          problem.boundary_conditions["left"] = {.beta_n = e("1"),
                                                 .gamma = e("1 + t")};
          problem.initial.u = e("0");
          const MeshedProblem q(square(), problem);
-         check(time_order(q) == 1 && lhs_depends_on_t(q),
+         check(time_order(q) == 1 && coefficients_depend_on_t(q),
                "a dynamic condition with gamma(t)");
          check(time_order(q) == time_order(problem) &&
-                   lhs_depends_on_t(q) == lhs_depends_on_t(problem),
+                   coefficients_depend_on_t(q) ==
+                       coefficients_depend_on_t(problem),
                "the same as on the problem");
        }},
       {"one region on several sides has no corner",

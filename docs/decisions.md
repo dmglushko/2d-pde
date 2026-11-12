@@ -358,9 +358,10 @@ Started 2026-11-11. The previous header-only code is on the branch
   (`Xor`) or unsafely between threads (`loggamma`), and a `Piecewise`
   without a final unconditional branch reads out of bounds.
 - **Facts are stored per coefficient** (`zero`, `depends_on_x/y/t`).
-  Summaries such as `time_order`, "left-hand side depends on t" and
-  "the data depend on t" (`data_depends_on_t`: f or g as written, not the
-  assembled right-hand side) are computed from them by functions, never
+  Summaries are aggregates of these facts over the input as written:
+  `time_order`, `coefficients_depend_on_t` (a coefficient multiplying u or
+  a derivative) and `data_depends_on_t` (f or g). They describe stage 1
+  only, not the assembled system, and are computed by functions, never
   stored. "Zero" means zero as written.
 - **Well-posedness checks are deferred.**
 

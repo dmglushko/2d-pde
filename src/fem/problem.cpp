@@ -42,8 +42,8 @@ int time_order(const Problem &problem) {
                                std::views::values(problem.boundary_conditions));
 }
 
-bool lhs_depends_on_t(const Problem &problem) {
-  return detail::lhs_depends_on_t_of(
+bool coefficients_depend_on_t(const Problem &problem) {
+  return detail::coefficients_depend_on_t_of(
       problem.equation, std::views::values(problem.boundary_conditions));
 }
 
