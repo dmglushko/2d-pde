@@ -1,7 +1,7 @@
 # Agent guide
 
-C++23 library (compiled, not header-only) for 2D geometry and triangle
-meshing, the first slice of a from-scratch rewrite that will grow into one
+C++23 library (compiled, not header-only) for 2D geometry, triangle
+meshing and their file formats, the first slice of a from-scratch rewrite that will grow into one
 linear scalar PDE with P1 finite elements. Read
 [docs/decisions.md](docs/decisions.md) (the owner's decisions: your
 specification), then [docs/architecture.md](docs/architecture.md) (modules,
@@ -28,15 +28,20 @@ impossible or unclear, ask.
 | `src/geometry/` | their implementation; `predicates.cpp` is Shewchuk's adaptive arithmetic, compiled with `-fno-fast-math -ffp-contract=off` |
 | `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`, with optional chains and links), `mesh_spec.hpp`, `curve_chain.hpp` (`CurveChain`, `CurveLink`, `default_corner_angle_degrees`), `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, improver roles, capabilities, `ImproverUse`, `PipelinePlan`, `plan_pipeline`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges) and `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) |
-| `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt` |
+| `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
+| `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
+| `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles), `shapes.hpp` (test geometries) |
-| `tools/` | `test.sh` (configure, build, ctest), `format.sh` |
-| `docs/` | `decisions.md`, `architecture.md`, `vision.md` |
+| `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
+| `examples/` | `mesh_viewer/produce_mesh.cpp` (meshes a plate with a hole, writes `.pde2d`), the viewer's startup example files (from the old code) |
+| `docs/` | `decisions.md`, `architecture.md`, `vision.md`, `formats/pde2d-mesh.md` (the `.pde2d` format) |
 
 The previous code is on the branch `archive/header-only-v1`. It is a
 reference, not a source: only the predicates and curve math were ported.
 Read it with `git show archive/header-only-v1:<path>`; do not check it out
-in this checkout.
+in this checkout. The mesh viewer and its example files were copied from
+it unchanged; keep them unchanged (the `.pde2d` format must stay readable
+by them).
 
 ## Build and test
 
@@ -49,6 +54,9 @@ tools/format.sh --check                # clang-format; tools/format.sh fixes
 ctest --test-dir build -R mesh_pipeline --output-on-failure   # one test
 ```
 
+Dependencies: Boost (tests only), libxml2 development files (`pde2d_io`),
+Node.js (optional: the viewer tests are skipped without it).
+`PDE2D_BUILD_EXAMPLES` (on by default) builds `examples/`.
 `PDE2D_BUILD_DIR` picks the build directory, `PDE2D_BUILD_JOBS` the build
 parallelism (capped at 4; run one build at a time), `PDE2D_TEST_JOBS` the
 test parallelism. Every test program prints `PASS/FAIL <case>`.
@@ -57,9 +65,9 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 
 - Names: snake_case for functions, variables and members; PascalCase for
   types; enumerators in snake_case.
-- One CMake library per module (`pde2d_geometry`, `pde2d_mesh`; later
-  `pde2d_io`, `pde2d_fem`). Dependencies point one way: mesh may include
-  geometry, never the reverse. Heavy dependencies (Boost, later Eigen,
+- One CMake library per module (`pde2d_geometry`, `pde2d_mesh`,
+  `pde2d_io`; later `pde2d_fem`). Dependencies point one way: mesh may
+  include geometry, io may include mesh and geometry, never the reverse. Heavy dependencies (Boost, later Eigen,
   SymEngine, libxml2) only in `.cpp` files, never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
   headers in `src/<module>/`. Tests use only public headers.
@@ -119,10 +127,15 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `MeshSpec`.
 - **`MeshResult::target_met` must be checked**: a mesh can miss its target
   (for example after smoothing or without a refiner).
+- **`.pde2d` keeps the old format exactly** (the viewer reads it
+  unchanged). If the `Mesh` cannot fill something the format needs, ask
+  the owner; never change the format on your own. Curve links have no
+  place in it and are dropped on export.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   FEM, problems and boundary conditions, anisotropic meshing, planners,
-  the simple-options facade, and IO (SVG, `.pde2d`, Gmsh) and the viewer.
-  Do not add them unless a task asks.
+  the simple-options facade, Gmsh export, reading the old boundary
+  context of `.pde2d` files as curve links. Do not add them unless a task
+  asks.
 
 ## Tests
 

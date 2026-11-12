@@ -9,16 +9,21 @@ How the code is organized now. The decisions behind it are in
 ```
 include/pde2d/geometry/   src/geometry/   ->  library pde2d_geometry
 include/pde2d/mesh/       src/mesh/       ->  library pde2d_mesh
+include/pde2d/io/         src/io/         ->  library pde2d_io
 ```
 
-`pde2d_mesh` depends on `pde2d_geometry`, never the reverse. Public
-headers are in `include/pde2d/<module>/`; everything in `src/` is private,
-including the private headers there (`src/mesh/*.hpp`). The libraries have
-no external dependencies. The tests use Boost.Multiprecision (header-only)
-in one place: `geometry_predicates_oracle` checks the adaptive predicates
-against an arbitrary-precision evaluation.
+`pde2d_mesh` depends on `pde2d_geometry`, and `pde2d_io` on `pde2d_mesh`
+(so on both), never the reverse. Public headers are in
+`include/pde2d/<module>/`; everything in `src/` is private, including the
+private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`). `pde2d_geometry`
+and `pde2d_mesh` have no external dependencies; `pde2d_io` links libxml2
+privately (only `src/io/svg_import.cpp` includes it). The tests use
+Boost.Multiprecision (header-only) in one place:
+`geometry_predicates_oracle` checks the adaptive predicates against an
+arbitrary-precision evaluation. The viewer tests need Node.js and are
+skipped without it.
 
-Namespaces: `pde2d::geometry` and `pde2d::mesh`.
+Namespaces: `pde2d::geometry`, `pde2d::mesh` and `pde2d::io`.
 
 ## Geometry
 
@@ -299,6 +304,37 @@ unlinked and is split at its chord midpoint; the "curve_links" report
 (right after "pipeline") counts `chains`, `linked_edges` and
 `unlinked_edges`. A mesh region missing from the geometry, a boundary node
 off its region's curves, or an angle outside [0, 180] is an error.
+
+## Input and output (`pde2d_io`)
+
+```
+SVG file ──import_svg──► CurveGeometry ──export_svg──► SVG file
+                                         (Mesher)
+.msh file ──import_gmsh──► Mesh ──export_pde2d──► .pde2d ──► tools/mesh_viewer
+.pde2d file ──import_pde2d──►  └──export_mesh_svg──► SVG picture
+```
+
+Every function has a `std::istream&` / `std::ostream&` form and a
+`std::filesystem::path` form. Problems in the content throw
+`std::invalid_argument` with a specific message; a file that cannot be
+opened, read or written throws `std::runtime_error`.
+
+| Function | Header | Notes |
+| --- | --- | --- |
+| `import_svg` | `svg.hpp` | `<path>` elements; all path commands onto `Line`, `QuadraticBezier`, `CubicBezier`, `EllipticalArc`; region = `data-region`, else `id`; subpaths joined into loops by end points (a run may be reversed); holes by depth; `<g>` entered, metadata ignored; transforms, shapes, nested `<svg>`, DTDs rejected; user units, y not flipped |
+| `export_svg` | `svg.hpp` | one `<path>` per run of one region in a loop; arcs in pieces of at most 90°; id = region name if unique and a valid XML id, else `pde2d_run_<k>` with `data-region`; shortest exact numbers |
+| `export_mesh_svg` | `svg.hpp` | triangles (light fill, grey edges) and one coloured `<path>` per region with `data-region` and a `<title>`; no nodes, no links |
+| `export_pde2d` | `pde2d_mesh.hpp` | the old `PDE2D_MESH` format (`docs/formats/pde2d-mesh.md`): version 2 for one loop, 5 with `RESULT 0` for several; outer loop (through the lexicographically smallest boundary node) first; links dropped |
+| `import_pde2d` | `pde2d_mesh.hpp` | versions 2–5; v1 and untagged edges rejected; result trailers checked and ignored; validated like a `WorkingMesh`; no links |
+| `import_gmsh` | `gmsh.hpp` | MSH 4.1 and 2.2 ASCII; 3-node triangles only; boundary edges must lie on line elements of one physical group of dimension 1 (its name, or `physical_<tag>`); triangles made counterclockwise; unused nodes dropped; no links |
+
+Imported meshes have no chains or links, so the `Remesher` splits their
+boundary edges at chord midpoints unless it is given the geometry.
+Private code: `svg_path.*` (the path data parser and the SVG arc
+conversion), `text.hpp` (files, exact number parsing and printing).
+
+The mesh viewer (`tools/mesh_viewer/`) is the previous code's viewer,
+unchanged. `examples/mesh_viewer/produce_mesh` writes a mesh for it.
 
 ## Determinism
 

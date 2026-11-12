@@ -1,7 +1,7 @@
 # pde2d
 
-A C++23 library, written to learn from, for two-dimensional geometry and
-triangle meshing, heading towards one linear scalar PDE solved with P1
+A C++23 library, written to learn from, for two-dimensional geometry,
+triangle meshing and their file formats, heading towards one linear scalar PDE solved with P1
 finite elements.
 
 This is a from-scratch rewrite. The previous header-only code is on the
@@ -16,14 +16,22 @@ What exists now:
   initial triangulator, optional refiner, improvers), the v1 components
   (chord-length boundary discretization, ear clipping, CDT, Ruppert,
   longest-edge bisection, Delaunay flips, Laplacian smoothing), and a
-  `Remesher` that refines an existing mesh.
+  `Remesher` that refines an existing mesh. A mesh made by the mesher
+  keeps its curve links, so refining it again puts new boundary points on
+  the true curves.
+- `pde2d_io`: SVG import and export of geometries, SVG pictures of
+  meshes, the `.pde2d` mesh format of the previous code (read by the
+  browser viewer in `tools/mesh_viewer/`), and Gmsh `.msh` import
+  (versions 4.1 and 2.2, ASCII).
 
 ## Build and test
 
-Linux (or WSL) with CMake 3.25+ and a C++23 compiler. The libraries have
-no external dependencies; the tests need Boost (only the header-only
-Boost.Multiprecision, used as an independent oracle for the exact
-predicates).
+Linux (or WSL) with CMake 3.25+ and a C++23 compiler. `pde2d_geometry`
+and `pde2d_mesh` have no external dependencies; `pde2d_io` needs the
+libxml2 development files (`libxml2-dev`), used privately to parse SVG.
+The tests need Boost (only the header-only Boost.Multiprecision, used as
+an independent oracle for the exact predicates); the viewer tests run
+when Node.js is installed.
 
 ```sh
 tools/test.sh          # configure, build (at most -j4) and run every test
@@ -81,6 +89,24 @@ int main() {
 
 Link against `pde2d_mesh` (it brings `pde2d_geometry`).
 
+## Example: from SVG to the viewer
+
+```cpp
+#include "pde2d/io/pde2d_mesh.hpp"
+#include "pde2d/io/svg.hpp"
+// ... and the mesher headers as above
+
+// Each <path> gives curves; its data-region (or id) names the region.
+geometry::CurveGeometry shape = io::import_svg("shape.svg");
+mesh::MeshResult result = mesher.run(shape, {.max_edge_length = 0.1});
+io::export_pde2d(result.mesh, "shape.pde2d"); // open in tools/mesh_viewer
+io::export_mesh_svg(result.mesh, "shape_mesh.svg");
+```
+
+Link against `pde2d_io`. `examples/mesh_viewer/produce_mesh.cpp` is a
+complete program (built as `build/examples/produce_mesh`); see
+[tools/mesh_viewer/README.md](tools/mesh_viewer/README.md).
+
 ## Documentation
 
 - [AGENTS.md](AGENTS.md): guide for contributors and coding agents.
@@ -88,3 +114,5 @@ Link against `pde2d_mesh` (it brings `pde2d_geometry`).
   data flow from geometry to mesh.
 - [docs/decisions.md](docs/decisions.md): the owner's design decisions.
 - [docs/vision.md](docs/vision.md): where the project is heading.
+- [docs/formats/pde2d-mesh.md](docs/formats/pde2d-mesh.md): the `.pde2d`
+  mesh file format.
