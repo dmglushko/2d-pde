@@ -23,12 +23,21 @@ What exists now:
   meshes, the `.pde2d` mesh format of the previous code (read by the
   browser viewer in `tools/mesh_viewer/`), and Gmsh `.msh` import
   (versions 4.1 and 2.2, ASCII).
+- `pde2d_fem`: the problem description. `Expression` (built from text,
+  parsed by SymEngine), `Problem` (the equation, named parameters, one
+  boundary condition per region, initial conditions), the structural
+  classification of boundary conditions, and `MeshedProblem`, which
+  combines a problem with a mesh: it checks the regions, decides the
+  Dirichlet nodes (corners included) and compiles every expression into
+  a fast numeric function. Assembly and solvers come later.
 
 ## Build and test
 
 Linux (or WSL) with CMake 3.25+ and a C++23 compiler. `pde2d_geometry`
 and `pde2d_mesh` have no external dependencies; `pde2d_io` needs the
-libxml2 development files (`libxml2-dev`), used privately to parse SVG.
+libxml2 development files (`libxml2-dev`), used privately to parse SVG;
+`pde2d_fem` needs SymEngine 0.14 (pass `-DSymEngine_DIR=<prefix>/lib/cmake/symengine`
+on the first configure if CMake does not find it).
 The tests need Boost (only the header-only Boost.Multiprecision, used as
 an independent oracle for the exact predicates); the viewer tests run
 when Node.js is installed.
