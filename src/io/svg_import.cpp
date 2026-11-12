@@ -217,7 +217,12 @@ geometry::CurveGeometry import_document(const std::string &document) {
   reader.children(root);
   if (reader.runs.empty())
     throw std::invalid_argument("SVG document has no path with curves");
+  // Runs are joined in the file's coordinates, so error messages name
+  // points as they are written there; then y is flipped to point up.
   auto loops = join_runs(std::move(reader.runs));
+  for (auto &loop : loops)
+    for (auto &c : loop.curves)
+      c.curve = detail::mirrored_y(c.curve);
   try {
     return geometry::CurveGeometry(std::move(loops));
   } catch (const std::invalid_argument &e) {

@@ -36,4 +36,13 @@ geometry::Curve svg_arc(geometry::Point from, geometry::Point to, double rx,
                         double ry, double rotation_degrees, bool large_arc,
                         bool sweep);
 
+// SVG's y axis points down, the library's up: import and export mirror
+// every point, (x, y) -> (x, -y). Mirroring twice gives the same numbers
+// back (0 - y is exact, and gives +0 rather than -0 for y = 0). A
+// mirrored curve runs the opposite way round (CurveGeometry normalizes
+// loop directions afterwards); an arc's rotation, start angle and sweep
+// change sign.
+geometry::Point mirrored_y(geometry::Point p);
+geometry::Curve mirrored_y(const geometry::Curve &curve);
+
 } // namespace pde2d::io::detail

@@ -194,6 +194,25 @@ geometry::Curve svg_arc(Point from, Point to, double rx, double ry,
   return geometry::EllipticalArc{center, rx, ry, phi, start, delta};
 }
 
+Point mirrored_y(Point p) { return {p.x, 0.0 - p.y}; }
+
+geometry::Curve mirrored_y(const geometry::Curve &curve) {
+  if (const auto *c = std::get_if<geometry::Line>(&curve))
+    return geometry::Line{mirrored_y(c->start), mirrored_y(c->end)};
+  if (const auto *c = std::get_if<geometry::QuadraticBezier>(&curve))
+    return geometry::QuadraticBezier{
+        mirrored_y(c->start), mirrored_y(c->control), mirrored_y(c->end)};
+  if (const auto *c = std::get_if<geometry::CubicBezier>(&curve))
+    return geometry::CubicBezier{mirrored_y(c->start), mirrored_y(c->control1),
+                                 mirrored_y(c->control2), mirrored_y(c->end)};
+  // center + R(phi) (rx cos a, ry sin a), mirrored: the mirror turns R(phi)
+  // into R(-phi) and the angle a into -a.
+  const auto &a = std::get<geometry::EllipticalArc>(curve);
+  return geometry::EllipticalArc{mirrored_y(a.center), a.radius_x,
+                                 a.radius_y,           0.0 - a.rotation,
+                                 0.0 - a.start_angle,  0.0 - a.sweep_angle};
+}
+
 std::vector<SvgSubpath> parse_path_data(std::string_view data) {
   Scanner in(data);
   std::vector<SvgSubpath> subpaths;

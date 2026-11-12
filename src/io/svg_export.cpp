@@ -1,5 +1,6 @@
 #include "pde2d/io/svg.hpp"
 
+#include "svg_path.hpp"
 #include "text.hpp"
 
 #include <algorithm>
@@ -19,12 +20,13 @@ using geometry::Point;
 
 namespace {
 
-// " x y"
+// " x y", for a point already in SVG coordinates (y down).
 std::string point_text(Point p) {
   return " " + shortest(p.x) + " " + shortest(p.y);
 }
 
-// The path command(s) that continue from the curve's start to its end.
+// The path command(s) that continue from the curve's start to its end;
+// the curve is already mirrored into SVG coordinates.
 std::string commands(const geometry::Curve &curve) {
   if (const auto *c = std::get_if<geometry::Line>(&curve))
     return " L" + point_text(c->end);
@@ -85,12 +87,15 @@ void export_svg(const geometry::CurveGeometry &geometry, std::ostream &out) {
   for (const auto &loop : geometry.loops()) {
     const auto &curves = loop.curves;
     for (std::size_t i = 0; i < curves.size();) {
+      // y points down in SVG: every curve is written mirrored.
       Run run{curves[i].region,
-              "M" + point_text(geometry::start_point(curves[i].curve))};
+              "M" + point_text(detail::mirrored_y(
+                        geometry::start_point(curves[i].curve)))};
       for (; i < curves.size() && curves[i].region == run.region; ++i) {
-        run.d += commands(curves[i].curve);
+        const geometry::Curve curve = detail::mirrored_y(curves[i].curve);
+        run.d += commands(curve);
         for (int k = 0; k <= 16; ++k)
-          bounds.add(geometry::point_at(curves[i].curve, k / 16.0));
+          bounds.add(geometry::point_at(curve, k / 16.0));
       }
       runs.push_back(std::move(run));
     }
@@ -137,11 +142,15 @@ void export_mesh_svg(const mesh::Mesh &mesh, std::ostream &out) {
   if (mesh.nodes.empty())
     throw std::invalid_argument("Mesh SVG export: the mesh has no nodes");
   const std::size_t n = mesh.nodes.size();
+  // The nodes in SVG coordinates (y down), so the picture is the right
+  // way up.
+  std::vector<Point> svg_nodes;
   Bounds bounds;
   for (Point p : mesh.nodes) {
     if (!geometry::is_finite(p))
       throw std::invalid_argument("Mesh SVG export: a node is not finite");
-    bounds.add(p);
+    svg_nodes.push_back(detail::mirrored_y(p));
+    bounds.add(svg_nodes.back());
   }
   for (const auto &t : mesh.triangles)
     for (auto v : t.nodes)
@@ -173,16 +182,16 @@ void export_mesh_svg(const mesh::Mesh &mesh, std::ostream &out) {
          "stroke-width=\"0.6\" stroke-linejoin=\"round\" "
          "vector-effect=\"non-scaling-stroke\" d=\"";
   for (const auto &t : mesh.triangles)
-    out << "M" << point_text(mesh.nodes[t.nodes[0]]) << " L"
-        << point_text(mesh.nodes[t.nodes[1]]) << " L"
-        << point_text(mesh.nodes[t.nodes[2]]) << " Z ";
+    out << "M" << point_text(svg_nodes[t.nodes[0]]) << " L"
+        << point_text(svg_nodes[t.nodes[1]]) << " L"
+        << point_text(svg_nodes[t.nodes[2]]) << " Z ";
   out << "\"/>\n";
   for (std::size_t r = 0; r < mesh.region_names.size(); ++r) {
     std::string d;
     for (const auto &e : mesh.boundary_edges)
       if (e.region == r)
-        d += "M" + point_text(mesh.nodes[e.nodes[0]]) + " L" +
-             point_text(mesh.nodes[e.nodes[1]]) + " ";
+        d += "M" + point_text(svg_nodes[e.nodes[0]]) + " L" +
+             point_text(svg_nodes[e.nodes[1]]) + " ";
     if (d.empty())
       continue;
     out << "  <path class=\"boundary\" data-region=\"" << mesh.region_names[r]

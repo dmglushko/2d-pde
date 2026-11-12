@@ -2,12 +2,14 @@
 #include "support/mesh_checks.hpp"
 #include "support/shapes.hpp"
 
+#include "pde2d/geometry/polygon.hpp"
 #include "pde2d/geometry/shapes.hpp"
 #include "pde2d/io/svg.hpp"
 #include "pde2d/mesh/cdt.hpp"
 #include "pde2d/mesh/chord_length_discretizer.hpp"
 #include "pde2d/mesh/mesher.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <numbers>
@@ -90,14 +92,15 @@ void check_same_geometry(const geometry::CurveGeometry &a,
   }
 }
 
-// Every curve kind, drawn counterclockwise (in x-right, y-up terms), so
-// the geometry keeps its direction.
+// Every curve kind. The SVG y axis points down and import flips it, so
+// the path is written with y negated (and the arc's sweep flag 0): it is
+// counterclockwise once imported and the geometry keeps its direction.
 const std::string all_commands =
-    "M 0 0 H 4 V 1 Q 4.5 2 3.5 2 T 2 2.2 C 1.5 2.6 1 2.6 0.5 2.2 "
-    "S 0 1.4 0 1 A 0.5 0.5 0 0 1 0 0 Z";
+    "M 0 0 H 4 V -1 Q 4.5 -2 3.5 -2 T 2 -2.2 C 1.5 -2.6 1 -2.6 0.5 -2.2 "
+    "S 0 -1.4 0 -1 A 0.5 0.5 0 0 0 0 0 Z";
 const std::string all_commands_relative =
-    "m 0 0 h 4 v 1 q 0.5 1 -0.5 1 t -1.5 0.2 c -0.5 0.4 -1 0.4 -1.5 0 "
-    "s -0.5 -0.8 -0.5 -1.2 a 0.5 0.5 0 0 1 0 -1 z";
+    "m 0 0 h 4 v -1 q 0.5 -1 -0.5 -1 t -1.5 -0.2 c -0.5 -0.4 -1 -0.4 -1.5 0 "
+    "s -0.5 0.8 -0.5 1.2 a 0.5 0.5 0 0 0 0 1 z";
 
 } // namespace
 
@@ -139,7 +142,7 @@ int main() {
              document(path("id=\"a\"", "M0,0L2,0,2,1e0,.5,1.5-.5.5Z")));
          check(kinds(g.loops()[0]) == "LLLLL", "five lines");
          auto arc =
-             from_text(document(path("id=\"a\"", "M0 0h2a1 1 0 011 1v1H0z")));
+             from_text(document(path("id=\"a\"", "M0 0h2a1 1 0 001-1v-1H0z")));
          check(kinds(arc.loops()[0]) == "LALLL", "compact arc flags");
          // After Z, a command other than M starts at the subpath's start.
          auto two = from_text(
@@ -156,7 +159,7 @@ int main() {
          check(kinds(flat.loops()[0]) == "LLL", "A with rx = 0 is a line");
          // Radii too small are scaled up: a half circle of radius 1.
          auto scaled = from_text(
-             document(path("id=\"a\"", "M0 0 A 0.1 0.1 0 0 1 2 0 Z")));
+             document(path("id=\"a\"", "M0 0 A 0.1 0.1 0 0 0 2 0 Z")));
          auto half = std::get<geometry::EllipticalArc>(
              scaled.loops()[0].curves[0].curve);
          near(half.radius_x, 1, 1e-12, "scaled radius");
@@ -165,10 +168,11 @@ int main() {
        [] {
          // A quarter-circle sector of radius r: the radii's fourth powers
          // overflow or underflow, so the conversion must not form them.
+         // (Written with y negated: (0, -r) in the file is (0, r).)
          for (double r : {1e-100, 1e-300, 1e100, 1e300}) {
            std::ostringstream text;
            text.precision(17);
-           text << "M0 0 L" << r << " 0 A" << r << " " << r << " 0 0 1 0 " << r
+           text << "M0 0 L" << r << " 0 A" << r << " " << r << " 0 0 0 0 " << -r
                 << " Z";
            auto g = from_text(document(path("id=\"a\"", text.str())));
            const auto &curves = g.loops()[0].curves;
@@ -190,7 +194,7 @@ int main() {
          for (double r : {1e8, 1e12, 1e20}) {
            std::ostringstream text;
            text.precision(17);
-           text << "M0 0 A" << r << " " << r << " 0 0 1 1 0 L1 1 L0 1 Z";
+           text << "M0 0 A" << r << " " << r << " 0 0 0 1 0 L1 -1 L0 -1 Z";
            auto g = from_text(document(path("id=\"a\"", text.str())));
            const auto &c = g.loops()[0].curves;
            check(kinds(g.loops()[0]) == "CLLL", "a flat arc is a cubic");
@@ -204,8 +208,75 @@ int main() {
          }
          // An ellipse: radii 1e9 and 1e7, rotated 30 degrees.
          auto g = from_text(document(
-             path("id=\"a\"", "M0 0 A1e9 1e7 30 0 0 1 0 L1 1 L0 1 Z")));
+             path("id=\"a\"", "M0 0 A1e9 1e7 -30 0 1 1 0 L1 -1 L0 -1 Z")));
          check(kinds(g.loops()[0]) == "CLLL", "flat elliptical arc");
+       }},
+      {"y_axis_points_up",
+       [] {
+         // (0, 0) -> (1, 0) -> (1, 1) -> (0, 1) in the file is clockwise on
+         // the screen; with y flipped it runs through (1, -1), clockwise in
+         // y-up terms, and CurveGeometry makes it counterclockwise.
+         auto g = from_text(document(path("id=\"a\"", "M0 0 H1 V1 H0 Z")));
+         const auto &c = g.loops()[0].curves;
+         check(kinds(g.loops()[0]) == "LLLL", "four lines");
+         std::vector<Point> corners;
+         for (const auto &bc : c)
+           corners.push_back(geometry::start_point(bc.curve));
+         for (Point p : corners)
+           check(p.y <= 0, "y flipped: the square is below the x axis");
+         check(std::find(corners.begin(), corners.end(), Point{1, -1}) !=
+                   corners.end(),
+               "(1, 1) in the file is (1, -1)");
+         check(geometry::polygon_orientation(corners) == 1,
+               "normalized counterclockwise");
+         // What is at the top of the drawing (small SVG y) has the largest
+         // y after import.
+         auto top = from_text(document(path("id=\"top\"", "M0 0 H2") +
+                                       path("id=\"rest\"", "M2 0 V1 H0 V0")));
+         for (const auto &bc : top.loops()[0].curves)
+           if (bc.region == "top") {
+             check(geometry::start_point(bc.curve).y == 0 &&
+                       geometry::end_point(bc.curve).y == 0,
+                   "the top edge stays at y = 0");
+           } else {
+             check(geometry::start_point(bc.curve).y <= 0 &&
+                       geometry::end_point(bc.curve).y <= 0,
+                   "the rest lies below it");
+           }
+         // Holes: both loops drawn the same way in the file; the outer one
+         // is made counterclockwise, the hole clockwise.
+         auto holed = from_text(document(path("id=\"o\"", "M0 0 H3 V3 H0 Z") +
+                                         path("id=\"h\"", "M1 1 H2 V2 H1 Z")));
+         check(holed.depth(0) == 0 && holed.depth(1) == 1, "depths");
+         for (std::size_t l = 0; l < 2; ++l) {
+           std::vector<Point> p;
+           for (const auto &bc : holed.loops()[l].curves)
+             p.push_back(geometry::start_point(bc.curve));
+           check(geometry::polygon_orientation(p) == (l == 0 ? 1 : -1),
+                 "even depth counterclockwise, odd depth clockwise");
+         }
+         // An arc: from (1, 0) to (0, -1) in the file, sweep flag 0, is the
+         // quarter circle through (cos 45, sin 45) once flipped.
+         auto quarter = from_text(
+             document(path("id=\"q\"", "M1 0 A1 1 0 0 0 0 -1 L0 0 Z")));
+         for (const auto &bc : quarter.loops()[0].curves)
+           if (const auto *arc =
+                   std::get_if<geometry::EllipticalArc>(&bc.curve)) {
+             Point mid = geometry::point_at(*arc, 0.5);
+             near(mid.x, std::sqrt(0.5), 1e-15, "arc middle x");
+             near(mid.y, std::sqrt(0.5), 1e-15, "arc middle y");
+           }
+         // Export writes y negated, and import(export(g)) gives the same
+         // numbers back.
+         auto r = geometry::rectangle(2, 1);
+         std::string text = to_text(r);
+         check(text.find(" -0.5") != std::string::npos, "y negated on export");
+         auto back = from_text(text);
+         for (std::size_t i = 0; i < r.loops()[0].curves.size(); ++i) {
+           auto a = std::get<geometry::Line>(r.loops()[0].curves[i].curve);
+           auto b = std::get<geometry::Line>(back.loops()[0].curves[i].curve);
+           check(a.start == b.start && a.end == b.end, "exact round trip");
+         }
        }},
       {"region_names",
        [] {
@@ -338,8 +409,8 @@ int main() {
          // Shortest exact numbers.
          check(to_text(CurveGeometry(
                            {polygon_loop({{0, 0}, {0.1, 0}, {0.1, 0.3}}, "t")}))
-                       .find("M 0 0 L 0.1 0 L 0.1 0.3") != std::string::npos,
-               "shortest numbers");
+                       .find("M 0 0 L 0.1 0 L 0.1 -0.3") != std::string::npos,
+               "shortest numbers, y negated");
        }},
       {"mesh_svg",
        [] {
@@ -361,9 +432,11 @@ int main() {
            check(svg.find("<title>" + name + "</title>") != std::string::npos,
                  "with a title");
          }
-         check(svg.find("viewBox=\"-0.12 -0.12 6.24 6.24\"") !=
+         // y points down in the picture: the mesh in [0, 6]^2 is drawn in
+         // [0, 6] x [-6, 0], so it looks like the drawing.
+         check(svg.find("viewBox=\"-0.12 -6.12 6.24 6.24\"") !=
                    std::string::npos,
-               "bounding box [0, 6]^2 with a 2% margin");
+               "bounding box [0, 6] x [-6, 0] with a 2% margin");
          mesh::Mesh empty;
          expect_throws<std::invalid_argument>(
              [&] { io::export_mesh_svg(empty, out); }, "has no nodes");
