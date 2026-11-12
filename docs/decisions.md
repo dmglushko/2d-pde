@@ -334,8 +334,8 @@ Started 2026-11-11. The previous header-only code is on the branch
 
 ## Problem combined with a mesh
 
-The name is still open; `MeshedProblem` is proposed. It holds
-`std::shared_ptr<const Mesh>`. Building it:
+It is called `MeshedProblem` (the owner left the name to Claude,
+2026-11-12). It holds `std::shared_ptr<const Mesh>`. Building it:
 
 1. matches region names in both directions: a condition naming an unknown
    region is an error, and so is a mesh region without a condition;
@@ -347,10 +347,25 @@ The name is still open; `MeshedProblem` is proposed. It holds
 
 It stops just before matrix assembly.
 
+**`Problem`, the boundary conditions and `MeshedProblem` are the next
+slice** (decided 2026-11-12); assembly comes after it.
+
 ## Assembly
 
-Discussed and agreed on 2026-11-12. The architecture (types, interfaces,
-where assembly lives) has not been discussed yet.
+Discussed and agreed on 2026-11-12. Of the architecture, only the items
+marked "architecture" below are decided.
+
+- **Architecture: assembly is a separate step.** An `Assembler` object has
+  `assemble(meshed_problem, t, previous)`, where `previous` is an optional
+  earlier result to reuse. It returns the assembled problem: the matrices
+  and the facts, partly carried over from `MeshedProblem` and partly
+  computed by assembly. *Why:* the problem description stays separate from
+  its discretized form, and a result can be reused when only t changes.
+- **Architecture: the first assembly slice has no options** (decided
+  2026-11-12). Choices such as colouring or chunked assembly and other
+  Dirichlet handlings may become options later.
+- **Architecture: assembly fills a `StageReport`**, like the meshing
+  stages (time, number of nonzeros, and so on).
 
 - **Weak form.** The second-order part is written as A : ∇²u with
   A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] and integrated by parts once:
@@ -434,11 +449,13 @@ where assembly lives) has not been discussed yet.
 
 ## Open
 
-- The name of the problem-plus-mesh object (`MeshedProblem` proposed).
 - Quality guarantees: an improver that runs after a refiner can break the
   refiner's guarantee (smoothing after Ruppert can lower the minimum
   angle). Whether to declare, warn and measure this is not decided yet.
-- The architecture of the assembled problem and of assembly itself
-  (types, interfaces, ownership), and the inheritance of the facts into it.
+- The rest of the assembly architecture: the matrix type in public
+  headers (own CSR struct or Eigen), which matrices the result stores
+  (every term, grouped by role, or a constant part plus a time-dependent
+  part), how a `previous` result is checked against the problem, and where
+  the thread count goes (constructor or `assemble`).
 - How the sparsity pattern is built.
 - Solvers and time integration have not been discussed yet.
