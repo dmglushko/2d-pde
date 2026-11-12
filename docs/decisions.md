@@ -35,7 +35,12 @@ Started 2026-11-11. The previous header-only code is on the branch
   2026-11-12), replacing Boost.Multiprecision. During the switch they are
   tested against the Boost version on many nearly degenerate inputs. Never
   compile them with `-ffast-math`. *Why:* the same exact answers, faster,
-  and no dependency.
+  and no dependency. Coordinates outside [2⁻²⁰⁰, 2²⁰⁰], where Shewchuk's
+  arithmetic is not exact, go to a small exact integer fallback that is
+  private to `predicates.cpp` (accepted 2026-11-12). *Why:* the predicates
+  stay exact for every finite input, and the fallback stays isolated in one
+  file. Linking a program with `-ffast-math` still flushes subnormals to
+  zero process-wide; no single file can prevent that.
 - **The archive is a reference, not a source.** Agents may port
   self-contained, well-tested pieces (the exact geometric predicates and the
   curve math). Everything else is written fresh to this design. *Why:* the
@@ -115,8 +120,11 @@ Started 2026-11-11. The previous header-only code is on the branch
   `(chain, s₀, s₁)`, an arc-length interval, and a split puts the new point
   at `s = (s₀ + s₁)/2`, found by a binary search over the chain's
   cumulative curve lengths and length inversion inside that curve. Chains
-  live on the meshing side (polygon and working mesh), never in the
-  geometry. The default threshold angle is still open.
+  live on the meshing side (polygon, working mesh and, optionally, the
+  output mesh), never in the geometry. The default `corner_angle_degrees`
+  is 30° (decided 2026-11-12): it keeps the corners of rectangles and
+  hexagons and merges smooth joins and fine polylines. The `Remesher` builds
+  chains the same way when it links a mesh to a geometry.
 - **Splitting a curved boundary edge goes through a replaceable policy**
   (decided 2026-11-12), a virtual interface like the other components. The
   v1 policy: split at the arc-length midpoint; if a triangle would invert,
@@ -124,7 +132,11 @@ Started 2026-11-11. The previous header-only code is on the branch
   edges by flips, delete what is now outside, including nodes in the
   cut-off region, which lie outside the true domain); if that also fails,
   skip the split, warn, and the target is not met. The working mesh may
-  therefore delete nodes and triangles. There is no chord fallback for
+  therefore delete nodes and triangles (tombstones until `compact()`). The
+  inward step inserts the point, forces the two new edges, then deletes the
+  cut-off region with its nodes, so no hole is left to re-triangulate. Only
+  `WorkingMesh::split_boundary_edge` is public; the policy's individual
+  steps are private. There is no chord fallback for
   linked edges. **The policy is internal, never a user input:** the
   library picks one fixed policy at compile time, and changing it means
   changing the library. *Why:* it is our own robustness machinery, not a
@@ -150,10 +162,18 @@ Started 2026-11-11. The previous header-only code is on the branch
   functions that several components may call.
 - **Ruppert makes its own input Delaunay** when it isn't (for example after
   ear clipping) and reports how many flips that took.
-- **Two improver interfaces:** `Improver::run(mesh, spec)` is a pass over the
-  whole mesh. `LocalImprover::improve_around(mesh, touched_triangles)` is
-  called by a refiner after each change. One class may implement both.
-  *Why:* a whole-mesh pass after every split would make refinement O(n²).
+- **Improver interfaces** (revised 2026-11-12): `Improver` is the common base
+  that goes into the improver list (name, effects, use mode). It declares
+  its roles itself: `as_local()` returns a `const LocalImprover*` and
+  `as_final()` a `const FinalImprover*`, `nullptr` for a role it does not
+  have. `LocalImprover::improve_around(mesh, touched)` is called by a
+  refiner after each change and returns its number of changes;
+  `FinalImprover::run(mesh, spec, report)` is a pass over the whole mesh.
+  *Why:* the object answers what it can do (a declaration, not a type check),
+  the pointer hands over the object to call, and a class with only one of
+  the two roles still fits in the list. A whole-mesh pass after every split
+  would make refinement O(n²), hence the local role. Defaults: Delaunay
+  flips `local_and_final`, Laplacian smoothing `final_only`.
 - **Improvers are given only to the `Mesher`** (decided 2026-11-12). Each
   improver's options carry a use mode, `ImproverUse { local_and_final,
   local_only, final_only }`. When the pipeline is assembled, the refiner
@@ -172,12 +192,20 @@ Started 2026-11-11. The previous header-only code is on the branch
   "delaunay_flips: Ruppert already maintains Delaunay, so it runs only as a
   final pass". *Why:* a preference that cannot be met must not stop the
   program.
+- **A final pass that cannot change anything is also a warning, and still
+  runs** (accepted 2026-11-12), for example Delaunay flips right after
+  Ruppert. Each role that cannot be honoured or is pointless gives one
+  warning.
 - **These warnings go into an extra `pipeline` report** (decided
   2026-11-12), the first entry of every run's reports. It holds the
   resolved plan (which improvers run locally, which as final passes) and
   the warnings found when the pipeline was built. *Why:* the warnings are
   found in the constructor, before any report exists, and an improver that
-  never runs has no report of its own to carry them.
+  never runs has no report of its own to carry them. The plan is written
+  as one readable message ("plan: refiner ruppert; local: none; final:
+  delaunay_flips, laplacian"); `plan()` gives it to code. Every report,
+  this one included, keeps its structured fields (`stage`, `time`,
+  `metrics`) beside the messages, so times can be summed later.
 - **Reports:** each stage report has common fields (`stage`, `time`,
   `messages`) plus named numeric `metrics`. Failures throw; messages only
   mean "worked, but…". The `Mesher` checks "target met" itself, against the
@@ -198,6 +226,12 @@ Started 2026-11-11. The previous header-only code is on the branch
   its left, and its region is an integer id into `region_names`.
 - **Interior edges and connected pieces are computed when needed**, not
   stored.
+- **The output mesh may carry its curve links** (decided 2026-11-12): an
+  optional set of chains plus an optional `(chain, s₀, s₁)` link per
+  boundary edge, empty for imported meshes. The `Remesher` then refines a
+  `Mesh` directly with its links; linking to a geometry is needed only for
+  meshes that have none. *Why:* refining an existing mesh (for example in a
+  future adaptivity loop) must not require relinking every time.
 - **Normals come from the straight edges.** *Why:* the mesh must be
   self-contained, because an imported mesh has no geometry behind it.
 
@@ -251,8 +285,6 @@ It stops just before matrix assembly.
 ## Open
 
 - The name of the problem-plus-mesh object (`MeshedProblem` proposed).
-- The default `corner_angle_degrees` for chains: 30° is used provisionally
-  until the owner confirms.
 - Quality guarantees: an improver that runs after a refiner can break the
   refiner's guarantee (smoothing after Ruppert can lower the minimum
   angle). Whether to declare, warn and measure this is not decided yet.
