@@ -541,6 +541,54 @@ marked "architecture" below are decided.
   Gauss–Legendre on edges. *Why:* it keeps P1's convergence rates and is
   exact for constant-coefficient mass matrices.
 
+## Solvers and time integration
+
+Discussed in a side chat on 2026-11-12. Not implemented yet; assembly
+comes first.
+
+- **Configuration in the constructor, the job in the call**, as for the
+  `Mesher`: `Integrator(method, step_controller, linear_solver)` with
+  `integrate(meshed_problem, t0, t1, output, initial)`, and
+  `StaticSolver(linear_solver)` with `solve(meshed_problem, t = 0)`. Both
+  assemble the problem themselves (reusing `previous` results).
+- **The time method is a component, not an order number** (implicit Euler,
+  Crank–Nicolson and BDF2 differ in more than their order). Implicit
+  methods first: explicit ones need M⁻¹ and steps that shrink like h².
+  A method declares which time orders it supports, checked against the
+  problem's `time_order` before integrating, like the triangulators'
+  declared hole support.
+- **The problem never changes during integration.** The current state is
+  a vector inside the integrator, read once from `initial_values(t0)`.
+  A different starting state (for example a steady solution) is passed as
+  an optional `initial` argument of `integrate`. A solver returns a
+  `Solution` (node values plus their mesh).
+- **The static solver drops the time terms** and solves A·U = b at the
+  given t.
+- **Linear solvers have a prepare step and a solve step**, like Eigen's
+  `compute` and `solve`: a configured `LinearSolver` is `const` and
+  reusable; `prepare(matrix)` returns a prepared solver tied to that
+  matrix, which solves many right-hand sides. The integrator prepares
+  again only when the operator or dt changes, which the facts tell it.
+- **Step control is a component:** a `StepController` interface; the
+  first slice has only `FixedStep{.dt}` (dt is configuration of the step
+  control). Error-controlled adaptive stepping comes later without
+  changing `integrate`; its options are tolerances, not step sizes.
+- **Step controllers, time methods and linear solvers are virtual
+  interfaces**, each with its own options in its constructor. *Why:* their
+  kinds will keep growing, including the owner's own smart ones, and a new
+  kind must not require editing library code (a variant suits closed sets
+  of data kinds, like curves).
+- **Reports stream:** each step's small record (t, dt, accepted, linear
+  iterations, residual, time taken) updates one running summary and is
+  then dropped; the summary becomes one `StageReport` at the end.
+- **Output options belong in the call:** `keep_step_history` (off by
+  default) keeps the small records; solution snapshots are taken at exact
+  `snapshot_times` (the stepper lands on them) and/or every n steps; the
+  final solution is always returned.
+- **Still open:** how second order in time (m2 ≠ 0) is integrated
+  (rewriting as a first-order system with v = u_t, or a dedicated method
+  such as Newmark-β or generalized-α).
+
 ## Deferred
 
 - Handling pure Neumann problems: to be discussed.
@@ -568,4 +616,5 @@ marked "architecture" below are decided.
   refiner's guarantee (smoothing after Ruppert can lower the minimum
   angle). Whether to declare, warn and measure this is not decided yet.
 - How the sparsity pattern is built.
-- Solvers and time integration have not been discussed yet.
+- How second order in time is integrated (see "Solvers and time
+  integration").
