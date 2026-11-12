@@ -100,16 +100,17 @@ public:
   std::optional<std::size_t> free_index(std::size_t node) const;
 
   // u at every mesh node (indexed like Mesh::nodes) at the start time t0,
-  // for time order 1 or 2. At a Dirichlet node it is the boundary data,
-  // dirichlet_value at t0; elsewhere the initial condition u at (x, y, t0).
-  // Computed on every call. Throws std::invalid_argument for time order 0,
-  // a t0 that is not finite, or a value that is not finite.
-  std::vector<double> initial_values(double t0) const;
-  // u_t at every mesh node at t0, for time order 2. At a Dirichlet node it
-  // is d/dt (g / alpha) at t0, averaged over the node's regions like
-  // dirichlet_value; elsewhere the initial condition u_t at (x, y, t0).
-  // Throws like initial_values, and for time order 0 or 1.
-  std::vector<double> initial_velocities(double t0) const;
+  // or nothing for time order 0, which has no initial values. At a
+  // Dirichlet node it is the boundary data, dirichlet_value at t0;
+  // elsewhere the initial condition u at (x, y, t0). Computed on every
+  // call. Throws std::invalid_argument for a t0 that is not finite (also
+  // for time order 0) or a value that is not finite.
+  std::optional<std::vector<double>> initial_values(double t0) const;
+  // u_t at every mesh node at t0, or nothing below time order 2. At a
+  // Dirichlet node it is d/dt (g / alpha) at t0, averaged over the node's
+  // regions like dirichlet_value; elsewhere the initial condition u_t at
+  // (x, y, t0). Throws like initial_values.
+  std::optional<std::vector<double>> initial_velocities(double t0) const;
 
   const mesh::StageReport &report() const { return report_; }
 

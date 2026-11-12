@@ -562,15 +562,24 @@ any `g`).
 
 `dirichlet_value(k, t)` is the average of `g / alpha` over the regions of
 `dirichlet_nodes()[k]` (with `std::midpoint`, so two large finite values
-do not overflow; an error if not finite). `initial_values(t0)` and, for
-time order 2, `initial_velocities(t0)` compute u and u_t at every mesh
-node at the start time t0 the time integrator passes, on every call: at a
-Dirichlet node from the boundary data (`dirichlet_value(k, t0)`, and the
-average of `d/dt (g / alpha)` for the velocity), elsewhere from the
-initial condition at `(x, y, t0)`. A time order without them, a t0 that
-is not finite, or a value that is not finite throws
-`std::invalid_argument`. `report()` is a
-`mesh::StageReport` named "meshed_problem" with the time, the metrics
+do not overflow; an error if not finite). `initial_values(t0)` and
+`initial_velocities(t0)` return `std::optional<std::vector<double>>`: u
+and u_t at every mesh node at the start time t0 the time integrator
+passes, computed on every call, or an empty optional when the time order
+has no such values (no values for time order 0, no velocities below 2). At
+a Dirichlet node they come from the boundary data (`dirichlet_value(k,
+t0)`, and the average of `d/dt (g / alpha)` for the velocity), elsewhere
+from the initial condition at `(x, y, t0)`. A t0 that is not finite (for
+any time order) or a value that is not finite throws
+`std::invalid_argument`:
+
+```cpp
+if (const auto u0 = meshed->initial_values(0.0)) // empty for time order 0
+  for (std::size_t node = 0; node < u0->size(); ++node)
+    use((*u0)[node]);
+```
+
+`report()` is a `mesh::StageReport` named "meshed_problem" with the time, the metrics
 `regions`, `dirichlet_nodes`, `free_nodes`, `corners`,
 `dirichlet_over_natural_corners`, `priority_corners`, `averaged_corners`,
 `differing_corners`, one message per differing corner, for example

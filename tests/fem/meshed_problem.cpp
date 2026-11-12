@@ -412,9 +412,14 @@ int main() {
                        "The problem has time order 0, so the initial "
                        "condition u_t is not needed; it is ignored"},
                "both ignored");
+         // Time order 0 has no initial values: nothing, not an error.
+         check(!steady.initial_values(0.0).has_value() &&
+                   !steady.initial_velocities(0.0).has_value(),
+               "nothing for time order 0");
+         // A start time that is not finite is still an error.
          expect_throws<std::invalid_argument>(
-             [&] { (void)steady.initial_values(0.0); },
-             "The problem has time order 0, so it has no initial values");
+             [&] { (void)steady.initial_values(NAN); },
+             "The start time t0 = nan is not finite");
          // Not even compiled: an unknown parameter in it does not matter.
          problem.initial.u = e("q*x");
          const MeshedProblem also_steady(wall, problem);
@@ -430,10 +435,12 @@ int main() {
                        "The problem has time order 1, so the initial "
                        "condition u_t is not needed; it is ignored"},
                "u in t, u_t not needed");
+         check(heat.initial_values(0.0).has_value() &&
+                   !heat.initial_velocities(0.0).has_value(),
+               "values, but no velocities for time order 1");
          expect_throws<std::invalid_argument>(
-             [&] { (void)heat.initial_velocities(0.0); },
-             "The problem has time order 1, so it has no initial "
-             "velocities (they need time order 2)");
+             [&] { (void)heat.initial_velocities(-INFINITY); },
+             "The start time t0 = -inf is not finite");
          // An initial condition the time order needs is still compiled.
          problem.initial = {.u = e("q*x")};
          expect_throws<std::invalid_argument>(
@@ -473,7 +480,7 @@ int main() {
          // Not finite at node 0, which is a Dirichlet node: never used.
          heat.initial.u = e("y/x");
          const MeshedProblem p(square(), heat);
-         const auto values = p.initial_values(2.0);
+         const auto values = p.initial_values(2.0).value();
          // Node 0 is a corner: the average of 102 and 0.
          check(values[0] == 51.0, "corner");
          check(values[1] == 102.0 && values[2] == 102.0, "bottom");
@@ -500,7 +507,7 @@ int main() {
                        "time t0",
                "u_t in t");
          const double t0 = 1.0;
-         const auto rates = p.initial_velocities(t0);
+         const auto rates = p.initial_velocities(t0).value();
          check(rates.size() == 9, "every node");
          // d/dt (sin t / (2 + t)) on the left.
          const double left =
@@ -514,14 +521,14 @@ int main() {
          check(rates[4] == 3.5 && rates[5] == 3.5 && rates[7] == 4.0 &&
                    rates[8] == 4.0,
                "free nodes: y + k t0");
-         const auto values = p.initial_values(t0);
+         const auto values = p.initial_values(t0).value();
          pde2d::test::near(values[0], std::sin(t0) / 3 / 2, 1e-15,
                            "corner value");
          check(values[1] == 0.5 && values[4] == 0.0, "values");
          // With a priority the winner's rate is used.
          wave.boundary_conditions["left"].priority = 1;
          const MeshedProblem q(square(), wave);
-         pde2d::test::near(q.initial_velocities(t0)[0], left, 1e-15,
+         pde2d::test::near(q.initial_velocities(t0).value()[0], left, 1e-15,
                            "left wins");
        }},
       {"initial velocities with g / alpha constant in t are zero",
@@ -547,7 +554,7 @@ int main() {
          check(p.initial_velocities(1.0) == std::vector<double>(9, 0.0),
                "0 at the kink");
          // The value itself is still abs.
-         check(p.initial_values(3.0)[0] == 2.0, "abs(3 - 1)");
+         check(p.initial_values(3.0).value()[0] == 2.0, "abs(3 - 1)");
        }},
       {"a time derivative outside the allow-list is an error",
        [] {
@@ -567,7 +574,7 @@ int main() {
          wave.equation.m1 = e("1");
          wave.initial.u_t.reset();
          const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
-         check(p.initial_values(1.0)[0] == 1e308, "1e308 t^2 at t = 1");
+         check(p.initial_values(1.0).value()[0] == 1e308, "1e308 t^2 at t = 1");
        }},
       {"every allowed function has a time derivative (chain rule)",
        [] {
@@ -634,7 +641,7 @@ int main() {
            wave.equation.m2 = e("1");
            wave.initial = {.u = e("0"), .u_t = e("0")};
            const MeshedProblem p(wall, wave);
-           const auto rates = p.initial_velocities(1.0);
+           const auto rates = p.initial_velocities(1.0).value();
            for (const auto &entry : p.dirichlet_nodes()) {
              const double x = p.mesh()->nodes[entry.node].x;
              const double s = (1 + x) / 4;
@@ -651,7 +658,7 @@ int main() {
          wave.initial = {.u = e("0"), .u_t = e("0")};
          const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
          // d/dt (1 / t) = -1 / t^2.
-         check(p.initial_velocities(2.0)[0] == -0.25, "-1/4");
+         check(p.initial_velocities(2.0).value()[0] == -0.25, "-1/4");
          expect_throws<std::invalid_argument>(
              [&] { (void)p.initial_velocities(0.0); },
              "The time derivative of g / alpha of region 'wall' is not "

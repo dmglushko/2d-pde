@@ -410,13 +410,11 @@ double MeshedProblem::dirichlet_value(std::size_t k, double t) const {
   return value;
 }
 
-std::vector<double> MeshedProblem::initial_values(double t0) const {
-  if (!initial_u_)
-    throw std::invalid_argument(
-        std::format("The problem has time order {}, so it has no initial "
-                    "values",
-                    time_order(*this)));
+std::optional<std::vector<double>>
+MeshedProblem::initial_values(double t0) const {
   check_start_time(t0);
+  if (!initial_u_)
+    return std::nullopt;
   auto values = at_free_nodes(*mesh_, free_nodes_, *initial_u_, "u", t0);
   // The boundary data wins over the initial condition.
   for (std::size_t k = 0; k < dirichlet_nodes_.size(); ++k)
@@ -424,13 +422,11 @@ std::vector<double> MeshedProblem::initial_values(double t0) const {
   return values;
 }
 
-std::vector<double> MeshedProblem::initial_velocities(double t0) const {
-  if (!initial_u_t_)
-    throw std::invalid_argument(
-        std::format("The problem has time order {}, so it has no initial "
-                    "velocities (they need time order 2)",
-                    time_order(*this)));
+std::optional<std::vector<double>>
+MeshedProblem::initial_velocities(double t0) const {
   check_start_time(t0);
+  if (!initial_u_t_)
+    return std::nullopt;
   auto values = at_free_nodes(*mesh_, free_nodes_, *initial_u_t_, "u_t", t0);
   const mesh::Mesh &m = *mesh_;
   for (const auto &entry : dirichlet_nodes_) {
