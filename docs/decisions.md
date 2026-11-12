@@ -366,6 +366,13 @@ where assembly lives) has not been discussed yet.
   time-dependent g cost one matrix–vector product per step. Edge blocks
   touching a Dirichlet corner are routed the same way. The same routing
   applies to every matrix and to the load vector.
+- **The eliminated system is shrunk to the free nodes** (decided
+  2026-11-12): the unknowns are renumbered to free nodes only, with a map
+  back to mesh nodes for the full solution. *Why:* with full size and
+  identity rows, the mass matrices have empty Dirichlet rows, so M becomes
+  singular and every time stepper (explicit ones need M⁻¹) would have to
+  special-case those rows. Shrunk, time integration sees a plain system of
+  ODEs in the free unknowns.
 - **"Right-hand side depends on t" also looks at the boundary data g**,
   since a time-dependent Dirichlet value makes the right-hand side
   time-dependent even when f is not.
@@ -402,6 +409,9 @@ where assembly lives) has not been discussed yet.
   some valid meshes; the inward split has no rollback if it fails half-way.
 - Gmsh export; turning the boundary context of old `.pde2d` files into
   curve links.
+- Natural conditions whose β̂_n is zero at some points although β_n is not
+  zero as written (u_x = g on a circle): GitHub issue #27, with the
+  well-posedness checks.
 - An arc type stored by its end points (exact end points for flat arcs).
 - The validity check also runs on meshes our own triangulators build, which
   the owner considers double work: GitHub issue #24.
@@ -418,10 +428,5 @@ where assembly lives) has not been discussed yet.
   angle). Whether to declare, warn and measure this is not decided yet.
 - The architecture of the assembled problem and of assembly itself
   (types, interfaces, ownership), and the inheritance of the facts into it.
-- Whether the eliminated system is renumbered to free nodes only or keeps
-  its full size with identity rows for Dirichlet nodes.
 - How the sparsity pattern is built.
-- β̂_n can vanish at some points even when β_n is not zero as written (for
-  example u_x = g on a circle), so the structural check alone may not be
-  enough.
 - Solvers and time integration have not been discussed yet.
