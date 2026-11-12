@@ -245,6 +245,29 @@ int main() {
                        "used",
                "message");
        }},
+      {"averaging large corner values does not overflow",
+       [] {
+         const MeshedProblem p(square(),
+                               poisson({{"bottom", dirichlet("1e308")},
+                                        {"right", neumann()},
+                                        {"top", neumann()},
+                                        {"left", dirichlet("1.5e308")}}));
+         check(p.dirichlet_value(index_of(p, 0), 0.0) == 1.25e308,
+               "(1e308 + 1.5e308) / 2 without overflow");
+         check(p.report().messages.size() == 1 &&
+                   p.report().messages[0] ==
+                       "Corner at node 0 (0, 0): regions 'bottom' and 'left' "
+                       "(both priority 0) give 1e+308 and 1.5e+308; their "
+                       "average 1.25e+308 is used",
+               p.report().messages.at(0));
+         const MeshedProblem q(square(),
+                               poisson({{"bottom", dirichlet("1e308")},
+                                        {"right", neumann()},
+                                        {"top", neumann()},
+                                        {"left", dirichlet("x + 1e308")}}));
+         check(q.dirichlet_value(index_of(q, 0), 0.0) == 1e308, "equal");
+         check(q.report().messages.empty(), "the same value");
+       }},
       {"corners whose values agree are not reported",
        [] {
          // Different expressions, the same value at the corner (0, 0).

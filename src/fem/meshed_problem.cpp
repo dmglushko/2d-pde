@@ -9,6 +9,7 @@
 #include <exception>
 #include <format>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -84,6 +85,21 @@ double checked_value(const mesh::Mesh &mesh, const CompiledCondition &condition,
   return value;
 }
 
+// The average of value(r) over `regions`, computed without overflow:
+// (a + b) / 2 is infinite for a = b = 1e308, std::midpoint is not. A node
+// has one region or two; more are averaged as a sum of value / n.
+template <class Value>
+double average(const std::vector<std::size_t> &regions, Value value) {
+  if (regions.size() == 1)
+    return value(regions[0]);
+  if (regions.size() == 2)
+    return std::midpoint(value(regions[0]), value(regions[1]));
+  double sum = 0.0;
+  for (const std::size_t r : regions)
+    sum += value(r) / static_cast<double>(regions.size());
+  return sum;
+}
+
 bool depends_on_t(const BoundaryCondition &condition) {
   return condition.alpha.facts().depends_on_t ||
          condition.g.facts().depends_on_t;
@@ -142,7 +158,7 @@ corner_message(const mesh::Mesh &mesh, const Problem &problem,
     return std::format("{}: regions {} and {} (both priority {}) give {} and "
                        "{}; their average {} is used",
                        where, in_quotes(name_a), in_quotes(name_b), a.priority,
-                       value_a, value_b, (value_a + value_b) / 2);
+                       value_a, value_b, std::midpoint(value_a, value_b));
   return std::format("{}: region {} (priority {}) gives {} and wins over "
                      "region {} (priority {}), which gives {}",
                      where, in_quotes(winner_name), winner_priority,
@@ -342,10 +358,14 @@ double MeshedProblem::dirichlet_value(std::size_t k, double t) const {
         std::format("Dirichlet node {} does not exist (there are {})", k,
                     dirichlet_nodes_.size()));
   const auto &entry = dirichlet_nodes_[k];
-  double sum = 0.0;
-  for (const std::size_t r : entry.regions)
-    sum += checked_value(*mesh_, conditions_[r], r, entry.node, t);
-  return sum / static_cast<double>(entry.regions.size());
+  const double value = average(entry.regions, [&](std::size_t r) {
+    return checked_value(*mesh_, conditions_[r], r, entry.node, t);
+  });
+  if (!std::isfinite(value))
+    throw std::invalid_argument(std::format(
+        "The average Dirichlet value g / alpha is not finite at {}, t = {}",
+        node_text(*mesh_, entry.node), t));
+  return value;
 }
 
 std::optional<std::size_t> MeshedProblem::free_index(std::size_t node) const {
