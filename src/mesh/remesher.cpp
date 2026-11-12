@@ -121,6 +121,9 @@ WorkingMesh link_to_geometry(const Mesh &mesh,
   for (const auto &loop : geometry.loops())
     for (const auto &c : loop.curves)
       curves.push_back(candidate(c.curve, c.region, tolerance));
+  std::vector<CurveChain> chains;
+  for (const auto &c : curves)
+    chains.emplace_back(std::vector<geometry::Curve>{c.curve});
 
   // For a node: the parameter on each curve it lies on (by curve index).
   auto on_curves = [&](Point p, const std::string &region) {
@@ -177,7 +180,13 @@ WorkingMesh link_to_geometry(const Mesh &mesh,
         if (geometry::distance(mid, geometry::midpoint(a, b)) >
             geometry::distance(a, b))
           continue;
-        link = CurveLink{ka, ta, tb};
+        // Each geometry curve is a chain of its own, measured by arc
+        // length; t = 1 maps to exactly the chain's length.
+        double sa = geometry::curve_length(curve, ta);
+        double sb =
+            tb == 1.0 ? chains[ka].length() : geometry::curve_length(curve, tb);
+        if (sa < sb)
+          link = CurveLink{ka, sa, sb};
       }
     if (link)
       ++linked;
@@ -192,14 +201,11 @@ WorkingMesh link_to_geometry(const Mesh &mesh,
         std::to_string(unlinked) +
         " boundary edges span two curves (a junction or the start of a "
         "closed curve) and are split at their chord midpoint");
-  std::vector<geometry::Curve> link_curves;
-  for (const auto &c : curves)
-    link_curves.push_back(c.curve);
   std::vector<WorkingMesh::TriangleNodes> triangles;
   for (const auto &t : mesh.triangles)
     triangles.push_back(t.nodes);
   return WorkingMesh(mesh.nodes, std::move(triangles), std::move(edges),
-                     mesh.region_names, std::move(link_curves));
+                     mesh.region_names, std::move(chains));
 }
 
 } // namespace

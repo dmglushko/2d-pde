@@ -25,11 +25,38 @@ void check_chords(const BoundaryPolygon &p, double h) {
       check(distance(a, b) <= h, "chord at most max_edge_length");
       const auto &link = loop.edges[i].link;
       check(link.has_value(), "linked");
-      const auto &curve = p.curves[link->curve];
-      near(distance(point_at(curve, link->t0), a), 0, 1e-15, "t0 at a");
-      if (link->t1 < 1)
-        near(distance(point_at(curve, link->t1), b), 0, 1e-15, "t1 at b");
+      const auto &chain = p.chains[link->chain];
+      check(link->s0 < link->s1, "increasing arc length");
+      near(distance(chain.point_at(link->s0), a), 0, 1e-15, "s0 at a");
+      if (link->s1 < chain.length())
+        near(distance(chain.point_at(link->s1), b), 0, 1e-15, "s1 at b");
     }
+}
+
+bool has_point(const BoundaryPolygon &p, Point q, double tolerance) {
+  for (const auto &loop : p.loops)
+    for (auto x : loop.points)
+      if (distance(x, q) <= tolerance)
+        return true;
+  return false;
+}
+
+std::size_t edges_in_region(const BoundaryPolygon &p, std::size_t region) {
+  std::size_t n = 0;
+  for (const auto &loop : p.loops)
+    for (const auto &e : loop.edges)
+      n += e.region == region;
+  return n;
+}
+
+// The unit circle as k arcs of one region, starting at angle 0.
+CurveGeometry circle_of_arcs(int k) {
+  Loop loop;
+  for (int i = 0; i < k; ++i)
+    loop.curves.push_back(
+        {EllipticalArc{{0, 0}, 1, 1, 0, i * 2 * pi / k, 2 * pi / k},
+         "boundary"});
+  return CurveGeometry({loop});
 }
 
 } // namespace
@@ -114,6 +141,101 @@ int main() {
          auto p = run_discretizer(CurveGeometry({loop}), 0.1);
          validate(p);
          check_chords(p, 0.1);
+       }},
+      {"chains_one_arc_or_four",
+       [] {
+         for (double h : {0.1, 0.37, 0.9}) {
+           auto one = run_discretizer(circle(1), h);
+           auto four = run_discretizer(circle_of_arcs(4), h);
+           check(one.chains.size() == 1 && four.chains.size() == 1,
+                 "a smooth closed loop is one chain");
+           near(four.chains[0].length(), 2 * pi, 1e-14, "chain length");
+           const auto &p1 = one.loops[0].points, &p4 = four.loops[0].points;
+           check(p1.size() == p4.size(), "same node count");
+           for (std::size_t i = 0; i < p1.size(); ++i)
+             near(distance(p1[i], p4[i]), 0, 1e-14, "same nodes");
+           check_chords(four, h);
+         }
+         // With h = 0.37, 2 pi / 0.37 = 16.98: 17 pieces, so the quarter
+         // junctions at angles pi/2, pi, 3 pi/2 are not nodes.
+         auto four = run_discretizer(circle_of_arcs(4), 0.37);
+         check(!has_point(four, {0, 1}, 1e-9) &&
+                   !has_point(four, {-1, 0}, 1e-9),
+               "junctions inside the chain are not nodes");
+         check(has_point(four, {1, 0}, 0), "the seam (start of curve 0) is");
+       }},
+      {"chains_polyline_sampled_by_h",
+       [] {
+         // The bottom side is 200 tiny, nearly collinear segments.
+         Loop loop;
+         std::vector<Point> bottom;
+         for (int k = 0; k <= 200; ++k)
+           bottom.push_back(
+               {0.01 * k, k == 0 || k == 200 ? 0.0 : 1e-4 * std::sin(k)});
+         for (int k = 0; k < 200; ++k)
+           loop.curves.push_back({Line{bottom[k], bottom[k + 1]}, "bottom"});
+         loop.curves.push_back({Line{{2, 0}, {2, 1}}, "right"});
+         loop.curves.push_back({Line{{2, 1}, {0, 1}}, "top"});
+         loop.curves.push_back({Line{{0, 1}, {0, 0}}, "left"});
+         auto p = run_discretizer(CurveGeometry({loop}), 0.45);
+         validate(p);
+         check(p.chains.size() == 4, "one chain per side");
+         // ceil(2.00... / 0.45) = 5 pieces, not 200.
+         check(edges_in_region(p, 0) == 5, "sampled by h, not by vertices");
+         check_chords(p, 0.45);
+       }},
+      {"chains_break_at_regions_and_corners",
+       [] {
+         auto r = run_discretizer(rectangle(2, 1), 0.3);
+         check(r.chains.size() == 4, "four sides");
+         for (Point corner :
+              {Point{-1, -0.5}, Point{1, -0.5}, Point{1, 0.5}, Point{-1, 0.5}})
+           check(has_point(r, corner, 0), "corner is a node");
+         // Two semicircles of different regions: smooth, but the region
+         // changes, so both junctions are nodes.
+         Loop halves{{{EllipticalArc{{0, 0}, 1, 1, 0, 0, pi}, "a"},
+                      {EllipticalArc{{0, 0}, 1, 1, 0, pi, pi}, "b"}}};
+         auto s = run_discretizer(CurveGeometry({halves}), 0.37);
+         check(s.chains.size() == 2, "two chains");
+         check(has_point(s, {1, 0}, 1e-15) && has_point(s, {-1, 0}, 1e-15),
+               "region borders are nodes");
+         // A 20 degree turn inside one region: joined by default (30), a
+         // node when the threshold is 10 degrees.
+         double rise = std::tan(20 * pi / 180);
+         CurveGeometry bend({polygon_loop(
+             {{0, 0}, {1, 0}, {2, rise}, {2, 2}, {0, 2}}, "wall")});
+         auto joined = run_discretizer(bend, 0.3);
+         check(!has_point(joined, {1, 0}, 1e-9), "20 degrees: no node");
+         auto split = run_discretizer(bend, 0.3, {.corner_angle_degrees = 10});
+         check(has_point(split, {1, 0}, 0), "threshold 10: a node");
+         check(split.chains.size() == joined.chains.size() + 1, "one more");
+         check_chords(joined, 0.3);
+         expect_throws<std::invalid_argument>(
+             [] { ChordLengthDiscretizer({.corner_angle_degrees = 181}); },
+             "[0, 180]");
+         check(ChordLengthOptions{}.corner_angle_degrees == 30,
+               "provisional default");
+       }},
+      {"chain_deviation_across_a_junction",
+       [] {
+         // The corner inside a chain is cut by the chords, but by no more
+         // than the deviation bound.
+         double rise = std::tan(25 * pi / 180);
+         CurveGeometry bend({polygon_loop(
+             {{0, 0}, {1, 0}, {2, rise}, {2, 2}, {0, 2}}, "wall")});
+         for (double d : {0.05, 0.01, 0.002}) {
+           auto p = run_discretizer(bend, 10, {.max_curve_deviation = d});
+           double worst = 0;
+           const auto &pts = p.loops[0].points;
+           for (std::size_t i = 0; i < pts.size(); ++i) {
+             Point a = pts[i], b = pts[(i + 1) % pts.size()];
+             if (a.x < 1 && b.x > 1) {
+               // Distance of the corner (1, 0) from the chord ab.
+               worst = std::abs(cross(b - a, Point{1, 0} - a)) / distance(a, b);
+             }
+           }
+           check(worst <= d, "corner within the deviation of its chord");
+         }
        }},
       {"validate_polygon",
        [] {

@@ -218,7 +218,7 @@ WorkingMesh Cdt::run(const BoundaryPolygon &polygon,
     triangles.push_back(v);
   }
   WorkingMesh mesh(std::move(pn.nodes), std::move(triangles),
-                   std::move(pn.edges), polygon.region_names, polygon.curves);
+                   std::move(pn.edges), polygon.region_names, polygon.chains);
 
   // 4. Constrained Delaunay: the polygon edges are now boundary edges and
   //    are never flipped.

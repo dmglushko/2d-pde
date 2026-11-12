@@ -61,6 +61,32 @@ void check_ruppert(const CurveGeometry &g, double h, double angle,
   }
 }
 
+// Chord-length discretization at a fixed coarse edge length and without a
+// deviation bound, whatever the spec says, so that the refiner has to
+// split most boundary edges.
+class CoarseBoundary final : public BoundaryDiscretizer {
+public:
+  explicit CoarseBoundary(double h) : h_(h) {}
+  std::string name() const override { return "coarse"; }
+  BoundaryPolygon run(const CurveGeometry &g, const MeshSpec &,
+                      StageReport &r) const override {
+    return ChordLengthDiscretizer({.max_curve_deviation = INFINITY})
+        .run(g, {h_}, r);
+  }
+
+private:
+  double h_;
+};
+
+// The unit circle as four quarter arcs of one region: one chain.
+CurveGeometry four_quarter_circle() {
+  Loop loop;
+  for (int i = 0; i < 4; ++i)
+    loop.curves.push_back(
+        {EllipticalArc{{0, 0}, 1, 1, 0, i * pi / 2, pi / 2}, "boundary"});
+  return CurveGeometry({loop});
+}
+
 } // namespace
 
 int main() {
@@ -164,6 +190,24 @@ int main() {
          check(m.at("local_improver_changes.delaunay_flips") ==
                    m.at("local_improver_changes"),
                "per-improver count");
+       }},
+      {"chain_splits_on_the_true_curve",
+       [] {
+         // Seven coarse chords over four quarter arcs: most chords span a
+         // junction, and every split must still land on the circle.
+         for (auto refiner :
+              {std::shared_ptr<const Refiner>(std::make_shared<Ruppert>()),
+               std::shared_ptr<const Refiner>(
+                   std::make_shared<LongestEdgeBisection>())}) {
+           Mesher mesher(std::make_shared<CoarseBoundary>(1.0),
+                         std::make_shared<Cdt>(), refiner);
+           auto r = mesher.run(four_quarter_circle(), {0.1});
+           check_valid_mesh(r.mesh);
+           check(r.target_met, "target met");
+           check(r.mesh.boundary_edges.size() > 60, "boundary refined");
+           check_on_circle(r.mesh, "boundary", {0, 0}, 1);
+           check_area(r.mesh, pi, 0.01);
+         }
        }},
       {"regions_survive_refinement",
        [] {

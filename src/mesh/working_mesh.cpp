@@ -27,10 +27,10 @@ WorkingMesh::WorkingMesh(std::vector<Point> nodes,
                          std::vector<TriangleNodes> triangles,
                          std::vector<WorkingBoundaryEdge> boundary_edges,
                          std::vector<std::string> region_names,
-                         std::vector<geometry::Curve> curves)
+                         std::vector<CurveChain> chains)
     : nodes_(std::move(nodes)), triangles_(std::move(triangles)),
       boundary_edges_(std::move(boundary_edges)),
-      region_names_(std::move(region_names)), curves_(std::move(curves)) {
+      region_names_(std::move(region_names)), chains_(std::move(chains)) {
   const std::size_t n = nodes_.size();
   if (triangles_.empty())
     throw std::invalid_argument("Mesh has no triangles");
@@ -121,13 +121,9 @@ WorkingMesh::WorkingMesh(std::vector<Point> nodes,
     if (be.region >= region_names_.size())
       throw std::invalid_argument("Boundary edge " + std::to_string(k) +
                                   " has a region id out of range");
-    if (be.link) {
-      const auto &l = *be.link;
-      if (l.curve >= curves_.size() || !(l.t0 >= 0 && l.t0 <= 1) ||
-          !(l.t1 >= 0 && l.t1 <= 1) || l.t0 == l.t1)
-        throw std::invalid_argument("Boundary edge " + std::to_string(k) +
-                                    " has an invalid curve link");
-    }
+    if (be.link && !is_valid_link(*be.link, chains_))
+      throw std::invalid_argument("Boundary edge " + std::to_string(k) +
+                                  " has an invalid curve link");
     auto it = std::lower_bound(open.begin(), open.end(),
                                std::make_tuple(a, b, std::size_t{0}, -1));
     if (it == open.end() || std::get<0>(*it) != a || std::get<1>(*it) != b)
@@ -407,12 +403,19 @@ std::array<std::size_t, 4> WorkingMesh::split_interior_edge(std::size_t t,
 
 Point WorkingMesh::boundary_split_point(std::size_t k) const {
   const auto &e = boundary_edges_.at(k);
+  Point chord_midpoint =
+      geometry::midpoint(nodes_[e.nodes[0]], nodes_[e.nodes[1]]);
+  if (!e.link)
+    return chord_midpoint;
+  const CurveChain &chain = chains_[e.link->chain];
+  auto [curve, t] = chain.position(0.5 * (e.link->s0 + e.link->s1));
   // On a straight curve the chord midpoint is the curve point, and it keeps
   // exactly the chord's rounding.
-  if (e.link && !geometry::is_line(curves_[e.link->curve]))
-    return geometry::point_at(curves_[e.link->curve],
-                              0.5 * (e.link->t0 + e.link->t1));
-  return geometry::midpoint(nodes_[e.nodes[0]], nodes_[e.nodes[1]]);
+  if (geometry::is_line(chain.curves()[curve]) &&
+      e.link->s0 >= chain.offset(curve) &&
+      e.link->s1 <= chain.offset(curve + 1))
+    return chord_midpoint;
+  return geometry::point_at(chain.curves()[curve], t);
 }
 
 std::array<std::size_t, 2> WorkingMesh::split_boundary_edge(std::size_t k) {
@@ -447,9 +450,9 @@ std::array<std::size_t, 2> WorkingMesh::split_boundary_edge(std::size_t k) {
   auto &e = boundary_edges_[k];
   WorkingBoundaryEdge second{{q, b}, e.region, std::nullopt};
   if (e.link) {
-    double tm = 0.5 * (e.link->t0 + e.link->t1);
-    second.link = CurveLink{e.link->curve, tm, e.link->t1};
-    e.link->t1 = tm;
+    double sm = 0.5 * (e.link->s0 + e.link->s1);
+    second.link = CurveLink{e.link->chain, sm, e.link->s1};
+    e.link->s1 = sm;
   }
   e.nodes[1] = q;
   boundary_edges_.push_back(second);

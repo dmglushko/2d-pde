@@ -168,20 +168,20 @@ int main() {
          EllipticalArc arc{{0, 0}, 1, 1, 0, 0, pi / 2};
          WorkingMesh w({{0, 0}, {1, 0}, {0, 1}}, {{0, 1, 2}},
                        {{{0, 1}, 0, {}},
-                        {{1, 2}, 0, CurveLink{0, 0, 1}},
+                        {{1, 2}, 0, CurveLink{0, 0, pi / 2}},
                         {{2, 0}, 0, {}}},
-                       {"r"}, {arc});
+                       {"r"}, {CurveChain({arc})});
          Point p = w.boundary_split_point(1);
          near(p.x, std::cos(pi / 4), 1e-15, "x on the arc");
          near(p.y, std::sin(pi / 4), 1e-15, "y on the arc");
          w.split_boundary_edge(1);
          const auto &e = w.boundary_edges();
-         check(e[1].link && e[1].link->t1 == 0.5, "first half [0, 0.5]");
-         check(e[3].link && e[3].link->t0 == 0.5 && e[3].link->t1 == 1,
-               "second half [0.5, 1]");
-         check(w.boundary_split_point(3) ==
-                   pde2d::geometry::point_at(arc, 0.75),
-               "next split at parameter 0.75");
+         check(e[1].link && e[1].link->s1 == pi / 4, "first half");
+         check(e[3].link && e[3].link->s0 == pi / 4 && e[3].link->s1 == pi / 2,
+               "second half");
+         Point q = w.boundary_split_point(3);
+         near(q.x, std::cos(3 * pi / 8), 1e-15, "next split at 3 pi / 8");
+         near(q.y, std::sin(3 * pi / 8), 1e-15, "next split at 3 pi / 8");
        }},
       {"curve_point_that_would_invert",
        [] {
@@ -192,16 +192,53 @@ int main() {
          double start = std::atan2(-k, -0.5), end = std::atan2(-k, 0.5);
          EllipticalArc arc{{0.5, k}, r, r, 0, start, end - start};
          near(pde2d::geometry::point_at(arc, 0.5).y, 0.3, 1e-15, "arc top");
+         CurveChain chain({arc});
          WorkingMesh w({{0, 0}, {1, 0}, {0.5, 0.1}}, {{0, 1, 2}},
-                       {{{0, 1}, 0, CurveLink{0, 0, 1}},
+                       {{{0, 1}, 0, CurveLink{0, 0, chain.length()}},
                         {{1, 2}, 0, {}},
                         {{2, 0}, 0, {}}},
-                       {"r"}, {arc});
+                       {"r"}, {chain});
          expect_throws<std::runtime_error>(
              [&] { w.split_boundary_edge(0); },
              "Splitting boundary edge (0, 1) of region 'r' at its curve point "
              "would invert a triangle");
          check(w.nodes().size() == 3, "mesh unchanged");
+       }},
+      {"split_point_at_arc_length_middle",
+       [] {
+         // A chain of a line and a quarter circle that continues it
+         // smoothly: (0,0) -> (1,0), then around (1,1) to (2,1).
+         using std::numbers::pi;
+         CurveChain chain({pde2d::geometry::Line{{0, 0}, {1, 0}},
+                           EllipticalArc{{1, 1}, 1, 1, 0, -pi / 2, pi / 2}});
+         near(chain.length(), 1 + pi / 2, 1e-15, "length");
+         // An edge from s = 0.5 (on the line) to s = 2 (on the arc): the
+         // middle s = 1.25 is 0.25 along the arc.
+         Point a = chain.point_at(0.5), b = chain.point_at(2.0);
+         near(a.x, 0.5, 0, "start on the line");
+         WorkingMesh w({a, b, {0.5, 2}}, {{0, 1, 2}},
+                       {{{0, 1}, 0, CurveLink{0, 0.5, 2.0}},
+                        {{1, 2}, 0, {}},
+                        {{2, 0}, 0, {}}},
+                       {"r"}, {chain});
+         Point p = w.boundary_split_point(0);
+         near(distance(p, {1, 1}), 1, 1e-15, "on the circle");
+         near(std::atan2(p.y - 1, p.x - 1), -pi / 2 + 0.25, 1e-14,
+              "at arc length 0.25 along the arc");
+         // An edge on the line only splits at its chord midpoint.
+         WorkingMesh v({{0.25, 0}, {0.75, 0}, {0.5, 1}}, {{0, 1, 2}},
+                       {{{0, 1}, 0, CurveLink{0, 0.25, 0.75}},
+                        {{1, 2}, 0, {}},
+                        {{2, 0}, 0, {}}},
+                       {"r"}, {chain});
+         check(v.boundary_split_point(0) == Point{0.5, 0}, "chord midpoint");
+         // Positions at a junction.
+         auto at = chain.position(1.0);
+         check(at.curve == 1 && at.t == 0, "start of the later curve");
+         auto before = chain.position_from_before(1.0);
+         check(before.curve == 0 && before.t == 1, "end of the earlier one");
+         expect_throws<std::invalid_argument>([] { CurveChain c({}); },
+                                              "at least one curve");
        }},
       {"delaunay_routines",
        [] {

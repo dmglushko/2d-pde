@@ -8,6 +8,12 @@
 
 namespace pde2d::mesh {
 
+bool is_valid_link(const CurveLink &link,
+                   const std::vector<CurveChain> &chains) {
+  return link.chain < chains.size() && link.s0 >= 0 && link.s0 < link.s1 &&
+         link.s1 <= chains[link.chain].length();
+}
+
 void validate(const BoundaryPolygon &polygon) {
   using std::to_string;
   const auto &loops = polygon.loops;
@@ -28,10 +34,7 @@ void validate(const BoundaryPolygon &polygon) {
     for (const auto &e : loop.edges) {
       if (e.region >= polygon.region_names.size())
         throw std::invalid_argument(where + " has a region id out of range");
-      if (e.link &&
-          (e.link->curve >= polygon.curves.size() ||
-           !(e.link->t0 >= 0 && e.link->t0 <= 1) ||
-           !(e.link->t1 >= 0 && e.link->t1 <= 1) || e.link->t0 == e.link->t1))
+      if (e.link && !is_valid_link(*e.link, polygon.chains))
         throw std::invalid_argument(where + " has an invalid curve link");
     }
     if (loop.parent) {

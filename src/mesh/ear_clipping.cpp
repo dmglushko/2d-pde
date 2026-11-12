@@ -246,7 +246,7 @@ WorkingMesh EarClipping::run(const BoundaryPolygon &polygon,
   report.metrics["pieces"] = static_cast<double>(pieces);
   report.metrics["bridges"] = static_cast<double>(bridges);
   return WorkingMesh(std::move(pn.nodes), std::move(triangles),
-                     std::move(pn.edges), polygon.region_names, polygon.curves);
+                     std::move(pn.edges), polygon.region_names, polygon.chains);
 }
 
 } // namespace pde2d::mesh

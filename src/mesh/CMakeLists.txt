@@ -3,6 +3,7 @@ add_library(pde2d_mesh
   cdt.cpp
   chord_length_discretizer.cpp
   components.cpp
+  curve_chain.cpp
   delaunay.cpp
   delaunay_flips.cpp
   ear_clipping.cpp

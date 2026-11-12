@@ -1,8 +1,8 @@
 #pragma once
 
-#include "pde2d/geometry/curve.hpp"
 #include "pde2d/geometry/point.hpp"
 #include "pde2d/mesh/boundary_polygon.hpp"
+#include "pde2d/mesh/curve_chain.hpp"
 #include "pde2d/mesh/mesh.hpp"
 
 #include <array>
@@ -19,7 +19,8 @@ namespace pde2d::mesh {
 inline constexpr std::size_t no_index = std::numeric_limits<std::size_t>::max();
 
 // A boundary edge of the working mesh, oriented with the domain on its
-// left. The optional link says which exact curve it approximates.
+// left. The optional link says which piece of a curve chain it
+// approximates.
 struct WorkingBoundaryEdge {
   std::array<std::size_t, 2> nodes{};
   std::size_t region = 0;
@@ -63,7 +64,7 @@ public:
               std::vector<TriangleNodes> triangles,
               std::vector<WorkingBoundaryEdge> boundary_edges,
               std::vector<std::string> region_names,
-              std::vector<geometry::Curve> curves = {});
+              std::vector<CurveChain> chains = {});
 
   // A working mesh without curve links.
   static WorkingMesh from_mesh(const Mesh &mesh);
@@ -75,7 +76,7 @@ public:
     return boundary_edges_;
   }
   const std::vector<std::string> &region_names() const { return region_names_; }
-  const std::vector<geometry::Curve> &curves() const { return curves_; }
+  const std::vector<CurveChain> &chains() const { return chains_; }
 
   std::size_t neighbour(std::size_t triangle, int edge) const {
     return neighbours_[triangle][static_cast<std::size_t>(edge)];
@@ -109,12 +110,14 @@ public:
   // result.
   std::array<std::size_t, 4> split_interior_edge(std::size_t triangle, int edge,
                                                  geometry::Point p);
-  // The point where boundary edge k is split: the curve point at the middle
-  // parameter if the edge has a link to a curved (non-Line) curve, else the
-  // chord midpoint.
+  // The point where boundary edge k is split. For a linked edge it is the
+  // chain point at the arc-length middle s = (s0 + s1) / 2, except that
+  // an edge lying on a single straight curve is split at its chord
+  // midpoint (the same point, without the rounding of the curve). An
+  // unlinked edge is split at its chord midpoint.
   geometry::Point boundary_split_point(std::size_t k) const;
   // Splits boundary edge k at boundary_split_point(k). The two halves keep
-  // the region; their links cover the two halves of the parameter
+  // the region; their links cover the two halves of the arc-length
   // interval. Throws std::runtime_error if the curve point would invert a
   // triangle (the chord is too coarse for the curve there).
   std::array<std::size_t, 2> split_boundary_edge(std::size_t k);
@@ -140,7 +143,7 @@ private:
   std::vector<WorkingBoundaryEdge> boundary_edges_;
   std::vector<std::size_t> outgoing_boundary_; // per node, or no_index
   std::vector<std::string> region_names_;
-  std::vector<geometry::Curve> curves_;
+  std::vector<CurveChain> chains_;
 };
 
 } // namespace pde2d::mesh

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "pde2d/geometry/curve.hpp"
 #include "pde2d/geometry/point.hpp"
+#include "pde2d/mesh/curve_chain.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -10,13 +10,15 @@
 
 namespace pde2d::mesh {
 
-// Where a straight boundary edge came from: curve `curve` (an index into
-// the curve list of the BoundaryPolygon or WorkingMesh that holds the link)
-// between parameters t0 (at the edge's first node) and t1 (at its second).
+// Where a straight boundary edge came from: chain `chain` (an index into
+// the chain list of the BoundaryPolygon or WorkingMesh that holds the
+// link) between arc lengths s0 (at the edge's first node) and s1 (at its
+// second), with 0 <= s0 < s1 <= chain length. Chains follow the boundary
+// direction (domain on the left), like the edges.
 struct CurveLink {
-  std::size_t curve = 0;
-  double t0 = 0.0;
-  double t1 = 0.0;
+  std::size_t chain = 0;
+  double s0 = 0.0;
+  double s1 = 0.0;
 };
 
 // Data of one polygon edge.
@@ -41,9 +43,13 @@ struct PolygonLoop {
 struct BoundaryPolygon {
   std::vector<PolygonLoop> loops;
   std::vector<std::string> region_names;
-  // The exact curves that curve links point to.
-  std::vector<geometry::Curve> curves;
+  // The curve chains that curve links point to.
+  std::vector<CurveChain> chains;
 };
+
+// True if the link's chain exists and 0 <= s0 < s1 <= its length.
+bool is_valid_link(const CurveLink &link,
+                   const std::vector<CurveChain> &chains);
 
 // Checks the BoundaryPolygon contract: sizes, indices, orientation by
 // depth, nesting, and no two edges crossing or touching. Throws
