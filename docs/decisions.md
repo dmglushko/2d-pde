@@ -356,7 +356,21 @@ Started 2026-11-11. The previous header-only code is on the branch
   else is rejected with a clear error, and new ones are added one at a
   time with a test. *Why:* SymEngine evaluates some constructs wrongly
   (`Xor`) or unsafely between threads (`loggamma`), and a `Piecewise`
-  without a final unconditional branch reads out of bounds.
+  without a final unconditional branch reads out of bounds. `atan2` is
+  left out (SymEngine's parser simplifies `atan2(x, x)` to π/4 whatever
+  the sign of x), and every constant part must evaluate to a finite real
+  number (`exp(1000)` and `asin(2)` are rejected).
+- **A condition is not a number** (accepted 2026-11-12, to revisit: GitHub
+  issue #28): comparisons and And/Or/Not may appear only as `Piecewise`
+  conditions, so `2*(x < 0)` is rejected.
+- **Every derivative is taken in one place** (decided 2026-11-12): one
+  private derivative function, used for the initial velocity, U_D′, U_D″
+  and later ∇·A. It differentiates `abs` itself (d|u| = sign(u)·du, with
+  sign written as a `Piecewise` and 0 at the kink), since SymEngine
+  cannot. Its result passes the same allow-list check. Each function on
+  the allow-list must also have a tested derivative. *Why:* no scattered
+  special cases, and a function without a derivative fails at one known
+  point.
 - **Facts are stored per coefficient** (`zero`, `depends_on_x/y/t`).
   Summaries are aggregates of these facts over the input as written:
   `time_order`, `coefficients_depend_on_t` (a coefficient multiplying u or
@@ -398,6 +412,15 @@ numbering and the Dirichlet values; derivatives for assembly (∇·A, g_t,
 g_tt) are compiled in the assembly slice; `CompiledExpression` is public;
 values that are not finite throw; SymEngine is a required dependency. The
 mesh is validated again by `MeshedProblem` (GitHub issue #24).
+
+**Decided after the review** (2026-11-12): `initial_values(t0)` and
+`initial_velocities(t0)` return an empty `std::optional` when the time
+order has no such values, never throw for that; one value per mesh node
+otherwise. When the initial condition and the boundary data g/α disagree
+at Dirichlet nodes, the report warns, like corners: compared exactly at
+each node when neither depends on t, and reported once as "may differ"
+otherwise. Only `pi` and `E` are constants; an unneeded initial condition
+is ignored, not compiled; a start time t₀ that is not finite throws.
 
 ## Assembly
 
