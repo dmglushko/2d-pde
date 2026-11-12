@@ -340,10 +340,23 @@ Started 2026-11-11. The previous header-only code is on the branch
   example after switching a problem from transient to steady), and one in
   t can be intended, for example to start the same problem at t = 0 or at
   t = 5.
+- **Initial values are evaluated on request at a start time t₀**
+  (decided 2026-11-12): `MeshedProblem` keeps the compiled initial
+  conditions and provides `initial_values(t0)`; the time integrator calls
+  it with its own start time. *Why:* the same problem can then start at
+  t = 0 or at t = 5, and t₀ belongs to the time-integration job, not to
+  the problem.
 - **At Dirichlet nodes the boundary data wins over the initial
   condition** (decided 2026-11-12): initial values there come from g/α,
-  not from the initial condition. *Why:* the initial field then agrees with
-  the boundary values the solution is held to.
+  not from the initial condition (and the initial velocity from the time
+  derivative of g/α when the time order is 2). *Why:* the initial field
+  then agrees with the boundary values the solution is held to.
+- **Expressions accept only an allow-list of functions and operators**
+  (decided 2026-11-12): functions we have checked and tested; anything
+  else is rejected with a clear error, and new ones are added one at a
+  time with a test. *Why:* SymEngine evaluates some constructs wrongly
+  (`Xor`) or unsafely between threads (`loggamma`), and a `Piecewise`
+  without a final unconditional branch reads out of bounds.
 - **Facts are stored per coefficient** (`zero`, `depends_on_x/y/t`).
   Summaries such as `time_order`, "left-hand side depends on t" and
   "right-hand side depends on t" are computed from them by functions, never
