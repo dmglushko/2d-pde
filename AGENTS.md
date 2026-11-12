@@ -77,9 +77,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   (and io and fem not each other). Heavy dependencies (Boost, later Eigen,
   SymEngine, libxml2) only in `.cpp` files, never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
-  headers in `src/<module>/`. Tests use only public headers, except
-  `tests/fem/derivative.cpp`, which tests the private derivative function
-  (pending the owner's confirmation).
+  headers in `src/<module>/`. Tests use only public headers. Narrow
+  exception (accepted by the owner): a private helper that no public
+  function reaches yet may be tested directly, if its header has no heavy
+  dependency (today only `tests/fem/derivative.cpp`).
 - Mesh components are virtual interfaces (`components.hpp`). Each
   component owns its options struct, set with designated initializers in
   its constructor, and validates it there. A component declares its

@@ -422,6 +422,18 @@ each node when neither depends on t, and reported once as "may differ"
 otherwise. Only `pi` and `E` are constants; an unneeded initial condition
 is ignored, not compiled; a start time t₀ that is not finite throws.
 
+**Accepted from the follow-up** (2026-11-12): a test may include a
+private header when no public function reaches the helper yet and the
+header has no heavy dependency (the derivative tests); the "may differ"
+count of initial-condition mismatches counts every Dirichlet node, like
+corners; u_t is compared with d/dt(g/α) as an expression, so it "may
+differ" only if that derivative depends on t; boundary data that is not
+finite at a Dirichlet node throws when `MeshedProblem` is built; only the
+Dirichlet region that wins a node is used; a mismatch message lists three
+example nodes, and values that do not depend on t are evaluated at t = 0.
+A `Piecewise` that jumps in t is differentiated branch by branch (the jump
+contributes nothing).
+
 ## Assembly
 
 Discussed and agreed on 2026-11-12. Of the architecture, only the items
