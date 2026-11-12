@@ -25,7 +25,6 @@ constexpr const char *texts[] = {
     "2.5*pi + E + 1/3 + x",
     "sin(x) + cos(y) + tan(t)",
     "asin(x/4) + acos(y/4) + atan(t)",
-    "atan2(y, x)",
     "sinh(x) + cosh(y) + tanh(t)",
     "exp(x) + log(abs(y) + 1) + ln(2 + t)",
     "Piecewise((1, x < y), (2, x <= t), (3, x > 0), (4, y >= 0), "

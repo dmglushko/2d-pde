@@ -468,14 +468,18 @@ double a = meshed->equation().a_xx(0.5, 0.5, 0.0); // -1000
 allow-list (`detail::unsupported`, `src/fem/expression.cpp`), walking it
 the way SymEngine's evaluator does: numbers (each must be finite as a
 double, so `1e1000` and `10^400` are rejected), x, y, t, parameter names,
-`pi` and `E`; `+ - * /` and powers; `sin cos tan asin acos atan atan2 sinh
+`pi` and `E`; `+ - * /` and powers; `sin cos tan asin acos atan sinh
 cosh tanh exp log sqrt abs`; `Piecewise` whose last branch is `(value,
 True)`, with conditions built from `< <= > >= == !=` (`Eq`, `Ne`) and
 `And`, `Or`, `Not`, allowed only as `Piecewise` conditions. Anything else
 throws `std::invalid_argument` naming it: a parse error, an unknown
 function (`foo(x)`), a construct not on the list (`loggamma`, `Xor`,
-`max`, `EulerGamma`), a complex value (`I`, `sqrt(-1)`), an infinite or
-undefined constant (`oo`, `1/0`, `nan`), a condition used as a number
+`max`, `EulerGamma`; `atan2` is refused by name before parsing, because
+SymEngine's parser turns `atan2(x, x)` into `pi/4` whatever the sign of
+x), a complex value (`I`, `sqrt(-1)`), an infinite or undefined constant
+(`oo`, `1/0`, `nan`), a constant part whose value is not a finite real
+double (`exp(1000)`, `asin(2)`; evaluated once, also after parameters are
+substituted), a condition used as a number
 (`2*(x < 0)`), a `Piecewise` without a final unconditional branch (SymEngine's evaluator
 would read past its branches). Constructs are added to the list one at a
 time, each with a test against the standard library

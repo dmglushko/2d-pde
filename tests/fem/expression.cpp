@@ -254,6 +254,36 @@ int main() {
          check(compiled("x + 1e-400")(2.0, 0.0, 0.0) == 2.0, "1e-400");
          check(compiled("x/10^400")(1.0, 0.0, 0.0) == 0.0, "1/10^400");
        }},
+      {"constant parts that are not finite real numbers are rejected",
+       [] {
+         // Each value would be infinite (exp(1000), cosh(1000)) or not
+         // real (asin(2), acos(2), (-2)^(1/3), and sin of infinity).
+         for (const char *text :
+              {"exp(1000)", "cosh(1000)", "x + exp(1000)", "asin(2)", "acos(2)",
+               "(-2)^(1/3)", "sin(exp(1000))",
+               "Piecewise((exp(1000), x < 0), (0, True))",
+               "Piecewise((1, x < exp(1000)), (0, True))"})
+           expect_throws<std::invalid_argument>(
+               [&] { Expression e(text); },
+               "whose value is not a finite real number in double precision");
+         // Finite constant parts are fine.
+         // exp(u) is evaluated as pow(E, u): close to std::exp, not identical.
+         near(compiled("exp(700) * x")(1.0, 0.0, 0.0), std::exp(700.0),
+              1e-12 * std::exp(700.0), "exp(700)");
+         near(compiled("asin(1/2) + x")(0.0, 0.0, 0.0), std::asin(0.5), 1e-15,
+              "asin(1/2)");
+         // With parameters, checked after substitution.
+         expect_throws<std::invalid_argument>(
+             [] {
+               CompiledExpression c(Expression("exp(k)"), {{"k", 1000.0}});
+             },
+             "with the given parameters");
+         expect_throws<std::invalid_argument>(
+             [] {
+               CompiledExpression c(Expression("asin(k) + x"), {{"k", 2.0}});
+             },
+             "with the given parameters");
+       }},
       {"parameter values that make a number infinite are rejected",
        [] {
          const std::pair<const char *, double> cases[] = {
@@ -316,14 +346,16 @@ int main() {
                   "(x - 2y)/(t + 3) x^2");
            }
        }},
-      {"atan2(y, x) takes y first, like std::atan2",
+      {"atan2 is rejected: SymEngine loses its quadrant when simplifying",
        [] {
-         const CompiledExpression f = compiled("atan2(y, x)");
-         for (const double x : {-2.0, -0.5, 0.0, 0.5, 2.0})
-           for (const double y : {-1.5, -0.25, 0.0, 0.25, 1.5})
-             check(f(x, y, 0.0) == std::atan2(y, x), "atan2");
-         check(compiled("atan2(1, 2)")(0.0, 0.0, 0.0) == std::atan2(1.0, 2.0),
-               "constant arguments");
+         // atan2(x, x) would become pi/4, wrong for x < 0 (-3pi/4).
+         for (const char *text : {"atan2(y, x)", "atan2(x,x)", "atan2(x, -x)",
+                                  "1 + atan2 (-x, x)", "sin(atan2(t, t))"})
+           expect_throws<std::invalid_argument>([&] { Expression e(text); },
+                                                "uses 'atan2', which is not");
+         // The name inside a longer name is not atan2.
+         check(compiled("atan(x) + 2")(1.0, 0.0, 0.0) == std::atan(1.0) + 2,
+               "atan");
        }},
       {"comparisons and logic: full truth tables",
        [] {

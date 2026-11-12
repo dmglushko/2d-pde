@@ -3,6 +3,7 @@
 #include "symengine_expression.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <exception>
@@ -10,6 +11,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -84,9 +86,8 @@ void walk_number(const Basic &node, Findings &found) {
     }
   } else if (is_a<Pow>(node) || is_a<Sin>(node) || is_a<Cos>(node) ||
              is_a<Tan>(node) || is_a<ASin>(node) || is_a<ACos>(node) ||
-             is_a<ATan>(node) || is_a<ATan2>(node) || is_a<Sinh>(node) ||
-             is_a<Cosh>(node) || is_a<Tanh>(node) || is_a<Log>(node) ||
-             is_a<Abs>(node)) {
+             is_a<ATan>(node) || is_a<Sinh>(node) || is_a<Cosh>(node) ||
+             is_a<Tanh>(node) || is_a<Log>(node) || is_a<Abs>(node)) {
     // exp(u) is Pow(E, u) and sqrt(u) is Pow(u, 1/2).
     for (const auto &argument : node.get_args())
       walk_number(*argument, found);
@@ -129,6 +130,55 @@ void walk_condition(const Basic &node, Findings &found) {
   } else {
     found.unsupported.insert(construct_name(node));
   }
+}
+
+// The first constant part of `node` (a subexpression without x, y, t or
+// parameters, other than a plain number) whose value is not a finite real
+// double, such as exp(1000) or asin(2). Plain numbers are checked by
+// walk_number; conditions are walked through their arguments.
+std::optional<std::string> bad_constant_part(const Basic &node) {
+  using namespace SymEngine;
+  if (is_a_Number(node) || is_a<Symbol>(node) || is_a<Constant>(node))
+    return std::nullopt;
+  if (!is_a_Boolean(node) && free_symbols(node).empty()) {
+    double value = std::nan("");
+    try {
+      value = eval_double(node);
+    } catch (const std::exception &) {
+    }
+    if (!std::isfinite(value))
+      return node.__str__();
+    return std::nullopt;
+  }
+  for (const auto &argument : node.get_args())
+    if (auto bad = bad_constant_part(*argument))
+      return bad;
+  return std::nullopt;
+}
+
+// SymEngine's parser simplifies atan2 with repeated or opposite arguments
+// to a constant without regard to their sign (atan2(x, x) becomes pi/4,
+// although it is -3pi/4 for x < 0), so atan2 is refused by name, before
+// parsing.
+bool mentions_atan2(std::string_view text) {
+  constexpr std::string_view name = "atan2";
+  const auto is_name_char = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  };
+  for (auto at = text.find(name); at != std::string_view::npos;
+       at = text.find(name, at + 1)) {
+    if (at > 0 && is_name_char(text[at - 1]))
+      continue;
+    auto next = at + name.size();
+    if (next < text.size() && is_name_char(text[next]))
+      continue;
+    while (next < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[next])) != 0)
+      ++next;
+    if (next < text.size() && text[next] == '(')
+      return true;
+  }
+  return false;
 }
 
 // 'a', 'a' and 'b', 'a', 'b' and 'c'.
@@ -205,6 +255,9 @@ std::optional<std::string> unsupported(const Basic &form) {
     return "has a Piecewise without a final unconditional branch (value, "
            "True): " +
            *found.open_piecewise.begin();
+  if (const auto bad = bad_constant_part(form))
+    return "has the constant part " + in_quotes(*bad) +
+           ", whose value is not a finite real number in double precision";
   return std::nullopt;
 }
 
@@ -232,6 +285,12 @@ Expression::Expression() : impl_(make_impl("0", SymEngine::integer(0))) {}
 
 Expression::Expression(std::string_view text) {
   std::string owned(text);
+  if (mentions_atan2(owned))
+    throw std::invalid_argument(
+        "The expression " + in_quotes(owned) +
+        " uses 'atan2', which is not among the supported functions and "
+        "operators (SymEngine simplifies atan2(x, x) to pi/4 whatever the "
+        "sign of x)");
   RCP<const Basic> form;
   try {
     form = SymEngine::parse(owned);

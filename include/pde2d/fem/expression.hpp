@@ -36,7 +36,7 @@ struct ExpressionAccess;
 // - numbers, finite as doubles; the variables x, y, t; parameter names;
 //   the constants pi and E;
 // - +, -, *, / and powers (^ or **);
-// - sin, cos, tan, asin, acos, atan, atan2(y, x), sinh, cosh, tanh, exp,
+// - sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp,
 //   log (or ln; log(u, b) is log(u)/log(b)), sqrt and abs;
 // - Piecewise((value, condition), ..., (value, True)), whose last branch
 //   must be unconditional. A condition compares numbers with <, <=, >,
@@ -45,9 +45,11 @@ struct ExpressionAccess;
 //   as the condition of a Piecewise branch.
 // Anything else throws std::invalid_argument when the expression is built,
 // naming what is wrong: a parse error, an unknown function, a function or
-// constant not on the list (loggamma, Xor, max, EulerGamma, ...), a complex,
-// infinite or undefined value, a number too large for a double, a condition
-// used as a number, a Piecewise without a final unconditional branch.
+// constant not on the list (loggamma, Xor, atan2, max, EulerGamma, ...), a
+// complex, infinite or undefined value, a number too large for a double, a
+// constant part whose value is not a finite real double (exp(1000),
+// asin(2)), a condition used as a number, a Piecewise without a final
+// unconditional branch.
 // Expression() is zero. Copies are cheap and share the parsed form, which
 // never changes.
 //
