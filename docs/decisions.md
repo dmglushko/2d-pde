@@ -334,6 +334,16 @@ Started 2026-11-11. The previous header-only code is on the branch
 - **Initial conditions are part of `Problem`** as optional expressions.
   Which ones are required follows from the time order. A missing initial
   condition is an empty `std::optional`, not NaN.
+- **Unusual initial conditions warn, never throw** (decided 2026-11-12):
+  an initial condition the time order does not need, and one that depends
+  on t, are reported as warnings. *Why:* an unneeded one is harmless (for
+  example after switching a problem from transient to steady), and one in
+  t can be intended, for example to start the same problem at t = 0 or at
+  t = 5.
+- **At Dirichlet nodes the boundary data wins over the initial
+  condition** (decided 2026-11-12): initial values there come from g/α,
+  not from the initial condition. *Why:* the initial field then agrees with
+  the boundary values the solution is held to.
 - **Facts are stored per coefficient** (`zero`, `depends_on_x/y/t`).
   Summaries such as `time_order`, "left-hand side depends on t" and
   "right-hand side depends on t" are computed from them by functions, never
@@ -357,6 +367,21 @@ It stops just before matrix assembly.
 
 **`Problem`, the boundary conditions and `MeshedProblem` are the next
 slice** (decided 2026-11-12); assembly comes after it.
+
+**Accepted from its implementation** (2026-11-12, pending the review):
+"zero as written" means zero in SymEngine's parsed form (`x - x` is zero,
+`sin(x)^2 + cos(x)^2 - 1` is not); parameters count as unknown constants
+in the facts; `Expression` has an explicit constructor from text;
+`Problem` and its parts are plain structs with conditions in a map by
+region name, checked only when `MeshedProblem` is built; the classes are
+Dirichlet, natural and dynamic plus an `is_oblique` flag, and Dirichlet
+also beats a dynamic condition at a corner; a dynamic condition makes the
+time order at least 1; corner values are compared exactly and reported as
+"may differ" when they depend on t; `MeshedProblem` provides the free-node
+numbering and the Dirichlet values; derivatives for assembly (∇·A, g_t,
+g_tt) are compiled in the assembly slice; `CompiledExpression` is public;
+values that are not finite throw; SymEngine is a required dependency. The
+mesh is validated again by `MeshedProblem` (GitHub issue #24).
 
 ## Assembly
 
