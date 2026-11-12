@@ -253,23 +253,28 @@ mesh::Mesh import_pde2d(std::istream &stream) {
     Tokens::fail("only ORDER 1 (three-node triangles) is supported");
   mesh::Mesh m;
   in.expect("NODES");
-  m.nodes.resize(in.count("node count"));
-  for (auto &p : m.nodes) {
-    p.x = in.real("node x");
-    p.y = in.real("node y");
+  // Records are appended as they are read, never allocated for the count
+  // first: a file that claims millions of records but ends early stops at
+  // its end instead of allocating for the claim.
+  std::size_t count = in.count("node count");
+  for (std::size_t i = 0; i < count; ++i) {
+    double x = in.real("node x");
+    m.nodes.push_back({x, in.real("node y")});
   }
   in.expect("ELEMENTS");
-  m.triangles.resize(in.count("element count"));
-  for (auto &t : m.triangles) {
+  count = in.count("element count");
+  for (std::size_t i = 0; i < count; ++i) {
     if (in.count("element node count") != 3)
       Tokens::fail("only three-node triangles are supported");
+    auto &t = m.triangles.emplace_back();
     for (auto &v : t.nodes)
       v = in.index("element node", m.nodes.size());
   }
   in.expect("BOUNDARY_EDGES");
-  m.boundary_edges.resize(in.count("boundary edge count"));
+  count = in.count("boundary edge count");
   std::map<std::string, std::size_t> region_id;
-  for (auto &e : m.boundary_edges) {
+  for (std::size_t i = 0; i < count; ++i) {
+    auto &e = m.boundary_edges.emplace_back();
     e.nodes[0] = in.index("boundary edge node", m.nodes.size());
     e.nodes[1] = in.index("boundary edge node", m.nodes.size());
     std::string tag = in.next("a region tag");

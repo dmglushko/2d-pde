@@ -134,6 +134,38 @@ int main() {
                  "the file ends inside a section");
          expect_throws<std::runtime_error>(
              [] { (void)io::import_gmsh(data("missing.msh")); }, "Cannot open");
+         // Counts read from the file are never added to or multiplied
+         // before they are compared with what the line really holds.
+         rejects(replace(v2, "7 2 2 100 1 1 2 5", "7 2 18446744073709551615"),
+                 "malformed element line");
+         rejects(replace(v2, "7 2 2 100 1 1 2 5", "7 2 18446744073709551614"),
+                 "malformed element line");
+         rejects(replace(v2, "7 2 2 100 1 1 2 5", "7 2 99999999999999999999"),
+                 "invalid tag count");
+         rejects(replace(v4, "1 0 0 0 1 0 0 1 10 2 1 -2",
+                         "1 0 0 0 1 0 0 18446744073709551615"),
+                 "malformed entity line");
+         rejects(replace(v4, "1 0 0 0 1 0 0 1 10 2 1 -2",
+                         "1 0 0 0 1 0 0 18446744073709551609 10 2 1 -2"),
+                 "malformed entity line");
+         rejects(replace(v4, "1 0 0 0 1 0 0 1 10 2 1 -2",
+                         "1 0 0 0 1 0 0 1 -9223372036854775808 2 1 -2"),
+                 "invalid physical tag '-9223372036854775808'");
+         rejects(
+             replace(v4, "1 2 1 1\n4 2 3", "18446744073709551615 2 1 1\n4 2 3"),
+             "invalid entity dimension");
+         // A huge count with nothing behind it: no allocation of that size.
+         rejects(replace(v4, "0 1 0 1\n1\n", "0 1 0 4611686018427387904\n1\n"),
+                 "the node block needs more lines than the file has");
+         rejects(replace(v4, "2 1 0 2\n", "18446744073709551614 1 1 2\n"),
+                 "invalid entity dimension");
+         rejects(replace(v4, "0 1 15 1\n", "0 1 15 4611686018427387904\n"),
+                 "the element block needs more lines than the file has");
+         rejects(
+             replace(v2, "$Elements\n10\n", "$Elements\n4611686018427387904\n"),
+             "$Elements needs more lines than the file has");
+         rejects(replace(v2, "$Nodes\n6\n", "$Nodes\n4611686018427387904\n"),
+                 "$Nodes needs more lines than the file has");
          // Unknown sections are skipped.
          Mesh m = from_text(replace(v2, "$Nodes",
                                     "$Comments\nanything $at all\n"

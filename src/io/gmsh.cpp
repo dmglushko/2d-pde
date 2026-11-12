@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -51,6 +52,15 @@ public:
     return at_ >= lines_.size();
   }
   std::size_t line_number() const { return at_; }
+  // Lines left, empty ones included: an upper bound on the records that
+  // can still follow, checked before a count from the file is trusted.
+  std::size_t remaining() const { return lines_.size() - at_; }
+  // Fails unless `count` records of `lines_each` lines can still follow.
+  void need_lines(std::size_t count, std::size_t lines_each,
+                  const std::string &what) const {
+    if (count > remaining() / lines_each)
+      fail(what + " needs more lines than the file has");
+  }
   std::string_view raw() {
     if (done())
       fail("the file ends inside a section");
@@ -87,13 +97,24 @@ std::size_t to_unsigned(std::string_view token, const char *what) {
   return value;
 }
 
+// The whole token as an integer whose magnitude fits a long long, so that
+// negating it is safe.
 long long to_signed(std::string_view token, const char *what) {
   long long value = 0;
   auto [end, ec] =
       std::from_chars(token.data(), token.data() + token.size(), value);
-  if (ec != std::errc{} || end != token.data() + token.size())
+  if (ec != std::errc{} || end != token.data() + token.size() ||
+      value == std::numeric_limits<long long>::min())
     fail(std::string("invalid ") + what + " '" + std::string(token) + "'");
   return value;
+}
+
+// An entity dimension: 0 to 3.
+int to_dimension(std::string_view token, const char *what) {
+  std::size_t value = to_unsigned(token, what);
+  if (value > 3)
+    fail(std::string("invalid ") + what + " '" + std::string(token) + "'");
+  return static_cast<int>(value);
 }
 
 double to_real(std::string_view token, const char *what) {
@@ -182,10 +203,11 @@ struct File {
 void read_physical_names(Lines &in, File &f) {
   std::size_t n = to_unsigned(need(in.next(), 1, "$PhysicalNames")[0],
                               "physical name count");
+  in.need_lines(n, 1, "$PhysicalNames");
   for (std::size_t i = 0; i < n; ++i) {
     std::string_view line = in.raw();
     auto t = need(Lines::tokens(line), 3, "$PhysicalNames", false);
-    int dim = static_cast<int>(to_unsigned(t[0], "physical dimension"));
+    int dim = to_dimension(t[0], "physical dimension");
     std::size_t tag = to_unsigned(t[1], "physical tag");
     // The name is quoted and may contain spaces.
     auto open = line.find('"'), close = line.rfind('"');
@@ -210,6 +232,7 @@ bool known_type(long long type) { return type == 1 || type == 2 || type == 15; }
 void read_v2(Lines &in, File &f, const std::string &section) {
   if (section == "Nodes") {
     std::size_t n = to_unsigned(need(in.next(), 1, "$Nodes")[0], "node count");
+    in.need_lines(n, 1, "$Nodes");
     for (std::size_t i = 0; i < n; ++i) {
       auto t = need(in.next(), 4, "node");
       if (to_real(t[3], "z coordinate") != 0)
@@ -222,14 +245,17 @@ void read_v2(Lines &in, File &f, const std::string &section) {
   } else if (section == "Elements") {
     std::size_t n =
         to_unsigned(need(in.next(), 1, "$Elements")[0], "element count");
+    in.need_lines(n, 1, "$Elements");
     for (std::size_t i = 0; i < n; ++i) {
       auto t = need(in.next(), 3, "element", false);
       Element e;
       e.type = to_signed(t[1], "element type");
       if (!known_type(e.type))
         fail(describe_type(e.type) + " are not supported");
+      // Compared with the tokens left, never added to: a huge count from
+      // the file would wrap around.
       std::size_t tags = to_unsigned(t[2], "tag count");
-      if (t.size() < 3 + tags)
+      if (tags > t.size() - 3)
         fail("malformed element line");
       if (tags >= 1)
         e.physical = to_unsigned(t[3], "physical tag");
@@ -254,13 +280,14 @@ void read_v4(Lines &in, File &f, const std::string &section,
     for (int dim = 0; dim < 4; ++dim) {
       std::size_t n =
           to_unsigned(counts[static_cast<std::size_t>(dim)], "entity count");
+      in.need_lines(n, 1, "$Entities");
       for (std::size_t i = 0; i < n; ++i) {
         // Points: tag x y z; others: tag minx miny minz maxx maxy maxz.
         std::size_t skip = dim == 0 ? 4 : 7;
         auto t = need(in.next(), skip + 1, "entity", false);
         long long tag = to_signed(t[0], "entity tag");
         std::size_t np = to_unsigned(t[skip], "physical tag count");
-        if (t.size() < skip + 1 + np)
+        if (np > t.size() - (skip + 1))
           fail("malformed entity line");
         auto &list = entity_physicals[{dim, tag}];
         for (std::size_t k = 0; k < np; ++k) {
@@ -273,11 +300,15 @@ void read_v4(Lines &in, File &f, const std::string &section,
   } else if (section == "Nodes") {
     auto head = need(in.next(), 4, "$Nodes");
     std::size_t blocks = to_unsigned(head[0], "node block count");
+    in.need_lines(blocks, 1, "$Nodes");
     for (std::size_t b = 0; b < blocks; ++b) {
       auto t = need(in.next(), 4, "node block");
-      std::size_t dim = to_unsigned(t[0], "entity dimension");
+      std::size_t dim =
+          static_cast<std::size_t>(to_dimension(t[0], "entity dimension"));
       bool parametric = to_unsigned(t[2], "parametric flag") != 0;
       std::size_t n = to_unsigned(t[3], "node count");
+      // A tag line and a coordinate line per node.
+      in.need_lines(n, 2, "the node block");
       std::vector<std::size_t> tags(n);
       for (auto &tag : tags)
         tag = to_unsigned(need(in.next(), 1, "node tag")[0], "node tag");
@@ -295,12 +326,14 @@ void read_v4(Lines &in, File &f, const std::string &section,
   } else if (section == "Elements") {
     auto head = need(in.next(), 4, "$Elements");
     std::size_t blocks = to_unsigned(head[0], "element block count");
+    in.need_lines(blocks, 1, "$Elements");
     for (std::size_t b = 0; b < blocks; ++b) {
       auto t = need(in.next(), 4, "element block");
-      int dim = static_cast<int>(to_unsigned(t[0], "entity dimension"));
+      int dim = to_dimension(t[0], "entity dimension");
       long long entity = to_signed(t[1], "entity tag");
       long long type = to_signed(t[2], "element type");
       std::size_t n = to_unsigned(t[3], "element count");
+      in.need_lines(n, 1, "the element block");
       if (!known_type(type))
         fail(describe_type(type) + " are not supported");
       std::size_t physical = 0;

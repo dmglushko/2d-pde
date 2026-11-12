@@ -184,6 +184,14 @@ int main() {
                                v5.substr(v5.find("RESULT"));
          rejects(shifted, "boundary loop 0 is not one closed loop");
          rejects(replace(v5, "RESULT 0", "RESULT 1"), "the file ends before");
+         // Large counts with nothing behind them: the reader stops at the
+         // end of the file instead of allocating for the count first.
+         rejects("PDE2D_MESH 2\nORDER 1\nNODES 50000000\n0 0\n",
+                 "the file ends before node x");
+         rejects(replace(tiny_text, "ELEMENTS 2", "ELEMENTS 50000000"),
+                 "invalid element node count 'BOUNDARY_EDGES'");
+         rejects("PDE2D_MESH 2\nORDER 1\nNODES 18446744073709551615\n",
+                 "invalid node count");
        }},
       {"export_rejects_invalid_meshes",
        [] {
