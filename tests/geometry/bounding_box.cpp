@@ -1,6 +1,8 @@
 #include "support/check.hpp"
 
 #include "pde2d/geometry/bounding_box.hpp"
+#include "pde2d/geometry/curve.hpp"
+#include "pde2d/geometry/curve_geometry.hpp"
 
 #include <cmath>
 #include <numbers>
@@ -25,14 +27,14 @@ void same_box(const BoundingBox &actual, const BoundingBox &expected,
 // Independent oracle: the box of many points along the curve. It lies
 // inside the exact box and approaches it as n grows.
 BoundingBox sampled_box(const Curve &c, int n) {
-  BoundingBox box{point_at(c, 0), point_at(c, 0)};
+  BoundingBox box{c.point_at(0), c.point_at(0)};
   for (int i = 1; i <= n; ++i)
-    box = merged(box, point_at(c, double(i) / n));
+    box = merged(box, c.point_at(double(i) / n));
   return box;
 }
 
 void check_against_samples(const Curve &c, std::string_view what) {
-  const BoundingBox exact = bounding_box(c);
+  const BoundingBox exact = c.bounding_box();
   const BoundingBox sampled = sampled_box(c, 200000);
   const double tiny = 1e-12;
   check(exact.min.x <= sampled.min.x + tiny &&
@@ -73,19 +75,17 @@ int main() {
                "box of curves");
          expect_throws<std::invalid_argument>(
              [] { (void)bounding_box(std::span<const Curve>{}); }, "no curves");
-         expect_throws<std::invalid_argument>(
-             [] { (void)bounding_box(std::span<const Loop>{}); }, "no curves");
        }},
       {"line",
        [] {
-         check(bounding_box(Line{{3, -1}, {1, 2}}) ==
+         check(Line{{3, -1}, {1, 2}}.bounding_box() ==
                    BoundingBox{{1, -1}, {3, 2}},
                "end points");
        }},
       {"quadratic_bezier",
        [] {
          // y(t) = 4 t (1 - t): peak 1 at t = 1/2; x is monotone.
-         check(bounding_box(QuadraticBezier{{0, 0}, {1, 2}, {2, 0}}) ==
+         check(QuadraticBezier{{0, 0}, {1, 2}, {2, 0}}.bounding_box() ==
                    BoundingBox{{0, 0}, {2, 1}},
                "peak of the parabola");
          check_against_samples(QuadraticBezier{{0, 0}, {3, 1}, {1, 2}},
@@ -104,22 +104,22 @@ int main() {
        }},
       {"circular_arcs",
        [] {
-         same_box(bounding_box(EllipticalArc{{1, 2}, 3, 3, 0, 0.3, 2 * pi}),
+         same_box(EllipticalArc{{1, 2}, 3, 3, 0, 0.3, 2 * pi}.bounding_box(),
                   {{-2, -1}, {4, 5}}, 1e-14, "full circle");
-         same_box(bounding_box(EllipticalArc{{0, 0}, 1, 1, 0, 0, pi / 2}),
+         same_box(EllipticalArc{{0, 0}, 1, 1, 0, 0, pi / 2}.bounding_box(),
                   {{0, 0}, {1, 1}}, 1e-15, "quarter circle");
          // Crossing 180 degrees: x reaches -1 in the middle.
          same_box(
-             bounding_box(EllipticalArc{{0, 0}, 1, 1, 0, 3 * pi / 4, pi / 2}),
+             EllipticalArc{{0, 0}, 1, 1, 0, 3 * pi / 4, pi / 2}.bounding_box(),
              {{-1, -std::sqrt(0.5)}, {-std::sqrt(0.5), std::sqrt(0.5)}}, 1e-15,
              "arc across 180 degrees");
          // The same arc traversed backwards.
          same_box(
-             bounding_box(EllipticalArc{{0, 0}, 1, 1, 0, 5 * pi / 4, -pi / 2}),
+             EllipticalArc{{0, 0}, 1, 1, 0, 5 * pi / 4, -pi / 2}.bounding_box(),
              {{-1, -std::sqrt(0.5)}, {-std::sqrt(0.5), std::sqrt(0.5)}}, 1e-15,
              "negative sweep");
          // Start angles outside [0, 2 pi).
-         same_box(bounding_box(EllipticalArc{{0, 0}, 1, 1, 0, -7 * pi, pi}),
+         same_box(EllipticalArc{{0, 0}, 1, 1, 0, -7 * pi, pi}.bounding_box(),
                   {{-1, -1}, {1, 0}}, 1e-14, "start angle -7 pi");
        }},
       {"rotated_ellipse",
@@ -130,7 +130,7 @@ int main() {
          const double c = std::cos(phi), s = std::sin(phi);
          const double wx = std::sqrt(rx * rx * c * c + ry * ry * s * s);
          const double wy = std::sqrt(rx * rx * s * s + ry * ry * c * c);
-         same_box(bounding_box(EllipticalArc{{1, 1}, rx, ry, phi, 0, 2 * pi}),
+         same_box(EllipticalArc{{1, 1}, rx, ry, phi, 0, 2 * pi}.bounding_box(),
                   {{1 - wx, 1 - wy}, {1 + wx, 1 + wy}}, 1e-14,
                   "full rotated ellipse");
          check_against_samples(EllipticalArc{{1, 1}, rx, ry, phi, 1.0, -2.5},
@@ -146,7 +146,7 @@ int main() {
                       {Line{{0, 2}, {0, 0}}, "a"}}};
          Loop hole{{{EllipticalArc{{1, 1}, 0.5, 0.5, 0, 0, 2 * pi}, "h"}}};
          Loop disc{{{EllipticalArc{{4, 1}, 1, 1, 0, 0, 2 * pi}, "i"}}};
-         same_box(bounding_box(CurveGeometry({square, hole, disc})),
+         same_box(CurveGeometry({square, hole, disc}).bounding_box(),
                   {{0, 0}, {5, 2}}, 1e-15, "all loops");
        }},
   });

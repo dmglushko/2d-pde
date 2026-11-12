@@ -30,15 +30,32 @@ Namespaces: `pde2d::geometry`, `pde2d::mesh` and `pde2d::io`.
 | Type | Role |
 | --- | --- |
 | `Point` | a point or vector, with `+ - * dot cross norm distance` |
-| `Line`, `QuadraticBezier`, `CubicBezier`, `EllipticalArc` | exact curves, parameter `t` in [0, 1] |
-| `Curve` | `std::variant` of the four curve kinds |
+| `Line`, `QuadraticBezier`, `CubicBezier`, `EllipticalArc` | the kinds of exact curve, parameter `t` in [0, 1]; each owns its mathematics as methods (the core, listed in the `CurveKind` concept) |
+| `Curve` | one curve of any kind, held by value (a class around a `std::variant` of the kinds); the same core methods, forwarded; `kind()` gives the variant |
 | `BoundaryCurve` | a `Curve` and its region name |
 | `Loop` | a closed list of `BoundaryCurve`s; built by the user |
 | `CurveGeometry` | a validated set of loops with computed depth and parent |
 
-Free functions on `Curve` (`point_at`, `split`, `subcurve`, `reversed`,
-`transformed`, `curve_length`, `parameter_at_length_fraction`,
-`derivative_bounds`) are ported from the archive. `orient` and `incircle`
+Curve operations are of three sorts:
+
+- **The core**, methods of every kind and of `Curve`: `validate`,
+  `point_at`, `derivative_at`, `second_derivative_at`,
+  `derivative_bounds`, `split`, `subcurve`, `reversed`, `transformed`,
+  `bounding_box`, `exact_length`, `exact_length_parameter`. A method is in
+  the core only if it needs the kind's own data. The `CurveKind` concept
+  lists them and a `static_assert` checks every kind, so a kind that
+  misses one does not compile.
+- **Functions built on the core**, written once for every kind:
+  `start_point`, `end_point`, `is_line`, `curve_length`,
+  `parameter_at_length_fraction`, `bounding_box` of several curves.
+  `curve_length` uses the kind's `exact_length` when it returns a value
+  (lines, circular arcs) and integrates numerically otherwise.
+- **Code that differs by kind but belongs to another module** (SVG path
+  commands, mirroring for SVG): `std::visit` over `curve.kind()` with
+  `overloaded{...}`, one handler per kind and no catch-all, so a new kind
+  does not compile until it is handled there.
+
+The formulas are ported from the archive. `orient` and `incircle`
 are exact predicates: Shewchuk's adaptive-precision `orient2d` and
 `incircle` (floating-point filter, then exact expansion arithmetic in
 stages), with a slow exact-integer evaluation for the rare undecided case
@@ -57,10 +74,11 @@ and `BoundaryPolygon` decide loop directions with it, because the sign of
 an area underflows or overflows at extreme scales),
 `locate_in_polygon` and `find_crossing` for polygons.
 `bounding_box.hpp`: `BoundingBox{min, max}` with `merged`, `padded`,
-`contains`, `width`, `height`, `diagonal`, and `bounding_box` of points,
-of a curve (end points plus the exact interior extremes: roots of the
-Bezier derivatives, axis extremes of arcs), of curves, of loops and of a
-`CurveGeometry`. Every axis-aligned box in the library uses it (the
+`contains`, `width`, `height`, `diagonal`, and `bounding_box` of points.
+The box of a curve is its core method `bounding_box()` (end points plus
+the exact interior extremes: roots of the Bezier derivatives, axis
+extremes of arcs); `CurveGeometry::bounding_box()` is the box of all its
+curves. Every axis-aligned box in the library uses it (the
 geometry's validation scale, SVG view boxes, the CDT's enclosing
 triangle, the validity grid, the polygon sweep, curve linking).
 

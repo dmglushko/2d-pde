@@ -75,6 +75,9 @@ public:
   // The same geometry moved by a similarity transform.
   CurveGeometry transformed(const CurveTransform &transform) const;
 
+  // The smallest box containing every curve of every loop.
+  BoundingBox bounding_box() const;
+
 private:
   std::vector<Loop> loops_;
   // Computed from all loops together, so kept apart from the input.

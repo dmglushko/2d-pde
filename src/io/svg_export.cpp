@@ -29,15 +29,7 @@ std::string point_text(Point p) {
 
 // The path command(s) that continue from the curve's start to its end;
 // the curve is already mirrored into SVG coordinates.
-std::string commands(const geometry::Curve &curve) {
-  if (const auto *c = std::get_if<geometry::Line>(&curve))
-    return " L" + point_text(c->end);
-  if (const auto *c = std::get_if<geometry::QuadraticBezier>(&curve))
-    return " Q" + point_text(c->control) + point_text(c->end);
-  if (const auto *c = std::get_if<geometry::CubicBezier>(&curve))
-    return " C" + point_text(c->control1) + point_text(c->control2) +
-           point_text(c->end);
-  const auto &arc = std::get<geometry::EllipticalArc>(curve);
+std::string arc_commands(const geometry::EllipticalArc &arc) {
   // Pieces of at most a quarter turn: an SVG arc cannot be a full turn
   // (its ends would coincide) and the large-arc flag stays 0.
   const int pieces = std::max(
@@ -49,8 +41,27 @@ std::string commands(const geometry::Curve &curve) {
                            " 0 " + (arc.sweep_angle > 0 ? "1" : "0");
   std::string text;
   for (int i = 1; i <= pieces; ++i)
-    text += head + point_text(geometry::point_at(curve, double(i) / pieces));
+    text += head + point_text(arc.point_at(double(i) / pieces));
   return text;
+}
+
+// One handler per kind and no catch-all: a new kind of curve does not
+// compile until it has a path command here.
+std::string commands(const geometry::Curve &curve) {
+  using namespace geometry;
+  return std::visit(overloaded{
+                        [](const Line &c) { return " L" + point_text(c.end); },
+                        [](const QuadraticBezier &c) {
+                          return " Q" + point_text(c.control) +
+                                 point_text(c.end);
+                        },
+                        [](const CubicBezier &c) {
+                          return " C" + point_text(c.control1) +
+                                 point_text(c.control2) + point_text(c.end);
+                        },
+                        [](const EllipticalArc &c) { return arc_commands(c); },
+                    },
+                    curve.kind());
 }
 
 // A valid XML id: starts with a letter or '_' (region names contain only

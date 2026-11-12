@@ -5,10 +5,15 @@
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <span>
 #include <stdexcept>
+#include <utility>
+#include <variant>
+#include <vector>
 
-// Ported from the archive (cpp/discretization/curve_segment.hpp and
-// curve_length.hpp), with snake_case names and free functions over Curve.
+// The formulas are ported from the archive
+// (cpp/discretization/curve_segment.hpp and curve_length.hpp). Each kind's
+// methods are together in its own section.
 namespace pde2d::geometry {
 namespace {
 
@@ -35,198 +40,394 @@ Point rotate(Point p, double angle) {
   return {c * p.x - s * p.y, s * p.x + c * p.y};
 }
 
+void validate_subcurve(double t0, double t1) {
+  if (!(t0 >= 0 && t0 < t1 && t1 <= 1))
+    throw std::invalid_argument("Subcurve requires 0 <= t0 < t1 <= 1");
+}
+
+// The piece between t0 and t1 of a kind that can be split anywhere.
+template <class Kind> Kind subcurve_by_split(Kind piece, double t0, double t1) {
+  validate_subcurve(t0, t1);
+  if (t1 < 1)
+    piece = piece.split(t1).first;
+  if (t0 > 0)
+    piece = piece.split(t0 / t1).second;
+  return piece;
+}
+
+// Adds the kind's point at t to the box if t lies strictly inside (0, 1).
+template <class Kind>
+void add_interior(BoundingBox &box, const Kind &kind, double t) {
+  if (t > 0 && t < 1)
+    box = merged(box, kind.point_at(t));
+}
+
+template <class Kind> BoundingBox box_of_ends(const Kind &kind) {
+  const Point a = kind.point_at(0.0);
+  return merged(BoundingBox{a, a}, kind.point_at(1.0));
+}
+
+// Roots of a t^2 + b t + c (a linear or constant equation when a vanishes).
+std::vector<double> quadratic_roots(double a, double b, double c) {
+  std::vector<double> roots;
+  if (a == 0) {
+    if (b != 0)
+      roots.push_back(-c / b);
+    return roots;
+  }
+  const double disc = b * b - 4 * a * c;
+  if (disc < 0)
+    return roots;
+  // The numerically stable form: one root from q, the other from c / q.
+  const double q = -0.5 * (b + std::copysign(std::sqrt(disc), b));
+  if (q != 0) {
+    roots.push_back(q / a);
+    roots.push_back(c / q);
+  } else {
+    roots.push_back(0.0); // b = 0 and disc = 0, so c = 0: a double root at 0
+  }
+  return roots;
+}
+
+} // namespace
+
+void CurveTransform::validate() const {
+  if (!(scale > 0) || !std::isfinite(scale) || !std::isfinite(rotation) ||
+      !is_finite(translation) || !is_finite(origin))
+    throw std::invalid_argument("Invalid curve transform");
+}
+
+Point CurveTransform::operator()(Point p) const {
+  return translation + scale * rotate(p - origin, rotation);
+}
+
 // --- Line -------------------------------------------------------------------
 
-Point point_of(const Line &c, double t) {
-  return {(1 - t) * c.start.x + t * c.end.x, (1 - t) * c.start.y + t * c.end.y};
+Point Line::point_at(double t) const {
+  return {(1 - t) * start.x + t * end.x, (1 - t) * start.y + t * end.y};
 }
-Point first_of(const Line &c, double) { return c.end - c.start; }
-Point second_of(const Line &, double) { return {0, 0}; }
-DerivativeBounds bounds_of(const Line &c) {
-  return {distance(c.start, c.end), 0};
+Point Line::derivative_at(double) const { return end - start; }
+Point Line::second_derivative_at(double) const { return {0, 0}; }
+DerivativeBounds Line::derivative_bounds() const {
+  return {distance(start, end), 0};
 }
-std::pair<Curve, Curve> split_of(const Line &c, double t) {
-  auto p = mix(c.start, c.end, t);
-  return {Line{c.start, p}, Line{p, c.end}};
+std::pair<Line, Line> Line::split(double t) const {
+  validate_split(t);
+  auto p = mix(start, end, t);
+  return {Line{start, p}, Line{p, end}};
 }
-Curve reversed_of(const Line &c) { return Line{c.end, c.start}; }
-Curve transformed_of(const Line &c, const CurveTransform &f) {
-  return Line{f(c.start), f(c.end)};
+Line Line::reversed() const { return Line{end, start}; }
+Line Line::transformed(const CurveTransform &f) const {
+  f.validate();
+  return Line{f(start), f(end)};
 }
-void validate_of(const Line &c) {
-  validate_point(c.start);
-  validate_point(c.end);
+void Line::validate() const {
+  validate_point(start);
+  validate_point(end);
 }
-std::optional<double> exact_length(const Line &c, double end) {
-  return end * distance(c.start, c.end);
+std::optional<double> Line::exact_length(double to) const {
+  return to * distance(start, end);
 }
-std::optional<double> exact_length_parameter(const Line &, double fraction) {
+std::optional<double> Line::exact_length_parameter(double fraction) const {
   return fraction;
 }
+Line Line::subcurve(double t0, double t1) const {
+  return subcurve_by_split(*this, t0, t1);
+}
+BoundingBox Line::bounding_box() const { return box_of_ends(*this); }
 
 // --- Quadratic Bezier -------------------------------------------------------
 
-Point point_of(const QuadraticBezier &c, double t) {
+Point QuadraticBezier::point_at(double t) const {
   const double a = (1 - t) * (1 - t), b = 2 * t * (1 - t), d = t * t;
-  return {a * c.start.x + b * c.control.x + d * c.end.x,
-          a * c.start.y + b * c.control.y + d * c.end.y};
+  return {a * start.x + b * control.x + d * end.x,
+          a * start.y + b * control.y + d * end.y};
 }
-Point first_of(const QuadraticBezier &c, double t) {
-  return {
-      2 * ((1 - t) * (c.control.x - c.start.x) + t * (c.end.x - c.control.x)),
-      2 * ((1 - t) * (c.control.y - c.start.y) + t * (c.end.y - c.control.y))};
+Point QuadraticBezier::derivative_at(double t) const {
+  return {2 * ((1 - t) * (control.x - start.x) + t * (end.x - control.x)),
+          2 * ((1 - t) * (control.y - start.y) + t * (end.y - control.y))};
 }
-Point second_of(const QuadraticBezier &c, double) {
-  return second_difference(c.start, c.control, c.end, 2);
+Point QuadraticBezier::second_derivative_at(double) const {
+  return second_difference(start, control, end, 2);
 }
-DerivativeBounds bounds_of(const QuadraticBezier &c) {
+DerivativeBounds QuadraticBezier::derivative_bounds() const {
   // The derivative's control polygon encloses the whole derivative curve.
-  return {
-      2 * std::max(distance(c.start, c.control), distance(c.control, c.end)),
-      norm(second_of(c, 0))};
+  return {2 * std::max(distance(start, control), distance(control, end)),
+          norm(second_derivative_at(0))};
 }
-std::pair<Curve, Curve> split_of(const QuadraticBezier &c, double t) {
-  auto a = mix(c.start, c.control, t), b = mix(c.control, c.end, t),
-       p = mix(a, b, t);
-  return {QuadraticBezier{c.start, a, p}, QuadraticBezier{p, b, c.end}};
+std::pair<QuadraticBezier, QuadraticBezier>
+QuadraticBezier::split(double t) const {
+  validate_split(t);
+  auto a = mix(start, control, t), b = mix(control, end, t), p = mix(a, b, t);
+  return {QuadraticBezier{start, a, p}, QuadraticBezier{p, b, end}};
 }
-Curve reversed_of(const QuadraticBezier &c) {
-  return QuadraticBezier{c.end, c.control, c.start};
+QuadraticBezier QuadraticBezier::reversed() const {
+  return QuadraticBezier{end, control, start};
 }
-Curve transformed_of(const QuadraticBezier &c, const CurveTransform &f) {
-  return QuadraticBezier{f(c.start), f(c.control), f(c.end)};
+QuadraticBezier QuadraticBezier::transformed(const CurveTransform &f) const {
+  f.validate();
+  return QuadraticBezier{f(start), f(control), f(end)};
 }
-void validate_of(const QuadraticBezier &c) {
-  validate_point(c.start);
-  validate_point(c.control);
-  validate_point(c.end);
+void QuadraticBezier::validate() const {
+  validate_point(start);
+  validate_point(control);
+  validate_point(end);
 }
-std::optional<double> exact_length(const QuadraticBezier &, double) {
+std::optional<double> QuadraticBezier::exact_length(double) const {
   return std::nullopt;
 }
-std::optional<double> exact_length_parameter(const QuadraticBezier &, double) {
+std::optional<double> QuadraticBezier::exact_length_parameter(double) const {
   return std::nullopt;
+}
+QuadraticBezier QuadraticBezier::subcurve(double t0, double t1) const {
+  return subcurve_by_split(*this, t0, t1);
+}
+BoundingBox QuadraticBezier::bounding_box() const {
+  BoundingBox box = box_of_ends(*this);
+  // x'(t) is linear: 2 [(p1 - p0) + t (p0 - 2 p1 + p2)].
+  auto axis = [&](double p0, double p1, double p2) {
+    const double d = p0 - 2 * p1 + p2;
+    if (d != 0)
+      add_interior(box, *this, (p0 - p1) / d);
+  };
+  axis(start.x, control.x, end.x);
+  axis(start.y, control.y, end.y);
+  return box;
 }
 
 // --- Cubic Bezier -----------------------------------------------------------
 
-Point point_of(const CubicBezier &c, double t) {
+Point CubicBezier::point_at(double t) const {
   const double a = (1 - t) * (1 - t) * (1 - t), b = 3 * t * (1 - t) * (1 - t),
                d = 3 * t * t * (1 - t), e = t * t * t;
-  return {a * c.start.x + b * c.control1.x + d * c.control2.x + e * c.end.x,
-          a * c.start.y + b * c.control1.y + d * c.control2.y + e * c.end.y};
+  return {a * start.x + b * control1.x + d * control2.x + e * end.x,
+          a * start.y + b * control1.y + d * control2.y + e * end.y};
 }
-Point first_of(const CubicBezier &c, double t) {
+Point CubicBezier::derivative_at(double t) const {
   const double u = 1 - t;
-  return {3 * (u * u * (c.control1.x - c.start.x) +
-               2 * u * t * (c.control2.x - c.control1.x) +
-               t * t * (c.end.x - c.control2.x)),
-          3 * (u * u * (c.control1.y - c.start.y) +
-               2 * u * t * (c.control2.y - c.control1.y) +
-               t * t * (c.end.y - c.control2.y))};
+  return {3 * (u * u * (control1.x - start.x) +
+               2 * u * t * (control2.x - control1.x) +
+               t * t * (end.x - control2.x)),
+          3 * (u * u * (control1.y - start.y) +
+               2 * u * t * (control2.y - control1.y) +
+               t * t * (end.y - control2.y))};
 }
-Point second_of(const CubicBezier &c, double t) {
-  auto a = second_difference(c.start, c.control1, c.control2, 6),
-       b = second_difference(c.control1, c.control2, c.end, 6);
+Point CubicBezier::second_derivative_at(double t) const {
+  auto a = second_difference(start, control1, control2, 6),
+       b = second_difference(control1, control2, end, 6);
   return {(1 - t) * a.x + t * b.x, (1 - t) * a.y + t * b.y};
 }
-DerivativeBounds bounds_of(const CubicBezier &c) {
-  return {3 * std::max({distance(c.start, c.control1),
-                        distance(c.control1, c.control2),
-                        distance(c.control2, c.end)}),
-          std::max(norm(second_of(c, 0)), norm(second_of(c, 1)))};
+DerivativeBounds CubicBezier::derivative_bounds() const {
+  return {
+      3 * std::max({distance(start, control1), distance(control1, control2),
+                    distance(control2, end)}),
+      std::max(norm(second_derivative_at(0)), norm(second_derivative_at(1)))};
 }
-std::pair<Curve, Curve> split_of(const CubicBezier &c, double t) {
-  auto a = mix(c.start, c.control1, t), b = mix(c.control1, c.control2, t),
-       d = mix(c.control2, c.end, t);
+std::pair<CubicBezier, CubicBezier> CubicBezier::split(double t) const {
+  validate_split(t);
+  auto a = mix(start, control1, t), b = mix(control1, control2, t),
+       d = mix(control2, end, t);
   auto e = mix(a, b, t), f = mix(b, d, t), p = mix(e, f, t);
-  return {CubicBezier{c.start, a, e, p}, CubicBezier{p, f, d, c.end}};
+  return {CubicBezier{start, a, e, p}, CubicBezier{p, f, d, end}};
 }
-Curve reversed_of(const CubicBezier &c) {
-  return CubicBezier{c.end, c.control2, c.control1, c.start};
+CubicBezier CubicBezier::reversed() const {
+  return CubicBezier{end, control2, control1, start};
 }
-Curve transformed_of(const CubicBezier &c, const CurveTransform &f) {
-  return CubicBezier{f(c.start), f(c.control1), f(c.control2), f(c.end)};
+CubicBezier CubicBezier::transformed(const CurveTransform &f) const {
+  f.validate();
+  return CubicBezier{f(start), f(control1), f(control2), f(end)};
 }
-void validate_of(const CubicBezier &c) {
-  validate_point(c.start);
-  validate_point(c.control1);
-  validate_point(c.control2);
-  validate_point(c.end);
+void CubicBezier::validate() const {
+  validate_point(start);
+  validate_point(control1);
+  validate_point(control2);
+  validate_point(end);
 }
-std::optional<double> exact_length(const CubicBezier &, double) {
+std::optional<double> CubicBezier::exact_length(double) const {
   return std::nullopt;
 }
-std::optional<double> exact_length_parameter(const CubicBezier &, double) {
+std::optional<double> CubicBezier::exact_length_parameter(double) const {
   return std::nullopt;
+}
+CubicBezier CubicBezier::subcurve(double t0, double t1) const {
+  return subcurve_by_split(*this, t0, t1);
+}
+BoundingBox CubicBezier::bounding_box() const {
+  BoundingBox box = box_of_ends(*this);
+  // x'(t) / 3 = a t^2 + b t + k with the coefficients below.
+  auto axis = [&](double p0, double p1, double p2, double p3) {
+    const double a = -p0 + 3 * p1 - 3 * p2 + p3;
+    const double b = 2 * (p0 - 2 * p1 + p2);
+    const double k = p1 - p0;
+    for (double t : quadratic_roots(a, b, k))
+      add_interior(box, *this, t);
+  };
+  axis(start.x, control1.x, control2.x, end.x);
+  axis(start.y, control1.y, control2.y, end.y);
+  return box;
 }
 
 // --- Elliptical arc ---------------------------------------------------------
 
-Point point_of(const EllipticalArc &c, double t) {
-  const double a = c.start_angle + t * c.sweep_angle;
-  return c.center + rotate({c.radius_x * std::cos(a), c.radius_y * std::sin(a)},
-                           c.rotation);
+Point EllipticalArc::point_at(double t) const {
+  const double a = start_angle + t * sweep_angle;
+  return center +
+         rotate({radius_x * std::cos(a), radius_y * std::sin(a)}, rotation);
 }
-Point first_of(const EllipticalArc &c, double t) {
-  const double a = c.start_angle + t * c.sweep_angle;
-  return rotate({-c.radius_x * std::sin(a) * c.sweep_angle,
-                 c.radius_y * std::cos(a) * c.sweep_angle},
-                c.rotation);
+Point EllipticalArc::derivative_at(double t) const {
+  const double a = start_angle + t * sweep_angle;
+  return rotate({-radius_x * std::sin(a) * sweep_angle,
+                 radius_y * std::cos(a) * sweep_angle},
+                rotation);
 }
-Point second_of(const EllipticalArc &c, double t) {
-  const double a = c.start_angle + t * c.sweep_angle,
-               w2 = c.sweep_angle * c.sweep_angle;
-  return rotate(
-      {-c.radius_x * std::cos(a) * w2, -c.radius_y * std::sin(a) * w2},
-      c.rotation);
+Point EllipticalArc::second_derivative_at(double t) const {
+  const double a = start_angle + t * sweep_angle,
+               w2 = sweep_angle * sweep_angle;
+  return rotate({-radius_x * std::cos(a) * w2, -radius_y * std::sin(a) * w2},
+                rotation);
 }
-DerivativeBounds bounds_of(const EllipticalArc &c) {
-  const double r = std::max(c.radius_x, c.radius_y),
-               w = std::abs(c.sweep_angle);
+DerivativeBounds EllipticalArc::derivative_bounds() const {
+  const double r = std::max(radius_x, radius_y), w = std::abs(sweep_angle);
   return {r * w, r * w * w};
 }
-std::pair<Curve, Curve> split_of(const EllipticalArc &c, double t) {
-  auto a = c, b = c;
-  a.sweep_angle = c.sweep_angle * t;
-  b.start_angle = c.start_angle + a.sweep_angle;
-  b.sweep_angle = c.sweep_angle * (1 - t);
+std::pair<EllipticalArc, EllipticalArc> EllipticalArc::split(double t) const {
+  validate_split(t);
+  auto a = *this, b = *this;
+  a.sweep_angle = sweep_angle * t;
+  b.start_angle = start_angle + a.sweep_angle;
+  b.sweep_angle = sweep_angle * (1 - t);
   return {a, b};
 }
-Curve reversed_of(const EllipticalArc &c) {
-  auto r = c;
-  r.start_angle += c.sweep_angle;
-  r.sweep_angle = -c.sweep_angle;
+EllipticalArc EllipticalArc::reversed() const {
+  auto r = *this;
+  r.start_angle += sweep_angle;
+  r.sweep_angle = -sweep_angle;
   return r;
 }
-Curve transformed_of(const EllipticalArc &c, const CurveTransform &f) {
-  return EllipticalArc{f(c.center),          c.radius_x * f.scale,
-                       c.radius_y * f.scale, c.rotation + f.rotation,
-                       c.start_angle,        c.sweep_angle};
+EllipticalArc EllipticalArc::transformed(const CurveTransform &f) const {
+  f.validate();
+  return EllipticalArc{f(center),          radius_x * f.scale,
+                       radius_y * f.scale, rotation + f.rotation,
+                       start_angle,        sweep_angle};
 }
-void validate_of(const EllipticalArc &c) {
-  validate_point(c.center);
-  if (!(c.radius_x > 0 && c.radius_y > 0) || !std::isfinite(c.radius_x) ||
-      !std::isfinite(c.radius_y) || !std::isfinite(c.rotation) ||
-      !std::isfinite(c.start_angle) || !std::isfinite(c.sweep_angle) ||
-      c.sweep_angle == 0 || std::abs(c.sweep_angle) > 2 * std::numbers::pi)
+void EllipticalArc::validate() const {
+  validate_point(center);
+  if (!(radius_x > 0 && radius_y > 0) || !std::isfinite(radius_x) ||
+      !std::isfinite(radius_y) || !std::isfinite(rotation) ||
+      !std::isfinite(start_angle) || !std::isfinite(sweep_angle) ||
+      sweep_angle == 0 || std::abs(sweep_angle) > 2 * std::numbers::pi)
     throw std::invalid_argument("Invalid elliptical arc");
 }
-std::optional<double> exact_length(const EllipticalArc &c, double t) {
-  if (c.radius_x == c.radius_y)
-    return t * std::abs(c.sweep_angle) * c.radius_x;
+std::optional<double> EllipticalArc::exact_length(double t) const {
+  if (radius_x == radius_y)
+    return t * std::abs(sweep_angle) * radius_x;
   return std::nullopt;
 }
-std::optional<double> exact_length_parameter(const EllipticalArc &c, double f) {
-  if (c.radius_x == c.radius_y)
+std::optional<double> EllipticalArc::exact_length_parameter(double f) const {
+  if (radius_x == radius_y)
     return f;
   return std::nullopt;
 }
+EllipticalArc EllipticalArc::subcurve(double t0, double t1) const {
+  validate_subcurve(t0, t1);
+  auto r = *this;
+  r.start_angle = start_angle + t0 * sweep_angle;
+  r.sweep_angle = sweep_angle * (t1 - t0);
+  return r;
+}
+BoundingBox EllipticalArc::bounding_box() const {
+  BoundingBox box = box_of_ends(*this);
+  // x(a) = cx + rx cos(a) cos(phi) - ry sin(a) sin(phi) is extreme where
+  // tan(a) = -ry sin(phi) / (rx cos(phi)); y likewise. Each gives two
+  // angles, half a turn apart.
+  const double cp = std::cos(rotation), sp = std::sin(rotation);
+  const double angles[] = {std::atan2(-radius_y * sp, radius_x * cp),
+                           std::atan2(radius_y * cp, radius_x * sp)};
+  const double turn = 2 * std::numbers::pi;
+  for (double base : angles)
+    for (double a : {base, base + std::numbers::pi}) {
+      // The parameter t with start + t * sweep = a (mod a full turn).
+      double offset = std::fmod(a - start_angle, turn);
+      if (sweep_angle < 0)
+        offset = -offset;
+      if (offset < 0)
+        offset += turn;
+      add_interior(box, *this, offset / std::abs(sweep_angle));
+    }
+  return box;
+}
 
-// --- Length -----------------------------------------------------------------
+// --- Curve ------------------------------------------------------------------
+
+void Curve::validate() const {
+  std::visit([](const auto &k) { k.validate(); }, kind_);
+}
+Point Curve::point_at(double t) const {
+  return std::visit([t](const auto &k) { return k.point_at(t); }, kind_);
+}
+Point Curve::derivative_at(double t) const {
+  return std::visit([t](const auto &k) { return k.derivative_at(t); }, kind_);
+}
+Point Curve::second_derivative_at(double t) const {
+  return std::visit([t](const auto &k) { return k.second_derivative_at(t); },
+                    kind_);
+}
+DerivativeBounds Curve::derivative_bounds() const {
+  return std::visit([](const auto &k) { return k.derivative_bounds(); }, kind_);
+}
+std::pair<Curve, Curve> Curve::split(double t) const {
+  return std::visit(
+      [t](const auto &k) {
+        auto [first, second] = k.split(t);
+        return std::pair<Curve, Curve>{first, second};
+      },
+      kind_);
+}
+Curve Curve::subcurve(double t0, double t1) const {
+  return std::visit([&](const auto &k) { return Curve{k.subcurve(t0, t1)}; },
+                    kind_);
+}
+Curve Curve::reversed() const {
+  return std::visit([](const auto &k) { return Curve{k.reversed()}; }, kind_);
+}
+Curve Curve::transformed(const CurveTransform &transform) const {
+  return std::visit(
+      [&](const auto &k) { return Curve{k.transformed(transform)}; }, kind_);
+}
+BoundingBox Curve::bounding_box() const {
+  return std::visit([](const auto &k) { return k.bounding_box(); }, kind_);
+}
+std::optional<double> Curve::exact_length(double end) const {
+  return std::visit([end](const auto &k) { return k.exact_length(end); },
+                    kind_);
+}
+std::optional<double> Curve::exact_length_parameter(double fraction) const {
+  return std::visit(
+      [fraction](const auto &k) { return k.exact_length_parameter(fraction); },
+      kind_);
+}
+
+// --- Functions built on the core ---------------------------------------------
+
+Point start_point(const Curve &curve) { return curve.point_at(0.0); }
+Point end_point(const Curve &curve) { return curve.point_at(1.0); }
+bool is_line(const Curve &curve) {
+  return std::holds_alternative<Line>(curve.kind());
+}
+
+BoundingBox bounding_box(std::span<const Curve> curves) {
+  if (curves.empty())
+    throw std::invalid_argument("bounding_box: no curves");
+  BoundingBox box = curves.front().bounding_box();
+  for (const auto &c : curves)
+    box = merged(box, c.bounding_box());
+  return box;
+}
+
+namespace {
 
 double speed(const Curve &curve, double t) {
-  return norm(derivative_at(curve, t));
+  return norm(curve.derivative_at(t));
 }
 
 // Adaptive Simpson integration of the speed. Tolerances scale with the
@@ -272,75 +473,13 @@ double integrate_length(const Curve &curve, double end) {
 
 } // namespace
 
-void CurveTransform::validate() const {
-  if (!(scale > 0) || !std::isfinite(scale) || !std::isfinite(rotation) ||
-      !is_finite(translation) || !is_finite(origin))
-    throw std::invalid_argument("Invalid curve transform");
-}
-
-Point CurveTransform::operator()(Point p) const {
-  return translation + scale * rotate(p - origin, rotation);
-}
-
-void validate(const Curve &curve) {
-  std::visit([](const auto &c) { validate_of(c); }, curve);
-}
-Point point_at(const Curve &curve, double t) {
-  return std::visit([t](const auto &c) { return point_of(c, t); }, curve);
-}
-Point derivative_at(const Curve &curve, double t) {
-  return std::visit([t](const auto &c) { return first_of(c, t); }, curve);
-}
-Point second_derivative_at(const Curve &curve, double t) {
-  return std::visit([t](const auto &c) { return second_of(c, t); }, curve);
-}
-Point start_point(const Curve &curve) { return point_at(curve, 0.0); }
-Point end_point(const Curve &curve) { return point_at(curve, 1.0); }
-DerivativeBounds derivative_bounds(const Curve &curve) {
-  return std::visit([](const auto &c) { return bounds_of(c); }, curve);
-}
-bool is_line(const Curve &curve) { return std::holds_alternative<Line>(curve); }
-
-std::pair<Curve, Curve> split(const Curve &curve, double t) {
-  validate_split(t);
-  return std::visit([t](const auto &c) { return split_of(c, t); }, curve);
-}
-
-Curve subcurve(const Curve &curve, double t0, double t1) {
-  if (!(t0 >= 0 && t0 < t1 && t1 <= 1))
-    throw std::invalid_argument("Subcurve requires 0 <= t0 < t1 <= 1");
-  if (const auto *arc = std::get_if<EllipticalArc>(&curve)) {
-    auto r = *arc;
-    r.start_angle = arc->start_angle + t0 * arc->sweep_angle;
-    r.sweep_angle = arc->sweep_angle * (t1 - t0);
-    return r;
-  }
-  Curve piece = curve;
-  if (t1 < 1)
-    piece = split(piece, t1).first;
-  if (t0 > 0)
-    piece = split(piece, t0 / t1).second;
-  return piece;
-}
-
-Curve reversed(const Curve &curve) {
-  return std::visit([](const auto &c) { return reversed_of(c); }, curve);
-}
-
-Curve transformed(const Curve &curve, const CurveTransform &transform) {
-  transform.validate();
-  return std::visit([&](const auto &c) { return transformed_of(c, transform); },
-                    curve);
-}
-
 double curve_length(const Curve &curve, double end) {
   if (!std::isfinite(end) || end < 0 || end > 1)
     throw std::invalid_argument("Length parameter must be in [0,1]");
-  validate(curve);
+  curve.validate();
   if (end == 0)
     return 0;
-  auto exact =
-      std::visit([end](const auto &c) { return exact_length(c, end); }, curve);
+  auto exact = curve.exact_length(end);
   double result = exact ? *exact : integrate_length(curve, end);
   if (!std::isfinite(result))
     throw std::invalid_argument("Curve length exceeds supported numeric scale");
@@ -354,9 +493,7 @@ double parameter_at_length_fraction(const Curve &curve, double fraction) {
   double length = curve_length(curve);
   if (!(length > 0))
     throw std::invalid_argument("Cannot split a zero-length curve");
-  auto exact = std::visit(
-      [fraction](const auto &c) { return exact_length_parameter(c, fraction); },
-      curve);
+  auto exact = curve.exact_length_parameter(fraction);
   if (exact)
     return *exact;
   double low = 0, high = 1;
@@ -368,7 +505,7 @@ double parameter_at_length_fraction(const Curve &curve, double fraction) {
       break;
     // Measure the smaller requested portion directly: subtracting nearly
     // equal lengths would lose precision near the end point.
-    double ratio = from_end ? curve_length(split(curve, t).second) / length
+    double ratio = from_end ? curve_length(curve.split(t).second) / length
                             : curve_length(curve, t) / length;
     double roundoff = 4 * std::numeric_limits<double>::epsilon() * std::abs(t) *
                       (speed(curve, t) / length);

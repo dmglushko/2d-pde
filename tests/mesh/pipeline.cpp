@@ -480,7 +480,7 @@ int main() {
          Loop outer = square_loop({0, 0}, 2, "outer");
          Loop flipped;
          for (auto it = outer.curves.rbegin(); it != outer.curves.rend(); ++it)
-           flipped.curves.push_back({reversed(it->curve), it->region});
+           flipped.curves.push_back({(it->curve).reversed(), it->region});
          CurveGeometry g({flipped, square_loop({0.5, 0.5}, 1, "hole")});
          auto r = Mesher(chords(), cdt())
                       .run(g, {.max_edge_length = {.absolute = 0.5}});

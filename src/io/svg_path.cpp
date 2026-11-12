@@ -196,21 +196,32 @@ geometry::Curve svg_arc(Point from, Point to, double rx, double ry,
 
 Point mirrored_y(Point p) { return {p.x, 0.0 - p.y}; }
 
+// One handler per kind and no catch-all: a new kind of curve does not
+// compile until it is mirrored here.
 geometry::Curve mirrored_y(const geometry::Curve &curve) {
-  if (const auto *c = std::get_if<geometry::Line>(&curve))
-    return geometry::Line{mirrored_y(c->start), mirrored_y(c->end)};
-  if (const auto *c = std::get_if<geometry::QuadraticBezier>(&curve))
-    return geometry::QuadraticBezier{
-        mirrored_y(c->start), mirrored_y(c->control), mirrored_y(c->end)};
-  if (const auto *c = std::get_if<geometry::CubicBezier>(&curve))
-    return geometry::CubicBezier{mirrored_y(c->start), mirrored_y(c->control1),
-                                 mirrored_y(c->control2), mirrored_y(c->end)};
-  // center + R(phi) (rx cos a, ry sin a), mirrored: the mirror turns R(phi)
-  // into R(-phi) and the angle a into -a.
-  const auto &a = std::get<geometry::EllipticalArc>(curve);
-  return geometry::EllipticalArc{mirrored_y(a.center), a.radius_x,
+  using namespace geometry;
+  return std::visit(
+      overloaded{
+          [](const Line &c) -> Curve {
+            return Line{mirrored_y(c.start), mirrored_y(c.end)};
+          },
+          [](const QuadraticBezier &c) -> Curve {
+            return QuadraticBezier{mirrored_y(c.start), mirrored_y(c.control),
+                                   mirrored_y(c.end)};
+          },
+          [](const CubicBezier &c) -> Curve {
+            return CubicBezier{mirrored_y(c.start), mirrored_y(c.control1),
+                               mirrored_y(c.control2), mirrored_y(c.end)};
+          },
+          // center + R(phi) (rx cos a, ry sin a), mirrored: the mirror
+          // turns R(phi) into R(-phi) and the angle a into -a.
+          [](const EllipticalArc &a) -> Curve {
+            return EllipticalArc{mirrored_y(a.center), a.radius_x,
                                  a.radius_y,           0.0 - a.rotation,
                                  0.0 - a.start_angle,  0.0 - a.sweep_angle};
+          },
+      },
+      curve.kind());
 }
 
 std::vector<SvgSubpath> parse_path_data(std::string_view data) {

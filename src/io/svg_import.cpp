@@ -180,7 +180,7 @@ std::vector<geometry::Loop> join_runs(std::vector<Run> runs) {
       if (reverse) {
         std::reverse(r.curves.begin(), r.curves.end());
         for (auto &c : r.curves)
-          c = geometry::reversed(c);
+          c = c.reversed();
         std::swap(r.start, r.end);
       }
       end = r.end;

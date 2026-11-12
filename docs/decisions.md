@@ -74,6 +74,18 @@ Started 2026-11-11. The previous header-only code is on the branch
   invariants or behaviour of their own. Rule: use a function when the result
   is fully described by the base type; create a new type only for its own
   data, invariants or behaviour.
+- **Curves: each kind owns its core mathematics as methods; `Curve` is a
+  value class around a `std::variant` of the kinds** (decided 2026-11-12).
+  The core is what needs the kind's own data (point, derivatives, split,
+  box, ...), stated once in the `CurveKind` concept and checked at compile
+  time. Everything computable from the core is a function written once for
+  all kinds. Code that differs by kind but belongs to another module (SVG)
+  visits `curve.kind()` with one handler per kind and no catch-all. Calls
+  are methods (`curve.point_at(t)`), not free functions. *Why:* a new kind
+  is one struct with a known list of methods, and forgetting one, or
+  forgetting a kind in another module, fails at compile time. Inheritance
+  was rejected: the kinds are a closed set fixed by the file formats, and
+  it would make every curve a pointer.
 - **Region editing (split, merge, rename) stays as methods of
   `CurveGeometry`.** *Why:* these operations must preserve the class's
   invariants: unique names, closed loops and correct depths.

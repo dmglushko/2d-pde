@@ -368,7 +368,7 @@ int main() {
          double r = 0.3 - k;
          double start = std::atan2(-k, -0.5), end = std::atan2(-k, 0.5);
          EllipticalArc arc{{0.5, k}, r, r, 0, start, end - start};
-         near(pde2d::geometry::point_at(arc, 0.5).y, 0.3, 1e-15, "arc top");
+         near(arc.point_at(0.5).y, 0.3, 1e-15, "arc top");
          CurveChain chain({arc});
          WorkingMesh w({{0, 0}, {1, 0}, {0.5, 0.1}}, {{0, 1, 2}},
                        {{{0, 1}, 0, CurveLink{0, 0, chain.length()}},

@@ -15,13 +15,13 @@ namespace {
 // arrives at its end (at_end true); zero if there is none.
 Point tangent(const geometry::Curve &curve, bool at_end) {
   double t = at_end ? 1.0 : 0.0;
-  auto bounds = geometry::derivative_bounds(curve);
-  Point d = geometry::derivative_at(curve, t);
+  auto bounds = curve.derivative_bounds();
+  Point d = curve.derivative_at(t);
   if (geometry::norm(d) > 1e-9 * bounds.first)
     return d;
   // c(t) ~ c(0) + c''(0) t^2 / 2 near the start, and c(1) - c(1 - t) ~
   // -c''(1) t^2 / 2 near the end.
-  Point d2 = geometry::second_derivative_at(curve, t);
+  Point d2 = curve.second_derivative_at(t);
   if (geometry::norm(d2) > 1e-9 * bounds.second)
     return at_end ? -1.0 * d2 : d2;
   return geometry::end_point(curve) - geometry::start_point(curve);

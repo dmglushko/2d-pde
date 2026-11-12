@@ -428,7 +428,7 @@ Point WorkingMesh::boundary_split_point(std::size_t k) const {
       e.link->s0 >= chain.offset(curve) &&
       e.link->s1 <= chain.offset(curve + 1))
     return chord_midpoint;
-  return geometry::point_at(chain.curves()[curve], t);
+  return chain.curves()[curve].point_at(t);
 }
 
 BoundarySplitResult WorkingMesh::split_boundary_edge(std::size_t k) {

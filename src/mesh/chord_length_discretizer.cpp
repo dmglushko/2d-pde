@@ -44,16 +44,13 @@ double piece_deviation(const CurveChain &chain, double sa, double sb, Point A,
     if (!(t0 < t1))
       continue;
     const auto &curve = chain.curves()[i];
-    double m =
-        geometry::is_line(curve)
-            ? 0.0
-            : geometry::derivative_bounds(geometry::subcurve(curve, t0, t1))
-                      .second /
-                  2;
+    double m = geometry::is_line(curve)
+                   ? 0.0
+                   : curve.subcurve(t0, t1).derivative_bounds().second / 2;
     double d0 = 0, d1 = 0;
     if (pa.curve != pb.curve) {
-      d0 = distance_to_segment(geometry::point_at(curve, t0), A, B);
-      d1 = distance_to_segment(geometry::point_at(curve, t1), A, B);
+      d0 = distance_to_segment(curve.point_at(t0), A, B);
+      d1 = distance_to_segment(curve.point_at(t1), A, B);
     }
     double g = std::max(d0, d1);
     if (m > 0) {

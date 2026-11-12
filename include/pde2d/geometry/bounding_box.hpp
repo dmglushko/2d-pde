@@ -1,7 +1,5 @@
 #pragma once
 
-#include "pde2d/geometry/curve.hpp"
-#include "pde2d/geometry/curve_geometry.hpp"
 #include "pde2d/geometry/point.hpp"
 
 #include <span>
@@ -31,17 +29,5 @@ double diagonal(const BoundingBox &box);
 // The smallest box containing the points. Throws std::invalid_argument for
 // an empty list.
 BoundingBox bounding_box(std::span<const Point> points);
-
-// The smallest box containing the curve: its end points and the points
-// where x' or y' vanishes (roots of the Bezier derivatives, the axis
-// extremes of an arc), each evaluated with point_at.
-BoundingBox bounding_box(const Curve &curve);
-// The smallest box containing every curve. Throws std::invalid_argument
-// for an empty list.
-BoundingBox bounding_box(std::span<const Curve> curves);
-// The smallest box containing every curve of every loop. Throws
-// std::invalid_argument when there is no curve.
-BoundingBox bounding_box(std::span<const Loop> loops);
-BoundingBox bounding_box(const CurveGeometry &geometry);
 
 } // namespace pde2d::geometry

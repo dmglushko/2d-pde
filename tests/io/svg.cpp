@@ -54,7 +54,7 @@ bool same_point(Point a, Point b, double tolerance) {
 std::string kinds(const geometry::Loop &loop) {
   std::string s;
   for (const auto &c : loop.curves)
-    s += "LQCA"[c.curve.index()];
+    s += "LQCA"[c.curve.kind().index()];
   return s;
 }
 
@@ -73,18 +73,18 @@ void check_same_geometry(const geometry::CurveGeometry &a,
     std::size_t j = 0;
     for (const auto &c : ca) {
       int pieces = 1;
-      const auto *arc = std::get_if<geometry::EllipticalArc>(&c.curve);
+      const auto *arc = std::get_if<geometry::EllipticalArc>(&c.curve.kind());
       if (arc && exported)
         pieces = static_cast<int>(
             std::ceil(std::abs(arc->sweep_angle) / (pi / 2) * (1 - 1e-12)));
       for (int k = 0; k < pieces; ++k, ++j) {
         check(j < cb.size(), "enough curves");
         check(cb[j].region == c.region, "same region");
-        check(cb[j].curve.index() == c.curve.index(), "same kind");
+        check(cb[j].curve.kind().index() == c.curve.kind().index(),
+              "same kind");
         for (double u : {0.0, 0.25, 0.5, 0.75, 1.0})
-          check(same_point(geometry::point_at(cb[j].curve, u),
-                           geometry::point_at(c.curve, (k + u) / pieces),
-                           tolerance),
+          check(same_point(cb[j].curve.point_at(u),
+                           c.curve.point_at((k + u) / pieces), tolerance),
                 "same points");
       }
     }
@@ -113,20 +113,21 @@ int main() {
          const auto &loop = g.loops()[0];
          check(kinds(loop) == "LLQQCCA", "kinds: " + kinds(loop));
          const auto &c = loop.curves;
-         auto line = std::get<geometry::Line>(c[0].curve);
+         auto line = std::get<geometry::Line>(c[0].curve.kind());
          check(line.start == Point{0, 0} && line.end == Point{4, 0}, "H");
-         check(std::get<geometry::Line>(c[1].curve).end == Point{4, 1}, "V");
-         auto t = std::get<geometry::QuadraticBezier>(c[3].curve);
+         check(std::get<geometry::Line>(c[1].curve.kind()).end == Point{4, 1},
+               "V");
+         auto t = std::get<geometry::QuadraticBezier>(c[3].curve.kind());
          check(t.control == Point{2.5, 2}, "T reflects the Q control");
-         auto s = std::get<geometry::CubicBezier>(c[5].curve);
+         auto s = std::get<geometry::CubicBezier>(c[5].curve.kind());
          near(s.control1.x, 0, 1e-15, "S reflects the C control");
          near(s.control1.y, 1.8, 1e-15, "S reflects the C control");
-         auto arc = std::get<geometry::EllipticalArc>(c[6].curve);
+         auto arc = std::get<geometry::EllipticalArc>(c[6].curve.kind());
          near(arc.center.x, 0, 1e-15, "arc center x");
          near(arc.center.y, 0.5, 1e-15, "arc center y");
          near(arc.radius_x, 0.5, 1e-15, "arc radius");
          near(arc.sweep_angle, pi, 1e-12, "half a turn, positive");
-         near(geometry::point_at(arc, 0.5).x, -0.5, 1e-12, "bulges left");
+         near(arc.point_at(0.5).x, -0.5, 1e-12, "bulges left");
          for (const auto &bc : c)
            check(bc.region == "wall", "region from the id");
          // Relative commands give the same curves.
@@ -161,7 +162,7 @@ int main() {
          auto scaled = from_text(
              document(path("id=\"a\"", "M0 0 A 0.1 0.1 0 0 0 2 0 Z")));
          auto half = std::get<geometry::EllipticalArc>(
-             scaled.loops()[0].curves[0].curve);
+             scaled.loops()[0].curves[0].curve.kind());
          near(half.radius_x, 1, 1e-12, "scaled radius");
        }},
       {"arcs_at_extreme_scales",
@@ -177,7 +178,7 @@ int main() {
            auto g = from_text(document(path("id=\"a\"", text.str())));
            const auto &curves = g.loops()[0].curves;
            check(kinds(g.loops()[0]) == "LAL", "line, arc, line");
-           auto arc = std::get<geometry::EllipticalArc>(curves[1].curve);
+           auto arc = std::get<geometry::EllipticalArc>(curves[1].curve.kind());
            near(arc.center.x / r, 0, 1e-15, "center x");
            near(arc.center.y / r, 0, 1e-15, "center y");
            near(arc.radius_x / r, 1, 1e-15, "radius");
@@ -202,7 +203,7 @@ int main() {
                      geometry::end_point(c[0].curve) == Point{1, 0},
                  "the flat arc ends exactly at its end points");
            // The sagitta of a chord of length 1: 1 / (8 r).
-           Point mid = geometry::point_at(c[0].curve, 0.5);
+           Point mid = c[0].curve.point_at(0.5);
            near(mid.x, 0.5, 1e-15, "middle x");
            near(std::abs(mid.y), 1 / (8 * r), 1e-6 / (8 * r), "sagitta");
          }
@@ -261,8 +262,8 @@ int main() {
              document(path("id=\"q\"", "M1 0 A1 1 0 0 0 0 -1 L0 0 Z")));
          for (const auto &bc : quarter.loops()[0].curves)
            if (const auto *arc =
-                   std::get_if<geometry::EllipticalArc>(&bc.curve)) {
-             Point mid = geometry::point_at(*arc, 0.5);
+                   std::get_if<geometry::EllipticalArc>(&bc.curve.kind())) {
+             Point mid = arc->point_at(0.5);
              near(mid.x, std::sqrt(0.5), 1e-15, "arc middle x");
              near(mid.y, std::sqrt(0.5), 1e-15, "arc middle y");
            }
@@ -273,8 +274,10 @@ int main() {
          check(text.find(" -0.5") != std::string::npos, "y negated on export");
          auto back = from_text(text);
          for (std::size_t i = 0; i < r.loops()[0].curves.size(); ++i) {
-           auto a = std::get<geometry::Line>(r.loops()[0].curves[i].curve);
-           auto b = std::get<geometry::Line>(back.loops()[0].curves[i].curve);
+           auto a =
+               std::get<geometry::Line>(r.loops()[0].curves[i].curve.kind());
+           auto b =
+               std::get<geometry::Line>(back.loops()[0].curves[i].curve.kind());
            check(a.start == b.start && a.end == b.end, "exact round trip");
          }
        }},

@@ -39,20 +39,20 @@ constexpr int samples = 256;
 
 CandidateCurve candidate(const geometry::Curve &curve,
                          const std::string &region, double tolerance) {
-  return {curve, region,
-          geometry::padded(geometry::bounding_box(curve), tolerance)};
+  return {curve, region, geometry::padded(curve.bounding_box(), tolerance)};
 }
 
 // Parameter of the curve point closest to p, and the distance.
 std::pair<double, double> project(const geometry::Curve &curve, Point p) {
-  if (const auto *line = std::get_if<geometry::Line>(&curve)) {
+  // A line has a closed formula; every other kind is searched below.
+  if (const auto *line = std::get_if<geometry::Line>(&curve.kind())) {
     Point d = line->end - line->start;
     double t = std::clamp(
         geometry::dot(p - line->start, d) / geometry::dot(d, d), 0.0, 1.0);
-    return {t, geometry::distance(geometry::point_at(curve, t), p)};
+    return {t, geometry::distance(curve.point_at(t), p)};
   }
   auto dist2 = [&](double t) {
-    Point d = geometry::point_at(curve, t) - p;
+    Point d = curve.point_at(t) - p;
     return geometry::dot(d, d);
   };
   int best = 0;

@@ -31,7 +31,7 @@ double sampled_area(const Loop &loop) {
   std::vector<Point> p;
   for (const auto &c : loop.curves)
     for (int i = 0; i < 400; ++i)
-      p.push_back(point_at(c.curve, i / 400.0));
+      p.push_back(c.curve.point_at(i / 400.0));
   double twice = 0;
   for (std::size_t i = 0; i < p.size(); ++i) {
     Point a = p[i], b = p[(i + 1) % p.size()];
@@ -78,7 +78,8 @@ int main() {
        [] {
          Loop outer = square_loop(0, 0, 4, true);
          CurveGeometry g({outer, circle_loop({2, 2}, 1, false, "hole")});
-         const auto *first = std::get_if<Line>(&g.loops()[0].curves[0].curve);
+         const auto *first =
+             std::get_if<Line>(&g.loops()[0].curves[0].curve.kind());
          check(first && first->start == Point{0, 0} &&
                    first->end == Point{4, 0},
                "outer loop unchanged");
@@ -90,7 +91,8 @@ int main() {
          // cancel to zero (which would read as clockwise and reverse it).
          for (bool ccw : {true, false}) {
            CurveGeometry g({square_loop(1e9, 1e9, 1, ccw)});
-           const auto &line = std::get<Line>(g.loops()[0].curves[0].curve);
+           const auto &line =
+               std::get<Line>(g.loops()[0].curves[0].curve.kind());
            check(line.start == Point{1e9, 1e9} &&
                      line.end == Point{1e9 + 1, 1e9},
                  "normalized counterclockwise");
@@ -102,7 +104,7 @@ int main() {
          loop.curves[0].region = "a"; // (0,0) -> (0,1) when clockwise
          CurveGeometry g({loop});
          for (const auto &c : g.loops()[0].curves) {
-           const auto &line = std::get<Line>(c.curve);
+           const auto &line = std::get<Line>(c.curve.kind());
            bool left_side = line.start.x == 0 && line.end.x == 0;
            check(left_side == (c.region == "a"), "region follows its curve");
          }
@@ -110,7 +112,9 @@ int main() {
       {"open_loop",
        [] {
          Loop loop = square_loop(0, 0, 1, true);
-         std::get<Line>(loop.curves[2].curve).end = {0, 0.9};
+         Line open = std::get<Line>(loop.curves[2].curve.kind());
+         open.end = {0, 0.9};
+         loop.curves[2].curve = open;
          expect_throws<std::invalid_argument>(
              [&] { CurveGeometry g({loop}); },
              "Loop 0 is not closed: curve 2 ends at");
@@ -187,7 +191,8 @@ int main() {
        [] {
          CurveGeometry g({square_loop(0, 0, 1, true)});
          auto moved = g.transformed({.scale = 2, .translation = {5, 0}});
-         const auto &line = std::get<Line>(moved.loops()[0].curves[0].curve);
+         const auto &line =
+             std::get<Line>(moved.loops()[0].curves[0].curve.kind());
          check(line.start == Point{5, 0} && line.end == Point{7, 0}, "moved");
        }},
   });

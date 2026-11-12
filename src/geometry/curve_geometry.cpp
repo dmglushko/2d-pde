@@ -40,9 +40,22 @@ void check_region_name(const std::string &name, const std::string &context) {
         "'-' is reserved)");
 }
 
+// The smallest box containing every curve of every loop.
+BoundingBox box_of_loops(const std::vector<Loop> &loops) {
+  std::optional<BoundingBox> box;
+  for (const auto &loop : loops)
+    for (const auto &c : loop.curves) {
+      const BoundingBox b = c.curve.bounding_box();
+      box = box ? merged(*box, b) : b;
+    }
+  if (!box)
+    throw std::invalid_argument("Geometry has no curves");
+  return *box;
+}
+
 // Size of the geometry: the diagonal of its exact bounding box.
 double geometry_scale(const std::vector<Loop> &loops) {
-  double scale = diagonal(bounding_box(loops));
+  double scale = diagonal(box_of_loops(loops));
   if (!std::isfinite(scale) || !(scale > 0))
     throw std::invalid_argument("Geometry has no extent or is too large");
   return scale;
@@ -53,8 +66,8 @@ double geometry_scale(const std::vector<Loop> &loops) {
 // point is not included: the next curve starts there.
 void flatten(const Curve &curve, double tolerance, std::vector<Point> &out) {
   auto emit = [&](auto &&self, double a, double b, int depth) -> void {
-    Curve piece = subcurve(curve, a, b);
-    double deviation = derivative_bounds(piece).second / 8;
+    Curve piece = curve.subcurve(a, b);
+    double deviation = piece.derivative_bounds().second / 8;
     bool split = depth < 2 || (!is_line(curve) && deviation > tolerance);
     if (split) {
       if (depth >= 24)
@@ -64,7 +77,7 @@ void flatten(const Curve &curve, double tolerance, std::vector<Point> &out) {
       self(self, a, m, depth + 1);
       self(self, m, b, depth + 1);
     } else {
-      out.push_back(point_at(curve, a));
+      out.push_back(curve.point_at(a));
     }
   };
   emit(emit, 0.0, 1.0, 0);
@@ -86,11 +99,11 @@ Analysis analyze(const std::vector<Loop> &loops) {
     for (std::size_t c = 0; c < loops[l].curves.size(); ++c) {
       const auto &bc = loops[l].curves[c];
       try {
-        validate(bc.curve);
+        bc.curve.validate();
       } catch (const std::invalid_argument &e) {
         throw std::invalid_argument(where(l, c) + ": " + e.what());
       }
-      if (derivative_bounds(bc.curve).first == 0)
+      if (bc.curve.derivative_bounds().first == 0)
         throw std::invalid_argument(where(l, c) + " has zero length");
       check_region_name(bc.region, where(l, c));
     }
@@ -160,7 +173,7 @@ Analysis analyze(const std::vector<Loop> &loops) {
 Loop reversed_loop(const Loop &loop) {
   Loop r;
   for (auto it = loop.curves.rbegin(); it != loop.curves.rend(); ++it)
-    r.curves.push_back({reversed(it->curve), it->region});
+    r.curves.push_back({it->curve.reversed(), it->region});
   return r;
 }
 
@@ -319,7 +332,7 @@ void CurveGeometry::split_region(const std::string &region, double fraction,
     if (local < lengths[i] - junction) {
       double t = parameter_at_length_fraction(loop.curves[i].curve,
                                               local / lengths[i]);
-      auto [a, b] = split(loop.curves[i].curve, t);
+      auto [a, b] = loop.curves[i].curve.split(t);
       loop.curves[i].curve = a;
       loop.curves.insert(loop.curves.begin() +
                              static_cast<std::ptrdiff_t>(i + 1),
@@ -352,8 +365,10 @@ CurveGeometry::transformed(const CurveTransform &transform) const {
   std::vector<Loop> loops = loops_;
   for (auto &loop : loops)
     for (auto &c : loop.curves)
-      c.curve = geometry::transformed(c.curve, transform);
+      c.curve = c.curve.transformed(transform);
   return CurveGeometry(std::move(loops));
 }
+
+BoundingBox CurveGeometry::bounding_box() const { return box_of_loops(loops_); }
 
 } // namespace pde2d::geometry

@@ -12,7 +12,7 @@ CurveChain::CurveChain(std::vector<geometry::Curve> curves)
   offsets_.reserve(curves_.size() + 1);
   offsets_.push_back(0.0);
   for (const auto &c : curves_) {
-    geometry::validate(c);
+    c.validate();
     double l = geometry::curve_length(c);
     if (!(l > 0))
       throw std::invalid_argument("A curve chain cannot hold a zero-length "
@@ -56,7 +56,7 @@ bool is_valid_link(const CurveLink &link,
 
 geometry::Point CurveChain::point_at(double s) const {
   Position p = position(s);
-  return geometry::point_at(curves_[p.curve], p.t);
+  return curves_[p.curve].point_at(p.t);
 }
 
 } // namespace pde2d::mesh

@@ -24,7 +24,7 @@ impossible or unclear, ask.
 
 | Path | Contents |
 | --- | --- |
-| `include/pde2d/geometry/` | `point.hpp`, `predicates.hpp` (exact `orient`, `incircle`), `curve.hpp` (curve kinds and math), `polygon.hpp`, `curve_geometry.hpp` (`Loop`, `CurveGeometry`), `bounding_box.hpp` (`BoundingBox`, exact boxes of curves), `shapes.hpp` |
+| `include/pde2d/geometry/` | `point.hpp`, `predicates.hpp` (exact `orient`, `incircle`), `bounding_box.hpp` (`BoundingBox`), `curve.hpp` (the curve kinds with their core methods, the `CurveKind` concept, `Curve`, functions built on the core), `polygon.hpp`, `curve_geometry.hpp` (`Loop`, `CurveGeometry`), `shapes.hpp` |
 | `src/geometry/` | their implementation; `predicates.cpp` is Shewchuk's adaptive arithmetic, compiled with `-fno-fast-math -ffp-contract=off` |
 | `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`, with optional chains and links), `mesh_spec.hpp` (`LengthBound`, `MeshSpec`), `domain_size.hpp` (what relative lengths multiply), `curve_chain.hpp` (`CurveChain`, `CurveLink`, `default_corner_angle_degrees`), `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, improver roles, capabilities, `ImproverUse`, `PipelinePlan`, `plan_pipeline`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) |
@@ -92,6 +92,15 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - Style: clang-format (LLVM, 80 columns).
 
 ## Invariants that are easy to break
+
+- **A curve kind owns its core methods; nothing tests the kind by hand.**
+  Mathematics that needs a kind's data is a method of the kind, listed in
+  the `CurveKind` concept. What can be computed from the core is one
+  function for all kinds. Code that must differ by kind in another module
+  uses `std::visit(overloaded{...}, curve.kind())` with one handler per
+  kind and no catch-all (`const auto &`), never a chain of `get_if`. A
+  `get_if` is acceptable only as a shortcut for one kind in front of code
+  that handles every kind.
 
 - **Domain on the left.** `CurveGeometry` normalizes loops (even depth
   counterclockwise, odd depth clockwise); `BoundaryPolygon`, `WorkingMesh`
