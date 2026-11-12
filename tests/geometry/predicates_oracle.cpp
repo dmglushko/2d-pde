@@ -277,6 +277,37 @@ int main() {
          }
          check(tally.cases > 4000, "cases ran");
        }},
+      {"mixed_exponents",
+       [] {
+         // Every coordinate with its own exponent, from subnormal to huge,
+         // some of them zero: products of differences of very different
+         // sizes underflow or overflow inside the floating-point filter.
+         Random r;
+         Tally tally;
+         auto coordinate = [&] {
+           if (r.integer(0, 4) == 0)
+             return 0.0;
+           double m = r.integer(1, 1 << 20) * (r.integer(0, 1) ? 1.0 : -1.0);
+           return std::ldexp(m, r.integer(-1074, 980));
+         };
+         auto point = [&] { return Point{coordinate(), coordinate()}; };
+         for (int k = 0; k < 6000; ++k) {
+           Point a = point(), b = point(), c = point(), d = point();
+           compare_orient(a, b, c, tally);
+           compare_incircle(a, b, c, d, tally);
+           // The shape of the original counterexample: points near the
+           // axes at unrelated scales.
+           auto e = [&](int lo, int hi) {
+             return std::ldexp(1.0, r.integer(lo, hi));
+           };
+           Point p{0, e(200, 900)}, q{0, e(-700, -100)},
+               s{e(-1000, -700), e(-300, -100)}, t{e(-1074, -800), 0};
+           compare_orient(p, q, s, tally);
+           compare_incircle(p, q, s, t, tally);
+           compare_incircle(p, q, s, r.nudge(t, 1), tally);
+         }
+         check(tally.cases > 20000, "cases ran");
+       }},
       {"general_position",
        [] {
          Random r;

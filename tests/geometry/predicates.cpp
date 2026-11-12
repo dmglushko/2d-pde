@@ -72,6 +72,24 @@ int main() {
                         {0, std::nextafter(-1e-300, 0.0)}) == 1,
                "tiny, just inside");
        }},
+      {"mixed_scales_underflow",
+       [] {
+         // Coordinates of very different sizes: a product of two small
+         // differences underflows, and multiplied by a huge lifted
+         // distance its lost accuracy outweighs the filter's error bound.
+         // Counterclockwise a, b, c; d lies outside their circle.
+         Point a{0, 0x1p400}, b{0, 0x1p-600}, c{0x1p-900, 0x1p-150},
+             d{0x1p-1000, 0};
+         check(orient(a, b, c) == 1, "counterclockwise");
+         check(incircle(a, b, c, d) == -1, "d outside the circle");
+         check(incircle(b, c, a, d) == -1, "rotated, d outside");
+         // orient: a product that underflows to a subnormal or to zero.
+         check(orient({0, 0}, {0x1p-600, 0x1p-600}, {0x1p-500, 0x1p-500}) == 0,
+               "tiny collinear");
+         check(orient({0, 0}, {0x1p-600, 0x1p-560},
+                      {0x1p-500, std::nextafter(0x1p-460, 0.0)}) == -1,
+               "tiny, just below");
+       }},
       {"non_finite_rejected",
        [] {
          double inf = std::numeric_limits<double>::infinity();

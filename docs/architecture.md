@@ -43,7 +43,10 @@ are exact predicates: Shewchuk's adaptive-precision `orient2d` and
 `incircle` (floating-point filter, then exact expansion arithmetic in
 stages), with a slow exact-integer evaluation for the rare undecided case
 whose coordinates lie outside [2^-200, 2^200], where the expansion
-arithmetic could overflow or underflow. `predicates.cpp` is compiled with
+arithmetic could overflow or underflow. Outside that range the filter's
+answer is used only if none of its products underflowed (an underflowed
+product, magnified by a later one, can exceed the error bound); the
+range check comes before the filter, so no stage runs unprotected. `predicates.cpp` is compiled with
 `-fno-fast-math -ffp-contract=off` and refuses to compile under
 `__FAST_MATH__` or with `FLT_EVAL_METHOD != 0` (x87 extended precision),
 because the error-free transformations need every operation rounded on

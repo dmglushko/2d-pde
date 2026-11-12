@@ -675,50 +675,106 @@ double incircle_adapt(Point pa, Point pb, Point pc, Point pd,
 }
 
 // The floating-point filters of orient2d and incircle accept their answer
-// only if no product can have overflowed or underflowed (finite values,
-// bound at least the smallest normal double); otherwise the adaptive
-// stages decide.
+// only if the bound is finite and at least the smallest normal double (the
+// bound itself has not underflowed); otherwise the adaptive stages decide.
 bool filter_decides(double det, double errbound) {
   return std::isfinite(det) && std::isfinite(errbound) &&
          errbound >= std::numeric_limits<double>::min() &&
          std::abs(det) > errbound;
 }
 
-} // namespace
+// Shewchuk's error bounds hold only if no product underflowed: a product
+// that drops below the smallest normal double loses absolute accuracy that
+// a relative bound does not cover, and a later product can magnify that
+// loss far beyond the bound (for example a tiny 2x2 minor times a huge
+// lifted distance in incircle). Inside the exact range no product can
+// underflow, so the plain product is used there; outside it, each product
+// records whether it underflowed, and the filter's answer is then refused.
+// Overflow needs no check: it makes the bound infinite or NaN, which
+// filter_decides refuses.
+struct PlainProduct {
+  double operator()(double x, double y) const { return x * y; }
+  bool underflowed() const { return false; }
+};
 
-int orient(Point a, Point b, Point c) {
-  check_finite({a.x, a.y, b.x, b.y, c.x, c.y});
-  double detleft = (a.x - c.x) * (b.y - c.y);
-  double detright = (a.y - c.y) * (b.x - c.x);
+struct CheckedProduct {
+  double operator()(double x, double y) {
+    double p = x * y;
+    if (std::abs(p) < std::numeric_limits<double>::min() && x != 0 && y != 0)
+      underflow = true;
+    return p;
+  }
+  bool underflowed() const { return underflow; }
+  bool underflow = false;
+};
+
+struct FilterResult {
+  double det, detsum;
+  bool decided;
+};
+
+template <class Product>
+FilterResult orient_filter(Point a, Point b, Point c, Product &&mul) {
+  double detleft = mul(a.x - c.x, b.y - c.y);
+  double detright = mul(a.y - c.y, b.x - c.x);
   double det = detleft - detright;
   double detsum = std::abs(detleft) + std::abs(detright);
-  if (filter_decides(det, ccwerrboundA * detsum))
-    return sign(det);
-  if (!in_exact_range({a.x, a.y, b.x, b.y, c.x, c.y}))
-    return integer_orient(a, b, c);
-  return sign(orient2d_adapt(a, b, c, detsum));
+  bool decided =
+      filter_decides(det, mul(ccwerrboundA, detsum)) && !mul.underflowed();
+  return {det, detsum, decided};
+}
+
+template <class Product>
+FilterResult incircle_filter(Point a, Point b, Point c, Point d,
+                             Product &&mul) {
+  double adx = a.x - d.x, bdx = b.x - d.x, cdx = c.x - d.x;
+  double ady = a.y - d.y, bdy = b.y - d.y, cdy = c.y - d.y;
+  double bdxcdy = mul(bdx, cdy), cdxbdy = mul(cdx, bdy);
+  double alift = mul(adx, adx) + mul(ady, ady);
+  double cdxady = mul(cdx, ady), adxcdy = mul(adx, cdy);
+  double blift = mul(bdx, bdx) + mul(bdy, bdy);
+  double adxbdy = mul(adx, bdy), bdxady = mul(bdx, ady);
+  double clift = mul(cdx, cdx) + mul(cdy, cdy);
+  double det = mul(alift, bdxcdy - cdxbdy) + mul(blift, cdxady - adxcdy) +
+               mul(clift, adxbdy - bdxady);
+  double permanent = mul(std::abs(bdxcdy) + std::abs(cdxbdy), alift) +
+                     mul(std::abs(cdxady) + std::abs(adxcdy), blift) +
+                     mul(std::abs(adxbdy) + std::abs(bdxady), clift);
+  bool decided =
+      filter_decides(det, mul(iccerrboundA, permanent)) && !mul.underflowed();
+  return {det, permanent, decided};
+}
+
+} // namespace
+
+// Inside the exact range: filter, then the adaptive stages. Outside it:
+// the filter with checked products, then the integer evaluation.
+int orient(Point a, Point b, Point c) {
+  check_finite({a.x, a.y, b.x, b.y, c.x, c.y});
+  if (in_exact_range({a.x, a.y, b.x, b.y, c.x, c.y})) {
+    FilterResult f = orient_filter(a, b, c, PlainProduct{});
+    if (f.decided)
+      return sign(f.det);
+    return sign(orient2d_adapt(a, b, c, f.detsum));
+  }
+  FilterResult f = orient_filter(a, b, c, CheckedProduct{});
+  if (f.decided)
+    return sign(f.det);
+  return integer_orient(a, b, c);
 }
 
 int incircle(Point a, Point b, Point c, Point d) {
   check_finite({a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y});
-  double adx = a.x - d.x, bdx = b.x - d.x, cdx = c.x - d.x;
-  double ady = a.y - d.y, bdy = b.y - d.y, cdy = c.y - d.y;
-  double bdxcdy = bdx * cdy, cdxbdy = cdx * bdy;
-  double alift = adx * adx + ady * ady;
-  double cdxady = cdx * ady, adxcdy = adx * cdy;
-  double blift = bdx * bdx + bdy * bdy;
-  double adxbdy = adx * bdy, bdxady = bdx * ady;
-  double clift = cdx * cdx + cdy * cdy;
-  double det = alift * (bdxcdy - cdxbdy) + blift * (cdxady - adxcdy) +
-               clift * (adxbdy - bdxady);
-  double permanent = (std::abs(bdxcdy) + std::abs(cdxbdy)) * alift +
-                     (std::abs(cdxady) + std::abs(adxcdy)) * blift +
-                     (std::abs(adxbdy) + std::abs(bdxady)) * clift;
-  if (filter_decides(det, iccerrboundA * permanent))
-    return sign(det);
-  if (!in_exact_range({a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y}))
-    return integer_incircle(a, b, c, d);
-  return sign(incircle_adapt(a, b, c, d, permanent));
+  if (in_exact_range({a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y})) {
+    FilterResult f = incircle_filter(a, b, c, d, PlainProduct{});
+    if (f.decided)
+      return sign(f.det);
+    return sign(incircle_adapt(a, b, c, d, f.detsum));
+  }
+  FilterResult f = incircle_filter(a, b, c, d, CheckedProduct{});
+  if (f.decided)
+    return sign(f.det);
+  return integer_incircle(a, b, c, d);
 }
 
 bool on_segment(Point a, Point b, Point p) {
