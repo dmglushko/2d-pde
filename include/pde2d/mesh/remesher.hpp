@@ -40,9 +40,10 @@ public:
   // the curve of its region that contains both its end points, so split
   // boundary edges get their new point on the curve. An edge whose end
   // points lie on two different curves (across a junction, or across the
-  // start of a closed curve) stays unlinked; the "curve_links" report says
-  // how many. Throws std::invalid_argument if a mesh region is not in the
-  // geometry or a boundary node is not on a curve of its region.
+  // start of a closed curve) stays unlinked; the "curve_links" report
+  // (right after "pipeline") says how many. Each geometry curve becomes a
+  // chain of its own. Throws std::invalid_argument if a mesh region is not in
+  // the geometry or a boundary node is not on a curve of its region.
   [[nodiscard]] MeshResult run(const Mesh &mesh,
                                const geometry::CurveGeometry &geometry,
                                const MeshSpec &spec) const;

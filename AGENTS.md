@@ -26,8 +26,8 @@ impossible or unclear, ask.
 | --- | --- |
 | `include/pde2d/geometry/` | `point.hpp`, `predicates.hpp` (exact `orient`, `incircle`), `curve.hpp` (curve kinds and math), `polygon.hpp`, `curve_geometry.hpp` (`Loop`, `CurveGeometry`), `shapes.hpp` |
 | `src/geometry/` | their implementation; `predicates.cpp` is Shewchuk's adaptive arithmetic, compiled with `-fno-fast-math -ffp-contract=off` |
-| `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`), `mesh_spec.hpp`, `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, capabilities, `check_compatibility`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
-| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp` |
+| `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`), `mesh_spec.hpp`, `curve_chain.hpp` (`CurveChain`), `boundary_polygon.hpp` (`CurveLink`), `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, capabilities, `ImproverUse`, `PipelinePlan`, `plan_pipeline`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
+| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges) |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt` |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh` |
@@ -88,11 +88,24 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - **Depth and parent are computed**, stored apart from `Loop`, never set by
   the user.
 - **WorkingMesh edge convention:** edge `i` of a triangle is opposite
-  vertex `i`. Edits never delete triangles or nodes, and must leave the
-  mesh valid or throw without changing it.
-- **Boundary edges carry region tags and optional curve links**; a refiner
-  must update them when it splits (use `split_boundary_edge`). A linked
-  edge is split at the curve point, an unlinked one at the chord midpoint.
+  vertex `i`. Edits must leave the mesh valid or throw without changing
+  it.
+- **WorkingMesh may delete triangles and nodes** (only when a boundary
+  split re-triangulates). They stay as tombstones until `compact()`, so
+  code that loops over `triangles()` or `nodes()` during refinement must
+  skip `is_triangle_deleted` / `is_node_deleted` entries, and queues must
+  check before use. Boundary edges are never deleted. The `Remesher`
+  compacts after the refiner.
+- **Boundary edges carry region tags and optional curve links**
+  `(chain, s0, s1)` in arc length; a refiner must update them when it
+  splits (use `split_boundary_edge`, which applies the boundary split
+  policy and may fail: check `BoundarySplitResult::split` and never retry
+  an `is_unsplittable` edge). A linked edge is split at the arc-length
+  middle on its chain, an unlinked one at the chord midpoint.
+- **Refiners never name improvers.** They receive the resolved local
+  improvers in `run`; improvers are configured only in the `Mesher` or
+  `Remesher`, and a mode that cannot be honoured is a warning in the
+  "pipeline" report, not an exception.
 - **The Mesher never sees FEM data.** Its only external input is the
   `MeshSpec`.
 - **`MeshResult::target_met` must be checked**: a mesh can miss its target

@@ -73,7 +73,8 @@ int main() {
   mesh::MeshResult result = mesher.run(plate, {.max_edge_length = 0.2});
   // result.mesh: nodes, triangles, boundary edges with region ids, and
   // region_names. result.target_met says whether every edge is at most
-  // 0.2; result.reports has one report per stage.
+  // 0.2; result.reports starts with the "pipeline" report (the plan and
+  // its warnings), then has one report per stage.
   return result.target_met ? 0 : 1;
 }
 ```
