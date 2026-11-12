@@ -31,8 +31,9 @@ Side side_of(Point a, Point b, Point c, Point p) {
 
 bool segment_meets_triangle(Point u, Point v, Point a, Point b, Point c) {
   return side_of(a, b, c, u) != Side::outside ||
-         side_of(a, b, c, v) != Side::outside || segments_intersect(u, v, a, b) ||
-         segments_intersect(u, v, b, c) || segments_intersect(u, v, c, a);
+         side_of(a, b, c, v) != Side::outside ||
+         segments_intersect(u, v, a, b) || segments_intersect(u, v, b, c) ||
+         segments_intersect(u, v, c, a);
 }
 
 // The v1 policy (decided 2026-11-12): (a) split directly; (b) re-triangulate
@@ -187,9 +188,8 @@ private:
         std::size_t other = u == shared ? v : u;
         Point o = P[other];
         ok = side_of(A, B, p, o) == Side::outside &&
-             (shared == a
-                  ? !(orient(A, B, o) >= 0 && orient(A, p, o) <= 0)
-                  : !(orient(B, p, o) >= 0 && orient(B, A, o) <= 0));
+             (shared == a ? !(orient(A, B, o) >= 0 && orient(A, p, o) <= 0)
+                          : !(orient(B, p, o) >= 0 && orient(B, A, o) <= 0));
       } else {
         ok = !segment_meets_triangle(P[u], P[v], A, B, p);
       }

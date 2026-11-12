@@ -50,7 +50,8 @@ crossed_edges(const WorkingMesh &mesh, std::size_t a, std::size_t b) {
     // Across the edge right -> left is the triangle with left -> right.
     auto [t, edge] = mesh.find_edge(left, right);
     if (t == no_index)
-      throw std::logic_error("Edge recovery: the walk along the edge left the mesh");
+      throw std::logic_error(
+          "Edge recovery: the walk along the edge left the mesh");
     std::size_t w = mesh.triangles()[t][static_cast<std::size_t>(edge)];
     if (w == b)
       return result;
@@ -111,6 +112,5 @@ std::size_t recover_edge(WorkingMesh &mesh, std::size_t a, std::size_t b,
     throw std::logic_error("Edge recovery failed");
   return flips;
 }
-
 
 } // namespace pde2d::mesh::detail
