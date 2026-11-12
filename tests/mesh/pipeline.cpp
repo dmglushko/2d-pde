@@ -59,16 +59,25 @@ public:
   }
 };
 
-// An improver with a local version and declared effects; it does nothing
-// but count its calls.
-class Probe final : public Improver, public LocalImprover {
+// An improver with declared effects and roles (both by default); it does
+// nothing but return one change per local call.
+class Probe final : public Improver,
+                    public LocalImprover,
+                    public FinalImprover {
 public:
-  Probe(std::string name, ImproverEffects effects, ImproverUse use)
-      : name_(std::move(name)), effects_(effects), use_(use) {}
+  Probe(std::string name, ImproverEffects effects, ImproverUse use,
+        bool local = true, bool final = true)
+      : name_(std::move(name)), effects_(effects), use_(use), local_(local),
+        final_(final) {}
   std::string name() const override { return name_; }
   ImproverEffects effects() const override { return effects_; }
   ImproverUse use() const override { return use_; }
-  const LocalImprover *as_local_improver() const override { return this; }
+  const LocalImprover *as_local() const override {
+    return local_ ? this : nullptr;
+  }
+  const FinalImprover *as_final() const override {
+    return final_ ? this : nullptr;
+  }
   void run(WorkingMesh &, const MeshSpec &, StageReport &) const override {}
   std::size_t improve_around(WorkingMesh &,
                              std::span<const std::size_t>) const override {
@@ -79,10 +88,39 @@ private:
   std::string name_;
   ImproverEffects effects_;
   ImproverUse use_;
+  bool local_, final_;
 };
 
-auto probe(std::string name, ImproverEffects effects, ImproverUse use) {
-  return std::make_shared<Probe>(std::move(name), effects, use);
+auto probe(std::string name, ImproverEffects effects, ImproverUse use,
+           bool local = true, bool final = true) {
+  return std::make_shared<Probe>(std::move(name), effects, use, local, final);
+}
+
+// Distance from p to the boundary of the stadium: [0, 2] x [0, 2] with a
+// half disc of radius 1 on each short end.
+double stadium_distance(Point p) {
+  if (p.x > 2)
+    return std::abs(distance(p, {2, 1}) - 1);
+  if (p.x < 0)
+    return std::abs(distance(p, {0, 1}) - 1);
+  return std::min(std::abs(p.y), std::abs(p.y - 2));
+}
+
+// The stadium as one region: its four junctions are smooth.
+CurveGeometry stadium() {
+  return CurveGeometry(
+      {Loop{{{Line{{0, 0}, {2, 0}}, "wall"},
+             {EllipticalArc{{2, 1}, 1, 1, 0, -pi / 2, pi}, "wall"},
+             {Line{{2, 2}, {0, 2}}, "wall"},
+             {EllipticalArc{{0, 1}, 1, 1, 0, pi / 2, pi}, "wall"}}}});
+}
+
+// The mesh without its chains and links, as if it had been imported.
+Mesh without_links(Mesh m) {
+  m.chains.clear();
+  for (auto &e : m.boundary_edges)
+    e.link.reset();
+  return m;
 }
 
 auto flips(ImproverUse use) {
@@ -146,6 +184,38 @@ int main() {
                            "laplacian_smoothing: it has no local version, "
                            "so it runs only as a final pass"),
                "no local version");
+         // Roles are symmetric: a role the improver does not have is a
+         // warning.
+         Remesher r5(
+             bisection(),
+             {probe("local_only_role", {}, U::local_and_final, true, false),
+              probe("no_role", {}, U::final_only, true, false),
+              probe("neither", {}, U::local_and_final, false, false)});
+         check(r5.plan().local_improvers == std::vector<std::size_t>{0},
+               "the local role runs");
+         check(r5.plan().final_passes.empty(), "no final role");
+         check(has_message(r5.plan().warnings,
+                           "local_only_role: it has no final version, so it "
+                           "runs only locally"),
+               "no final version");
+         check(has_message(r5.plan().warnings,
+                           "no_role: it has no final version, so it does not "
+                           "run at all"),
+               "final only without a final version");
+         check(has_message(r5.plan().warnings,
+                           "neither: it has no local version, so it does not "
+                           "run at all") &&
+                   has_message(r5.plan().warnings,
+                               "neither: it has no final version, so it does "
+                               "not run at all"),
+               "one warning per role");
+         check(r5.plan().warnings.size() == 4, "four warnings");
+         check(LaplacianSmoothing().as_local() == nullptr &&
+                   LaplacianSmoothing().as_final() != nullptr,
+               "smoothing declares only the final role");
+         DelaunayFlips both;
+         check(both.as_local() == &both && both.as_final() == &both,
+               "flips declare both roles");
          // A refiner that tolerates nothing refuses flips and moves.
          auto strict = std::make_shared<Strict>();
          Remesher r3(strict,
@@ -194,16 +264,18 @@ int main() {
                                             "mover", "laplacian_smoothing"},
                "pipeline report once, first; final passes in list order");
          const auto &p = r.reports[0];
-         check(p.messages == mesher.plan().warnings, "warnings as messages");
-         check(p.messages.size() == 1, "one warning (mover)");
+         check(p.messages.size() == 2, "the plan and one warning (mover)");
+         check(p.messages[0] == "plan: refiner strict; local: counter; final: "
+                                "counter, mover, laplacian_smoothing",
+               "the plan in words");
+         check(std::vector<std::string>(p.messages.begin() + 1,
+                                        p.messages.end()) ==
+                   mesher.plan().warnings,
+               "then the warnings");
+         check(p.metrics.size() == 2, "two metrics");
          near(p.metrics.at("local_improvers"), 1, 0, "one local improver");
          near(p.metrics.at("final_passes"), 3, 0, "three final passes");
-         near(p.metrics.at("refiner.strict"), 1, 0, "the refiner");
-         near(p.metrics.at("local.0.counter"), 0, 0, "local: improver 0");
-         near(p.metrics.at("final.0.counter"), 0, 0, "final pass 0");
-         near(p.metrics.at("final.1.mover"), 1, 0, "final pass 1");
-         near(p.metrics.at("final.2.laplacian_smoothing"), 2, 0,
-              "final pass 2");
+         check(p.time.count() >= 0, "time of the planning");
          // The refiner received exactly the resolved local improvers.
          check(r.reports[3].messages ==
                    std::vector<std::string>{"local counter"},
@@ -217,8 +289,12 @@ int main() {
                                                            "delaunay_flips",
                                                            "delaunay_flips"},
                "remesher reports");
-         check(rr.reports[0].messages.size() == 3,
-               "two refused local uses and one redundant pass");
+         check(rr.reports[0].messages.size() == 4,
+               "the plan, two refused local uses and one redundant pass");
+         check(rr.reports[0].messages[0] ==
+                   "plan: no refiner; local: none; final: delaunay_flips, "
+                   "delaunay_flips",
+               "the plan without a refiner");
          auto rg = remesher.run(r.mesh, rectangle(1, 1), {0.5});
          check(rg.reports[0].stage == "pipeline" &&
                    rg.reports[1].stage == "curve_links",
@@ -342,10 +418,11 @@ int main() {
              same_mesh(mesher.run(g, {0.25}).mesh, mesher.run(g, {0.25}).mesh),
              "same input, same mesh");
        }},
-      {"remesh_without_geometry_keeps_points_on_chords",
+      {"remesh_without_links_keeps_points_on_chords",
        [] {
          auto coarse = Mesher(chords(), cdt(), ruppert()).run(circle(1), {0.5});
-         const Mesh &c = coarse.mesh;
+         // An imported mesh has no links.
+         const Mesh c = without_links(coarse.mesh);
          for (auto refiner : {std::shared_ptr<const Refiner>(ruppert()),
                               std::shared_ptr<const Refiner>(bisection())}) {
            auto fine = Remesher(refiner).run(c, {0.1});
@@ -365,13 +442,82 @@ int main() {
            }
          }
        }},
+      {"output_mesh_carries_its_links",
+       [] {
+         auto g = annulus(1, 0.5);
+         auto coarse = Mesher(chords(), cdt(), ruppert()).run(g, {0.5});
+         const Mesh &m = coarse.mesh;
+         check(m.chains.size() == 2, "one chain per circle");
+         for (const auto &e : m.boundary_edges) {
+           check(e.link.has_value(), "every boundary edge is linked");
+           check(is_valid_link(*e.link, m.chains), "valid link");
+           // The link's ends are the edge's nodes.
+           const auto &chain = m.chains[e.link->chain];
+           near(distance(chain.point_at(e.link->s0), m.nodes[e.nodes[0]]), 0,
+                1e-12, "s0 at the first node");
+           near(distance(chain.point_at(e.link->s1), m.nodes[e.nodes[1]]), 0,
+                1e-12, "s1 at the second node");
+         }
+         // Refined again from the output Mesh alone: new boundary nodes
+         // lie on the true circles.
+         for (auto refiner : {std::shared_ptr<const Refiner>(ruppert()),
+                              std::shared_ptr<const Refiner>(bisection())}) {
+           auto fine = Remesher(refiner).run(m, {0.1});
+           check_valid_mesh(fine.mesh);
+           check(fine.target_met, "target met");
+           check(fine.reports[1].stage == refiner->name(), "no curve_links");
+           check(fine.mesh.boundary_edges.size() > m.boundary_edges.size(),
+                 "boundary refined");
+           std::size_t inner = region_id(fine.mesh, "inner");
+           for (const auto &e : fine.mesh.boundary_edges)
+             for (auto v : e.nodes)
+               near(norm(fine.mesh.nodes[v]), e.region == inner ? 0.5 : 1.0,
+                    1e-12, "boundary node on its circle");
+           // And again: the refined mesh carries its links too.
+           auto finer = Remesher(refiner).run(fine.mesh, {0.05});
+           for (const auto &e : finer.mesh.boundary_edges)
+             near(norm(finer.mesh.nodes[e.nodes[0]]),
+                  e.region == inner ? 0.5 : 1.0, 1e-12, "still on the circle");
+         }
+       }},
+      {"remesh_with_geometry_links_across_smooth_junctions",
+       [] {
+         // The stadium's junctions are smooth, so the discretizer samples
+         // it as one chain and its chords span the junctions. Linking to
+         // the geometry builds the same chain, so every edge is linked.
+         auto g = stadium();
+         auto coarse = Mesher(chords(), cdt()).run(g, {0.5});
+         const Mesh m = without_links(coarse.mesh);
+         auto fine = Remesher(bisection()).run(m, g, {0.1});
+         check_valid_mesh(fine.mesh);
+         const auto &links = fine.reports[1];
+         near(links.metrics.at("chains"), 1, 0, "one chain");
+         near(links.metrics.at("unlinked_edges"), 0, 0, "every edge linked");
+         check(links.messages.empty(), "no message");
+         for (auto v : boundary_nodes(fine.mesh))
+           near(stadium_distance(fine.mesh.nodes[v]), 0, 1e-12,
+                "boundary node on the stadium");
+         // With a corner angle of 0 every junction is a break, and the
+         // edges across junctions stay unlinked. The coarse mesh has 26
+         // equal pieces, so the junctions at the seam (s = 0) and at half
+         // the length (s = 2 + pi) are nodes; the other two are crossed.
+         check(m.boundary_edges.size() == 26, "26 boundary edges");
+         auto broken = Remesher(bisection()).run(m, g, {0.1}, 0.0);
+         near(broken.reports[1].metrics.at("chains"), 4, 0, "four chains");
+         near(broken.reports[1].metrics.at("unlinked_edges"), 2, 0,
+              "two edges across junctions");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)Remesher(bisection()).run(m, g, {0.1}, 200); },
+             "Remesher: corner_angle_degrees must be in [0, 180]");
+       }},
       {"remesh_with_geometry_puts_points_on_curves",
        [] {
          auto g = annulus(1, 0.5);
          auto coarse = Mesher(chords(), cdt(), ruppert()).run(g, {0.5});
          for (auto refiner : {std::shared_ptr<const Refiner>(ruppert()),
                               std::shared_ptr<const Refiner>(bisection())}) {
-           auto fine = Remesher(refiner).run(coarse.mesh, g, {0.1});
+           auto fine =
+               Remesher(refiner).run(without_links(coarse.mesh), g, {0.1});
            check_valid_mesh(fine.mesh);
            check(fine.target_met, "target met");
            check(fine.reports[1].stage == "curve_links", "after pipeline");

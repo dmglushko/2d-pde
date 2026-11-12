@@ -1,6 +1,7 @@
 add_library(pde2d_mesh
   boundary_polygon.cpp
   boundary_split_policy.cpp
+  boundary_split_steps.cpp
   cdt.cpp
   chord_length_discretizer.cpp
   components.cpp
@@ -11,6 +12,7 @@ add_library(pde2d_mesh
   ear_clipping.cpp
   laplacian_smoothing.cpp
   longest_edge_bisection.cpp
+  loop_chains.cpp
   mesh.cpp
   mesher.cpp
   remesher.cpp

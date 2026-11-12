@@ -48,6 +48,12 @@ CurveChain::Position CurveChain::position_from_before(double s) const {
   return p;
 }
 
+bool is_valid_link(const CurveLink &link,
+                   const std::vector<CurveChain> &chains) {
+  return link.chain < chains.size() && link.s0 >= 0 && link.s0 < link.s1 &&
+         link.s1 <= chains[link.chain].length();
+}
+
 geometry::Point CurveChain::point_at(double s) const {
   Position p = position(s);
   return geometry::point_at(curves_[p.curve], p.t);

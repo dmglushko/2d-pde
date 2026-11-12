@@ -75,18 +75,30 @@ public:
                           StageReport &report) const = 0;
 };
 
-// Called by a refiner after each change, on the triangles it touched. The
-// refiner gets its local improvers from the Mesher (or Remesher), never
-// from its own options.
+// The local role of an improver: called by a refiner after each change, on
+// the triangles it touched. The refiner gets its local improvers from the
+// Mesher (or Remesher), never from its own options. An Improver that has
+// this role returns it from Improver::as_local().
 class LocalImprover {
 public:
   virtual ~LocalImprover() = default;
+  // The improver's name, for the refiner's report (the same as
+  // Improver::name()).
   virtual std::string name() const = 0;
-  virtual ImproverEffects effects() const = 0;
   // Returns the number of changes made (flips, moves, ...).
   virtual std::size_t
   improve_around(WorkingMesh &mesh,
                  std::span<const std::size_t> touched_triangles) const = 0;
+};
+
+// The final role of an improver: one pass over the whole mesh, after the
+// refiner. An Improver that has this role returns it from
+// Improver::as_final().
+class FinalImprover {
+public:
+  virtual ~FinalImprover() = default;
+  virtual void run(WorkingMesh &mesh, const MeshSpec &spec,
+                   StageReport &report) const = 0;
 };
 
 class Refiner {
@@ -105,9 +117,12 @@ public:
                    StageReport &report) const = 0;
 };
 
-// A pass over the whole mesh. An improver that can also work locally
-// implements LocalImprover as well and returns itself from
-// as_local_improver().
+// What goes into the improver list of a Mesher or Remesher. It declares
+// its effects and use mode, and its roles: as_local() and as_final()
+// return the object to call in that role, or null for a role it does not
+// have. A class with both roles (DelaunayFlips) returns itself from both;
+// one with only a final pass (LaplacianSmoothing) keeps the default null
+// from as_local().
 class Improver {
 public:
   virtual ~Improver() = default;
@@ -115,10 +130,10 @@ public:
   virtual ImproverEffects effects() const = 0;
   // The use mode from the improver's options.
   virtual ImproverUse use() const = 0;
-  // Its local version, or null if it has none.
-  virtual const LocalImprover *as_local_improver() const { return nullptr; }
-  virtual void run(WorkingMesh &mesh, const MeshSpec &spec,
-                   StageReport &report) const = 0;
+  // Its local role, or null if it has none.
+  virtual const LocalImprover *as_local() const { return nullptr; }
+  // Its final (whole-mesh) role, or null if it has none.
+  virtual const FinalImprover *as_final() const { return nullptr; }
 };
 
 // How a Remesher (and so a Mesher) uses its improvers, decided once when
@@ -136,15 +151,17 @@ struct PipelinePlan {
 
 // Resolves the improvers' use modes against the refiner (which may be
 // null). An improver runs locally if its mode allows local use, it has a
-// local version, and the refiner tolerates its effects (no flips for a
-// refiner that does not tolerate flips, no node moves likewise, and no
-// Delaunay maker for a refiner that already maintains Delaunay). It runs
-// as a final pass if its mode allows final use. Final passes keep the list
-// order, and so do local improvers.
+// local role (as_local()), and the refiner tolerates its effects (no flips
+// for a refiner that does not tolerate flips, no node moves likewise, and
+// no Delaunay maker for a refiner that already maintains Delaunay). It
+// runs as a final pass if its mode allows final use and it has a final
+// role (as_final()). Final passes keep the list order, and so do local
+// improvers.
 //
-// A mode that cannot be honoured is a warning, not an error, for example
-// "delaunay_flips: ruppert already maintains Delaunay, so it runs only as
-// a final pass". So is a final pass that would make the mesh Delaunay
+// A mode that cannot be honoured is a warning, not an error, one per role,
+// for example "delaunay_flips: ruppert already maintains Delaunay, so it
+// runs only as a final pass" or "<name>: it has no final version, so it
+// runs only locally". So is a final pass that would make the mesh Delaunay
 // while it already is (after a refiner that maintains Delaunay, or after
 // another such pass with no flip or move in between); it still runs.
 // Throws std::invalid_argument only for a null improver.

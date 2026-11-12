@@ -87,10 +87,10 @@ the assembled pipeline, never from its own options.
 | --- | --- |
 | `MeshSpec{max_edge_length}` | the mesher's only external input besides the geometry |
 | `CurveChain` | consecutive exact curves treated as one path, measured by arc length `s`; cumulative lengths, `position(s)`, `point_at(s)` |
+| `CurveLink{chain, s0, s1}` | which chain (index into the holder's chain list) and arc-length interval an edge approximates, `0 <= s0 < s1 <= length`; in `curve_chain.hpp`, with `default_corner_angle_degrees` (30) |
 | `BoundaryPolygon` | loops of straight edges; per edge a region id and an optional `CurveLink`; the chains; region names |
-| `CurveLink{chain, s0, s1}` | which chain (index into the holder's chain list) and arc-length interval an edge approximates, `0 <= s0 < s1 <= length` |
 | `WorkingMesh` | the mutable mesh the stages edit |
-| `Mesh` | the output: `nodes`, `Triangle{nodes}`, `BoundaryEdge{nodes, region}`, `region_names` |
+| `Mesh` | the output: `nodes`, `Triangle{nodes}`, `BoundaryEdge{nodes, region, link}`, `region_names`, `chains` (links and chains empty for an imported mesh) |
 | `ImproverUse` | `local_and_final`, `local_only`, `final_only`: in each improver's options |
 | `PipelinePlan` | resolved at construction: indices of the local improvers and of the final passes, and the warnings |
 | `StageReport` | `stage`, `time`, `messages`, `metrics` (name → number) |
@@ -100,7 +100,8 @@ the assembled pipeline, never from its own options.
 
 The discretizer joins consecutive curves of a loop into a `CurveChain`
 unless the region changes or the boundary turns by more than
-`corner_angle_degrees` (default 30°, provisional) at the junction. The
+`corner_angle_degrees` (default 30°, `default_corner_angle_degrees`) at
+the junction. The
 turning angle is the angle between the end tangent of one curve and the
 start tangent of the next; where a derivative vanishes at that end, the
 second derivative's direction is used, then the curve's chord; a junction
@@ -122,6 +123,9 @@ the chain's cumulative lengths for the curve, then length inversion
 (`parameter_at_length_fraction`) inside it. An edge lying on one straight
 curve is split at its chord midpoint (the same point without the curve's
 rounding); an unlinked edge too. Chains live only on the meshing side.
+The chain building is shared private code (`src/mesh/loop_chains.*`), used
+by the discretizer and by the `Remesher` when it links a mesh to a
+geometry, so both build the same chains.
 
 ### WorkingMesh
 
@@ -133,8 +137,8 @@ rounding); an unlinked edge too. Chains live only on the meshing side.
   Boundary loops never touch, so each boundary node has one outgoing
   boundary edge.
 - Edits (`flip`, `insert_in_triangle`, `split_interior_edge`,
-  `split_boundary_edge` and its building blocks, `try_move_node`) keep all
-  of this and return the triangles they touched. An edit that would
+  `split_boundary_edge`, `try_move_node`) keep all of this and return the
+  triangles they touched. An edit that would
   invert a triangle throws and leaves the mesh unchanged.
 - **Deletions.** Splitting a curved boundary edge may delete triangles and
   nodes. They stay as tombstones (`is_triangle_deleted`,
@@ -148,28 +152,35 @@ rounding); an unlinked edge too. Chains live only on the meshing side.
 - The constructor validates everything (orientation, conformity, boundary
   edges matching the triangulation, no unused nodes, indices in range,
   links inside their chains).
-- `to_mesh()` lists boundary edges loop by loop in walking order.
+- `to_mesh()` lists boundary edges loop by loop in walking order, and
+  copies the chains and each edge's link into the `Mesh`. `from_mesh()`
+  takes them back, so a mesh refined once can be refined again on the
+  true curves without the geometry.
 
 ### Splitting a boundary edge
 
 `WorkingMesh::split_boundary_edge(k)` goes through the library's boundary
 split policy, a private virtual interface (`src/mesh/boundary_split_policy.*`)
-with one fixed implementation; it is not a user option. Its steps, with
+with one fixed implementation; it is not a user option. Its steps are
+private too: static functions of `detail::BoundarySplitSteps`
+(`src/mesh/boundary_split_steps.*`), which `WorkingMesh` names as a friend
+so they can edit its internals. Only `split_boundary_edge`,
+`is_unsplittable` and `BoundarySplitResult` are public. The steps, with
 `a -> b` the edge, `c` the opposite vertex and `p` the split point:
 
-1. **Direct** (`split_boundary_edge_directly`): if `p` lies inside the
-   angle at `c`, join it to `c` (two triangles replace one).
+1. **Direct** (`split_directly`): if `p` lies inside the angle at `c`, join
+   it to `c` (two triangles replace one).
 2. **Local re-triangulation.**
    - `p` outside the mesh (the curve bulges outwards): add the triangle
-     `(a, p, b)` on the edge (`add_boundary_cap`), unless a neighbouring
-     boundary edge crosses it.
+     `(a, p, b)` on the edge (`add_cap`), unless a neighbouring boundary
+     edge crosses it.
    - `p` inside the mesh (the curve bulges inwards): first check the
      straight triangle `(a, b, p)`: no other boundary edge may cross it,
      no boundary node may lie in it, and no node on its new sides. Then
      insert `p` into the triangle containing it, force `a-p` and `p-b` by
      flips (`detail::recover_edge`, shared with the CDT), and cut off the
      region between them and the old edge with every node in it, which
-     lies outside the true domain (`cut_off_boundary_edge`). The region is
+     lies outside the true domain (`cut_off`). The region is
      bounded by forced edges, so deleting its triangles leaves no hole.
 3. **Give up**: change nothing, mark the edge unsplittable
    (`is_unsplittable`) and return the reason. There is no chord fallback
@@ -192,11 +203,13 @@ class Refiner             { RefinerCapabilities capabilities();
                             void run(mesh, spec,
                                      std::span<const LocalImprover *const> local,
                                      report); };
-class Improver            { ImproverEffects effects(); ImproverUse use();
-                            const LocalImprover *as_local_improver();
-                            void run(mesh, spec, report); };
-class LocalImprover       { ImproverEffects effects();
+class Improver            { std::string name(); ImproverEffects effects();
+                            ImproverUse use();
+                            const LocalImprover *as_local();   // or null
+                            const FinalImprover *as_final(); }; // or null
+class LocalImprover       { std::string name();
                             size_t improve_around(mesh, touched); };
+class FinalImprover       { void run(mesh, spec, report); };
 ```
 
 Declarations:
@@ -206,8 +219,12 @@ Declarations:
   maintains_delaunay}` (what the refiner accepts from local improvers,
   and what its output keeps);
 - `TriangulatorCapabilities{supports_holes, supports_several_pieces}`;
-- `ImproverUse` (from the improver's options) and `as_local_improver()`
-  (non-null if the improver also implements `LocalImprover`).
+- `ImproverUse` (from the improver's options) and the roles: `as_local()`
+  and `as_final()` return the object to call in that role, or null for a
+  role the improver does not have. `DelaunayFlips` derives from all three
+  interfaces and returns itself from both; `LaplacianSmoothing` has only
+  the final role. `LocalImprover` keeps `name()` because the refiner names
+  each local improver in its report.
 
 Checks:
 
@@ -215,20 +232,23 @@ Checks:
    `Mesher`): an improver runs locally if its mode allows it, it has a
    local version, and the refiner tolerates its effects (a Delaunay maker
    is refused by a refiner that maintains Delaunay). It runs as a final
-   pass if its mode allows it. Both keep the list order. A mode that
-   cannot be honoured is a **warning**, for example "delaunay_flips:
-   ruppert already maintains Delaunay, so it runs only as a final pass";
-   so is a final pass that would make an already Delaunay mesh Delaunay
-   (it still runs). Only a null component throws.
+   pass if its mode allows it and it has a final role. Both keep the list
+   order. A mode that cannot be honoured is a **warning**, one per role,
+   for example "delaunay_flips: ruppert already maintains Delaunay, so it
+   runs only as a final pass" or "<name>: it has no final version, so it
+   runs only locally"; so is a final pass that would make an already
+   Delaunay mesh Delaunay (it still runs). Only a null component throws.
 2. **When a run starts** (`Mesher::run`): the spec is valid, and the
    triangulator supports the geometry's holes and pieces.
 
 The `Remesher` stores the plan (`plan()`, also on the `Mesher`) and a
 "pipeline" `StageReport` (`pipeline_report()`) that every run copies to
-the front of its reports: messages are the warnings; metrics are
-`local_improvers` and `final_passes` (counts), `refiner.<name>` = 1, and
-`local.<k>.<name>` / `final.<k>.<name>` whose value is the improver's
-index in the list and `k` its position in call order. The refiner calls
+the front of its reports. Its first message is the plan in words ("plan:
+refiner ruppert; local: none; final: delaunay_flips,
+laplacian_smoothing", or "plan: no refiner; ..."), followed by the
+warnings; its metrics are `local_improvers` and `final_passes` (counts),
+and its `time` is the time the planning took. Like every report it keeps
+its structured fields, so times can be summed. The refiner calls
 the local improvers after each change and reports the sum of their
 returned counts as `local_improver_changes` (and one
 `local_improver_changes.<name>` each).
@@ -244,31 +264,41 @@ Failures are exceptions with specific messages; report messages only mean
 
 | Component | File | Notes |
 | --- | --- | --- |
-| `ChordLengthDiscretizer` | `chord_length_discretizer.*` | chains sampled by equal arc length, chord ≤ h; options `max_curve_deviation` (0.02), `corner_angle_degrees` (30, provisional) |
+| `ChordLengthDiscretizer` | `chord_length_discretizer.*` | chains sampled by equal arc length, chord ≤ h; options `max_curve_deviation` (0.02), `corner_angle_degrees` (30) |
 | `EarClipping` | `ear_clipping.*` | per piece: bridge holes, cut best-shaped ears first |
 | `Cdt` | `cdt.*` | incremental Delaunay in an enclosing triangle, edge recovery by flips, outside removed, final flips |
 | `Ruppert` | `ruppert.*` | makes its input Delaunay, splits encroached/long boundary edges, inserts circumcenters; options `min_angle_degrees`, `max_points`; accepts only local improvers without effects |
 | `LongestEdgeBisection` | `longest_edge_bisection.*` | Rivara's longest-edge propagation path; option `max_points`; tolerates local flips and moves |
-| `DelaunayFlips` | `delaunay_flips.*` | Lawson flips; both `Improver` and `LocalImprover`; option `use` (default `local_and_final`) |
-| `LaplacianSmoothing` | `laplacian_smoothing.*` | interior nodes to neighbour average, inverting moves skipped; options `iterations`, `use` (default `final_only`: it has no local version) |
+| `DelaunayFlips` | `delaunay_flips.*` | Lawson flips; both roles (`LocalImprover` and `FinalImprover`); option `use` (default `local_and_final`) |
+| `LaplacianSmoothing` | `laplacian_smoothing.*` | interior nodes to neighbour average, inverting moves skipped; final role only; options `iterations`, `use` (default `final_only`) |
 
 Shared routines that components call are plain functions in
 `delaunay.hpp`: `is_locally_delaunay`, `flip_to_delaunay`,
 `flip_to_delaunay_around`. Private shared code in `src/mesh/`:
 `delaunay_internal.hpp` (Lawson with a touched list), `edge_recovery.*`
 (forcing an edge by flips), `local_improvers.hpp` (calling and counting a
-refiner's local improvers), `boundary_split_policy.*`.
+refiner's local improvers), `boundary_split_policy.*` and
+`boundary_split_steps.*` (the policy and its steps), `loop_chains.*`
+(joining a loop's curves into chains).
 
-### Remesher with geometry
+### Remesher and curve links
 
-`Remesher::run(mesh, geometry, spec)` first links each boundary edge to
-the curve of its region that contains both end points (within 1e-9 of the
-mesh size). Each geometry curve becomes a chain of its own, so edges
-whose end points are on two different curves (across a junction or the
-start of a closed curve) stay unlinked and are split at chord midpoints;
-the "curve_links" report (right after "pipeline") counts them. A mesh
-region missing from the geometry, or a boundary node off its region's
-curves, is an error.
+`Remesher::run(mesh, spec)` uses the mesh's own chains and links: a mesh
+made by the `Mesher` or `Remesher` carries them, so refining it again puts
+new boundary points on the true curves. An imported mesh has none, and its
+boundary edges are split at chord midpoints.
+
+`Remesher::run(mesh, geometry, spec, corner_angle_degrees = 30)` is for a
+mesh without links (any links it has are replaced). It first joins the
+geometry's loops into chains with the same code and rule as the
+discretizer, then links each boundary edge to the chain of its region that
+contains both end points (within 1e-9 of the mesh size), taking the short
+way along the chain. An edge whose ends lie on two different chains
+(across a corner, a region change or the start of a closed loop) stays
+unlinked and is split at its chord midpoint; the "curve_links" report
+(right after "pipeline") counts `chains`, `linked_edges` and
+`unlinked_edges`. A mesh region missing from the geometry, a boundary node
+off its region's curves, or an angle outside [0, 180] is an error.
 
 ## Determinism
 

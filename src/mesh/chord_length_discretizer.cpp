@@ -1,9 +1,10 @@
 #include "pde2d/mesh/chord_length_discretizer.hpp"
 
+#include "loop_chains.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
-#include <numbers>
 #include <stdexcept>
 
 namespace pde2d::mesh {
@@ -13,32 +14,6 @@ using geometry::Point;
 namespace {
 
 constexpr std::size_t max_pieces_per_chain = 10'000'000;
-
-// The direction in which the curve leaves its start (at_end false) or
-// arrives at its end (at_end true); zero if there is none.
-Point tangent(const geometry::Curve &curve, bool at_end) {
-  double t = at_end ? 1.0 : 0.0;
-  auto bounds = geometry::derivative_bounds(curve);
-  Point d = geometry::derivative_at(curve, t);
-  if (geometry::norm(d) > 1e-9 * bounds.first)
-    return d;
-  // c(t) ~ c(0) + c''(0) t^2 / 2 near the start, and c(1) - c(1 - t) ~
-  // -c''(1) t^2 / 2 near the end.
-  Point d2 = geometry::second_derivative_at(curve, t);
-  if (geometry::norm(d2) > 1e-9 * bounds.second)
-    return at_end ? -1.0 * d2 : d2;
-  return geometry::end_point(curve) - geometry::start_point(curve);
-}
-
-// Angle in [0, pi] by which the boundary turns from `before` to `after`;
-// pi when either direction is missing.
-double turning_angle(const geometry::Curve &before,
-                     const geometry::Curve &after) {
-  Point u = tangent(before, true), v = tangent(after, false);
-  if (geometry::norm(u) == 0 || geometry::norm(v) == 0)
-    return std::numbers::pi;
-  return std::atan2(std::abs(geometry::cross(u, v)), geometry::dot(u, v));
-}
 
 double distance_to_segment(Point p, Point a, Point b) {
   Point d = b - a;
@@ -109,10 +84,8 @@ ChordLengthDiscretizer::ChordLengthDiscretizer(ChordLengthOptions options)
   if (!(options_.max_curve_deviation > 0))
     throw std::invalid_argument(
         "ChordLengthOptions::max_curve_deviation must be positive");
-  if (!(options_.corner_angle_degrees >= 0 &&
-        options_.corner_angle_degrees <= 180))
-    throw std::invalid_argument(
-        "ChordLengthOptions::corner_angle_degrees must be in [0, 180]");
+  detail::validate_corner_angle(options_.corner_angle_degrees,
+                                "ChordLengthOptions::corner_angle_degrees");
 }
 
 BoundaryPolygon
@@ -121,7 +94,6 @@ ChordLengthDiscretizer::run(const geometry::CurveGeometry &geometry,
   validate(spec);
   const double h = spec.max_edge_length;
   const double tolerance = options_.max_curve_deviation;
-  const double corner = options_.corner_angle_degrees * std::numbers::pi / 180;
   BoundaryPolygon polygon;
   polygon.region_names = geometry.region_names();
   std::map<std::string, std::size_t> region_id;
@@ -131,40 +103,15 @@ ChordLengthDiscretizer::run(const geometry::CurveGeometry &geometry,
   std::size_t points = 0;
   for (std::size_t l = 0; l < geometry.loops().size(); ++l) {
     const auto &curves = geometry.loops()[l].curves;
-    const std::size_t n = curves.size();
-    // Junction j joins curve j to curve j + 1 (cyclically).
-    std::vector<bool> breaks(n);
-    bool any_break = false;
-    for (std::size_t j = 0; j < n; ++j) {
-      const auto &next = curves[(j + 1) % n];
-      breaks[j] = curves[j].region != next.region ||
-                  turning_angle(curves[j].curve, next.curve) > corner;
-      any_break = any_break || breaks[j];
-    }
-    // Chains start after each break, in curve order; without a break the
-    // whole loop is one chain from the start of curve 0.
-    std::vector<std::size_t> starts;
-    for (std::size_t j = 0; j < n; ++j)
-      if (breaks[(j + n - 1) % n])
-        starts.push_back(j);
-    if (!any_break)
-      starts.push_back(0);
     std::vector<Piece> pieces;
-    for (std::size_t c = 0; c < starts.size(); ++c) {
-      std::size_t end = any_break ? starts[(c + 1) % starts.size()] : 0;
-      std::vector<geometry::Curve> chain_curves;
-      std::size_t j = starts[c];
-      do {
-        chain_curves.push_back(curves[j].curve);
-        j = (j + 1) % n;
-      } while (j != end);
-      CurveChain chain(std::move(chain_curves));
-      double count = std::ceil(chain.length() / h);
+    for (auto &c : detail::loop_chains(geometry.loops()[l],
+                                       options_.corner_angle_degrees)) {
+      double count = std::ceil(c.chain.length() / h);
       if (!(count <= static_cast<double>(max_pieces_per_chain)))
         throw std::invalid_argument(
             "max_edge_length is too small for this geometry");
       pieces.push_back(
-          {std::move(chain), region_id.at(curves[starts[c]].region),
+          {std::move(c.chain), region_id.at(curves[c.first].region),
            std::max<std::size_t>(1, static_cast<std::size_t>(count))});
     }
     // A loop needs at least three points: add pieces to the chain with the

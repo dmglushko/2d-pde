@@ -1,5 +1,6 @@
 #include "boundary_split_policy.hpp"
 
+#include "boundary_split_steps.hpp"
 #include "edge_recovery.hpp"
 
 #include "pde2d/geometry/predicates.hpp"
@@ -52,7 +53,7 @@ public:
 
     // (a) The point is inside the angle at c: two triangles replace one.
     if (orient(P[c], P[a], p) > 0 && orient(P[c], p, P[b]) > 0) {
-      auto touched = mesh.split_boundary_edge_directly(k);
+      auto touched = BoundarySplitSteps::split_directly(mesh, k);
       result.split = true;
       result.touched.assign(touched.begin(), touched.end());
       return result;
@@ -116,7 +117,7 @@ private:
                        "edge";
       return result;
     }
-    auto touched = mesh.add_boundary_cap(k);
+    auto touched = BoundarySplitSteps::add_cap(mesh, k);
     result.split = true;
     result.touched.assign(touched.begin(), touched.end());
     return result;
@@ -215,8 +216,8 @@ private:
     try {
       recover_edge(mesh, a, q, &touched);
       recover_edge(mesh, q, b, &touched);
-      auto kept = mesh.cut_off_boundary_edge(k, q, &result.deleted_nodes,
-                                             &result.deleted_triangles);
+      auto kept = BoundarySplitSteps::cut_off(mesh, k, q, &result.deleted_nodes,
+                                              &result.deleted_triangles);
       touched.insert(touched.end(), kept.begin(), kept.end());
     } catch (const std::exception &e) {
       throw std::logic_error(

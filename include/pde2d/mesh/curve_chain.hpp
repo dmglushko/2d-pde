@@ -50,4 +50,25 @@ private:
   std::vector<double> offsets_; // size curves_.size() + 1, increasing
 };
 
+// Where a straight boundary edge came from: chain `chain` (an index into
+// the chain list of the BoundaryPolygon, WorkingMesh or Mesh that holds the
+// link) between arc lengths s0 (at the edge's first node) and s1 (at its
+// second), with 0 <= s0 < s1 <= chain length. Chains follow the boundary
+// direction (domain on the left), like the edges.
+struct CurveLink {
+  std::size_t chain = 0;
+  double s0 = 0.0;
+  double s1 = 0.0;
+};
+
+// True if the link's chain exists and 0 <= s0 < s1 <= its length.
+bool is_valid_link(const CurveLink &link,
+                   const std::vector<CurveChain> &chains);
+
+// The default turning angle, in degrees, above which a junction of two
+// curves is a corner that ends a chain (decided 2026-11-12). Used by the
+// ChordLengthDiscretizer and by the Remesher when it links a mesh to a
+// geometry.
+inline constexpr double default_corner_angle_degrees = 30.0;
+
 } // namespace pde2d::mesh

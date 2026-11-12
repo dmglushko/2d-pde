@@ -32,32 +32,40 @@ public:
   // passes, and the warnings found when the plan was made.
   const PipelinePlan &plan() const { return plan_; }
 
-  // A mesh without geometry: split boundary edges get their new point at
-  // the chord midpoint.
+  // A mesh as it is: boundary edges with a curve link (a mesh made by the
+  // Mesher or Remesher carries its chains and links) get their new point
+  // on the true curve; edges without one (an imported mesh) at their chord
+  // midpoint.
   [[nodiscard]] MeshResult run(const Mesh &mesh, const MeshSpec &spec) const;
 
-  // A mesh that lies on `geometry`: each boundary edge is first linked to
-  // the curve of its region that contains both its end points, so split
-  // boundary edges get their new point on the curve. An edge whose end
-  // points lie on two different curves (across a junction, or across the
-  // start of a closed curve) stays unlinked; the "curve_links" report
-  // (right after "pipeline") says how many. Each geometry curve becomes a
-  // chain of its own. Throws std::invalid_argument if a mesh region is not in
-  // the geometry or a boundary node is not on a curve of its region.
-  [[nodiscard]] MeshResult run(const Mesh &mesh,
-                               const geometry::CurveGeometry &geometry,
-                               const MeshSpec &spec) const;
+  // A mesh that lies on `geometry`, for a mesh without links of its own
+  // (any links it has are replaced). The geometry's loops are first
+  // joined into chains exactly as the ChordLengthDiscretizer does (a
+  // junction is a break where the region changes or the boundary turns by
+  // more than corner_angle_degrees, in [0, 180]); then each boundary edge
+  // is linked to the chain of its region that contains both its end
+  // points, so split boundary edges get their new point on the curve. An
+  // edge whose end points lie on two different chains (across a corner,
+  // a region change, or the start of a closed loop) stays unlinked; the
+  // "curve_links" report (right after "pipeline") says how many. Throws
+  // std::invalid_argument for an angle outside [0, 180], a mesh region
+  // that is not in the geometry, or a boundary node that is not on a curve
+  // of its region.
+  [[nodiscard]] MeshResult
+  run(const Mesh &mesh, const geometry::CurveGeometry &geometry,
+      const MeshSpec &spec,
+      double corner_angle_degrees = default_corner_angle_degrees) const;
 
   // The working mesh as it is, with whatever links it has. The Mesher
   // calls this after triangulation.
   [[nodiscard]] MeshResult run(WorkingMesh mesh, const MeshSpec &spec) const;
 
-  // The "pipeline" report that starts every run's reports. Messages are
-  // the plan's warnings. Metrics: "local_improvers" and "final_passes"
-  // (counts); "refiner.<name>" = 1 if there is a refiner; one
-  // "local.<k>.<name>" per local improver and one "final.<k>.<name>" per
-  // final pass, where k is the position in call order and the value is
-  // the improver's index in the improver list.
+  // The "pipeline" report that starts every run's reports. Its first
+  // message is the plan in words, for example "plan: refiner ruppert;
+  // local: none; final: delaunay_flips, laplacian_smoothing" ("no refiner"
+  // without one); the plan's warnings follow as further messages. Metrics:
+  // "local_improvers" and "final_passes" (counts). Its time is the time
+  // the plan took to resolve.
   const StageReport &pipeline_report() const { return pipeline_report_; }
 
 private:
@@ -65,6 +73,7 @@ private:
   std::vector<std::shared_ptr<const Improver>> improvers_;
   PipelinePlan plan_;
   std::vector<const LocalImprover *> local_improvers_;
+  std::vector<const FinalImprover *> final_improvers_;
   StageReport pipeline_report_;
 };
 

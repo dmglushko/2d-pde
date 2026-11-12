@@ -14,9 +14,9 @@ struct LaplacianSmoothingOptions {
 
 // Moves each interior node to the average of its neighbours, one node at a
 // time in index order (Gauss-Seidel). A move that would invert a triangle
-// is skipped. Boundary nodes never move. Metrics: "moves",
-// "rejected_moves".
-class LaplacianSmoothing final : public Improver {
+// is skipped. Boundary nodes never move. It has only the final role (no
+// local version). Metrics: "moves", "rejected_moves".
+class LaplacianSmoothing final : public Improver, public FinalImprover {
 public:
   explicit LaplacianSmoothing(LaplacianSmoothingOptions options = {});
   const LaplacianSmoothingOptions &options() const { return options_; }
@@ -26,6 +26,7 @@ public:
     return {.flips_edges = false, .moves_nodes = true, .makes_delaunay = false};
   }
   ImproverUse use() const override { return options_.use; }
+  const FinalImprover *as_final() const override { return this; }
   void run(WorkingMesh &mesh, const MeshSpec &spec,
            StageReport &report) const override;
 

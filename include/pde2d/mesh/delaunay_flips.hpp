@@ -10,10 +10,13 @@ struct DelaunayFlipsOptions {
 };
 
 // Flips edges until every interior edge is locally Delaunay (Lawson's
-// algorithm, flip_to_delaunay). As an Improver it runs on the whole mesh;
-// as a LocalImprover it starts from the touched triangles. Boundary edges
-// are never flipped. Metric: "flips".
-class DelaunayFlips final : public Improver, public LocalImprover {
+// algorithm, flip_to_delaunay). It has both roles: as a FinalImprover it
+// runs on the whole mesh, as a LocalImprover it starts from the touched
+// triangles. Boundary edges are never flipped. Metric of the final pass:
+// "flips".
+class DelaunayFlips final : public Improver,
+                            public LocalImprover,
+                            public FinalImprover {
 public:
   explicit DelaunayFlips(DelaunayFlipsOptions options = {})
       : options_(options) {}
@@ -24,7 +27,8 @@ public:
     return {.flips_edges = true, .moves_nodes = false, .makes_delaunay = true};
   }
   ImproverUse use() const override { return options_.use; }
-  const LocalImprover *as_local_improver() const override { return this; }
+  const LocalImprover *as_local() const override { return this; }
+  const FinalImprover *as_final() const override { return this; }
   void run(WorkingMesh &mesh, const MeshSpec &spec,
            StageReport &report) const override;
   std::size_t

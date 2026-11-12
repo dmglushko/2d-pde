@@ -213,8 +213,9 @@ int main() {
          expect_throws<std::invalid_argument>(
              [] { ChordLengthDiscretizer({.corner_angle_degrees = 181}); },
              "[0, 180]");
-         check(ChordLengthOptions{}.corner_angle_degrees == 30,
-               "provisional default");
+         check(ChordLengthOptions{}.corner_angle_degrees == 30 &&
+                   default_corner_angle_degrees == 30,
+               "default 30 degrees");
        }},
       {"chain_deviation_across_a_junction",
        [] {

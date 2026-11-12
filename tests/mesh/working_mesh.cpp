@@ -154,7 +154,8 @@ int main() {
          auto [tri, edge] = w.find_edge(0, 2);
          w.split_interior_edge(tri, edge, {0.5, 0.5});
          check_valid_mesh(w.to_mesh());
-         w.split_boundary_edge(0);
+         auto direct = w.split_boundary_edge(0);
+         check(direct.split && !direct.retriangulated, "the direct step");
          Mesh m = w.to_mesh();
          check_valid_mesh(m);
          check(m.nodes.back() == Point{0.5, 0}, "chord midpoint");
@@ -212,6 +213,23 @@ int main() {
          Point q = w.boundary_split_point(3);
          near(q.x, std::cos(3 * pi / 8), 1e-15, "next split at 3 pi / 8");
          near(q.y, std::sin(3 * pi / 8), 1e-15, "next split at 3 pi / 8");
+         // The output mesh keeps the chains and links, and a working mesh
+         // made from it splits on the arc again.
+         Mesh m = w.to_mesh();
+         check(m.chains.size() == 1, "chains copied");
+         std::size_t linked = 0;
+         for (const auto &be : m.boundary_edges)
+           linked += be.link.has_value();
+         check(linked == 2, "both arc halves linked");
+         auto again = WorkingMesh::from_mesh(m);
+         check(again.chains().size() == 1, "chains back");
+         bool on_arc = false;
+         for (std::size_t k = 0; k < again.boundary_edges().size(); ++k)
+           if (again.boundary_edges()[k].link) {
+             Point r = again.boundary_split_point(k);
+             on_arc = on_arc || std::abs(norm(r) - 1) < 1e-15;
+           }
+         check(on_arc, "split points on the arc");
        }},
       {"curve_point_that_would_invert",
        [] {
@@ -228,16 +246,12 @@ int main() {
                         {{1, 2}, 0, {}},
                         {{2, 0}, 0, {}}},
                        {"r"}, {chain});
-         expect_throws<std::runtime_error>(
-             [&] { w.split_boundary_edge_directly(0); },
-             "Splitting boundary edge (0, 1) of region 'r' at its curve point "
-             "would invert a triangle");
-         check(w.nodes().size() == 3, "mesh unchanged");
-         // The policy cannot re-triangulate either: the region it would
+         // Joining node 2 to the curve point would invert a triangle, and
+         // the policy cannot re-triangulate either: the region it would
          // cut off contains node 2, a boundary node. Step (c): nothing
          // changes and the edge is marked.
          auto split = w.split_boundary_edge(0);
-         check(!split.split, "not split");
+         check(!split.split && !split.retriangulated, "not split");
          check(split.failure ==
                    "the curve bulges in past another boundary node",
                "reason");
@@ -342,10 +356,9 @@ int main() {
                         {{1, 2}, 0, {}},
                         {{2, 0}, 0, {}}},
                        {"r"}, {chain});
-         expect_throws<std::runtime_error>(
-             [&] { w.split_boundary_edge_directly(0); }, "would invert");
          auto r = w.split_boundary_edge(0);
-         check(r.split && r.retriangulated, "split with a cap");
+         check(r.split && r.retriangulated,
+               "the direct split would invert: split with a cap");
          Mesh m = w.to_mesh();
          check_valid_mesh(m);
          // Old triangle 0.05 plus the cap (0,0), (0.5,-0.3), (1,0): 0.15.

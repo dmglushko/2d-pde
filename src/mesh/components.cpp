@@ -6,11 +6,10 @@ namespace pde2d::mesh {
 
 namespace {
 
-// Why the refiner does not accept this local improver, or empty if it
+// Why the refiner does not accept this improver locally, or empty if it
 // does.
-std::string refusal(const Refiner &refiner, const LocalImprover &local) {
+std::string refusal(const Refiner &refiner, const ImproverEffects &fx) {
   auto caps = refiner.capabilities();
-  auto fx = local.effects();
   if (fx.makes_delaunay && caps.maintains_delaunay)
     return refiner.name() + " already maintains Delaunay";
   if (fx.flips_edges && !caps.tolerates_flips)
@@ -33,25 +32,32 @@ plan_pipeline(const Refiner *refiner,
     ImproverUse use = improver->use();
     bool wants_local = use != ImproverUse::final_only;
     bool wants_final = use != ImproverUse::local_only;
+    // Why each wanted role cannot be honoured (empty: it can).
+    std::string local_reason, final_reason;
     if (wants_local) {
-      std::string reason;
-      const LocalImprover *local = improver->as_local_improver();
-      if (!local)
-        reason = "it has no local version";
+      if (!improver->as_local())
+        local_reason = "it has no local version";
       else if (!refiner)
-        reason = "there is no refiner to run it locally";
+        local_reason = "there is no refiner to run it locally";
       else
-        reason = refusal(*refiner, *local);
-      if (reason.empty())
-        plan.local_improvers.push_back(i);
-      else
-        plan.warnings.push_back(improver->name() + ": " + reason +
-                                (wants_final
-                                     ? ", so it runs only as a final pass"
-                                     : ", so it does not run at all"));
+        local_reason = refusal(*refiner, improver->effects());
     }
-    if (wants_final)
+    if (wants_final && !improver->as_final())
+      final_reason = "it has no final version";
+    bool runs_local = wants_local && local_reason.empty();
+    bool runs_final = wants_final && final_reason.empty();
+    if (runs_local)
+      plan.local_improvers.push_back(i);
+    if (runs_final)
       plan.final_passes.push_back(i);
+    if (wants_local && !runs_local)
+      plan.warnings.push_back(improver->name() + ": " + local_reason +
+                              (runs_final ? ", so it runs only as a final pass"
+                                          : ", so it does not run at all"));
+    if (wants_final && !runs_final)
+      plan.warnings.push_back(improver->name() + ": " + final_reason +
+                              (runs_local ? ", so it runs only locally"
+                                          : ", so it does not run at all"));
   }
 
   // Final passes that would make an already Delaunay mesh Delaunay.

@@ -12,10 +12,10 @@ struct ChordLengthOptions {
   // Consecutive curves of one loop are joined into one chain, sampled as a
   // single path, unless the region changes or the boundary turns by more
   // than this angle where they meet. In degrees, in [0, 180]: 0 breaks at
-  // every turn, 180 joins every junction of one region.
-  // PROVISIONAL: 30 degrees has not been confirmed by the owner yet
-  // (docs/decisions.md, "Open").
-  double corner_angle_degrees = 30.0;
+  // every turn, 180 joins every junction of one region. The default, 30
+  // degrees, keeps the corners of rectangles and hexagons and merges smooth
+  // joins and fine polylines.
+  double corner_angle_degrees = default_corner_angle_degrees;
 };
 
 // Joins the curves of each loop into chains (see corner_angle_degrees)

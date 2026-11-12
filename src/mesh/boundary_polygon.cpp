@@ -8,12 +8,6 @@
 
 namespace pde2d::mesh {
 
-bool is_valid_link(const CurveLink &link,
-                   const std::vector<CurveChain> &chains) {
-  return link.chain < chains.size() && link.s0 >= 0 && link.s0 < link.s1 &&
-         link.s1 <= chains[link.chain].length();
-}
-
 void validate(const BoundaryPolygon &polygon) {
   using std::to_string;
   const auto &loops = polygon.loops;

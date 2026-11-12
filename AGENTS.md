@@ -26,8 +26,8 @@ impossible or unclear, ask.
 | --- | --- |
 | `include/pde2d/geometry/` | `point.hpp`, `predicates.hpp` (exact `orient`, `incircle`), `curve.hpp` (curve kinds and math), `polygon.hpp`, `curve_geometry.hpp` (`Loop`, `CurveGeometry`), `shapes.hpp` |
 | `src/geometry/` | their implementation; `predicates.cpp` is Shewchuk's adaptive arithmetic, compiled with `-fno-fast-math -ffp-contract=off` |
-| `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`), `mesh_spec.hpp`, `curve_chain.hpp` (`CurveChain`), `boundary_polygon.hpp` (`CurveLink`), `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, capabilities, `ImproverUse`, `PipelinePlan`, `plan_pipeline`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
-| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges) |
+| `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`, with optional chains and links), `mesh_spec.hpp`, `curve_chain.hpp` (`CurveChain`, `CurveLink`, `default_corner_angle_degrees`), `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, improver roles, capabilities, `ImproverUse`, `PipelinePlan`, `plan_pipeline`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
+| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges) and `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt` |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh` |
@@ -101,7 +101,16 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   splits (use `split_boundary_edge`, which applies the boundary split
   policy and may fail: check `BoundarySplitResult::split` and never retry
   an `is_unsplittable` edge). A linked edge is split at the arc-length
-  middle on its chain, an unlinked one at the chord midpoint.
+  middle on its chain, an unlinked one at the chord midpoint. The policy's
+  steps are private (`detail::BoundarySplitSteps`); do not make them
+  public.
+- **The output `Mesh` carries its chains and links** when it came from the
+  Mesher or Remesher (`to_mesh()` copies them, `from_mesh()` takes them
+  back). Imported meshes have none. Code that builds or edits a `Mesh` by
+  hand must keep links valid (`is_valid_link`) or drop them.
+- **Improver roles are declared:** an `Improver` returns its
+  `LocalImprover` from `as_local()` and its `FinalImprover` from
+  `as_final()`, null for a role it lacks. Never test the type.
 - **Refiners never name improvers.** They receive the resolved local
   improvers in `run`; improvers are configured only in the `Mesher` or
   `Remesher`, and a mode that cannot be honoured is a warning in the
