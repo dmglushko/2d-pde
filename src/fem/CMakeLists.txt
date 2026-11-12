@@ -1,5 +1,6 @@
 add_library(pde2d_fem
   compiled_expression.cpp
+  derivative.cpp
   expression.cpp
   meshed_problem.cpp
   problem.cpp)

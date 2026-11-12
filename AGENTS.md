@@ -31,7 +31,7 @@ impossible or unclear, ask.
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts) |
-| `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`) and `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) |
+| `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken) and `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
@@ -77,7 +77,9 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   (and io and fem not each other). Heavy dependencies (Boost, later Eigen,
   SymEngine, libxml2) only in `.cpp` files, never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
-  headers in `src/<module>/`. Tests use only public headers.
+  headers in `src/<module>/`. Tests use only public headers, except
+  `tests/fem/derivative.cpp`, which tests the private derivative function
+  (pending the owner's confirmation).
 - Mesh components are virtual interfaces (`components.hpp`). Each
   component owns its options struct, set with designated initializers in
   its constructor, and validates it there. A component declares its
@@ -159,6 +161,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   unchanged). If the `Mesh` cannot fill something the format needs, ask
   the owner; never change the format on your own. Curve links have no
   place in it and are dropped on export.
+- **Every derivative is taken by `detail::derivative`**
+  (`src/fem/derivative.hpp`); never call SymEngine's `diff` elsewhere. It
+  differentiates `abs` itself and checks its result against the
+  allow-list.
 - **SymEngine stays in `src/fem/symengine_expression.hpp`.** Public fem
   headers hold expressions through a pimpl (`Expression::Impl`); a `.cpp`
   that needs SymEngine includes that private header, never
@@ -167,8 +173,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - **Expressions accept only the allow-list** (`detail::unsupported` in
   `src/fem/expression.cpp`, listed in `expression.hpp`). Add a construct
   only with a test against the standard library in
-  `tests/fem/expression.cpp` and a use in
-  `tests/fem/expression_threads.cpp`, after checking that SymEngine's
+  `tests/fem/expression.cpp`, a use in
+  `tests/fem/expression_threads.cpp` and a test of its derivative in
+  `tests/fem/derivative.cpp` (and in t in `tests/fem/meshed_problem.cpp`),
+  after checking that SymEngine's
   `LambdaRealDoubleVisitor` evaluates it correctly and without shared
   state: compiled functions are called from several threads at once.
 - **Facts are as written and summaries are never stored.** An

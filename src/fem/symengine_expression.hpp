@@ -25,6 +25,7 @@
 #include <symengine/complex.h>
 #include <symengine/complex_double.h>
 #include <symengine/constants.h>
+#include <symengine/derivative.h>
 #include <symengine/eval_double.h>
 #include <symengine/functions.h>
 #include <symengine/infinity.h>
@@ -89,16 +90,9 @@ struct ExpressionAccess {
 std::optional<std::string> unsupported(const SymEngine::Basic &form);
 
 // An Expression made from a form the library built (for example a
-// derivative), checked like one built from text. Its text is SymEngine's
-// printed form. Throws std::invalid_argument like Expression(text).
+// derivative, derivative.hpp), checked like one built from text. Its text is
+// SymEngine's printed form. Throws std::invalid_argument like Expression(text).
 Expression expression_from_form(SymEngine::RCP<const SymEngine::Basic> form);
-
-// d/dt (numerator / denominator), differentiated symbolically. Throws
-// std::invalid_argument when the derivative is not an accepted expression
-// (SymEngine cannot differentiate abs, for example, and leaves a
-// Derivative).
-Expression time_derivative_of_quotient(const Expression &numerator,
-                                       const Expression &denominator);
 
 // Throws std::invalid_argument when a parameter name is not a plain symbol
 // other than x, y and t, or a value is not finite.

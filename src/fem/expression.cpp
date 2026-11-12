@@ -266,14 +266,6 @@ Expression expression_from_form(RCP<const Basic> form) {
   return ExpressionAccess::make(make_impl(std::move(text), std::move(form)));
 }
 
-Expression time_derivative_of_quotient(const Expression &numerator,
-                                       const Expression &denominator) {
-  const auto quotient =
-      SymEngine::div(ExpressionAccess::impl(numerator).form,
-                     ExpressionAccess::impl(denominator).form);
-  return expression_from_form(quotient->diff(SymEngine::symbol("t")));
-}
-
 bool same_as_written(const Expression &a, const Expression &b) {
   return SymEngine::eq(*ExpressionAccess::impl(a).form,
                        *ExpressionAccess::impl(b).form);

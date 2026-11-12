@@ -1,5 +1,6 @@
 #include "pde2d/fem/meshed_problem.hpp"
 
+#include "derivative.hpp"
 #include "fact_summaries.hpp"
 #include "symengine_expression.hpp"
 

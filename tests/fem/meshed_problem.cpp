@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -531,10 +533,26 @@ int main() {
          const std::vector<double> expected{0, 0, 0, 0, 1, 0, 0, 0, 0};
          check(p.initial_velocities(3.0) == expected, "only the centre");
        }},
-      {"a time derivative that cannot be expressed is an error",
+      {"the time derivative of abs(g) is sign(g) dg/dt",
        [] {
-         // SymEngine cannot differentiate abs and leaves a Derivative.
+         // SymEngine cannot differentiate abs; the library does.
          Problem wave = poisson({{"wall", dirichlet("abs(t - 1)")}});
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         const std::vector<double> before{-1, -1, -1, -1, 0, -1, -1, -1, -1};
+         const std::vector<double> after{1, 1, 1, 1, 0, 1, 1, 1, 1};
+         check(p.initial_velocities(0.0) == before, "-1 before the kink");
+         check(p.initial_velocities(2.0) == after, "+1 after it");
+         check(p.initial_velocities(1.0) == std::vector<double>(9, 0.0),
+               "0 at the kink");
+         // The value itself is still abs.
+         check(p.initial_values(3.0)[0] == 2.0, "abs(3 - 1)");
+       }},
+      {"a time derivative outside the allow-list is an error",
+       [] {
+         // d/dt (1e308 t^2) = 2e308 t: the number is infinite as a double.
+         Problem wave = poisson({{"wall", dirichlet("1e308*t^2")}});
          wave.equation.m2 = e("1");
          wave.initial = {.u = e("0"), .u_t = e("0")};
          expect_throws<std::invalid_argument>(
@@ -542,14 +560,89 @@ int main() {
                MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
              },
              "Region 'wall', time derivative of g / alpha: The expression "
-             "'Derivative(abs(1 - t), t)' uses 'Derivative', which is not "
-             "among the supported functions and operators");
+             "'inf.0*t' contains a number that is not finite in double "
+             "precision");
          // Not needed below time order 2.
          wave.equation.m2 = e("0");
          wave.equation.m1 = e("1");
          wave.initial.u_t.reset();
          const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
-         check(p.initial_values(3.0)[0] == 2.0, "abs(3 - 1)");
+         check(p.initial_values(1.0)[0] == 1e308, "1e308 t^2 at t = 1");
+       }},
+      {"every allowed function has a time derivative (chain rule)",
+       [] {
+         // g = f(s) with s = (1 + x) t / 4 on an all-Dirichlet square, so
+         // d/dt g = f'(s) (1 + x) / 4 at its eight boundary nodes. At t0 = 1,
+         // s is 1/4, 3/8 or 1/2: inside the domain of every f.
+         const auto sign = [](double v) {
+           return v > 0 ? 1.0 : v < 0 ? -1.0 : 0.0;
+         };
+         struct Case {
+           std::string f;
+           std::function<double(double)> derivative;
+         };
+         const std::vector<Case> cases{
+             {"sin(s)", [](double s) { return std::cos(s); }},
+             {"cos(s)", [](double s) { return -std::sin(s); }},
+             {"tan(s)", [](double s) { return 1 / std::pow(std::cos(s), 2); }},
+             {"asin(s)", [](double s) { return 1 / std::sqrt(1 - s * s); }},
+             {"acos(s)", [](double s) { return -1 / std::sqrt(1 - s * s); }},
+             {"atan(s)", [](double s) { return 1 / (1 + s * s); }},
+             {"sinh(s)", [](double s) { return std::cosh(s); }},
+             {"cosh(s)", [](double s) { return std::sinh(s); }},
+             {"tanh(s)",
+              [](double s) { return 1 / std::pow(std::cosh(s), 2); }},
+             {"exp(s)", [](double s) { return std::exp(s); }},
+             {"E^s", [](double s) { return std::exp(s); }},
+             {"log(s)", [](double s) { return 1 / s; }},
+             {"ln(s)", [](double s) { return 1 / s; }},
+             {"log(s, 2)", [](double s) { return 1 / (s * std::log(2.0)); }},
+             {"sqrt(s)", [](double s) { return 0.5 / std::sqrt(s); }},
+             // Its kink is at the middle nodes, where s = 3/8.
+             {"abs(s - 3/8)", [&](double s) { return sign(s - 0.375); }},
+             {"s^2.5", [](double s) { return 2.5 * std::pow(s, 1.5); }},
+             {"s**3", [](double s) { return 3 * s * s; }},
+             {"2^s", [](double s) { return std::exp2(s) * std::log(2.0); }},
+             {"s^s",
+              [](double s) { return std::pow(s, s) * (1 + std::log(s)); }},
+             {"1/s", [](double s) { return -1 / (s * s); }},
+             {"pi*s - 2", [](double) { return 3.141592653589793; }},
+             {"Piecewise((s^2, s < 0.3), (Piecewise((-s, And(s > 0.4, Not(s "
+              ">= 0.45))), (sin(s), True)), True))",
+              [](double s) {
+                return s < 0.3                   ? 2 * s
+                       : s > 0.4 && !(s >= 0.45) ? -1.0
+                                                 : std::cos(s);
+              }}};
+         const auto wall = grid({"wall", "wall", "wall", "wall"});
+         for (const auto &[f, f_prime] : cases) {
+           std::string g = f;
+           for (std::size_t at = g.find('s'); at != std::string::npos;
+                at = g.find('s', at + 1)) {
+             // Only the variable s, not the s of sin, sinh, sqrt, ...
+             const bool alone =
+                 (at == 0 ||
+                  !std::isalpha(static_cast<unsigned char>(g[at - 1]))) &&
+                 (at + 1 == g.size() ||
+                  !std::isalpha(static_cast<unsigned char>(g[at + 1])));
+             if (alone) {
+               g.replace(at, 1, "((1 + x)*t/4)");
+               at += 12;
+             }
+           }
+           Problem wave = poisson({{"wall", dirichlet(g.c_str())}});
+           wave.equation.m2 = e("1");
+           wave.initial = {.u = e("0"), .u_t = e("0")};
+           const MeshedProblem p(wall, wave);
+           const auto rates = p.initial_velocities(1.0);
+           for (const auto &entry : p.dirichlet_nodes()) {
+             const double x = p.mesh()->nodes[entry.node].x;
+             const double s = (1 + x) / 4;
+             const double want = f_prime(s) * (1 + x) / 4;
+             pde2d::test::near(rates[entry.node], want,
+                               2e-15 * std::max(1.0, std::abs(want)), g);
+           }
+         }
        }},
       {"initial velocities that are not finite are errors",
        [] {

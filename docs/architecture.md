@@ -483,7 +483,8 @@ substituted), a condition used as a number
 (`2*(x < 0)`), a `Piecewise` without a final unconditional branch (SymEngine's evaluator
 would read past its branches). Constructs are added to the list one at a
 time, each with a test against the standard library
-(`tests/fem/expression.cpp`). The facts are read off the parsed form:
+(`tests/fem/expression.cpp`) and a tested derivative
+(`tests/fem/derivative.cpp`, and in t through `MeshedProblem`). The facts are read off the parsed form:
 `zero` when it is the number zero (SymEngine's parser already combines
 like terms, so `x - x` is zero, but nothing more is simplified),
 `depends_on_*` when the symbol is free in it. Free symbols other than x,
@@ -501,6 +502,23 @@ also run under ThreadSanitizer and Helgrind). SymEngine itself is built
 without thread-safe reference counting, so all symbolic work (building,
 substituting, differentiating, compiling, dropping the last copy of an
 expression) happens in one thread.
+
+**Derivatives** are taken in one place, the private
+`detail::derivative(expression, Variable::x | y | t)`
+(`src/fem/derivative.hpp`). It runs SymEngine's differentiation with two
+rules of its own: `abs`, which SymEngine leaves as an unevaluated
+`Derivative`, becomes `d|u| = sign(u) du` with the sign written as
+`Piecewise((1, 0 < u), (-1, u < 0), (0, True))` (0 at the kink), so
+`d/dt abs(t - 1)` is `-Piecewise((1, 0 < 1 - t), (-1, 1 - t < 0), (0,
+True))`; and a `Piecewise` is differentiated branch by branch with its
+conditions kept, collapsing to the common value when all branches give
+the same derivative. The expression itself keeps its `abs`; only its
+derivative contains the sign. The result is checked against the
+allow-list like text (`expression_from_form`), so a derivative that leaves
+it (`d/dx 1e308*x^2` has an infinite number) throws. Every allowed
+construct has a derivative inside the allow-list. It is used for
+`d/dt (g / alpha)` (`time_derivative_of_quotient`) and will be used for
+the derivatives of assembly.
 
 **Classification** (`classify`), by which coefficients are zero as
 written: no spatial derivative and no `gamma` is Dirichlet (`alpha` must
@@ -537,9 +555,8 @@ any `g`).
    missing one is an error; one that is not needed is ignored and one that
    depends on t is evaluated at the start time, each with a report
    message), and for time order 2 so is `d/dt (g / alpha)` of every
-   Dirichlet condition that depends on t (differentiated symbolically; a
-   derivative SymEngine cannot express, such as that of `abs`, is an
-   error);
+   Dirichlet condition that depends on t (with `detail::derivative`; a
+   derivative outside the allow-list is an error);
 6. the facts stay with each compiled function, and the summaries read
    them.
 
