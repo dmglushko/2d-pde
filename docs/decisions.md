@@ -380,6 +380,14 @@ marked "architecture" below are decided.
   `assemble` reuses `previous` only if it was built from the same problem
   object (identity, not equal contents); otherwise it throws
   `std::invalid_argument`.
+- **Architecture: matrices in public headers are our own `CsrMatrix`**
+  (row offsets, columns, values; decided 2026-11-12), never Eigen types.
+  Assembly fills it through the precomputed pattern without Eigen; solvers
+  view the same arrays with `Eigen::Map` inside their `.cpp` files, without
+  copying. An opt-in adapter header (`as_eigen`) may be added when someone
+  needs it, not now. *Why:* Eigen stays out of public headers (compile
+  time, and our interface does not depend on Eigen or its version), and
+  the solver library can be replaced without changing the public API.
 - **Architecture: the thread count will be a constructor option of the
   `Assembler`, default 1** (decided 2026-11-12), added in a later slice.
   The serial path already goes colour by colour, so the thread count never
@@ -470,7 +478,5 @@ marked "architecture" below are decided.
 - Quality guarantees: an improver that runs after a refiner can break the
   refiner's guarantee (smoothing after Ruppert can lower the minimum
   angle). Whether to declare, warn and measure this is not decided yet.
-- The matrix type in public headers: our own CSR struct (optionally with
-  an opt-in Eigen adapter header) or Eigen types.
 - How the sparsity pattern is built.
 - Solvers and time integration have not been discussed yet.
