@@ -29,10 +29,9 @@ public:
     using namespace SymEngine;
     const RCP<const Basic> &u = self.get_arg();
     const RCP<const Basic> du = apply(u);
-    const RCP<const Basic> sign =
-        piecewise({{integer(1), Lt(integer(0), u)},
-                   {integer(-1), Lt(u, integer(0))},
-                   {integer(0), boolTrue}});
+    const RCP<const Basic> sign = piecewise({{integer(1), Lt(integer(0), u)},
+                                             {integer(-1), Lt(u, integer(0))},
+                                             {integer(0), boolTrue}});
     result_ = mul(sign, du);
   }
 

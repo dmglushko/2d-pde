@@ -55,9 +55,8 @@ int main() {
        [] {
          compare("sin(x)", unit_points, [](double x) { return std::cos(x); });
          compare("cos(x)", unit_points, [](double x) { return -std::sin(x); });
-         compare("tan(x)", unit_points, [](double x) {
-           return 1.0 / (std::cos(x) * std::cos(x));
-         });
+         compare("tan(x)", unit_points,
+                 [](double x) { return 1.0 / (std::cos(x) * std::cos(x)); });
          compare("asin(x)", unit_points,
                  [](double x) { return 1.0 / std::sqrt(1.0 - x * x); });
          compare("acos(x)", unit_points,
@@ -66,9 +65,8 @@ int main() {
                  [](double x) { return 1.0 / (1.0 + x * x); });
          compare("sinh(x)", unit_points, [](double x) { return std::cosh(x); });
          compare("cosh(x)", unit_points, [](double x) { return std::sinh(x); });
-         compare("tanh(x)", unit_points, [](double x) {
-           return 1.0 / (std::cosh(x) * std::cosh(x));
-         });
+         compare("tanh(x)", unit_points,
+                 [](double x) { return 1.0 / (std::cosh(x) * std::cosh(x)); });
          compare("exp(x)", unit_points, [](double x) { return std::exp(x); });
          compare("E^x", unit_points, [](double x) { return std::exp(x); });
          compare("log(x)", positive_points, [](double x) { return 1.0 / x; });
@@ -83,12 +81,11 @@ int main() {
          compare("x**3", unit_points, [](double x) { return 3 * x * x; });
          compare("2^x", unit_points,
                  [](double x) { return std::exp2(x) * std::log(2.0); });
-         compare("x^x", positive_points, [](double x) {
-           return std::pow(x, x) * (1.0 + std::log(x));
-         });
-         compare("1/x", positive_points, [](double x) { return -1.0 / (x * x); });
-         compare("pi*x", unit_points,
-                 [](double) { return 3.141592653589793; });
+         compare("x^x", positive_points,
+                 [](double x) { return std::pow(x, x) * (1.0 + std::log(x)); });
+         compare("1/x", positive_points,
+                 [](double x) { return -1.0 / (x * x); });
+         compare("pi*x", unit_points, [](double) { return 3.141592653589793; });
          compare("3 - 2*x + x/4", unit_points, [](double) { return -1.75; });
          compare("Piecewise((x^2, x < 0), (sin(x), True))", unit_points,
                  [](double x) { return x < 0 ? 2 * x : std::cos(x); });
@@ -138,9 +135,8 @@ int main() {
          // abs inside abs, and inside a Piecewise condition (not
          // differentiated: a condition has no derivative).
          // At x = -0.5 the inner value is 0: the kink, where it is 0.
-         compare("abs(abs(x) - 0.5)", unit_points, [](double x) {
-           return sign(std::abs(x) - 0.5) * sign(x);
-         });
+         compare("abs(abs(x) - 0.5)", unit_points,
+                 [](double x) { return sign(std::abs(x) - 0.5) * sign(x); });
          compare("Piecewise((x^2, abs(x) < 0.4), (x, True))", unit_points,
                  [](double x) { return std::abs(x) < 0.4 ? 2 * x : 1.0; });
        }},
