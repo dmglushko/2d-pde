@@ -26,7 +26,12 @@ std::vector<SvgSubpath> parse_path_data(std::string_view data);
 // The SVG endpoint parameterization of an elliptical arc converted to an
 // exact curve (SVG 1.1, appendix F.6): a Line if a radius is zero, else
 // an EllipticalArc. Radii too small to reach the end point are scaled up.
-// The end points must differ.
+// The conversion is done on the unit circle, so radii of any size work.
+// A nearly flat arc (sweep below 0.01 radians, for example a huge radius
+// over a short chord) becomes a CubicBezier through exactly the given end
+// points: an EllipticalArc would miss them by its center's rounding, and
+// the Bezier deviates from the true arc by less than that. The end points
+// must differ.
 geometry::Curve svg_arc(geometry::Point from, geometry::Point to, double rx,
                         double ry, double rotation_degrees, bool large_arc,
                         bool sweep);

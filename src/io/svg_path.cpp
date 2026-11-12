@@ -126,33 +126,71 @@ geometry::Curve svg_arc(Point from, Point to, double rx, double ry,
     return geometry::Line{from, to};
   const double phi = rotation_degrees * std::numbers::pi / 180;
   const double c = std::cos(phi), s = std::sin(phi);
-  // Step 1: the midpoint of the chord in the ellipse's axes.
+  // Step 1: half the chord, in the ellipse's axes.
   const double dx = (from.x - to.x) / 2, dy = (from.y - to.y) / 2;
   const double x = c * dx + s * dy, y = -s * dx + c * dy;
+  if (x == 0 && y == 0) // end points one subnormal apart
+    return geometry::Line{from, to};
+  // The rest is done on the unit circle: (X, Y) = (x / rx, y / ry) is half
+  // the chord there, of length d. The formulas of F.6.5 multiply up to
+  // four lengths (rx^2 ry^2), which overflows or underflows for radii far
+  // from 1; on the unit circle every quantity is at most about 1. Powers
+  // of two scale the chord and the radii first, so the ratios neither
+  // overflow nor underflow, whatever the drawing's units.
+  const int chord_exp = std::ilogb(std::max(std::abs(x), std::abs(y)));
+  const int radius_exp = std::ilogb(std::max(rx, ry));
+  const double X0 = std::scalbn(x, -chord_exp) / std::scalbn(rx, -radius_exp);
+  const double Y0 = std::scalbn(y, -chord_exp) / std::scalbn(ry, -radius_exp);
+  const double d0 = std::hypot(X0, Y0); // d = d0 * 2^(chord_exp - radius_exp)
+  // The direction of the half chord on the unit circle.
+  const double ux0 = X0 / d0, uy0 = Y0 / d0;
+  double d = std::scalbn(d0, chord_exp - radius_exp);
   // Radii too small are scaled up until the ellipse just reaches.
-  const double lambda = x * x / (rx * rx) + y * y / (ry * ry);
-  if (lambda > 1) {
-    rx *= std::sqrt(lambda);
-    ry *= std::sqrt(lambda);
+  if (d > 1) {
+    rx = std::scalbn(std::scalbn(rx, -radius_exp) * d0, chord_exp);
+    ry = std::scalbn(std::scalbn(ry, -radius_exp) * d0, chord_exp);
+    d = 1;
   }
-  // Step 2: the center in the ellipse's axes.
-  const double num =
-      std::max(0.0, rx * rx * ry * ry - rx * rx * y * y - ry * ry * x * x);
-  const double den = rx * rx * y * y + ry * ry * x * x;
-  const double k = (large_arc == sweep ? -1.0 : 1.0) * std::sqrt(num / den);
-  const double cx = k * rx * y / ry, cy = -k * ry * x / rx;
+  // Step 2: the center, on the unit circle: perpendicular to the chord at
+  // distance sqrt(1 - d^2) from its midpoint, on the side the flags pick.
+  const double h = (large_arc == sweep ? -1.0 : 1.0) *
+                   std::sqrt(std::max(0.0, (1 - d) * (1 + d)));
+  const double cu = h * uy0, cv = -h * ux0;
   // Step 3: the center in user coordinates.
+  const double cx = rx * cu, cy = ry * cv;
   const Point center{c * cx - s * cy + (from.x + to.x) / 2,
                      s * cx + c * cy + (from.y + to.y) / 2};
-  // Step 4: start angle and sweep.
-  const double ux = (x - cx) / rx, uy = (y - cy) / ry;
-  const double vx = (-x - cx) / rx, vy = (-y - cy) / ry;
-  const double start = std::atan2(uy, ux);
-  double delta = std::atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+  // Step 4: start angle and sweep, from the unit vectors from the center
+  // to the end points.
+  const double X = d * ux0, Y = d * uy0;
+  const double ax = X - cu, ay = Y - cv, bx = -X - cu, by = -Y - cv;
+  const double start = std::atan2(ay, ax);
+  double delta = std::atan2(ax * by - ay * bx, ax * bx + ay * by);
   if (!sweep && delta > 0)
     delta -= 2 * std::numbers::pi;
   if (sweep && delta < 0)
     delta += 2 * std::numbers::pi;
+  // An EllipticalArc reaches its end points only through its center, so
+  // they are off by about max(rx, ry) * 2^-53; for a nearly flat arc (a
+  // huge radius over a short chord) that is far more than the arc's own
+  // size allows. Below this sweep a cubic Bezier with exactly the given
+  // end points deviates from the true arc by at most about
+  // 2e-5 * delta^6 * max(rx, ry), less than that rounding, so it is the
+  // more exact curve.
+  constexpr double flat_sweep = 1e-2;
+  if (std::abs(delta) < flat_sweep) {
+    // Control points from the end points along the tangents, mapped from
+    // the unit circle without going through the far-away center.
+    const double kappa = 4.0 / 3.0 * std::tan(delta / 4);
+    auto user = [&](double u, double v) {
+      return Point{c * rx * u - s * ry * v, s * rx * u + c * ry * v};
+    };
+    const Point t0 = user(-ay, ax), t1 = user(-by, bx);
+    return geometry::CubicBezier{from,
+                                 {from.x + kappa * t0.x, from.y + kappa * t0.y},
+                                 {to.x - kappa * t1.x, to.y - kappa * t1.y},
+                                 to};
+  }
   return geometry::EllipticalArc{center, rx, ry, phi, start, delta};
 }
 

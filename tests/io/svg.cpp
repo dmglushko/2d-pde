@@ -161,6 +161,52 @@ int main() {
              scaled.loops()[0].curves[0].curve);
          near(half.radius_x, 1, 1e-12, "scaled radius");
        }},
+      {"arcs_at_extreme_scales",
+       [] {
+         // A quarter-circle sector of radius r: the radii's fourth powers
+         // overflow or underflow, so the conversion must not form them.
+         for (double r : {1e-100, 1e-300, 1e100, 1e300}) {
+           std::ostringstream text;
+           text.precision(17);
+           text << "M0 0 L" << r << " 0 A" << r << " " << r << " 0 0 1 0 " << r
+                << " Z";
+           auto g = from_text(document(path("id=\"a\"", text.str())));
+           const auto &curves = g.loops()[0].curves;
+           check(kinds(g.loops()[0]) == "LAL", "line, arc, line");
+           auto arc = std::get<geometry::EllipticalArc>(curves[1].curve);
+           near(arc.center.x / r, 0, 1e-15, "center x");
+           near(arc.center.y / r, 0, 1e-15, "center y");
+           near(arc.radius_x / r, 1, 1e-15, "radius");
+           Point end = geometry::end_point(arc);
+           near(end.x / r, 0, 1e-15, "arc ends at (0, r): x");
+           near(end.y / r, 1, 1e-15, "arc ends at (0, r): y");
+         }
+       }},
+      {"nearly_flat_arcs_end_exactly",
+       [] {
+         // A radius far larger than the chord: an arc through its far-away
+         // center would miss (1, 0) by about 1e8 * 2^-53, more than the
+         // loop's closure tolerance.
+         for (double r : {1e8, 1e12, 1e20}) {
+           std::ostringstream text;
+           text.precision(17);
+           text << "M0 0 A" << r << " " << r << " 0 0 1 1 0 L1 1 L0 1 Z";
+           auto g = from_text(document(path("id=\"a\"", text.str())));
+           const auto &c = g.loops()[0].curves;
+           check(kinds(g.loops()[0]) == "CLLL", "a flat arc is a cubic");
+           check(geometry::start_point(c[0].curve) == Point{0, 0} &&
+                     geometry::end_point(c[0].curve) == Point{1, 0},
+                 "the flat arc ends exactly at its end points");
+           // The sagitta of a chord of length 1: 1 / (8 r).
+           Point mid = geometry::point_at(c[0].curve, 0.5);
+           near(mid.x, 0.5, 1e-15, "middle x");
+           near(std::abs(mid.y), 1 / (8 * r), 1e-6 / (8 * r), "sagitta");
+         }
+         // An ellipse: radii 1e9 and 1e7, rotated 30 degrees.
+         auto g = from_text(document(
+             path("id=\"a\"", "M0 0 A1e9 1e7 30 0 0 1 0 L1 1 L0 1 Z")));
+         check(kinds(g.loops()[0]) == "CLLL", "flat elliptical arc");
+       }},
       {"region_names",
        [] {
          auto g = from_text(
