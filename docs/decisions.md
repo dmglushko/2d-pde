@@ -31,6 +31,11 @@ Started 2026-11-11. The previous header-only code is on the branch
   dependencies, which fixes the slow builds.
 - **Tests:** a tiny helper without dependencies (`check`, `near`,
   `expect_throws`), as in the old code, registered with CTest.
+- **Exact predicates use Shewchuk's adaptive arithmetic** (decided
+  2026-11-12), replacing Boost.Multiprecision. During the switch they are
+  tested against the Boost version on many nearly degenerate inputs. Never
+  compile them with `-ffast-math`. *Why:* the same exact answers, faster,
+  and no dependency.
 - **The archive is a reference, not a source.** Agents may port
   self-contained, well-tested pieces (the exact geometric predicates and the
   curve math). Everything else is written fresh to this design. *Why:* the
@@ -100,12 +105,39 @@ Started 2026-11-11. The previous header-only code is on the branch
 - **Curve links are optional per boundary edge.** When a link is present, a
   split boundary edge gets its new point on the true curve. When it is
   missing (imported meshes), the new point goes at the chord midpoint.
+- **Merging curve junctions happens in the discretizer, not the
+  geometry** (decided 2026-11-12). *Why:* the geometry stays exact and
+  untouched; simplification is a meshing concern. It works with **chains**
+  (decided 2026-11-12): the discretizer joins consecutive curves of one
+  loop into a chain unless the region changes or the boundary turns by more
+  than `corner_angle_degrees` (a discretizer option) at the junction. Each
+  chain is sampled as one path by arc length. A boundary edge's link is
+  `(chain, s₀, s₁)`, an arc-length interval, and a split puts the new point
+  at `s = (s₀ + s₁)/2`, found by a binary search over the chain's
+  cumulative curve lengths and length inversion inside that curve. Chains
+  live on the meshing side (polygon and working mesh), never in the
+  geometry. The default threshold angle is still open.
+- **Splitting a curved boundary edge goes through a replaceable policy**
+  (decided 2026-11-12), a virtual interface like the other components. The
+  v1 policy: split at the arc-length midpoint; if a triangle would invert,
+  re-triangulate locally (insert the point, force the two new boundary
+  edges by flips, delete what is now outside, including nodes in the
+  cut-off region, which lie outside the true domain); if that also fails,
+  skip the split, warn, and the target is not met. The working mesh may
+  therefore delete nodes and triangles. There is no chord fallback for
+  linked edges. **The policy is internal, never a user input:** the
+  library picks one fixed policy at compile time, and changing it means
+  changing the library. *Why:* it is our own robustness machinery, not a
+  meshing choice the user should have to understand.
+- **Merging curves of the same kind at import is deferred** (decided
+  2026-11-12).
 - **Refining an existing mesh:** a separate `Remesher{refiner, improvers}`
   refines a mesh that came from anywhere, and the `Mesher` uses a `Remesher`
   internally.
 - **v1 algorithms:**
   - boundary discretizer: every chord ≤ `max_edge_length`; the curve
-    deviation is the component's own option;
+    deviation is the component's own option, on by default with
+    `max_curve_deviation = 0.02` (in geometry units);
   - triangulators: ear clipping (bridging holes, run once per piece) and
     CDT;
   - refiners: Ruppert (keeps the mesh Delaunay internally, min-angle option)
@@ -120,21 +152,43 @@ Started 2026-11-11. The previous header-only code is on the branch
   ear clipping) and reports how many flips that took.
 - **Two improver interfaces:** `Improver::run(mesh, spec)` is a pass over the
   whole mesh. `LocalImprover::improve_around(mesh, touched_triangles)` is
-  called by a refiner after each change. One class may implement both. A
-  local improver is handed to the refiner explicitly, as part of the
-  refiner's options. *Why:* a whole-mesh pass after every split would make
-  refinement O(n²).
+  called by a refiner after each change. One class may implement both.
+  *Why:* a whole-mesh pass after every split would make refinement O(n²).
+- **Improvers are given only to the `Mesher`** (decided 2026-11-12). Each
+  improver's options carry a use mode, `ImproverUse { local_and_final,
+  local_only, final_only }`. When the pipeline is assembled, the refiner
+  takes as local improvers those it permits whose mode allows local use; the
+  refiner's own options never name improvers. Local improvers run in the
+  order of the improver list, and final passes run in that order too.
+  *Why:* every improver is configured in one place, and the refiner learns
+  about improvers only from the assembled pipeline.
 - **Compatibility is matched by declared capabilities, not by name lists.**
   Improvers declare their effects (flips edges, moves nodes, makes the mesh
   Delaunay). Refiners declare what they tolerate and what they already
-  maintain. A mismatch throws at construction with the reason, for example
-  "Ruppert already maintains Delaunay". *Why:* new improvers work without
-  editing refiners, and the declarations double as documentation.
+  maintain. *Why:* new improvers work without editing refiners, and the
+  declarations double as documentation.
+- **A mode that cannot be honoured is a warning, not an error** (decided
+  2026-11-12). The improver is then not used in that role, for example
+  "delaunay_flips: Ruppert already maintains Delaunay, so it runs only as a
+  final pass". *Why:* a preference that cannot be met must not stop the
+  program.
+- **These warnings go into an extra `pipeline` report** (decided
+  2026-11-12), the first entry of every run's reports. It holds the
+  resolved plan (which improvers run locally, which as final passes) and
+  the warnings found when the pipeline was built. *Why:* the warnings are
+  found in the constructor, before any report exists, and an improver that
+  never runs has no report of its own to carry them.
 - **Reports:** each stage report has common fields (`stage`, `time`,
   `messages`) plus named numeric `metrics`. Failures throw; messages only
   mean "worked, but…". The `Mesher` checks "target met" itself, against the
   `MeshSpec`, on the final mesh. *Why:* only the `Mesher` sees the final
   mesh, after the improvers, and the refiner is optional.
+- **Interface details (accepted 2026-11-12):** every `run` receives a
+  `StageReport&` that the component fills with metrics and messages (the
+  `Mesher` sets the stage name and the time). `improve_around` returns its
+  number of changes. Components are held as `std::shared_ptr<const T>`, so
+  one object (for example `DelaunayFlips`) can be both a local and a
+  whole-mesh improver, and a pipeline can be reused across runs.
 - **A facade with simple options comes later.**
 
 ## Mesh (output)
@@ -197,5 +251,10 @@ It stops just before matrix assembly.
 ## Open
 
 - The name of the problem-plus-mesh object (`MeshedProblem` proposed).
+- The default `corner_angle_degrees` for chains: 30° is used provisionally
+  until the owner confirms.
+- Quality guarantees: an improver that runs after a refiner can break the
+  refiner's guarantee (smoothing after Ruppert can lower the minimum
+  angle). Whether to declare, warn and measure this is not decided yet.
 - Everything from matrix assembly onwards (assembly, solvers, time
   integration) has not been discussed yet.
