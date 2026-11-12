@@ -92,6 +92,19 @@ Started 2026-11-11. The previous header-only code is on the branch
   export because the format has no place for them. Gmsh boundary edges must
   belong to a physical line group, which gives their region. If the new mesh
   cannot fill the format, ask the owner before changing it.
+- **Very flat SVG arcs become cubic Béziers** (accepted 2026-11-12): an arc
+  that sweeps less than 0.01 rad is imported as a cubic through its exact
+  end points. *Why:* `EllipticalArc` reaches its end points through its
+  centre; for a radius of 1e8 over a chord of 1 the end lands about 1e-8
+  off, above the closure tolerance. Such an arc comes back from export as a
+  cubic. A proper end-point arc type is deferred.
+- **Loop direction is decided exactly** by the public
+  `geometry::polygon_orientation` (the `orient` sign of the turn at the
+  lowest point), not by the sign of the area (accepted 2026-11-12). *Why:*
+  the area underflows or overflows at extreme scales.
+- **Gmsh import is strict** (accepted 2026-11-12): entity dimensions must be
+  0 to 3, and every count must fit in what remains of the file before
+  anything is allocated.
 - **Imported meshes get a full geometric validity check** (decided
   2026-11-12), not only a connectivity check: counterclockwise triangles,
   conforming edges, no folds around interior nodes, no crossing boundary
@@ -291,6 +304,63 @@ The name is still open; `MeshedProblem` is proposed. It holds
 
 It stops just before matrix assembly.
 
+## Assembly
+
+Discussed and agreed on 2026-11-12. The architecture (types, interfaces,
+where assembly lives) has not been discussed yet.
+
+- **Weak form.** The second-order part is written as A : ∇²u with
+  A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] and integrated by parts once:
+  ∫ (A:∇²u) v = −∫ ∇v·A∇u − ∫ (∇·A)·∇u v + ∮ v (A∇u)·n. The term ∇·A
+  needs derivatives of the coefficients, which symbolic input provides.
+- **Matrices.** Interior: stiffness K (∫ ∇φᵢ·A∇φⱼ), convection C
+  (∫ (b − ∇·A)·∇φⱼ φᵢ), reaction R (c), masses M₁, M₂ (m1, m2), load F (f).
+  Boundary: Robin mass S, tangential block T, dynamic mass D, boundary load
+  G. The system is M₂U″ + (M₁ − D)U′ + (−K + C + R − S + T)U = F − G. C and
+  T are not symmetric.
+- **Natural conditions** are substituted into the boundary term. On each
+  straight edge, β_x and β_y are split into normal and tangential parts,
+  giving β̂_n and β̂_τ; the condition is solved for u_n (this needs β̂_n ≠ 0)
+  and substituted into (A∇u)·n = κ_n u_n + κ_τ u_τ, with κ_n = nᵀAn and
+  κ_τ = nᵀAτ. u_τ is kept: it is the derivative along the edge, (U_b − U_a)/L
+  for P1. *Consequence:* our Neumann condition is u_n = g, not the conormal
+  flux, so with an anisotropic A even u_n = 0 contributes a T block.
+- **Dirichlet values are imposed by elimination (lifting)**, during the
+  scattering of each block, not afterwards: an entry whose row is a
+  Dirichlet node is skipped; an entry whose column is a Dirichlet node goes
+  to a separate sparse matrix A_FD; every other entry goes to A_FF. The
+  right-hand side is b_F − A_FD U_D(t), plus −M₁,FD U_D′ − M₂,FD U_D″ for time
+  derivatives, which come from differentiating g symbolically. *Why:*
+  elimination is exact and standard (deal.II, FEniCS); keeping A_FD lets a
+  time-dependent g cost one matrix–vector product per step. Edge blocks
+  touching a Dirichlet corner are routed the same way. The same routing
+  applies to every matrix and to the load vector.
+- **"Right-hand side depends on t" also looks at the boundary data g**,
+  since a time-dependent Dirichlet value makes the right-hand side
+  time-dependent even when f is not.
+- **Matrices are rebuilt per matrix, from the facts:** a matrix is
+  recomputed in time only if a coefficient it uses depends on t (K only if
+  A does, M₁ only if m1 does, and so on).
+- **Element blocks are computed in full:** 3×3 per triangle, 2×2 per
+  boundary edge, all entries, no symmetric shortcut. *Why:* correct for the
+  non-symmetric matrices too; the cost is in quadrature, not in additions.
+- **One pass over the triangles computes the blocks of every matrix**, so
+  the area, gradients and coefficient values at quadrature points are
+  computed once per triangle.
+- **The sparsity pattern is precomputed from the mesh** and reused for
+  every matrix and rebuild (one for A_FF, one for A_FD). How it is built is
+  still to be discussed.
+- **Parallel assembly uses colouring:** triangles are grouped so that no two
+  in a colour share a node; colours run one after another, with no atomics.
+  *Why:* atomics make results depend on thread timing (floating-point
+  addition is not associative) and are slow under contention; storing all
+  element blocks first costs about 2.5× the matrix in memory. The colouring
+  must itself be deterministic.
+- **Quadrature is internal and fixed at compile time**, never a user input:
+  a 3-point rule on triangles (exact for degree 2) and 2-point
+  Gauss–Legendre on edges. *Why:* it keeps P1's convergence rates and is
+  exact for constant-coefficient mass matrices.
+
 ## Deferred
 
 - Handling pure Neumann problems: to be discussed.
@@ -301,6 +371,9 @@ It stops just before matrix assembly.
   some valid meshes; the inward split has no rollback if it fails half-way.
 - Gmsh export; turning the boundary context of old `.pde2d` files into
   curve links.
+- An arc type stored by its end points (exact end points for flat arcs).
+- The validity check also runs on meshes our own triangulators build, which
+  the owner considers double work: GitHub issue #24.
 
 ## Open
 
@@ -308,5 +381,12 @@ It stops just before matrix assembly.
 - Quality guarantees: an improver that runs after a refiner can break the
   refiner's guarantee (smoothing after Ruppert can lower the minimum
   angle). Whether to declare, warn and measure this is not decided yet.
-- Everything from matrix assembly onwards (assembly, solvers, time
-  integration) has not been discussed yet.
+- The architecture of the assembled problem and of assembly itself
+  (types, interfaces, ownership), and the inheritance of the facts into it.
+- Whether the eliminated system is renumbered to free nodes only or keeps
+  its full size with identity rows for Dirichlet nodes.
+- How the sparsity pattern is built.
+- β̂_n can vanish at some points even when β_n is not zero as written (for
+  example u_x = g on a circle), so the structural check alone may not be
+  enough.
+- Solvers and time integration have not been discussed yet.
