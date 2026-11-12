@@ -88,9 +88,20 @@ int main() {
              [] { ChordLengthDiscretizer({.max_curve_deviation = 0}); },
              "must be positive");
        }},
+      {"default_curve_deviation",
+       [] {
+         check(ChordLengthOptions{}.max_curve_deviation == 0.02, "0.02");
+         // A huge h: only the default deviation bound sets the count, so
+         // the sweep w of each piece has w^2 / 8 <= 0.02.
+         auto p = run_discretizer(circle(1), 100);
+         double w = 2 * pi / double(p.loops[0].points.size());
+         check(w * w / 8 <= 0.02, "default bound met");
+         check(p.loops[0].points.size() > 3, "more than a triangle");
+       }},
       {"at_least_three_points",
        [] {
-         auto p = run_discretizer(circle(1), 100);
+         auto p =
+             run_discretizer(circle(1), 100, {.max_curve_deviation = INFINITY});
          check(p.loops[0].points.size() == 3, "a triangle");
          validate(p);
        }},

@@ -2,15 +2,13 @@
 
 #include "pde2d/mesh/components.hpp"
 
-#include <limits>
-
 namespace pde2d::mesh {
 
 struct ChordLengthOptions {
   // Upper bound on the distance between a curve and its chords, in the
-  // geometry's length unit. Infinity (the default) means no bound beyond
-  // the edge length. Must be positive.
-  double max_curve_deviation = std::numeric_limits<double>::infinity();
+  // geometry's length unit. Infinity means no bound beyond the edge
+  // length. Must be positive.
+  double max_curve_deviation = 0.02;
 };
 
 // Splits every curve into ceil(length / max_edge_length) pieces of equal

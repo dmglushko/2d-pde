@@ -187,11 +187,14 @@ int main() {
       {"invalid_boundary_polygon_is_reported",
        [] {
          // The hole comes within 0.05 of the outer circle; at this edge
-         // length the chords of the two circles cross.
+         // length and without a deviation bound the chords of the two
+         // circles cross.
          CurveGeometry g({circle_loop({0, 0}, 1, "outer"),
                           circle_loop({0, 0.05}, 0.9, "hole")});
+         auto coarse = std::make_shared<ChordLengthDiscretizer>(
+             ChordLengthOptions{.max_curve_deviation = INFINITY});
          expect_throws<std::runtime_error>(
-             [&] { (void)Mesher(chords(), cdt()).run(g, {1.0}); },
+             [&] { (void)Mesher(coarse, cdt()).run(g, {1.0}); },
              "chord_length produced an invalid boundary polygon: Boundary "
              "polygon edges cross or touch");
          // A curve deviation bound fixes it.
