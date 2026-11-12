@@ -1,6 +1,7 @@
 add_library(pde2d_fem
   compiled_expression.cpp
   expression.cpp
+  meshed_problem.cpp
   problem.cpp)
 add_library(pde2d::fem ALIAS pde2d_fem)
 target_include_directories(pde2d_fem PUBLIC ${PROJECT_SOURCE_DIR}/include)
