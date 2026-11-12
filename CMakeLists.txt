@@ -9,6 +9,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(PDE2D_BUILD_TESTS "Build the tests" ON)
+option(PDE2D_BUILD_EXAMPLES "Build the example programs" ON)
 option(PDE2D_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
 # Warning flags shared by every target of this project.
@@ -24,6 +25,10 @@ endif()
 add_subdirectory(src/geometry)
 add_subdirectory(src/mesh)
 add_subdirectory(src/io)
+
+if(PDE2D_BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
 
 if(PDE2D_BUILD_TESTS)
   # Boost.Multiprecision (header-only) is a test dependency only: the
