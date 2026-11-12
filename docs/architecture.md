@@ -529,20 +529,33 @@ any `g`).
    values at Dirichlet corners are then compared: equal as written, never
    reported; otherwise, if one depends on t, reported as "may differ";
    otherwise evaluated at the node and reported when they differ;
-5. the initial conditions that `time_order` requires are evaluated at
-   every node (a missing or an unneeded one, one depending on t, or a
-   value that is not finite is an error);
+5. the initial conditions that `time_order` requires are compiled (a
+   missing one is an error; one that is not needed is ignored and one that
+   depends on t is evaluated at the start time, each with a report
+   message), and for time order 2 so is `d/dt (g / alpha)` of every
+   Dirichlet condition that depends on t (differentiated symbolically; a
+   derivative SymEngine cannot express, such as that of `abs`, is an
+   error);
 6. the facts stay with each compiled function, and the summaries read
    them.
 
 `dirichlet_value(k, t)` is the average of `g / alpha` over the regions of
-`dirichlet_nodes()[k]` (an error if not finite). `report()` is a
+`dirichlet_nodes()[k]` (with `std::midpoint`, so two large finite values
+do not overflow; an error if not finite). `initial_values(t0)` and, for
+time order 2, `initial_velocities(t0)` compute u and u_t at every mesh
+node at the start time t0 the time integrator passes, on every call: at a
+Dirichlet node from the boundary data (`dirichlet_value(k, t0)`, and the
+average of `d/dt (g / alpha)` for the velocity), elsewhere from the
+initial condition at `(x, y, t0)`. A time order without them, a t0 that
+is not finite, or a value that is not finite throws
+`std::invalid_argument`. `report()` is a
 `mesh::StageReport` named "meshed_problem" with the time, the metrics
 `regions`, `dirichlet_nodes`, `free_nodes`, `corners`,
 `dirichlet_over_natural_corners`, `priority_corners`, `averaged_corners`,
-`differing_corners`, and one message per differing corner, for example
+`differing_corners`, one message per differing corner, for example
 "Corner at node 0 (0, 0): regions 'bottom' and 'left' (both priority 0)
-give 0 and 1; their average 0.5 is used".
+give 0 and 1; their average 0.5 is used", and one per initial condition
+that is not needed or depends on t.
 
 ## Determinism
 

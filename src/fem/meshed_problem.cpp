@@ -166,38 +166,56 @@ corner_message(const mesh::Mesh &mesh, const Problem &problem,
                      loser_priority, b_wins ? value_a : value_b);
 }
 
-std::optional<std::vector<double>>
-initial_values(const mesh::Mesh &mesh, const Problem &problem,
-               const std::optional<Expression> &condition, bool needed,
-               const std::string &name) {
+// Step 5 for one initial condition: compiled when the time order needs
+// it. A missing one that is needed is an error; one that is not needed,
+// or one that depends on t, is a report message.
+std::optional<CompiledExpression>
+compile_initial(const Problem &problem,
+                const std::optional<Expression> &condition, bool needed,
+                const std::string &name, const char *evaluated_by,
+                std::vector<std::string> &messages) {
   const int order = time_order(problem);
   if (needed && !condition)
     throw std::invalid_argument(
         std::format("The problem has time order {}, so it needs the initial "
                     "condition {}",
                     order, name));
-  if (!needed && condition)
-    throw std::invalid_argument(
-        std::format("The problem has time order {}, so it takes no initial "
-                    "condition {}, but it is set",
-                    order, name));
-  if (!condition)
+  if (!needed) {
+    if (condition)
+      messages.push_back(std::format("The problem has time order {}, so the "
+                                     "initial condition {} is not needed; it "
+                                     "is ignored",
+                                     order, name));
     return std::nullopt;
+  }
   if (condition->facts().depends_on_t)
-    throw std::invalid_argument("The initial condition " + name +
-                                " depends on t; an initial condition may "
-                                "depend only on x, y and parameters");
-  const auto function =
-      compile(*condition, problem.parameters, "Initial condition " + name);
-  std::vector<double> values;
-  values.reserve(mesh.nodes.size());
-  for (std::size_t node = 0; node < mesh.nodes.size(); ++node) {
+    messages.push_back(std::format("The initial condition {} depends on t; "
+                                   "{}(t0) evaluates it at the start time t0",
+                                   name, evaluated_by));
+  return compile(*condition, problem.parameters, "Initial condition " + name);
+}
+
+void check_start_time(double t0) {
+  if (!std::isfinite(t0))
+    throw std::invalid_argument(
+        std::format("The start time t0 = {} is not finite", t0));
+}
+
+// An initial condition at the free nodes at t0; the Dirichlet nodes are
+// filled by the caller.
+std::vector<double> at_free_nodes(const mesh::Mesh &mesh,
+                                  const std::vector<std::size_t> &free_nodes,
+                                  const CompiledExpression &condition,
+                                  const char *name, double t0) {
+  std::vector<double> values(mesh.nodes.size(), 0.0);
+  for (const std::size_t node : free_nodes) {
     const auto &p = mesh.nodes[node];
-    const double value = function(p.x, p.y, 0.0);
+    const double value = condition(p.x, p.y, t0);
     if (!std::isfinite(value))
-      throw std::invalid_argument("The initial condition " + name +
-                                  " is not finite at " + node_text(mesh, node));
-    values.push_back(value);
+      throw std::invalid_argument(
+          std::format("The initial condition {} is not finite at {}, t = {}",
+                      name, node_text(mesh, node), t0));
+    values[node] = value;
   }
   return values;
 }
@@ -330,11 +348,34 @@ MeshedProblem::MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh,
       report_.messages.push_back(std::move(*message));
     }
 
-  // 5. Initial conditions at the nodes.
+  // 5. Initial conditions, compiled; they are evaluated on request at a
+  // start time. For time order 2 the initial velocity at a Dirichlet node
+  // comes from d/dt (g / alpha), differentiated here (symbolic work stays
+  // in the constructor).
   const int order = time_order(problem_);
-  initial_u_ = initial_values(m, problem_, problem_.initial.u, order >= 1, "u");
-  initial_u_t_ =
-      initial_values(m, problem_, problem_.initial.u_t, order >= 2, "u_t");
+  initial_u_ = compile_initial(problem_, problem_.initial.u, order >= 1, "u",
+                               "initial_values", report_.messages);
+  initial_u_t_ = compile_initial(problem_, problem_.initial.u_t, order >= 2,
+                                 "u_t", "initial_velocities", report_.messages);
+  if (order >= 2) {
+    dirichlet_rates_.resize(regions);
+    for (std::size_t r = 0; r < regions; ++r) {
+      const auto &name = m.region_names[r];
+      const auto &source = problem_.boundary_conditions.at(name);
+      // Zero (the default) when g / alpha does not depend on t.
+      if (!dirichlet(r) || !depends_on_t(source))
+        continue;
+      const std::string label =
+          "Region " + in_quotes(name) + ", time derivative of g / alpha";
+      Expression rate;
+      try {
+        rate = detail::time_derivative_of_quotient(source.g, source.alpha);
+      } catch (const std::invalid_argument &error) {
+        throw std::invalid_argument(label + ": " + error.what());
+      }
+      dirichlet_rates_[r] = compile(rate, parameters, label);
+    }
+  }
 
   // 6. Facts: each CompiledExpression carries the facts of the expression
   // it was compiled from, so the summaries below read the compiled problem.
@@ -366,6 +407,50 @@ double MeshedProblem::dirichlet_value(std::size_t k, double t) const {
         "The average Dirichlet value g / alpha is not finite at {}, t = {}",
         node_text(*mesh_, entry.node), t));
   return value;
+}
+
+std::vector<double> MeshedProblem::initial_values(double t0) const {
+  if (!initial_u_)
+    throw std::invalid_argument(
+        std::format("The problem has time order {}, so it has no initial "
+                    "values",
+                    time_order(*this)));
+  check_start_time(t0);
+  auto values = at_free_nodes(*mesh_, free_nodes_, *initial_u_, "u", t0);
+  // The boundary data wins over the initial condition.
+  for (std::size_t k = 0; k < dirichlet_nodes_.size(); ++k)
+    values[dirichlet_nodes_[k].node] = dirichlet_value(k, t0);
+  return values;
+}
+
+std::vector<double> MeshedProblem::initial_velocities(double t0) const {
+  if (!initial_u_t_)
+    throw std::invalid_argument(
+        std::format("The problem has time order {}, so it has no initial "
+                    "velocities (they need time order 2)",
+                    time_order(*this)));
+  check_start_time(t0);
+  auto values = at_free_nodes(*mesh_, free_nodes_, *initial_u_t_, "u_t", t0);
+  const mesh::Mesh &m = *mesh_;
+  for (const auto &entry : dirichlet_nodes_) {
+    const auto &p = m.nodes[entry.node];
+    const double value = average(entry.regions, [&](std::size_t r) {
+      const double rate = dirichlet_rates_[r](p.x, p.y, t0);
+      if (!std::isfinite(rate))
+        throw std::invalid_argument(std::format(
+            "The time derivative of g / alpha of region {} is not finite at "
+            "{}, t = {}",
+            in_quotes(m.region_names[r]), node_text(m, entry.node), t0));
+      return rate;
+    });
+    if (!std::isfinite(value))
+      throw std::invalid_argument(std::format(
+          "The average time derivative of g / alpha is not finite at {}, t "
+          "= {}",
+          node_text(m, entry.node), t0));
+    values[entry.node] = value;
+  }
+  return values;
 }
 
 std::optional<std::size_t> MeshedProblem::free_index(std::size_t node) const {

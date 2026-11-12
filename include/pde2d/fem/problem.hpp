@@ -34,8 +34,10 @@ struct BoundaryCondition {
 };
 
 // u and u_t at the start. Which ones are required follows from
-// time_order(): none for 0, u for 1, both for 2. They may depend on x and
-// y (and parameters), not on t.
+// time_order(): none for 0, u for 1, both for 2. They may depend on x, y
+// and parameters, and also on t: MeshedProblem evaluates them at the
+// start time it is given (initial_values(t0)). One that is not required,
+// or one that depends on t, is only a warning in MeshedProblem's report.
 struct InitialConditions {
   std::optional<Expression> u{};
   std::optional<Expression> u_t{};

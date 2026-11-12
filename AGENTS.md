@@ -164,6 +164,13 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   that needs SymEngine includes that private header, never
   `<symengine/...>` directly. Symbolic work happens in one thread (the
   SymEngine build has no thread-safe reference counting).
+- **Expressions accept only the allow-list** (`detail::unsupported` in
+  `src/fem/expression.cpp`, listed in `expression.hpp`). Add a construct
+  only with a test against the standard library in
+  `tests/fem/expression.cpp` and a use in
+  `tests/fem/expression_threads.cpp`, after checking that SymEngine's
+  `LambdaRealDoubleVisitor` evaluates it correctly and without shared
+  state: compiled functions are called from several threads at once.
 - **Facts are as written and summaries are never stored.** An
   `Expression`'s `facts()` come from its parsed form; `time_order`,
   `lhs_depends_on_t` and `rhs_depends_on_t` are computed from them each

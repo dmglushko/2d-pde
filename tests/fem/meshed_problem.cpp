@@ -381,57 +381,188 @@ int main() {
              },
              "Parameter 'pi' is not a plain symbol name");
        }},
-      {"initial conditions follow the time order",
+      {"a missing initial condition is an error",
        [] {
          const auto wall = grid({"wall", "wall", "wall", "wall"});
          Problem problem = poisson({{"wall", dirichlet("0")}});
-         problem.initial.u = e("x");
-         expect_throws<std::invalid_argument>(
-             [&] { MeshedProblem p(wall, problem); },
-             "The problem has time order 0, so it takes no initial "
-             "condition u, but it is set");
          problem.equation.m1 = e("1");
-         problem.initial.u.reset();
          expect_throws<std::invalid_argument>(
              [&] { MeshedProblem p(wall, problem); },
              "The problem has time order 1, so it needs the initial "
              "condition u");
-         problem.initial = {.u = e("x"), .u_t = e("0")};
-         expect_throws<std::invalid_argument>(
-             [&] { MeshedProblem p(wall, problem); },
-             "takes no initial condition u_t");
          problem.equation.m2 = e("1");
-         problem.initial.u_t.reset();
+         problem.initial.u = e("x");
          expect_throws<std::invalid_argument>(
              [&] { MeshedProblem p(wall, problem); },
              "The problem has time order 2, so it needs the initial "
              "condition u_t");
-         problem.initial = {.u = e("x*t"), .u_t = e("0")};
-         expect_throws<std::invalid_argument>(
-             [&] { MeshedProblem p(wall, problem); },
-             "The initial condition u depends on t");
-         problem.initial = {.u = e("1/x"), .u_t = e("0")};
-         expect_throws<std::invalid_argument>(
-             [&] { MeshedProblem p(wall, problem); },
-             "The initial condition u is not finite at node 0 (0, 0)");
        }},
-      {"initial conditions are evaluated at the nodes",
+      {"unusual initial conditions are warnings, not errors",
        [] {
          const auto wall = grid({"wall", "wall", "wall", "wall"});
-         Problem heat = poisson({{"wall", dirichlet("0")}});
+         Problem problem = poisson({{"wall", dirichlet("0")}});
+         problem.initial = {.u = e("x"), .u_t = e("0")};
+         const MeshedProblem steady(wall, problem);
+         check(steady.report().messages ==
+                   std::vector<std::string>{
+                       "The problem has time order 0, so the initial "
+                       "condition u is not needed; it is ignored",
+                       "The problem has time order 0, so the initial "
+                       "condition u_t is not needed; it is ignored"},
+               "both ignored");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)steady.initial_values(0.0); },
+             "The problem has time order 0, so it has no initial values");
+         // Not even compiled: an unknown parameter in it does not matter.
+         problem.initial.u = e("q*x");
+         const MeshedProblem also_steady(wall, problem);
+         check(also_steady.report().messages.size() == 2, "ignored");
+
+         problem.equation.m1 = e("1");
+         problem.initial = {.u = e("x*t"), .u_t = e("0")};
+         const MeshedProblem heat(wall, problem);
+         check(heat.report().messages ==
+                   std::vector<std::string>{
+                       "The initial condition u depends on t; "
+                       "initial_values(t0) evaluates it at the start time t0",
+                       "The problem has time order 1, so the initial "
+                       "condition u_t is not needed; it is ignored"},
+               "u in t, u_t not needed");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)heat.initial_velocities(0.0); },
+             "The problem has time order 1, so it has no initial "
+             "velocities (they need time order 2)");
+         // An initial condition the time order needs is still compiled.
+         problem.initial = {.u = e("q*x")};
+         expect_throws<std::invalid_argument>(
+             [&] { MeshedProblem p(wall, problem); },
+             "Initial condition u: The expression 'q*x' uses 'q'");
+       }},
+      {"initial values at a start time",
+       [] {
+         // Natural conditions everywhere: every node is free.
+         const auto open = grid({"side", "side", "side", "side"});
+         Problem heat = poisson({{"side", neumann()}});
          heat.equation.m1 = e("1");
-         heat.initial.u = e("x + 2*y");
-         const MeshedProblem p(wall, heat);
-         check(p.initial_u().has_value() && !p.initial_u_t().has_value(),
-               "only u");
-         const std::vector<double> expected{0, 0.5, 1, 1, 1.5, 2, 2, 2.5, 3};
-         check(*p.initial_u() == expected, "x + 2 y at the nodes");
-         Problem wave = heat;
+         heat.initial.u = e("x + 2*y + 10*t");
+         const MeshedProblem p(open, heat);
+         const std::vector<double> at_zero{0, 0.5, 1, 1, 1.5, 2, 2, 2.5, 3};
+         check(p.initial_values(0.0) == at_zero, "x + 2 y at t0 = 0");
+         auto at_five = at_zero;
+         for (double &value : at_five)
+           value += 50.0;
+         check(p.initial_values(5.0) == at_five, "x + 2 y + 50 at t0 = 5");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)p.initial_values(INFINITY); },
+             "The start time t0 = inf is not finite");
+         heat.initial.u = e("1/x");
+         const MeshedProblem q(open, heat);
+         expect_throws<std::invalid_argument>(
+             [&] { (void)q.initial_values(0.0); },
+             "The initial condition u is not finite at node 0 (0, 0), t = 0");
+       }},
+      {"at Dirichlet nodes the initial values come from g / alpha",
+       [] {
+         Problem heat = poisson({{"bottom", dirichlet("100 + t")},
+                                 {"right", neumann()},
+                                 {"top", neumann()},
+                                 {"left", dirichlet("-x")}});
+         heat.equation.m1 = e("1");
+         // Not finite at node 0, which is a Dirichlet node: never used.
+         heat.initial.u = e("y/x");
+         const MeshedProblem p(square(), heat);
+         const auto values = p.initial_values(2.0);
+         // Node 0 is a corner: the average of 102 and 0.
+         check(values[0] == 51.0, "corner");
+         check(values[1] == 102.0 && values[2] == 102.0, "bottom");
+         check(values[3] == 0.0 && values[6] == 0.0, "left: -x");
+         check(values[4] == 1.0 && values[5] == 0.5 && values[7] == 2.0 &&
+                   values[8] == 1.0,
+               "free nodes: y / x");
+       }},
+      {"initial velocities: u_t, and d/dt (g / alpha) at Dirichlet nodes",
+       [] {
+         Problem wave =
+             poisson({{"bottom", dirichlet("x*t^2")},
+                      {"right", neumann()},
+                      {"top", neumann()},
+                      {"left", {.alpha = e("2 + t"), .g = e("sin(t)")}}});
          wave.equation.m2 = e("1");
-         wave.initial.u_t = e("k");
-         wave.parameters = {{"k", 5.0}};
-         const MeshedProblem q(wall, wave);
-         check(*q.initial_u_t() == std::vector<double>(9, 5.0), "u_t = k");
+         wave.initial = {.u = e("0"), .u_t = e("y + k*t")};
+         wave.parameters = {{"k", 3.0}};
+         const MeshedProblem p(square(), wave);
+         check(p.report().messages.size() == 2 &&
+                   p.report().messages[1] ==
+                       "The initial condition u_t depends on t; "
+                       "initial_velocities(t0) evaluates it at the start "
+                       "time t0",
+               "u_t in t");
+         const double t0 = 1.0;
+         const auto rates = p.initial_velocities(t0);
+         check(rates.size() == 9, "every node");
+         // d/dt (sin t / (2 + t)) on the left.
+         const double left =
+             (std::cos(t0) * (2 + t0) - std::sin(t0)) / ((2 + t0) * (2 + t0));
+         const double bottom_at_0 = 0.0; // 2 x t at x = 0
+         pde2d::test::near(rates[0], (bottom_at_0 + left) / 2, 1e-15,
+                           "corner: the average");
+         check(rates[1] == 1.0 && rates[2] == 2.0, "bottom: 2 x t");
+         pde2d::test::near(rates[3], left, 1e-15, "left");
+         pde2d::test::near(rates[6], left, 1e-15, "left beats top");
+         check(rates[4] == 3.5 && rates[5] == 3.5 && rates[7] == 4.0 &&
+                   rates[8] == 4.0,
+               "free nodes: y + k t0");
+         const auto values = p.initial_values(t0);
+         pde2d::test::near(values[0], std::sin(t0) / 3 / 2, 1e-15,
+                           "corner value");
+         check(values[1] == 0.5 && values[4] == 0.0, "values");
+         // With a priority the winner's rate is used.
+         wave.boundary_conditions["left"].priority = 1;
+         const MeshedProblem q(square(), wave);
+         pde2d::test::near(q.initial_velocities(t0)[0], left, 1e-15,
+                           "left wins");
+       }},
+      {"initial velocities with g / alpha constant in t are zero",
+       [] {
+         Problem wave = poisson({{"wall", dirichlet("x*y")}});
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("1")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         const std::vector<double> expected{0, 0, 0, 0, 1, 0, 0, 0, 0};
+         check(p.initial_velocities(3.0) == expected, "only the centre");
+       }},
+      {"a time derivative that cannot be expressed is an error",
+       [] {
+         // SymEngine cannot differentiate abs and leaves a Derivative.
+         Problem wave = poisson({{"wall", dirichlet("abs(t - 1)")}});
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         expect_throws<std::invalid_argument>(
+             [&] {
+               MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+             },
+             "Region 'wall', time derivative of g / alpha: The expression "
+             "'Derivative(abs(1 - t), t)' uses 'Derivative', which is not "
+             "among the supported functions and operators");
+         // Not needed below time order 2.
+         wave.equation.m2 = e("0");
+         wave.equation.m1 = e("1");
+         wave.initial.u_t.reset();
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         check(p.initial_values(3.0)[0] == 2.0, "abs(3 - 1)");
+       }},
+      {"initial velocities that are not finite are errors",
+       [] {
+         Problem wave = poisson({{"wall", {.alpha = e("t"), .g = e("1")}}});
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         // d/dt (1 / t) = -1 / t^2.
+         check(p.initial_velocities(2.0)[0] == -0.25, "-1/4");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)p.initial_velocities(0.0); },
+             "The time derivative of g / alpha of region 'wall' is not "
+             "finite at node 0 (0, 0), t = 0");
        }},
       {"the summaries read the compiled facts",
        [] {

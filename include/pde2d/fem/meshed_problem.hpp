@@ -54,8 +54,11 @@ struct DirichletNode {
 //    dynamic); at a corner between two Dirichlet regions the higher
 //    priority wins and equal priorities are averaged;
 // 4. compiles every expression with the problem's parameters;
-// 5. evaluates the initial conditions at the nodes (required ones by
-//    time_order(); a missing one, or one that is not needed, is an error);
+// 5. compiles the initial conditions that time_order() requires (u for 1,
+//    u and u_t for 2; a missing one is an error) and, for time order 2,
+//    the time derivative d/dt (g / alpha) of every Dirichlet condition. An
+//    initial condition that is not needed is ignored, and one that depends
+//    on t is evaluated at the start time; both get a report message;
 // 6. keeps each expression's facts with its compiled function, so the
 //    summaries below are computed from the compiled problem.
 //
@@ -65,9 +68,10 @@ struct DirichletNode {
 // report() is a mesh::StageReport ("meshed_problem"): the time taken, the
 // metrics regions, dirichlet_nodes, free_nodes, corners (boundary nodes
 // where the region changes), dirichlet_over_natural_corners,
-// priority_corners, averaged_corners and differing_corners, and one
-// message for every corner between two Dirichlet regions whose values
-// differ (or depend on t, unless both conditions are the same as written).
+// priority_corners, averaged_corners and differing_corners, one message
+// for every corner between two Dirichlet regions whose values differ (or
+// depend on t, unless both conditions are the same as written), and one
+// for every initial condition that is not needed or depends on t.
 class MeshedProblem {
 public:
   MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh, const Problem &problem);
@@ -95,13 +99,17 @@ public:
   // The unknown of a mesh node, or nothing for a Dirichlet node.
   std::optional<std::size_t> free_index(std::size_t node) const;
 
-  // u and u_t at every mesh node, when the time order requires them.
-  const std::optional<std::vector<double>> &initial_u() const {
-    return initial_u_;
-  }
-  const std::optional<std::vector<double>> &initial_u_t() const {
-    return initial_u_t_;
-  }
+  // u at every mesh node (indexed like Mesh::nodes) at the start time t0,
+  // for time order 1 or 2. At a Dirichlet node it is the boundary data,
+  // dirichlet_value at t0; elsewhere the initial condition u at (x, y, t0).
+  // Computed on every call. Throws std::invalid_argument for time order 0,
+  // a t0 that is not finite, or a value that is not finite.
+  std::vector<double> initial_values(double t0) const;
+  // u_t at every mesh node at t0, for time order 2. At a Dirichlet node it
+  // is d/dt (g / alpha) at t0, averaged over the node's regions like
+  // dirichlet_value; elsewhere the initial condition u_t at (x, y, t0).
+  // Throws like initial_values, and for time order 0 or 1.
+  std::vector<double> initial_velocities(double t0) const;
 
   const mesh::StageReport &report() const { return report_; }
 
@@ -114,8 +122,12 @@ private:
   std::vector<std::size_t> free_nodes_;
   // Per node: its unknown, or the largest std::size_t for a Dirichlet node.
   std::vector<std::size_t> free_index_;
-  std::optional<std::vector<double>> initial_u_;
-  std::optional<std::vector<double>> initial_u_t_;
+  // The initial conditions the time order needs, compiled.
+  std::optional<CompiledExpression> initial_u_;
+  std::optional<CompiledExpression> initial_u_t_;
+  // Per region, for time order 2: d/dt (g / alpha) of a Dirichlet
+  // condition, zero otherwise. Empty for time order 0 or 1.
+  std::vector<CompiledExpression> dirichlet_rates_;
   mesh::StageReport report_;
 };
 
