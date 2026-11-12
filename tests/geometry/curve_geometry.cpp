@@ -84,6 +84,18 @@ int main() {
                "outer loop unchanged");
          check_closed_and_oriented(g);
        }},
+      {"far_from_origin_loop_is_not_reversed",
+       [] {
+         // A counterclockwise unit square at (1e9, 1e9). Its area must not
+         // cancel to zero (which would read as clockwise and reverse it).
+         for (bool ccw : {true, false}) {
+           CurveGeometry g({square_loop(1e9, 1e9, 1, ccw)});
+           const auto &line = std::get<Line>(g.loops()[0].curves[0].curve);
+           check(line.start == Point{1e9, 1e9} &&
+                     line.end == Point{1e9 + 1, 1e9},
+                 "normalized counterclockwise");
+         }
+       }},
       {"reversal_keeps_regions_with_their_curves",
        [] {
          Loop loop = square_loop(0, 0, 1, false);

@@ -14,6 +14,20 @@ int main() {
          std::vector<Point> cw(square.rbegin(), square.rend());
          near(signed_area(cw), -4, 0, "clockwise");
        }},
+      {"signed_area_far_from_origin",
+       [] {
+         // A unit square at (1e9, 1e9): the products of absolute
+         // coordinates (about 1e18) cancel, and their rounding errors are
+         // larger than the area.
+         std::vector<Point> far = {
+             {1e9, 1e9}, {1e9 + 1, 1e9}, {1e9 + 1, 1e9 + 1}, {1e9, 1e9 + 1}};
+         near(signed_area(far), 1, 0, "unit square far away");
+         std::vector<Point> cw(far.rbegin(), far.rend());
+         near(signed_area(cw), -1, 0, "clockwise far away");
+         std::vector<Point> thin = {
+             {1e15, 3}, {1e15 + 8, 3}, {1e15 + 8, 3.5}, {1e15, 3.5}};
+         near(signed_area(thin), 4, 0, "thin rectangle at 1e15");
+       }},
       {"locate",
        [&] {
          check(locate_in_polygon(square, {1, 1}) == 1, "inside");

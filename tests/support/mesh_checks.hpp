@@ -35,10 +35,12 @@ inline double mesh_area(const Mesh &m) {
 // Area enclosed by the boundary edges (holes count negatively because
 // their edges run clockwise).
 inline double boundary_area(const Mesh &m) {
+  // Relative to one node, so the products do not cancel far from 0.
+  Point o = m.nodes.empty() ? Point{0, 0} : m.nodes[0];
   double twice = 0;
   for (const auto &e : m.boundary_edges) {
     Point a = m.nodes[e.nodes[0]], b = m.nodes[e.nodes[1]];
-    twice += a.x * b.y - a.y * b.x;
+    twice += (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
   }
   return twice / 2;
 }

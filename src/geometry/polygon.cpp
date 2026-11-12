@@ -8,9 +8,15 @@
 namespace pde2d::geometry {
 
 double signed_area(std::span<const Point> polygon) {
+  // Relative to the first vertex: the products are then as large as the
+  // polygon, not as its distance from the origin, so they do not cancel
+  // for a small polygon far away (a unit square at 1e9 would round to 0).
+  if (polygon.size() < 3)
+    return 0;
+  Point o = polygon[0];
   double twice = 0;
-  for (std::size_t i = 0; i < polygon.size(); ++i)
-    twice += cross(polygon[i], polygon[(i + 1) % polygon.size()]);
+  for (std::size_t i = 1; i + 1 < polygon.size(); ++i)
+    twice += cross(polygon[i] - o, polygon[i + 1] - o);
   return twice / 2;
 }
 

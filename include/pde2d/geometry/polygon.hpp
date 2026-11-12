@@ -11,7 +11,9 @@
 // point: segment i runs from points[i] to points[(i + 1) % size].
 namespace pde2d::geometry {
 
-// Shoelace formula: positive for a counterclockwise polygon.
+// Shoelace formula, relative to the first point (so a small polygon far
+// from the origin does not cancel): positive for a counterclockwise
+// polygon, 0 for fewer than three points.
 double signed_area(std::span<const Point> polygon);
 
 // Exact point location: +1 strictly inside, 0 on the boundary, -1 outside.

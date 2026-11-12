@@ -50,7 +50,8 @@ range check comes before the filter, so no stage runs unprotected. `predicates.c
 `-fno-fast-math -ffp-contract=off` and refuses to compile under
 `__FAST_MATH__` or with `FLT_EVAL_METHOD != 0` (x87 extended precision),
 because the error-free transformations need every operation rounded on
-its own. `polygon.hpp` has `signed_area`,
+its own. `polygon.hpp` has `signed_area` (relative to the first point, so a
+small polygon far from the origin does not cancel),
 `locate_in_polygon` and `find_crossing` for polygons.
 
 `CurveGeometry` construction:
