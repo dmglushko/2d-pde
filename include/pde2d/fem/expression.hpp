@@ -31,9 +31,25 @@ struct ExpressionAccess;
 
 // A scalar expression in the variables x, y and t and in named parameters,
 // built from text: Expression("1 + k*x*y"). The text is parsed when the
-// expression is built; a parse error, an unknown function, a complex or
-// infinite constant throws std::invalid_argument there. Expression() is
-// zero. Copies are cheap and share the parsed form, which never changes.
+// expression is built. Only these constructs are accepted (the
+// allow-list; each one is tested against the standard library):
+// - numbers, finite as doubles; the variables x, y, t; parameter names;
+//   the constants pi and E;
+// - +, -, *, / and powers (^ or **);
+// - sin, cos, tan, asin, acos, atan, atan2(y, x), sinh, cosh, tanh, exp,
+//   log (or ln; log(u, b) is log(u)/log(b)), sqrt and abs;
+// - Piecewise((value, condition), ..., (value, True)), whose last branch
+//   must be unconditional. A condition compares numbers with <, <=, >,
+//   >=, == (or Eq) and != (or Ne), and combines comparisons with And (&),
+//   Or (|) and Not (~). A condition is not a number: it may appear only
+//   as the condition of a Piecewise branch.
+// Anything else throws std::invalid_argument when the expression is built,
+// naming what is wrong: a parse error, an unknown function, a function or
+// constant not on the list (loggamma, Xor, max, EulerGamma, ...), a complex,
+// infinite or undefined value, a number too large for a double, a condition
+// used as a number, a Piecewise without a final unconditional branch.
+// Expression() is zero. Copies are cheap and share the parsed form, which
+// never changes.
 //
 // SymEngine does the parsing, but it is used only inside the library's .cpp
 // files: this header does not depend on it.

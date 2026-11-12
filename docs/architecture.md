@@ -464,22 +464,39 @@ double a = meshed->equation().a_xx(0.5, 0.5, 0.0); // -1000
 ```
 
 **Expressions.** SymEngine parses the text when an `Expression` is built
-(`parse`, with `^` as power). A parse error, an unknown function
-(`foo(x)`), an infinite or undefined constant (`oo`, `1/0`, `nan`) and a
-value that is not real (`I`, `sqrt(-1)`) throw `std::invalid_argument`
-there; the last is found by compiling the form once with every free
-symbol as an input. The facts are read off the parsed form: `zero` when
-it is the number zero (SymEngine's parser already combines like terms, so
-`x - x` is zero, but nothing more is simplified), `depends_on_*` when the
-symbol is free in it. Free symbols other than x, y, t are parameter names,
-unknown constants for the facts. `CompiledExpression` checks the
-parameters (a plain symbol name other than x, y, t, which the parser reads
-back as that symbol, so not `pi` or `E`; a finite value), substitutes the
-values (an unknown name throws), and prepares SymEngine's
-`LambdaRealDoubleVisitor` (a tree of `std::function`s; no LLVM in this
-build). A call does not check its result. SymEngine is built without
-thread-safe reference counting, so all symbolic work happens in one
-thread; calls only read the prepared functions.
+(`parse`, with `^` as power). The parsed form is then checked against the
+allow-list (`detail::unsupported`, `src/fem/expression.cpp`), walking it
+the way SymEngine's evaluator does: numbers (each must be finite as a
+double, so `1e1000` and `10^400` are rejected), x, y, t, parameter names,
+`pi` and `E`; `+ - * /` and powers; `sin cos tan asin acos atan atan2 sinh
+cosh tanh exp log sqrt abs`; `Piecewise` whose last branch is `(value,
+True)`, with conditions built from `< <= > >= == !=` (`Eq`, `Ne`) and
+`And`, `Or`, `Not`, allowed only as `Piecewise` conditions. Anything else
+throws `std::invalid_argument` naming it: a parse error, an unknown
+function (`foo(x)`), a construct not on the list (`loggamma`, `Xor`,
+`max`, `EulerGamma`), a complex value (`I`, `sqrt(-1)`), an infinite or
+undefined constant (`oo`, `1/0`, `nan`), a condition used as a number
+(`2*(x < 0)`), a `Piecewise` without a final unconditional branch (SymEngine's evaluator
+would read past its branches). Constructs are added to the list one at a
+time, each with a test against the standard library
+(`tests/fem/expression.cpp`). The facts are read off the parsed form:
+`zero` when it is the number zero (SymEngine's parser already combines
+like terms, so `x - x` is zero, but nothing more is simplified),
+`depends_on_*` when the symbol is free in it. Free symbols other than x,
+y, t are parameter names, unknown constants for the facts.
+`CompiledExpression` checks the parameters (a plain symbol name other than
+x, y, t, which the parser reads back as that symbol, so not `pi` or `E`; a
+finite value), substitutes the values (an unknown name throws), checks the
+substituted form again (`log(k)` with k = -1 is complex, `1/k` with k = 0
+is infinite) and prepares SymEngine's `LambdaRealDoubleVisitor` (a tree of
+`std::function`s; no LLVM in this build). A call does not check its
+result. Calls may run in several threads at once: they only read the
+prepared functions, and every allowed construct evaluates through standard
+math functions without shared state (`tests/fem/expression_threads.cpp`,
+also run under ThreadSanitizer and Helgrind). SymEngine itself is built
+without thread-safe reference counting, so all symbolic work (building,
+substituting, differentiating, compiling, dropping the last copy of an
+expression) happens in one thread.
 
 **Classification** (`classify`), by which coefficients are zero as
 written: no spatial derivative and no `gamma` is Dirichlet (`alpha` must
