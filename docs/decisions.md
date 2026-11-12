@@ -323,6 +323,14 @@ Started 2026-11-11. The previous header-only code is on the branch
   Dirichlet conditions, an integer `priority` on each condition decides: the
   higher one wins, equal priorities are averaged, and the report records
   every corner where the competing values differ.
+- **Expressions are our own `Expression` value type, built from text**
+  (decided 2026-11-12), for example `Expression("1 + k*x*y")`. SymEngine
+  is used only inside `.cpp` files; a parse error throws when the
+  expression is built. *Why:* SymEngine stays out of public headers, like
+  Eigen, and mistakes show up where they are written.
+- **`Problem`, the conditions, `MeshedProblem` and later assembly and
+  solvers live in one library, `pde2d_fem`** (decided 2026-11-12), which
+  depends on `pde2d_mesh`.
 - **Initial conditions are part of `Problem`** as optional expressions.
   Which ones are required follows from the time order. A missing initial
   condition is an empty `std::optional`, not NaN.
