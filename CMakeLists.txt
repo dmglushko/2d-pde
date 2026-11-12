@@ -23,6 +23,7 @@ endif()
 
 add_subdirectory(src/geometry)
 add_subdirectory(src/mesh)
+add_subdirectory(src/io)
 
 if(PDE2D_BUILD_TESTS)
   # Boost.Multiprecision (header-only) is a test dependency only: the
