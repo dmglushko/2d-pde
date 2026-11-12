@@ -433,7 +433,11 @@ int main() {
                        "The initial condition u depends on t; "
                        "initial_values(t0) evaluates it at the start time t0",
                        "The problem has time order 1, so the initial "
-                       "condition u_t is not needed; it is ignored"},
+                       "condition u_t is not needed; it is ignored",
+                       "The initial condition u and g / alpha may differ at "
+                       "the 8 Dirichlet nodes, where g / alpha is used; one "
+                       "of them depends on t, so whether they differ depends "
+                       "on the start time t0"},
                "u in t, u_t not needed");
          check(heat.initial_values(0.0).has_value() &&
                    !heat.initial_velocities(0.0).has_value(),
@@ -500,7 +504,9 @@ int main() {
          wave.initial = {.u = e("0"), .u_t = e("y + k*t")};
          wave.parameters = {{"k", 3.0}};
          const MeshedProblem p(square(), wave);
-         check(p.report().messages.size() == 2 &&
+         // A corner, u_t in t, and both initial conditions may differ from
+         // the boundary data.
+         check(p.report().messages.size() == 4 &&
                    p.report().messages[1] ==
                        "The initial condition u_t depends on t; "
                        "initial_velocities(t0) evaluates it at the start "
@@ -663,6 +669,133 @@ int main() {
              [&] { (void)p.initial_velocities(0.0); },
              "The time derivative of g / alpha of region 'wall' is not "
              "finite at node 0 (0, 0), t = 0");
+       }},
+      {"an initial condition that disagrees with g / alpha is reported",
+       [] {
+         // Dirichlet on the bottom (g = x) and the left (g = 0); u0 = 1.
+         Problem heat = poisson({{"bottom", dirichlet("x")},
+                                 {"right", neumann()},
+                                 {"top", neumann()},
+                                 {"left", dirichlet("0")}});
+         heat.equation.m1 = e("1");
+         heat.initial.u = e("1");
+         const MeshedProblem p(square(), heat);
+         // Dirichlet nodes 0 (corner, average 0), 1 (0.5), 2 (1), 3 and 6
+         // (0): u0 = 1 differs at four of them.
+         check(metric(p, "differing_initial_values") == 4 &&
+                   metric(p, "differing_initial_velocities") == 0,
+               "metrics");
+         // The corner values agree (x = 0 there): only u is reported.
+         check(p.report().messages.size() == 1, "only u");
+         check(p.report().messages[0] ==
+                   "The initial condition u differs from g / alpha at 4 of 5 "
+                   "Dirichlet nodes, where g / alpha is used: node 0 (0, 0) "
+                   "has u = 1, g / alpha = 0; node 1 (0.5, 0) has u = 1, "
+                   "g / alpha = 0.5; node 3 (0, 0.5) has u = 1, g / alpha = "
+                   "0; and 1 more",
+               p.report().messages[0]);
+         // The boundary data is used there.
+         check(p.initial_values(0.0).value()[1] == 0.5, "g wins");
+
+         // u0 = x agrees with g = x on both sides.
+         heat.boundary_conditions["left"] = dirichlet("x");
+         heat.initial.u = e("x");
+         const MeshedProblem agree(square(), heat);
+         check(metric(agree, "differing_initial_values") == 0 &&
+                   agree.report().messages.empty(),
+               "u0 = g everywhere: nothing to report");
+         heat.initial.u = e("x*y");
+         const MeshedProblem one(square(), heat);
+         // x y is 0 on both sides: it differs from g = x at nodes 1 and 2.
+         check(metric(one, "differing_initial_values") == 2 &&
+                   one.report().messages.back() ==
+                       "The initial condition u differs from g / alpha at 2 "
+                       "of 5 Dirichlet nodes, where g / alpha is used: node 1 "
+                       "(0.5, 0) has u = 0, g / alpha = 0.5; node 2 (1, 0) "
+                       "has u = 0, g / alpha = 1",
+               one.report().messages.back());
+       }},
+      {"boundary data compared with u must be finite",
+       [] {
+         // g / alpha = 1 / x is used at node 0 at every t, and infinite.
+         Problem heat = poisson({{"bottom", neumann()},
+                                 {"right", neumann()},
+                                 {"top", neumann()},
+                                 {"left", {.alpha = e("x"), .g = e("1")}}});
+         heat.equation.m1 = e("1");
+         heat.initial.u = e("0");
+         expect_throws<std::invalid_argument>(
+             [&] { MeshedProblem p(square(), heat); },
+             "The Dirichlet value g / alpha of region 'left' is not finite at "
+             "node 0 (0, 0), t = 0");
+         // An initial condition that is not finite there (on the whole left
+         // side, x = 0) is only reported.
+         heat.boundary_conditions["left"] = dirichlet("1");
+         heat.initial.u = e("1/x");
+         const MeshedProblem p(square(), heat);
+         check(p.report().messages.back().starts_with(
+                   "The initial condition u differs from g / alpha at 3 of 3 "
+                   "Dirichlet nodes, where g / alpha is used: node 0 (0, 0) "
+                   "has u = inf, g / alpha = 1"),
+               p.report().messages.back());
+       }},
+      {"an initial condition or boundary data in t may differ",
+       [] {
+         const auto wall = grid({"wall", "wall", "wall", "wall"});
+         Problem heat = poisson({{"wall", dirichlet("t")}});
+         heat.equation.m1 = e("1");
+         heat.initial.u = e("0");
+         const MeshedProblem p(wall, heat);
+         check(p.report().messages ==
+                   std::vector<std::string>{
+                       "The initial condition u and g / alpha may differ at "
+                       "the 8 Dirichlet nodes, where g / alpha is used; one "
+                       "of them depends on t, so whether they differ depends "
+                       "on the start time t0"},
+               "g in t");
+         check(metric(p, "differing_initial_values") == 8, "every node");
+         // No Dirichlet node: nothing to compare.
+         Problem open = poisson({{"wall", neumann()}});
+         open.equation.m1 = e("1");
+         open.initial.u = e("t");
+         const MeshedProblem q(wall, open);
+         check(metric(q, "differing_initial_values") == 0 &&
+                   q.report().messages.size() == 1,
+               "only the message that u depends on t");
+       }},
+      {"an initial velocity is compared with d/dt (g / alpha)",
+       [] {
+         const auto wall = grid({"wall", "wall", "wall", "wall"});
+         // g = 2 t: g depends on t, its time derivative 2 does not.
+         Problem wave = poisson({{"wall", dirichlet("2*t")}});
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("2")};
+         const MeshedProblem p(wall, wave);
+         check(metric(p, "differing_initial_values") == 8 &&
+                   metric(p, "differing_initial_velocities") == 0,
+               "u may differ, u_t agrees");
+         check(p.report().messages.size() == 1, "only u");
+         wave.initial.u_t = e("x");
+         const MeshedProblem q(wall, wave);
+         check(metric(q, "differing_initial_velocities") == 8, "x != 2");
+         check(q.report().messages.back() ==
+                   "The initial condition u_t differs from d/dt (g / alpha) "
+                   "at 8 of 8 Dirichlet nodes, where d/dt (g / alpha) is "
+                   "used: node 0 (0, 0) has u_t = 0, d/dt (g / alpha) = 2; "
+                   "node 1 (0.5, 0) has u_t = 0.5, d/dt (g / alpha) = 2; "
+                   "node 2 (1, 0) has u_t = 1, d/dt (g / alpha) = 2; and 5 "
+                   "more",
+               q.report().messages.back());
+         // abs(t - 1) has a derivative in t: they may differ.
+         wave.boundary_conditions["wall"] = dirichlet("abs(t - 1)");
+         const MeshedProblem r(wall, wave);
+         check(metric(r, "differing_initial_velocities") == 8 &&
+                   r.report().messages.back() ==
+                       "The initial condition u_t and d/dt (g / alpha) may "
+                       "differ at the 8 Dirichlet nodes, where d/dt (g / "
+                       "alpha) is used; one of them depends on t, so whether "
+                       "they differ depends on the start time t0",
+               r.report().messages.back());
        }},
       {"the summaries read the compiled facts",
        [] {

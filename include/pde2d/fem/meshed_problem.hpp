@@ -58,7 +58,13 @@ struct DirichletNode {
 //    u and u_t for 2; a missing one is an error) and, for time order 2,
 //    the time derivative d/dt (g / alpha) of every Dirichlet condition. An
 //    initial condition that is not needed is ignored, and one that depends
-//    on t is evaluated at the start time; both get a report message;
+//    on t is evaluated at the start time; both get a report message. Each
+//    compiled initial condition is compared with the boundary data that
+//    replaces it at the Dirichlet nodes (u with g / alpha, u_t with
+//    d/dt (g / alpha)): when neither depends on t, exactly at every node
+//    (the boundary data must then be finite there), and a difference is
+//    reported with the number of nodes and the first three; otherwise they
+//    are reported once as possibly different;
 // 6. keeps each expression's facts with its compiled function, so the
 //    summaries below are computed from the compiled problem.
 //
@@ -68,10 +74,14 @@ struct DirichletNode {
 // report() is a mesh::StageReport ("meshed_problem"): the time taken, the
 // metrics regions, dirichlet_nodes, free_nodes, corners (boundary nodes
 // where the region changes), dirichlet_over_natural_corners,
-// priority_corners, averaged_corners and differing_corners, one message
-// for every corner between two Dirichlet regions whose values differ (or
-// depend on t, unless both conditions are the same as written), and one
-// for every initial condition that is not needed or depends on t.
+// priority_corners, averaged_corners, differing_corners,
+// differing_initial_values and differing_initial_velocities (the Dirichlet
+// nodes where u or u_t differs from the boundary data, or all of them when
+// they may differ), one message for every corner between two Dirichlet
+// regions whose values differ (or depend on t, unless both conditions are
+// the same as written), one for every initial condition that is not needed
+// or depends on t, and one for every initial condition that differs or may
+// differ from the boundary data.
 class MeshedProblem {
 public:
   MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh, const Problem &problem);

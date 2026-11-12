@@ -221,6 +221,82 @@ std::vector<double> at_free_nodes(const mesh::Mesh &mesh,
   return values;
 }
 
+// The average of d/dt (g / alpha) over the regions of `entry` at t, from
+// the compiled rates (one per region).
+double dirichlet_rate(const mesh::Mesh &mesh,
+                      const std::vector<CompiledExpression> &rates,
+                      const DirichletNode &entry, double t) {
+  const auto &p = mesh.nodes[entry.node];
+  const double value = average(entry.regions, [&](std::size_t r) {
+    const double rate = rates[r](p.x, p.y, t);
+    if (!std::isfinite(rate))
+      throw std::invalid_argument(std::format(
+          "The time derivative of g / alpha of region {} is not finite at "
+          "{}, t = {}",
+          in_quotes(mesh.region_names[r]), node_text(mesh, entry.node), t));
+    return rate;
+  });
+  if (!std::isfinite(value))
+    throw std::invalid_argument(std::format(
+        "The average time derivative of g / alpha is not finite at {}, t "
+        "= {}",
+        node_text(mesh, entry.node), t));
+  return value;
+}
+
+// How many differing nodes a mismatch message lists.
+constexpr std::size_t listed_mismatches = 3;
+
+// Compares an initial condition with the boundary data that replaces it at
+// the Dirichlet nodes (`data(k)` at dirichlet_nodes[k]) and adds a report
+// message when they differ. When neither depends on t both are evaluated
+// at t = 0 (any t gives the same values) and compared exactly at every
+// node; otherwise they are reported once as possibly different. Returns
+// the number of nodes reported: those that differ, or every Dirichlet node
+// when they may differ.
+template <class Data>
+std::size_t compare_with_boundary_data(const mesh::Mesh &mesh,
+                                       const std::vector<DirichletNode> &nodes,
+                                       const CompiledExpression &initial,
+                                       bool data_depends_on_t, Data data,
+                                       const char *initial_name,
+                                       const char *data_name,
+                                       std::vector<std::string> &messages) {
+  if (nodes.empty())
+    return 0;
+  if (initial.facts().depends_on_t || data_depends_on_t) {
+    messages.push_back(std::format(
+        "The initial condition {} and {} may differ at the {} Dirichlet "
+        "nodes, where {} is used; one of them depends on t, so whether they "
+        "differ depends on the start time t0",
+        initial_name, data_name, nodes.size(), data_name));
+    return nodes.size();
+  }
+  std::size_t differing = 0;
+  std::string examples;
+  for (std::size_t k = 0; k < nodes.size(); ++k) {
+    const auto &p = mesh.nodes[nodes[k].node];
+    const double initial_value = initial(p.x, p.y, 0.0);
+    const double data_value = data(k);
+    if (initial_value == data_value)
+      continue;
+    if (++differing <= listed_mismatches)
+      examples +=
+          std::format("{}{} has {} = {}, {} = {}", differing == 1 ? "" : "; ",
+                      node_text(mesh, nodes[k].node), initial_name,
+                      initial_value, data_name, data_value);
+  }
+  if (differing == 0)
+    return 0;
+  if (differing > listed_mismatches)
+    examples += std::format("; and {} more", differing - listed_mismatches);
+  messages.push_back(std::format(
+      "The initial condition {} differs from {} at {} of {} Dirichlet "
+      "nodes, where {} is used: {}",
+      initial_name, data_name, differing, nodes.size(), data_name, examples));
+  return differing;
+}
+
 } // namespace
 
 MeshedProblem::MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh,
@@ -377,6 +453,34 @@ MeshedProblem::MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh,
       dirichlet_rates_[r] = compile(rate, parameters, label);
     }
   }
+  // The boundary data wins over the initial condition at Dirichlet nodes;
+  // the report says where they disagree. g / alpha depends on t when alpha
+  // or g does; its time derivative when the derivative does.
+  const auto used_data_depends_on_t = [&](auto region_depends_on_t) {
+    return std::ranges::any_of(dirichlet_nodes_, [&](const auto &entry) {
+      return std::ranges::any_of(entry.regions, region_depends_on_t);
+    });
+  };
+  std::size_t differing_values = 0, differing_velocities = 0;
+  if (initial_u_)
+    differing_values = compare_with_boundary_data(
+        m, dirichlet_nodes_, *initial_u_,
+        used_data_depends_on_t([&](std::size_t r) {
+          return depends_on_t(
+              problem_.boundary_conditions.at(m.region_names[r]));
+        }),
+        [&](std::size_t k) { return dirichlet_value(k, 0.0); }, "u",
+        "g / alpha", report_.messages);
+  if (initial_u_t_)
+    differing_velocities = compare_with_boundary_data(
+        m, dirichlet_nodes_, *initial_u_t_,
+        used_data_depends_on_t([&](std::size_t r) {
+          return dirichlet_rates_[r].facts().depends_on_t;
+        }),
+        [&](std::size_t k) {
+          return dirichlet_rate(m, dirichlet_rates_, dirichlet_nodes_[k], 0.0);
+        },
+        "u_t", "d/dt (g / alpha)", report_.messages);
 
   // 6. Facts: each CompiledExpression carries the facts of the expression
   // it was compiled from, so the summaries below read the compiled problem.
@@ -390,7 +494,10 @@ MeshedProblem::MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh,
       {"dirichlet_over_natural_corners", static_cast<double>(over_natural)},
       {"priority_corners", static_cast<double>(by_priority)},
       {"averaged_corners", static_cast<double>(averaged)},
-      {"differing_corners", static_cast<double>(differing)}};
+      {"differing_corners", static_cast<double>(differing)},
+      {"differing_initial_values", static_cast<double>(differing_values)},
+      {"differing_initial_velocities",
+       static_cast<double>(differing_velocities)}};
   report_.time = std::chrono::steady_clock::now() - start;
 }
 
@@ -428,25 +535,8 @@ MeshedProblem::initial_velocities(double t0) const {
   if (!initial_u_t_)
     return std::nullopt;
   auto values = at_free_nodes(*mesh_, free_nodes_, *initial_u_t_, "u_t", t0);
-  const mesh::Mesh &m = *mesh_;
-  for (const auto &entry : dirichlet_nodes_) {
-    const auto &p = m.nodes[entry.node];
-    const double value = average(entry.regions, [&](std::size_t r) {
-      const double rate = dirichlet_rates_[r](p.x, p.y, t0);
-      if (!std::isfinite(rate))
-        throw std::invalid_argument(std::format(
-            "The time derivative of g / alpha of region {} is not finite at "
-            "{}, t = {}",
-            in_quotes(m.region_names[r]), node_text(m, entry.node), t0));
-      return rate;
-    });
-    if (!std::isfinite(value))
-      throw std::invalid_argument(std::format(
-          "The average time derivative of g / alpha is not finite at {}, t "
-          "= {}",
-          node_text(m, entry.node), t0));
-    values[entry.node] = value;
-  }
+  for (const auto &entry : dirichlet_nodes_)
+    values[entry.node] = dirichlet_rate(*mesh_, dirichlet_rates_, entry, t0);
   return values;
 }
 

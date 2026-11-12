@@ -556,7 +556,14 @@ any `g`).
    depends on t is evaluated at the start time, each with a report
    message), and for time order 2 so is `d/dt (g / alpha)` of every
    Dirichlet condition that depends on t (with `detail::derivative`; a
-   derivative outside the allow-list is an error);
+   derivative outside the allow-list is an error). Each compiled initial
+   condition is then compared with the boundary data that replaces it at
+   the Dirichlet nodes, u with `g / alpha` and u_t with `d/dt (g /
+   alpha)`, like the corners: when neither depends on t, both are
+   evaluated at every Dirichlet node and compared exactly (the boundary
+   data must be finite there, or it is an error), and a difference is one
+   message with the count and the first three nodes; otherwise one message
+   says they may differ;
 6. the facts stay with each compiled function, and the summaries read
    them.
 
@@ -582,10 +589,20 @@ if (const auto u0 = meshed->initial_values(0.0)) // empty for time order 0
 `report()` is a `mesh::StageReport` named "meshed_problem" with the time, the metrics
 `regions`, `dirichlet_nodes`, `free_nodes`, `corners`,
 `dirichlet_over_natural_corners`, `priority_corners`, `averaged_corners`,
-`differing_corners`, one message per differing corner, for example
+`differing_corners`, `differing_initial_values` and
+`differing_initial_velocities` (Dirichlet nodes where the initial
+condition differs from the boundary data, or all of them when it may
+differ), one message per differing corner, for example
 "Corner at node 0 (0, 0): regions 'bottom' and 'left' (both priority 0)
-give 0 and 1; their average 0.5 is used", and one per initial condition
-that is not needed or depends on t.
+give 0 and 1; their average 0.5 is used", one per initial condition
+that is not needed or depends on t, and one per initial condition that
+differs from the boundary data, for example "The initial condition u
+differs from g / alpha at 4 of 5 Dirichlet nodes, where g / alpha is used:
+node 0 (0, 0) has u = 1, g / alpha = 0; node 1 (0.5, 0) has u = 1, g /
+alpha = 0.5; node 3 (0, 0.5) has u = 1, g / alpha = 0; and 1 more", or
+may differ: "The initial condition u and g / alpha may differ at the 8
+Dirichlet nodes, where g / alpha is used; one of them depends on t, so
+whether they differ depends on the start time t0".
 
 ## Determinism
 
