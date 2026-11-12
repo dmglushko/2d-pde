@@ -11,10 +11,6 @@ endif()
 option(PDE2D_BUILD_TESTS "Build the tests" ON)
 option(PDE2D_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
-# Boost.Multiprecision (header-only) is used by the exact predicates, and
-# only from src/geometry/predicates.cpp.
-find_package(Boost 1.74 REQUIRED CONFIG)
-
 # Warning flags shared by every target of this project.
 add_library(pde2d_warnings INTERFACE)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -29,6 +25,10 @@ add_subdirectory(src/geometry)
 add_subdirectory(src/mesh)
 
 if(PDE2D_BUILD_TESTS)
+  # Boost.Multiprecision (header-only) is a test dependency only: the
+  # predicate test uses an arbitrary-precision version of the predicates as
+  # an oracle for the adaptive ones.
+  find_package(Boost 1.74 REQUIRED CONFIG)
   enable_testing()
   add_subdirectory(tests)
 endif()

@@ -13,9 +13,10 @@ include/pde2d/mesh/       src/mesh/       ->  library pde2d_mesh
 
 `pde2d_mesh` depends on `pde2d_geometry`, never the reverse. Public
 headers are in `include/pde2d/<module>/`; everything in `src/` is private,
-including the private headers there (`src/mesh/*.hpp`). The only external
-dependency is Boost.Multiprecision, used from one source file
-(`src/geometry/predicates.cpp`), never from a public header.
+including the private headers there (`src/mesh/*.hpp`). The libraries have
+no external dependencies. The tests use Boost.Multiprecision (header-only)
+in one place: `geometry_predicates_oracle` checks the adaptive predicates
+against an arbitrary-precision evaluation.
 
 Namespaces: `pde2d::geometry` and `pde2d::mesh`.
 
@@ -33,7 +34,15 @@ Namespaces: `pde2d::geometry` and `pde2d::mesh`.
 Free functions on `Curve` (`point_at`, `split`, `subcurve`, `reversed`,
 `transformed`, `curve_length`, `parameter_at_length_fraction`,
 `derivative_bounds`) are ported from the archive. `orient` and `incircle`
-are exact predicates. `polygon.hpp` has `signed_area`,
+are exact predicates: Shewchuk's adaptive-precision `orient2d` and
+`incircle` (floating-point filter, then exact expansion arithmetic in
+stages), with a slow exact-integer evaluation for the rare undecided case
+whose coordinates lie outside [2^-200, 2^200], where the expansion
+arithmetic could overflow or underflow. `predicates.cpp` is compiled with
+`-fno-fast-math -ffp-contract=off` and refuses to compile under
+`__FAST_MATH__` or with `FLT_EVAL_METHOD != 0` (x87 extended precision),
+because the error-free transformations need every operation rounded on
+its own. `polygon.hpp` has `signed_area`,
 `locate_in_polygon` and `find_crossing` for polygons.
 
 `CurveGeometry` construction:

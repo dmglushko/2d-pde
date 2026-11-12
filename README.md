@@ -20,8 +20,10 @@ What exists now:
 
 ## Build and test
 
-Linux (or WSL) with CMake 3.25+, a C++23 compiler and Boost (only the
-header-only Boost.Multiprecision, used by the exact predicates).
+Linux (or WSL) with CMake 3.25+ and a C++23 compiler. The libraries have
+no external dependencies; the tests need Boost (only the header-only
+Boost.Multiprecision, used as an independent oracle for the exact
+predicates).
 
 ```sh
 tools/test.sh          # configure, build (at most -j4) and run every test

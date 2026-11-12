@@ -25,7 +25,7 @@ impossible or unclear, ask.
 | Path | Contents |
 | --- | --- |
 | `include/pde2d/geometry/` | `point.hpp`, `predicates.hpp` (exact `orient`, `incircle`), `curve.hpp` (curve kinds and math), `polygon.hpp`, `curve_geometry.hpp` (`Loop`, `CurveGeometry`), `shapes.hpp` |
-| `src/geometry/` | their implementation; Boost.Multiprecision only in `predicates.cpp` |
+| `src/geometry/` | their implementation; `predicates.cpp` is Shewchuk's adaptive arithmetic, compiled with `-fno-fast-math -ffp-contract=off` |
 | `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`), `mesh_spec.hpp`, `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, capabilities, `check_compatibility`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp` |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt` |

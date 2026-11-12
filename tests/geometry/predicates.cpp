@@ -25,8 +25,11 @@ int main() {
          check(orient({0, 0}, {1e10, 1e10}, {x, next}) == 1, "just above");
          check(orient({0, 0}, {1e10, 1e10}, {next, x}) == -1, "just below");
          // Exactly collinear points with large and small coordinates.
-         check(orient({1e-300, 1e-300}, {1e300, 1e300}, {3, 3}) == 0,
+         check(orient({1e-50, 1e-50}, {1e50, 1e50}, {3, 3}) == 0,
                "wide range collinear");
+         check(orient({1e-50, 1e-50}, {1e50, 1e50},
+                      {3, std::nextafter(3.0, 4)}) == 1,
+               "wide range, just above");
        }},
       {"incircle_signs",
        [] {
@@ -49,6 +52,25 @@ int main() {
          check(!segments_intersect({0, 0}, {1, 1}, {1, 0}, {2, 1}), "parallel");
          check(on_segment({0, 0}, {2, 2}, {1, 1}), "on segment");
          check(!on_segment({0, 0}, {2, 2}, {3, 3}), "beyond the end");
+       }},
+      {"extreme_coordinates",
+       [] {
+         // Outside [2^-200, 2^200] the adaptive arithmetic could overflow
+         // or underflow; undecided cases there use exact integers.
+         check(orient({1e-300, 1e-300}, {1e300, 1e300}, {3, 3}) == 0,
+               "very wide range, collinear");
+         double tiny = std::numeric_limits<double>::denorm_min();
+         check(orient({0, 0}, {1, 1}, {tiny, tiny}) == 0, "subnormal on line");
+         check(orient({0, 0}, {1, 1}, {tiny, 2 * tiny}) == 1,
+               "subnormal above");
+         check(orient({0, 0}, {1e300, 1e300}, {1, std::nextafter(1.0, 0.0)}) ==
+                   -1,
+               "large and below");
+         check(incircle({1e70, 0}, {0, 1e70}, {-1e70, 0}, {0, -1e70}) == 0,
+               "large cocircular");
+         check(incircle({1e-300, 0}, {0, 1e-300}, {-1e-300, 0},
+                        {0, std::nextafter(-1e-300, 0.0)}) == 1,
+               "tiny, just inside");
        }},
       {"non_finite_rejected",
        [] {
