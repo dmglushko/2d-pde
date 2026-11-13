@@ -66,6 +66,54 @@ template <class F> void truth_table(const char *condition, F expected) {
 
 int main() {
   return pde2d::test::run({
+      {"negative bases accept integral floating exponents",
+       [] {
+         for (const char *text : {"(-2)^2.0", "(-2.0)^2.0", "(-2)^2e0",
+                                  "(-2)^(1.0 + 1.0)", "(-2)^-2.0"}) {
+           const CompiledExpression f(Expression(text), {});
+           check(f(0, 0, 0) == (std::string(text) == "(-2)^-2.0" ? 0.25 : 4),
+                 text);
+         }
+         for (const double k : {-3., -2., 0., 2., 3.}) {
+           const CompiledExpression f(Expression("(-2)^k"), {{"k", k}});
+           check(f(0, 0, 0) == std::pow(-2., k), "integer parameter power");
+           const CompiledExpression composite(Expression("(-2)^(k+1)"),
+                                              {{"k", k}});
+           check(composite(0, 0, 0) == std::pow(-2., k + 1),
+                 "composite exponent");
+         }
+         expect_throws<std::invalid_argument>([] { Expression e("(-2)^0.5"); },
+                                              "has no real numeric value");
+         expect_throws<std::invalid_argument>(
+             [] { CompiledExpression f(Expression("(-2)^k"), {{"k", 0.5}}); },
+             "has no real numeric value");
+       }},
+      {"finite parents cannot hide infinite constant descendants",
+       [] {
+         for (const char *text :
+              {"tanh(exp(1000))", "atan(exp(1000))", "1 + tanh(exp(1000))"})
+           expect_throws<std::invalid_argument>([&] { Expression e(text); },
+                                                "finite real");
+         for (const char *text :
+              {"tanh(exp(k))", "atan(exp(k))", "x + tanh(exp(k))"})
+           expect_throws<std::invalid_argument>(
+               [&] { CompiledExpression f(Expression(text), {{"k", 1000}}); },
+               "finite");
+         const CompiledExpression finite(Expression("tanh(exp(k))"),
+                                         {{"k", 2}});
+         near(finite(0, 0, 0), std::tanh(std::exp(2.)), 1e-15, "finite child");
+       }},
+      {"floating power folding preserves descendant validation",
+       [] {
+         expect_throws<std::invalid_argument>(
+             [] { Expression e("tanh(exp(1000.5))"); }, "finite");
+         expect_throws<std::invalid_argument>(
+             [] {
+               CompiledExpression f(Expression("tanh(exp(k))"),
+                                    {{"k", 1000.5}});
+             },
+             "finite");
+       }},
       {"parse errors throw when the expression is built",
        [] {
          for (const char *text : {"", "   ", "exp(", "x y", "1 +"})

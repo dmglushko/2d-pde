@@ -91,6 +91,44 @@ double metric(const MeshedProblem &problem, const std::string &name) {
 
 int main() {
   return pde2d::test::run({
+      {"negative bases with integral floating exponents stay real in time",
+       [] {
+         Problem wave = poisson({{"wall", dirichlet("(-2)^k*t^2")}});
+         wave.parameters = {{"k", 2}};
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         check(p.initial_velocities(0).value()[0] == 0, "zero velocity");
+         check(p.initial_velocities(2).value()[0] == 16, "8 t");
+         check(p.dirichlet_acceleration(0, 0) == 8, "constant acceleration");
+       }},
+      {"guarded zero-base boundary powers have zero rates",
+       [] {
+         Problem wave = poisson(
+             {{"wall", dirichlet("Piecewise((0^t, t > 0), (1, True))")}});
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         for (const double t : {-1., 0., 1.}) {
+           check(p.initial_velocities(t).value() == std::vector<double>(9, 0),
+                 "branchwise zero velocity");
+           check(p.dirichlet_acceleration(0, t) == 0, "zero acceleration");
+           check(p.dirichlet_value(0, t) == (t > 0 ? 0 : 1), "value");
+         }
+       }},
+      {"a composite power is smooth at its zero",
+       [] {
+         Problem wave = poisson({{"wall", dirichlet("(t^2)^k")}});
+         wave.parameters = {{"k", 2}};
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         check(p.initial_velocities(0).value() == std::vector<double>(9, 0),
+               "t^4 has zero initial velocity");
+         check(p.dirichlet_acceleration(0, 0) == 0, "zero acceleration");
+         check(p.initial_velocities(2).value()[0] == 32, "4 t^3");
+         check(p.dirichlet_acceleration(0, 2) == 48, "12 t^2");
+       }},
       {"a null or invalid mesh is rejected",
        [] {
          expect_throws<std::invalid_argument>(
@@ -323,13 +361,15 @@ int main() {
          expect_throws<std::invalid_argument>(
              [&] { (void)p.dirichlet_value(3, 0.0); },
              "Dirichlet node 3 does not exist");
-         const MeshedProblem q(
-             square(), poisson({{"bottom", neumann()},
-                                {"right", neumann()},
-                                {"top", neumann()},
-                                {"left", {.alpha = e("x"), .g = e("1")}}}));
          expect_throws<std::invalid_argument>(
-             [&] { (void)q.dirichlet_value(0, 0.0); },
+             [&] {
+               const MeshedProblem q(
+                   square(),
+                   poisson({{"bottom", neumann()},
+                            {"right", neumann()},
+                            {"top", neumann()},
+                            {"left", {.alpha = e("x"), .g = e("1")}}}));
+             },
              "The Dirichlet value g / alpha of region 'left' is not finite at "
              "node 0 (0, 0), t = 0");
        }},
@@ -780,7 +820,7 @@ int main() {
                        "has u = 0, g / alpha = 1",
                one.report().messages.back());
        }},
-      {"boundary data compared with u must be finite",
+      {"time-independent boundary data must be finite at construction",
        [] {
          // g / alpha = 1 / x is used at node 0 at every t, and infinite.
          Problem heat = poisson({{"bottom", neumann()},
@@ -793,9 +833,19 @@ int main() {
              [&] { MeshedProblem p(square(), heat); },
              "The Dirichlet value g / alpha of region 'left' is not finite at "
              "node 0 (0, 0), t = 0");
+         heat.initial.u = e("t");
+         expect_throws<std::invalid_argument>(
+             [&] { MeshedProblem p(square(), heat); },
+             "The Dirichlet value g / alpha of region 'left' is not finite");
+         heat.equation.m1 = e("0");
+         heat.initial.u.reset();
+         expect_throws<std::invalid_argument>(
+             [&] { MeshedProblem p(square(), heat); },
+             "The Dirichlet value g / alpha of region 'left' is not finite");
          // An initial condition that is not finite there (on the whole left
          // side, x = 0) is only reported.
          heat.boundary_conditions["left"] = dirichlet("1");
+         heat.equation.m1 = e("1");
          heat.initial.u = e("1/x");
          const MeshedProblem p(square(), heat);
          check(p.report().messages.back().starts_with(

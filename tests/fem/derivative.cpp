@@ -51,6 +51,40 @@ void compare(const char *text, const Points &points, F expected) {
 
 int main() {
   return pde2d::test::run({
+      {"integral floating powers stay real in derivatives",
+       [] {
+         const CompiledExpression literal = derivative_in_x("(-2)^2.0*x");
+         check(literal(0, 0, 0) == 4, "constant multiplier");
+         const CompiledExpression parameter(
+             derivative(Expression("(-2)^k*x"), Variable::x), {{"k", 2}});
+         check(parameter(0, 0, 0) == 4, "parameter multiplier");
+       }},
+      {"guarded zero-base powers differentiate branch by branch",
+       [] {
+         const Expression f("Piecewise((0^x, x > 0), (1, True))");
+         const Expression d = derivative(f, Variable::x);
+         check(d.facts().zero, "both branch derivatives are zero");
+         check(derivative(d, Variable::x).facts().zero, "second derivative");
+         const CompiledExpression value(f, {});
+         check(value(-1, 0, 0) == 1 && value(0, 0, 0) == 1 &&
+                   value(2, 0, 0) == 0,
+               "guarded values");
+       }},
+      {"constant symbolic exponents have smooth derivatives at zero",
+       [] {
+         for (const char *text : {"(x^2)^k", "(sin(x))^k", "(x+y)^k"}) {
+           const Expression d = derivative(Expression(text), Variable::x);
+           const CompiledExpression first(d, {{"k", 2}});
+           const CompiledExpression second(derivative(d, Variable::x),
+                                           {{"k", 2}});
+           check(first(0, 0, 0) == 0, text);
+           check(second(0, 0, 0) == (std::string(text) == "(x^2)^k" ? 0 : 2),
+                 text);
+         }
+         // sqrt has a genuinely infinite derivative at zero.
+         check(!std::isfinite(derivative_in_x("sqrt(x)")(0, 0, 0)),
+               "sqrt singularity stays visible");
+       }},
       {"every allowed function: d/dx against its exact derivative",
        [] {
          compare("sin(x)", unit_points, [](double x) { return std::cos(x); });

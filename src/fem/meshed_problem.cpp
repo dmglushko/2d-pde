@@ -422,6 +422,15 @@ MeshedProblem::MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh,
   // The corner values can be compared now that the conditions are
   // compiled.
   std::size_t differing = 0;
+  // Validate every time-independent value that wins a node, even in a
+  // steady problem or when a time-dependent initial condition prevents
+  // the comparison below. Time-dependent data is checked on use.
+  for (const auto &entry : dirichlet_nodes_)
+    for (const auto r : entry.regions)
+      if (!conditions_[r].g.facts().depends_on_t &&
+          !conditions_[r].alpha.facts().depends_on_t)
+        (void)checked_value(m, conditions_[r], r, entry.node, 0.0);
+
   for (const auto &corner : dirichlet_corners)
     if (auto message = corner_message(m, problem_, conditions_, corner)) {
       ++differing;

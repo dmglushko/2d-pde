@@ -25,6 +25,25 @@ public:
 
   using DiffVisitor::bvisit;
 
+  void bvisit(const SymEngine::Pow &self) {
+    using namespace SymEngine;
+    // On every branch where 0^e is defined it is constant. In particular,
+    // do not introduce log(0) in a guarded Piecewise branch.
+    if (eq(*self.get_base(), *zero)) {
+      result_ = zero;
+      return;
+    }
+    const auto de = apply(self.get_exp());
+    if (eq(*de, *zero)) {
+      // Keep the chain rule free of division by a possibly zero base.
+      result_ = mul(
+          mul(self.get_exp(), pow(self.get_base(), sub(self.get_exp(), one))),
+          apply(self.get_base()));
+    } else {
+      DiffVisitor::bvisit(self);
+    }
+  }
+
   void bvisit(const SymEngine::Abs &self) {
     using namespace SymEngine;
     const RCP<const Basic> &u = self.get_arg();

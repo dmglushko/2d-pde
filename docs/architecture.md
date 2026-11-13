@@ -559,7 +559,10 @@ double a = meshed->equation().a_xx(0.5, 0.5, 0.0); // -1000
 ```
 
 **Expressions.** SymEngine parses the text when an `Expression` is built
-(`parse`, with `^` as power). The parsed form is then checked against the
+(`parse`, with `^` as power). Floating literals are restored in a bottom-up
+pass that treats exactly integral power exponents as integers, including
+after parameter substitution. Constant descendants are checked even when
+a finite parent or substitution would hide them. The parsed form is then checked against the
 allow-list (`detail::unsupported`, `src/fem/expression.cpp`), walking it
 the way SymEngine's evaluator does: numbers (each must be finite as a
 double, so `1e1000` and `10^400` are rejected), x, y, t, parameter names,
@@ -643,8 +646,10 @@ any `g`).
    `i` of the shrunk system is node `free_nodes()[i]`, and `free_index`
    goes back;
 4. every expression is compiled with the parameters; an error names the
-   coefficient ("Region 'wall', coefficient g: ..."). The competing
-   values at Dirichlet corners are then compared: equal as written, never
+   coefficient ("Region 'wall', coefficient g: ..."). The
+   time-independent winning boundary data is checked for finiteness at
+   every Dirichlet node, independently of initial conditions. The
+   competing values at Dirichlet corners are then compared: equal as written, never
    reported; otherwise, if one depends on t, reported as "may differ";
    otherwise evaluated at the node and reported when they differ;
 5. the initial conditions that `time_order` requires are compiled (a

@@ -98,6 +98,17 @@ Expression expression_from_form(SymEngine::RCP<const SymEngine::Basic> form);
 // other than x, y and t, or a value is not finite.
 void check_parameters(const Parameters &parameters);
 
+// Check descendants too: substitution can fold an invalid child away.
+std::optional<std::string>
+unsupported_substitution(const SymEngine::RCP<const SymEngine::Basic> &form,
+                         const SymEngine::map_basic_basic &values);
+
+// Substitute bottom up, folding exactly integral floating power exponents
+// as integers before SymEngine can introduce a complex rounding residue.
+SymEngine::RCP<const SymEngine::Basic>
+substitute_powers(const SymEngine::RCP<const SymEngine::Basic> &form,
+                  const SymEngine::map_basic_basic &values);
+
 // True when both expressions have the same form as written (expression.hpp).
 bool same_as_written(const Expression &a, const Expression &b);
 
