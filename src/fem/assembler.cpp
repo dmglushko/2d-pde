@@ -123,10 +123,10 @@ Plan make_plan(const MeshedProblem &problem) {
     if (condition.kind != ConditionKind::dirichlet) {
       // Every boundary term carries kappa_n / beta_n_hat or kappa_tau.
       const TermFacts kappa = plan.k;
-      const TermFacts beta_n_hat = facts_of(
-          {&condition.beta_n, &condition.beta_x, &condition.beta_y});
-      const TermFacts beta_tau_hat = facts_of(
-          {&condition.beta_tau, &condition.beta_x, &condition.beta_y});
+      const TermFacts beta_n_hat =
+          facts_of({&condition.beta_n, &condition.beta_x, &condition.beta_y});
+      const TermFacts beta_tau_hat =
+          facts_of({&condition.beta_tau, &condition.beta_x, &condition.beta_y});
       const auto with = [&](const CompiledExpression &coefficient) {
         return product({kappa, facts_of({&coefficient})},
                        beta_n_hat.depends_on_t);
@@ -135,9 +135,9 @@ Plan make_plan(const MeshedProblem &problem) {
       region.d = with(condition.gamma);
       region.g = with(condition.g);
       // kappa_tau - kappa_n beta_tau_hat / beta_n_hat.
-      region.t = product({kappa}, !beta_tau_hat.zero &&
-                                      (beta_tau_hat.depends_on_t ||
-                                       beta_n_hat.depends_on_t));
+      region.t =
+          product({kappa}, !beta_tau_hat.zero && (beta_tau_hat.depends_on_t ||
+                                                  beta_n_hat.depends_on_t));
     }
     plan.damping = merged({plan.damping, region.d});
     plan.stiffness = merged({plan.stiffness, region.s, region.t});
@@ -200,8 +200,8 @@ colour(std::size_t node_count,
       for (const std::size_t j : by_node[node])
         if (j < i)
           used[colour_of[j]] = true;
-    const auto c = static_cast<std::size_t>(std::ranges::find(used, false) -
-                                            used.begin());
+    const auto c =
+        static_cast<std::size_t>(std::ranges::find(used, false) - used.begin());
     if (c == colours.size())
       colours.emplace_back();
     colours[c].push_back(i);
@@ -279,13 +279,12 @@ Destinations<N> destinations(const Internals &internals,
     for (std::size_t j = 0; j < N; ++j) {
       const std::size_t column = internals.free_index[nodes[j]];
       if (column != none)
-        result.entries[i][j] = {
-            Slot::Kind::free, *internals.free_pattern->find(row, column)};
+        result.entries[i][j] = {Slot::Kind::free,
+                                *internals.free_pattern->find(row, column)};
       else
-        result.entries[i][j] = {
-            Slot::Kind::dirichlet,
-            *internals.dirichlet_pattern->find(
-                row, internals.dirichlet_index[nodes[j]])};
+        result.entries[i][j] = {Slot::Kind::dirichlet,
+                                *internals.dirichlet_pattern->find(
+                                    row, internals.dirichlet_index[nodes[j]])};
     }
   }
   return result;
@@ -351,9 +350,9 @@ int AssembledProblem::time_order() const {
   return damping_.is_zero ? 0 : 1;
 }
 
-AssembledProblem Assembler::assemble(
-    std::shared_ptr<const MeshedProblem> meshed_problem, double t,
-    const AssembledProblem *previous) const {
+AssembledProblem
+Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
+                    double t, const AssembledProblem *previous) const {
   const auto start = std::chrono::steady_clock::now();
   if (!meshed_problem)
     throw std::invalid_argument("assemble needs a MeshedProblem, not null");
@@ -463,8 +462,7 @@ AssembledProblem Assembler::assemble(
       op = (*previous).*previous_op;
     } else if (facts.zero) {
       op.free.values.assign(internals->free_pattern->nonzeros(), 0.0);
-      op.dirichlet.values.assign(internals->dirichlet_pattern->nonzeros(),
-                                 0.0);
+      op.dirichlet.values.assign(internals->dirichlet_pattern->nonzeros(), 0.0);
     } else {
       op.free.values = std::move(constant_values.free);
       op.dirichlet.values = std::move(constant_values.dirichlet);
@@ -474,8 +472,8 @@ AssembledProblem Assembler::assemble(
          &AssembledProblem::mass_);
   finish(result.damping_, plan.damping, constant.damping, time.damping,
          &Internals::damping, &AssembledProblem::damping_);
-  finish(result.stiffness_, plan.stiffness, constant.stiffness,
-         time.stiffness, &Internals::stiffness, &AssembledProblem::stiffness_);
+  finish(result.stiffness_, plan.stiffness, constant.stiffness, time.stiffness,
+         &Internals::stiffness, &AssembledProblem::stiffness_);
   if (plan.load.depends_on_t) {
     if (fresh)
       fresh->load = std::move(constant.load);

@@ -28,8 +28,7 @@ struct TriangleTerms {
 // The terms of a boundary edge of a natural or dynamic condition: S, T
 // (stiffness), D (damping), G (load).
 struct EdgeTerms {
-  Target s = Target::skip, t = Target::skip, d = Target::skip,
-         g = Target::skip;
+  Target s = Target::skip, t = Target::skip, d = Target::skip, g = Target::skip;
 };
 
 // One element's contribution to each operator and the load, for N nodes.
@@ -63,7 +62,7 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
 // std::invalid_argument for a coefficient that is not finite at a
 // quadrature point, and when beta_n + (beta_x, beta_y).n is zero there.
 ElementBlocks<2> edge_blocks(const MeshedProblem &problem, std::size_t region,
-                             const std::array<std::size_t, 2> &nodes,
-                             double t, const EdgeTerms &terms);
+                             const std::array<std::size_t, 2> &nodes, double t,
+                             const EdgeTerms &terms);
 
 } // namespace pde2d::fem::detail

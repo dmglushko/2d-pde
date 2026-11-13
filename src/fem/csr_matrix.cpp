@@ -10,12 +10,11 @@ std::optional<std::size_t> SparsityPattern::find(std::size_t row,
                                                  std::size_t column) const {
   if (row >= rows || column >= columns)
     throw std::invalid_argument(
-        std::format("Entry ({}, {}) is outside the {} x {} matrix", row,
-                    column, rows, columns));
+        std::format("Entry ({}, {}) is outside the {} x {} matrix", row, column,
+                    rows, columns));
   const auto begin = column_indices.begin() + row_offsets[row];
   const auto end = column_indices.begin() + row_offsets[row + 1];
-  const auto found =
-      std::lower_bound(begin, end, static_cast<Index>(column));
+  const auto found = std::lower_bound(begin, end, static_cast<Index>(column));
   if (found == end || *found != static_cast<Index>(column))
     return std::nullopt;
   return static_cast<std::size_t>(found - column_indices.begin());

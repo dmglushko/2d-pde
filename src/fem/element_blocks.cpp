@@ -65,7 +65,8 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
   // Geometry: twice the area and the gradients of the barycentric
   // coordinates (constant on the triangle).
   const auto &[p0, p1, p2] = nodes;
-  const double det = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
+  const double det =
+      (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
   const double area = det / 2.0;
   std::array<Point, 3> gradient{};
   for (std::size_t i = 0; i < 3; ++i) {
@@ -79,7 +80,8 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
     for (std::size_t i = 0; i < 3; ++i)
       lambda[q][i] = q == i ? 2.0 / 3.0 : 1.0 / 6.0;
     point[q] = {lambda[q][0] * p0.x + lambda[q][1] * p1.x + lambda[q][2] * p2.x,
-                lambda[q][0] * p0.y + lambda[q][1] * p1.y + lambda[q][2] * p2.y};
+                lambda[q][0] * p0.y + lambda[q][1] * p1.y +
+                    lambda[q][2] * p2.y};
   }
   const double weight = area / 3.0;
 
@@ -106,24 +108,26 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
     for (std::size_t q = 0; q < 3; ++q) {
       const double bx =
           value(e.b_x, equation_label("b_x"), point[q], t) -
-          value(divergence.x,
-                [] {
-                  return std::string(
-                      "Equation: the x component of the divergence of A");
-                },
-                point[q], t);
+          value(
+              divergence.x,
+              [] {
+                return std::string(
+                    "Equation: the x component of the divergence of A");
+              },
+              point[q], t);
       const double by =
           value(e.b_y, equation_label("b_y"), point[q], t) -
-          value(divergence.y,
-                [] {
-                  return std::string(
-                      "Equation: the y component of the divergence of A");
-                },
-                point[q], t);
+          value(
+              divergence.y,
+              [] {
+                return std::string(
+                    "Equation: the y component of the divergence of A");
+              },
+              point[q], t);
       for (std::size_t i = 0; i < 3; ++i)
         for (std::size_t j = 0; j < 3; ++j)
-          c[i][j] += weight * lambda[q][i] *
-                     (bx * gradient[j].x + by * gradient[j].y);
+          c[i][j] +=
+              weight * lambda[q][i] * (bx * gradient[j].x + by * gradient[j].y);
     }
     add(d->stiffness, 1.0, c);
   }
@@ -160,8 +164,8 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
 }
 
 ElementBlocks<2> edge_blocks(const MeshedProblem &problem, std::size_t region,
-                             const std::array<std::size_t, 2> &nodes,
-                             double t, const EdgeTerms &terms) {
+                             const std::array<std::size_t, 2> &nodes, double t,
+                             const EdgeTerms &terms) {
   ElementBlocks<2> out;
   if (terms.s == Target::skip && terms.t == Target::skip &&
       terms.d == Target::skip && terms.g == Target::skip)
@@ -202,10 +206,10 @@ ElementBlocks<2> edge_blocks(const MeshedProblem &problem, std::size_t region,
     const double xx = value(e.a_xx, equation_label("a_xx"), p, t);
     const double xy = value(e.a_xy, equation_label("a_xy"), p, t) / 2;
     const double yy = value(e.a_yy, equation_label("a_yy"), p, t);
-    const double kappa_n = n.x * (xx * n.x + xy * n.y) +
-                           n.y * (xy * n.x + yy * n.y);
-    const double kappa_tau = n.x * (xx * tau.x + xy * tau.y) +
-                             n.y * (xy * tau.x + yy * tau.y);
+    const double kappa_n =
+        n.x * (xx * n.x + xy * n.y) + n.y * (xy * n.x + yy * n.y);
+    const double kappa_tau =
+        n.x * (xx * tau.x + xy * tau.y) + n.y * (xy * tau.x + yy * tau.y);
     // The condition: alpha u + beta_n_hat u_n + beta_tau_hat u_tau
     // + gamma u_t = g, with (beta_x, beta_y) split along n and tau.
     const double beta_x = value(condition.beta_x, region_label("beta_x"), p, t);

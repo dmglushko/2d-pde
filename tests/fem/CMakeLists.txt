@@ -11,3 +11,7 @@ pde2d_add_test(NAME fem_meshed_problem SOURCE meshed_problem.cpp
 pde2d_add_test(NAME fem_derivative SOURCE derivative.cpp LIBS pde2d_fem)
 target_include_directories(fem_derivative PRIVATE
                            ${PROJECT_SOURCE_DIR}/src/fem)
+pde2d_add_test(NAME fem_csr_matrix SOURCE csr_matrix.cpp LIBS pde2d_fem)
+pde2d_add_test(NAME fem_assembly SOURCE assembly.cpp LIBS pde2d_fem)
+pde2d_add_test(NAME fem_assembly_convergence SOURCE assembly_convergence.cpp
+               LIBS pde2d_fem)
