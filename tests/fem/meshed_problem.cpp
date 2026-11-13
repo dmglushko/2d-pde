@@ -91,6 +91,20 @@ double metric(const MeshedProblem &problem, const std::string &name) {
 
 int main() {
   return pde2d::test::run({
+      {"guarded zero-base boundary powers have zero rates",
+       [] {
+         Problem wave = poisson(
+             {{"wall", dirichlet("Piecewise((0^t, t > 0), (1, True))")}});
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         for (const double t : {-1., 0., 1.}) {
+           check(p.initial_velocities(t).value() == std::vector<double>(9, 0),
+                 "branchwise zero velocity");
+           check(p.dirichlet_acceleration(0, t) == 0, "zero acceleration");
+           check(p.dirichlet_value(0, t) == (t > 0 ? 0 : 1), "value");
+         }
+       }},
       {"a composite power is smooth at its zero",
        [] {
          Problem wave = poisson({{"wall", dirichlet("(t^2)^k")}});

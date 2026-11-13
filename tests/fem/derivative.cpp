@@ -51,6 +51,17 @@ void compare(const char *text, const Points &points, F expected) {
 
 int main() {
   return pde2d::test::run({
+      {"guarded zero-base powers differentiate branch by branch",
+       [] {
+         const Expression f("Piecewise((0^x, x > 0), (1, True))");
+         const Expression d = derivative(f, Variable::x);
+         check(d.facts().zero, "both branch derivatives are zero");
+         check(derivative(d, Variable::x).facts().zero, "second derivative");
+         const CompiledExpression value(f, {});
+         check(value(-1, 0, 0) == 1 && value(0, 0, 0) == 1 &&
+                   value(2, 0, 0) == 0,
+               "guarded values");
+       }},
       {"constant symbolic exponents have smooth derivatives at zero",
        [] {
          for (const char *text : {"(x^2)^k", "(sin(x))^k", "(x+y)^k"}) {
