@@ -431,8 +431,8 @@ unchanged. `examples/mesh_viewer/produce_mesh` writes a mesh for it.
 ```
 text ──► Expression ─┐
                      ├─► Problem ──┐
-         Parameters ─┘             ├─► MeshedProblem ──► (assembly, later)
-                   Mesh (shared) ──┘
+         Parameters ─┘             ├─► MeshedProblem ──► Assembler ──► AssembledProblem
+                   Mesh (shared) ──┘                      (at t, optional previous)
 ```
 
 | Type | Header | Role |
@@ -449,6 +449,11 @@ text ──► Expression ─┐
 | `CompiledEquation`, `CompiledCondition` | `meshed_problem.hpp` | the same members as `CompiledExpression`s; a condition also has its `kind`, `oblique` and `priority` |
 | `DirichletNode` | `meshed_problem.hpp` | a node and the regions whose `g / alpha` is averaged there (one, or two at an equal-priority corner) |
 | `MeshedProblem` | `meshed_problem.hpp` | `Problem` + `std::shared_ptr<const Mesh>`, checked and compiled, up to assembly |
+| `CompiledDivergence` | `meshed_problem.hpp` | `x`, `y`: the compiled divergence of A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] (`MeshedProblem::divergence_of_a()`) |
+| `SparsityPattern`, `CsrMatrix` | `csr_matrix.hpp` | compressed sparse rows: `rows`, `columns`, `row_offsets`, `column_indices` (signed `Index`, sorted and unique per row), `find`; a matrix is a shared pattern plus `values`, with `entry(i, j)` and `multiply(x)` |
+| `Operator` | `assembled_problem.hpp` | one operator of the system: `free` (X_FF), `dirichlet` (X_FD), `depends_on_t`, `is_zero` |
+| `AssembledProblem` | `assembled_problem.hpp` | the system M2 U'' + B U' + A U = b in the free unknowns at one t |
+| `Assembler` | `assembler.hpp` | `assemble(meshed_problem, t, previous = nullptr)` |
 
 ```cpp
 using namespace pde2d::fem;
@@ -517,8 +522,9 @@ derivative contains the sign. The result is checked against the
 allow-list like text (`expression_from_form`), so a derivative that leaves
 it (`d/dx 1e308*x^2` has an infinite number) throws. Every allowed
 construct has a derivative inside the allow-list. It is used for
-`d/dt (g / alpha)` (`time_derivative_of_quotient`) and will be used for
-the derivatives of assembly.
+`d/dt (g / alpha)` (`time_derivative_of_quotient`), its second time
+derivative, and the divergence of A (`divergence_of_a`), all in the
+`MeshedProblem` constructor.
 
 **Classification** (`classify`), by which coefficients are zero as
 written: no spatial derivative and no `gamma` is Dirichlet (`alpha` must
@@ -554,9 +560,10 @@ any `g`).
 5. the initial conditions that `time_order` requires are compiled (a
    missing one is an error; one that is not needed is ignored and one that
    depends on t is evaluated at the start time, each with a report
-   message), and for time order 2 so is `d/dt (g / alpha)` of every
-   Dirichlet condition that depends on t (with `detail::derivative`; a
-   derivative outside the allow-list is an error). Each compiled initial
+   message); for time order 1 or 2 so is `d/dt (g / alpha)` of every
+   Dirichlet condition that depends on t, and for time order 2 its second
+   derivative (with `detail::derivative`; a derivative outside the
+   allow-list is an error). Each compiled initial
    condition is then compared with the boundary data that replaces it at
    the Dirichlet nodes, u with `g / alpha` and u_t with `d/dt (g /
    alpha)`, like the corners: when neither depends on t, both are
@@ -564,12 +571,17 @@ any `g`).
    data must be finite there, or it is an error), and a difference is one
    message with the count and the first three nodes; otherwise one message
    says they may differ;
-6. the facts stay with each compiled function, and the summaries read
+6. the divergence of A is differentiated (`detail::divergence_of_a`,
+   through `detail::derivative`) and compiled: `divergence_of_a()`;
+7. the facts stay with each compiled function, and the summaries read
    them.
 
 `dirichlet_value(k, t)` is the average of `g / alpha` over the regions of
 `dirichlet_nodes()[k]` (with `std::midpoint`, so two large finite values
-do not overflow; an error if not finite). `initial_values(t0)` and
+do not overflow; an error if not finite). `dirichlet_rate(k, t)` and
+`dirichlet_acceleration(k, t)` average the first and second time
+derivatives the same way; they exist for time order 1 or 2 and for time
+order 2 respectively and throw `std::invalid_argument` below that. `initial_values(t0)` and
 `initial_velocities(t0)` return `std::optional<std::vector<double>>`: u
 and u_t at every mesh node at the start time t0 the time integrator
 passes, computed on every call, or an empty optional when the time order
@@ -603,6 +615,98 @@ alpha = 0.5; node 3 (0, 0.5) has u = 1, g / alpha = 0; and 1 more", or
 may differ: "The initial condition u and g / alpha may differ at the 8
 Dirichlet nodes, where g / alpha is used; one of them depends on t, so
 whether they differ depends on the start time t0".
+
+## Assembly (`pde2d_fem`)
+
+```cpp
+auto meshed = std::make_shared<const MeshedProblem>(mesh, problem);
+const Assembler assembler;
+AssembledProblem a = assembler.assemble(meshed, 0.0);
+// static: a.stiffness().free * U = a.right_hand_side()
+AssembledProblem b = assembler.assemble(meshed, 0.1, &a); // reuses a
+```
+
+The system in the free unknowns (`MeshedProblem::free_nodes()`, the
+Dirichlet nodes eliminated) is
+
+```
+M2 U'' + B U' + A U = b,   B = M1 - D,   A = -K + C + R - S + T,
+b = (F - G) - A_FD U_D - B_FD U_D' - M2_FD U_D''
+```
+
+`mass()`, `damping()` and `stiffness()` are `Operator`s, each with a
+`free` matrix (free rows and columns) and a `dirichlet` matrix (free rows,
+column k is `dirichlet_nodes()[k]`). All `free` matrices share one
+`SparsityPattern` object and all `dirichlet` matrices another; a solver can
+view the arrays with `Eigen::Map` (the index type is signed). `load()` is
+F - G, `dirichlet_values()`, `dirichlet_rates()` and
+`dirichlet_accelerations()` are U_D, U_D' and U_D'' (rates only for
+`time_order() >= 1`, accelerations only for 2, otherwise empty), and
+`right_hand_side()` is b (a lifting product is left out when its operator
+is zero).
+
+**Terms.** Interior, per triangle: K (a_xx, a_xy, a_yy), C (b and
+`divergence_of_a()`), R (c), M1 (m1), M2 (m2), F (f). Boundary, per edge
+of a natural or dynamic region: S (alpha), T (the tangential part), D
+(gamma), G (g). On an edge with outward normal n and tangent tau (the
+domain on the left), with κ_n = nᵀAn, κ_τ = nᵀAτ,
+β̂_n = beta_n + (beta_x, beta_y)·n and β̂_τ = beta_tau + (beta_x, beta_y)·τ,
+the condition is solved for u_n and substituted into (A∇u)·n = κ_n u_n +
+κ_τ u_τ:
+
+```
+S_ij = ∫ κ_n alpha / β̂_n φ_i φ_j      T_ij = ∫ (κ_τ - κ_n β̂_τ / β̂_n) φ_i ∂τ φ_j
+D_ij = ∫ κ_n gamma / β̂_n φ_i φ_j      G_i  = ∫ κ_n g / β̂_n φ_i
+```
+
+β̂_n = 0 at a quadrature point throws. Dirichlet regions have no boundary
+term. Quadrature: barycentric (2/3, 1/6, 1/6) and rotations on triangles
+(degree 2), 2-point Gauss–Legendre on edges.
+
+**Facts.** Per term, from the facts of the coefficients feeding it
+(zero as written, depends on t): K from A; C from b and div A; a boundary
+term is zero when A is (κ = 0) or its own coefficient (alpha, gamma, g)
+is, T only when A is; it depends on t when one of its non-zero factors
+(including β̂_n, and β̂_τ for T) does. An operator `is_zero` when every
+term of it is zero and `depends_on_t` when one of them depends on t;
+`time_order()` is 2 with a non-zero mass, else 1 with a non-zero damping,
+else 0 (lower than the problem's when a dynamic condition has A = 0).
+`load_depends_on_t()` reads F and G; `right_hand_side_depends_on_t()`
+adds the lifting products: a non-zero operator with Dirichlet nodes whose
+values (g / alpha of a used region) or, for the stiffness, whose own terms
+depend on t.
+
+**Structure** (private, `detail::AssemblyInternals` in `assembler.cpp`,
+shared through `previous`): the free index and the Dirichlet column of
+every node; the two patterns, from one loop over the triangles (every node
+pair (p, q) with p free adds column q to row p in the free or the
+Dirichlet pattern; rows sorted, duplicates removed; boundary edges add
+nothing); a greedy colouring of the triangles in index order (the smallest
+colour not used by an earlier triangle sharing a node) and, in a separate
+pass, of the boundary edges; the constant parts of the operators and load
+that have terms depending on t.
+
+**Building.** The driver loops over the colours, inside a colour in index
+order. For each element it calls a pure block function
+(`detail::triangle_blocks`, `detail::edge_blocks` in
+`src/fem/element_blocks.cpp`), which computes the full 3 x 3 (2 x 2)
+blocks of the requested terms, summed per operator and split into a
+constant set and a time set; then it scatters them: a Dirichlet row is
+skipped, a Dirichlet column goes to the `dirichlet` matrix, the rest to
+`free`, each slot found by binary search in its row. A constant term goes
+to the constant arrays, a term depending on t to the time arrays. Each
+total is the constant part, or constant + time elementwise when the
+operator has terms in t (the constant part is then kept for reuse). With
+`previous` (same `MeshedProblem` object, else `std::invalid_argument`),
+the structure and the constant parts are taken over and only the terms in
+t are computed; an operator without such terms is copied from `previous`.
+The result is the same bit for bit as a fresh assembly at that t.
+
+**Report** ("assembly"): time; metrics `free_nodes`, `dirichlet_nodes`,
+`free_nonzeros`, `dirichlet_nonzeros`, `triangle_colours`, `edge_colours`,
+`used_previous`, and `mass_rebuilt`, `damping_rebuilt`,
+`stiffness_rebuilt`, `load_rebuilt` (1 when something of it was computed,
+0 when reused whole).
 
 ## Determinism
 
