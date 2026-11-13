@@ -4,6 +4,23 @@ How the code is organized now. The decisions behind it are in
 [decisions.md](decisions.md); where it is heading is in
 [vision.md](vision.md).
 
+## Pictures first
+
+The sections up to "Modules" are diagrams to look things up in; the rest
+of the file is the detailed text.
+
+| Question | Diagram |
+| --- | --- |
+| What goes into and comes out of each step? | [Data flow](#data-flow) |
+| Which library may use which? | [Libraries](#libraries) |
+| What is inside `Problem`, `MeshedProblem`, `AssembledProblem`, a matrix? | [What each object contains](#what-each-object-contains) |
+| Where do facts and parameter values come in? | [A coefficient, from text to matrix](#a-coefficient-from-text-to-matrix) |
+| How do mesh nodes map to matrix rows, and where do Dirichlet nodes go? | [Nodes and unknowns](#nodes-and-unknowns) |
+| What happens inside `assemble`? | [Inside assemble](#inside-assemble) |
+| What are the stages of meshing? | [Meshing pipeline](#meshing-pipeline) |
+| In what order does a time step run? (planned) | [One time step](#one-time-step-planned) |
+| Which interfaces exist and what implements them? | [Interfaces and their components](#interfaces-and-their-components) |
+
 ## Data flow
 
 Rectangles are steps (an object with one main function, or a function);
@@ -93,6 +110,361 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 
 Every stage that does work also returns or holds a `StageReport` (time,
 metrics, "worked, but…" messages).
+
+## Libraries
+
+An arrow means "may include and link". Dependencies point one way only.
+The name on the right of each box is the outside library it uses, only
+inside its `.cpp` files.
+
+```mermaid
+flowchart BT
+    GEO[pde2d_geometry]
+    MESH[pde2d_mesh]
+    IO["pde2d_io · libxml2"]
+    FEM["pde2d_fem · SymEngine"]
+    SOLVE["pde2d_solve · Eigen"]:::planned
+
+    MESH --> GEO
+    IO --> MESH
+    FEM --> MESH
+    SOLVE --> FEM
+
+    classDef planned stroke-dasharray: 5 5
+```
+
+`pde2d_io` and `pde2d_fem` do not use each other.
+
+## What each object contains
+
+A line with a diamond means "holds"; the number says how many.
+
+```mermaid
+classDiagram
+    direction LR
+    class Problem {
+        Equation equation
+        Parameters parameters
+        map~string, BoundaryCondition~ boundary_conditions
+        InitialConditions initial
+    }
+    class Equation {
+        Expression a_xx, a_xy, a_yy
+        Expression b_x, b_y
+        Expression c
+        Expression m1, m2
+        Expression f
+    }
+    class BoundaryCondition {
+        Expression alpha
+        Expression beta_n, beta_tau, beta_x, beta_y
+        Expression gamma
+        Expression g
+        int priority
+    }
+    class InitialConditions {
+        optional~Expression~ u
+        optional~Expression~ u_t
+    }
+    class Expression {
+        parsed text
+        facts() zero, depends_on_x, depends_on_y, depends_on_t
+    }
+    Problem *-- "1" Equation
+    Problem *-- "1 per region name" BoundaryCondition
+    Problem *-- "1" InitialConditions
+    Equation *-- "9" Expression
+    BoundaryCondition *-- "7" Expression
+```
+
+```mermaid
+classDiagram
+    direction LR
+    class Mesh {
+        vector~Point~ nodes
+        vector~Triangle~ triangles
+        vector~BoundaryEdge~ boundary_edges
+        vector~string~ region_names
+        vector~CurveChain~ chains
+    }
+    class MeshedProblem {
+        mesh() shared_ptr to const Mesh
+        problem() the Problem as given
+        equation() CompiledEquation
+        conditions() one CompiledCondition per mesh region
+        divergence_of_a() CompiledDivergence
+        dirichlet_nodes()
+        dirichlet_value(k, t), dirichlet_rate(k, t), dirichlet_acceleration(k, t)
+        free_nodes()
+        free_index(node)
+        initial_values(t0), initial_velocities(t0)
+        report()
+    }
+    class CompiledEquation {
+        CompiledExpression a_xx ... f
+    }
+    class CompiledCondition {
+        ConditionKind kind
+        bool oblique
+        int priority
+        CompiledExpression alpha ... g
+    }
+    class CompiledExpression {
+        operator()(x, y, t) double
+        facts()
+    }
+    MeshedProblem o-- "1" Mesh
+    MeshedProblem *-- "1" CompiledEquation
+    MeshedProblem *-- "1 per region" CompiledCondition
+    CompiledEquation *-- "9" CompiledExpression
+    CompiledCondition *-- "7" CompiledExpression
+```
+
+```mermaid
+classDiagram
+    direction LR
+    class AssembledProblem {
+        meshed_problem() shared_ptr to const MeshedProblem
+        time()
+        mass() Operator, M2
+        damping() Operator, B = M1 - D
+        stiffness() Operator, A = -K + C + R - S + T
+        load() F - G on the free rows
+        dirichlet_values() U_D at t
+        dirichlet_rates() U_D' at t
+        dirichlet_accelerations() U_D'' at t
+        right_hand_side() load - A_FD U_D - B_FD U_D' - M2_FD U_D''
+        load_depends_on_t()
+        right_hand_side_depends_on_t()
+        time_order()
+        report()
+    }
+    class Operator {
+        CsrMatrix free
+        CsrMatrix dirichlet
+        bool depends_on_t
+        bool is_zero
+    }
+    class CsrMatrix {
+        shared_ptr to const SparsityPattern pattern
+        vector~double~ values
+        entry(row, column)
+        multiply(vector)
+    }
+    class SparsityPattern {
+        rows, columns
+        row_offsets
+        column_indices
+        find(row, column)
+    }
+    AssembledProblem o-- "1" MeshedProblem
+    AssembledProblem *-- "3" Operator
+    Operator *-- "2" CsrMatrix
+    CsrMatrix o-- "1 shared" SparsityPattern
+```
+
+`free` is free rows × free columns (what a solver gets); `dirichlet` is
+free rows × Dirichlet columns (it multiplies the known values). All `free`
+matrices share one pattern object and all `dirichlet` matrices another.
+
+## A coefficient, from text to matrix
+
+The same coefficient at each stage, for `a_xx = "-k*(1+t)"` with `k = 1000`.
+
+```mermaid
+flowchart LR
+    T(["text: -k*(1+t)"])
+    PAR(["parameters: k = 1000"])
+    E(["Expression in Problem<br/>parsed form + facts"])
+    C(["CompiledExpression in MeshedProblem<br/>function (x, y, t) + the same facts"])
+    V(["a number at a quadrature point"])
+    B(["element block 3×3"])
+    M(["entries of a CsrMatrix"])
+
+    T -->|"Expression(text): parse, check the allow-list, compute facts"| E
+    E -->|"MeshedProblem constructor: put the parameter values in, compile"| C
+    PAR --> C
+    C -->|"assembly: call it at (x, y, t)"| V
+    V -->|"times gradients or shape functions, times the weight"| B
+    B -->|"scatter through free_index"| M
+```
+
+- Facts (`zero`, `depends_on_x`, `depends_on_y`, `depends_on_t`) are
+  computed once, when the text is parsed, and travel with the expression.
+  Assembly reads them to skip zero terms and to decide what to rebuild at
+  a new t.
+- Parameter names become numbers in the `MeshedProblem` constructor.
+- Coefficient values are never stored: only the matrices are kept.
+- Boundary conditions go the same way (`BoundaryCondition` →
+  `CompiledCondition`, one per mesh region).
+
+## Nodes and unknowns
+
+The mesh numbers every node; the matrices have one row per node whose
+value is unknown. `MeshedProblem` holds the tables. Example: 6 nodes,
+nodes 1 and 4 on a Dirichlet region.
+
+| mesh node | 0 | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| kind | free | Dirichlet | free | free | Dirichlet | free |
+| `free_index(node)` (node → row) | 0 | none | 1 | 2 | none | 3 |
+| position in `dirichlet_nodes()` | | 0 | | | 1 | |
+
+`free_nodes()` is the other direction (row → node): `[0, 2, 3, 5]`.
+
+```mermaid
+flowchart LR
+    BLK(["one entry of an element block:<br/>row node p, column node q"])
+    Q1{"p Dirichlet?"}
+    Q2{"q Dirichlet?"}
+    SKIP["skipped: no equation for a known value"]
+    FF["goes to the free matrix<br/>at (free_index(p), free_index(q))"]
+    FD["goes to the dirichlet matrix<br/>at (free_index(p), k of q)"]
+
+    BLK --> Q1
+    Q1 -- yes --> SKIP
+    Q1 -- no --> Q2
+    Q2 -- no --> FF
+    Q2 -- yes --> FD
+```
+
+Who uses the tables:
+
+| Use | Table | Where |
+| --- | --- | --- |
+| placing block entries | `free_index` | assembly (above) |
+| moving known values to the right-hand side | `dirichlet_value(k, t)` and its two time derivatives | assembly: `right_hand_side` |
+| starting values per node | `dirichlet_value(k, t0)` at Dirichlet nodes | `initial_values(t0)` |
+| the solver's short vector back to all nodes (planned) | `free_nodes`, `dirichlet_value` | `build_solution` |
+
+## Inside assemble
+
+`Assembler::assemble(meshed_problem, t, previous)`.
+
+```mermaid
+flowchart TD
+    START(["meshed_problem, t, previous or nothing"])
+    PLAN["classify every term from the facts:<br/>zero, constant, or depends on t"]
+    HAVE{"previous given?"}
+    STRUCT["build once: the two sparsity patterns,<br/>triangle colours, edge colours"]
+    REUSE["take from previous: patterns, colours,<br/>the constant part of every operator"]
+    TRI["triangles, colour by colour:<br/>blocks K, C, R, M1, M2, F (3-point rule)"]
+    EDGE["boundary edges of natural conditions, colour by colour:<br/>blocks S, T, D, G (2-point rule)"]
+    SCAT["scatter each block (see Nodes and unknowns)<br/>into the constant part or the part in t"]
+    TOT["total of each operator = constant part + part in t"]
+    RHS["U_D, U_D', U_D'' at t;<br/>right-hand side = load − lifting"]
+    OUT(["AssembledProblem: operators, load, right-hand side, facts, report"])
+
+    START --> PLAN --> HAVE
+    HAVE -- no --> STRUCT --> TRI
+    HAVE -- yes --> REUSE --> TRI
+    TRI --> EDGE --> SCAT --> TOT --> RHS --> OUT
+```
+
+- Without `previous`, constant terms and terms in t are all computed.
+  With it, only the terms in t are; the result is bit-for-bit the same.
+- A zero term is never computed. An operator with no term in t is copied
+  whole from `previous`.
+- The code has three pieces: computing a block (`element_blocks.cpp`, no
+  shared state), scattering it, and the driver that loops over colours
+  (`assembler.cpp`). Only the driver would ever know about threads.
+
+## Meshing pipeline
+
+`Mesher::run(geometry, spec)`; the part in the box is the `Remesher`,
+which can also start from any `Mesh`.
+
+```mermaid
+flowchart LR
+    G([CurveGeometry])
+    SPEC([MeshSpec])
+    DISC[BoundaryDiscretizer]
+    BP([BoundaryPolygon])
+    TRI[InitialTriangulator]
+    WM([WorkingMesh])
+    M0([Mesh from anywhere])
+    M([Mesh in MeshResult])
+
+    G --> DISC
+    SPEC --> DISC
+    DISC --> BP --> TRI --> WM
+    M0 --> WM
+    subgraph Remesher
+        direction LR
+        REF["Refiner (optional)<br/>calls the local improvers"]
+        FIN["final improvers, in order"]
+        REF --> FIN
+    end
+    WM --> REF
+    SPEC --> REF
+    FIN --> M
+```
+
+## One time step (planned)
+
+Decided, not built yet. `Integrator::integrate(meshed, t0, t1, output,
+initial)`; the problem never changes, the state `U` (one value per free
+unknown) lives inside the call.
+
+```mermaid
+sequenceDiagram
+    participant I as Integrator
+    participant C as StepController
+    participant A as Assembler
+    participant M as TimeMethod
+    participant L as LinearSolver
+    Note over I: U = initial, or initial_values(t0), free part
+    I->>A: assemble(meshed, t0)
+    loop until t reaches t1
+        I->>C: next dt
+        I->>A: assemble(meshed, new time, previous)
+        A-->>I: AssembledProblem
+        I->>M: step(assembled, U, dt)
+        M->>L: prepare(matrix), only when the matrix or dt changed
+        M->>L: solve(right-hand side)
+        L-->>M: LinearSolveResult
+        M-->>I: new U
+        Note over I: snapshot if asked: build_solution(meshed, U, t)
+    end
+    Note over I: return build_solution(meshed, U, t1), snapshots, history, report
+```
+
+The `StaticSolver` is the same without the loop: assemble once, one
+linear solve of stiffness·U = load − A_FD·U_D, then `build_solution`.
+
+## Interfaces and their components
+
+A component is passed in when the object that uses it is built
+(`Mesher{discretizer, triangulator, refiner, improvers}`,
+`Integrator(method, step_controller, linear_solver)`). Dashed boxes are
+planned.
+
+```mermaid
+flowchart LR
+    subgraph mesh [pde2d_mesh]
+        BD([BoundaryDiscretizer]) --- CLD[ChordLengthDiscretizer]
+        IT([InitialTriangulator]) --- EAR[EarClipping]
+        IT --- CDT[Cdt]
+        RF([Refiner]) --- RUP[Ruppert]
+        RF --- LEB[LongestEdgeBisection]
+        IMP([Improver]) --- DF[DelaunayFlips]
+        IMP --- LS[LaplacianSmoothing]
+    end
+    subgraph solve ["pde2d_solve (planned)"]
+        TMI([TimeMethod]):::planned --- IE[ImplicitEuler]:::planned
+        TMI --- IM[ImplicitMidpoint]:::planned
+        TMI --- NM[Newmark]:::planned
+        LSI([LinearSolver]):::planned --- SLU[SparseLu]:::planned
+        LSI --- BCG[BiCgStab]:::planned
+        SCI([StepController]):::planned --- FS[FixedStep]:::planned
+    end
+    classDef planned stroke-dasharray: 5 5
+```
+
+Rounded boxes are interfaces, rectangles implement them. An `Improver`
+offers one or both roles, `LocalImprover` (called by a refiner) and
+`FinalImprover` (a pass at the end). The curve kinds are not here: they
+are a closed set held in a `std::variant` (see Geometry).
 
 ## Modules
 
