@@ -4,6 +4,96 @@ How the code is organized now. The decisions behind it are in
 [decisions.md](decisions.md); where it is heading is in
 [vision.md](vision.md).
 
+## Data flow
+
+Rectangles are steps (an object with one main function, or a function);
+rounded nodes are data. Dashed nodes are decided but not built yet (see
+"Solvers and time integration" in [decisions.md](decisions.md)).
+
+```mermaid
+flowchart LR
+    SVG[SVG import / shapes]
+    IMP[Gmsh / .pde2d import]
+    MSH[Mesher]
+    RM[Remesher]
+    CMB[MeshedProblem constructor]
+    ASM[Assembler]
+    LS[LinearSolver]:::planned
+    TM[TimeMethod step]:::planned
+    SB[build_solution]:::planned
+
+    G([CurveGeometry])
+    SPEC([MeshSpec])
+    M([Mesh])
+    P([Problem])
+    MP([MeshedProblem])
+    AP([AssembledProblem])
+    LR([LinearSolveResult]):::planned
+    S([Solution]):::planned
+
+    SVG --> G
+    G --> MSH
+    SPEC --> MSH
+    MSH --> M
+    IMP --> M
+    M --> RM
+    SPEC --> RM
+    RM --> M
+    M --> CMB
+    P --> CMB
+    CMB --> MP
+    MP --> ASM
+    ASM --> AP
+    AP -. previous .-> ASM
+    AP --> TM
+    TM --> LS
+    AP --> LS
+    LS --> LR
+    LR --> SB
+    MP --> SB
+    SB --> S
+    S -. initial .-> TM
+
+    classDef planned stroke-dasharray: 5 5
+```
+
+The `StaticSolver` and the `Integrator` (both planned) are the drivers of
+the right-hand part: each takes a `MeshedProblem`, calls the `Assembler`
+itself, and returns a `Solution`. The static solver goes once through
+Assembler → LinearSolver → build_solution; the integrator repeats
+Assembler → TimeMethod step → LinearSolver for every time step and builds a
+`Solution` for snapshots and at the end.
+
+### Steps
+
+| Step | Call | Takes | Gives | Library |
+| --- | --- | --- | --- | --- |
+| SVG import, shapes | `io::import_svg`, `geometry` shape functions, user code | a file or numbers | `CurveGeometry` | `pde2d_io`, `pde2d_geometry` |
+| Mesh import | `io::import_gmsh`, `io::import_pde2d` | a file | `Mesh` (no curve links) | `pde2d_io` |
+| Mesher | `Mesher::run(geometry, spec)` | `CurveGeometry`, `MeshSpec` | `MeshResult`: the `Mesh`, reports, `target_met` | `pde2d_mesh` |
+| Remesher | `Remesher::run(mesh, spec)` | `Mesh`, `MeshSpec` | `MeshResult` | `pde2d_mesh` |
+| Combining | `MeshedProblem(mesh, problem)` | `Mesh`, `Problem` | `MeshedProblem` | `pde2d_fem` |
+| Assembler | `Assembler::assemble(meshed, t, previous)` | `MeshedProblem`, a time, optionally the previous result | `AssembledProblem` | `pde2d_fem` |
+| Linear solver (planned) | `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix`, a right-hand side | `LinearSolveResult` | `pde2d_solve` |
+| Time method (planned) | one step | two `AssembledProblem`s, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
+| Building the solution (planned) | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
+
+### Data
+
+| Data | What it holds | Changes after it is built? |
+| --- | --- | --- |
+| `CurveGeometry` | validated loops of exact curves with region names; computed depth and parent | only region edits |
+| `MeshSpec` | the target: length bounds, absolute or relative to the domain size | plain settings |
+| `Mesh` | nodes, counterclockwise triangles, boundary edges with region and optional curve link, region names, chains | a plain struct |
+| `Problem` | the equation's coefficients, boundary conditions by region name and initial conditions as `Expression`s (each with its facts), and the parameter values | a plain struct |
+| `MeshedProblem` | the mesh and the problem; every expression compiled to a function of (x, y, t) with its facts; the Dirichlet nodes and the node ↔ unknown tables; ∇·A and the time derivatives of the Dirichlet data | never |
+| `AssembledProblem` | at one time t: the operators mass, damping, stiffness (each a `free` and a `dirichlet` `CsrMatrix`), the load, the Dirichlet values, the right-hand side, its own facts, a report | never |
+| `LinearSolveResult` (planned) | one value per free unknown, iterations, residual | never |
+| `Solution` (planned) | one value per mesh node, the mesh, the time | never |
+
+Every stage that does work also returns or holds a `StageReport` (time,
+metrics, "worked, but…" messages).
+
 ## Modules
 
 ```
