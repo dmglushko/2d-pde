@@ -350,13 +350,15 @@ int main() {
          expect_throws<std::invalid_argument>(
              [&] { (void)p.dirichlet_value(3, 0.0); },
              "Dirichlet node 3 does not exist");
-         const MeshedProblem q(
-             square(), poisson({{"bottom", neumann()},
-                                {"right", neumann()},
-                                {"top", neumann()},
-                                {"left", {.alpha = e("x"), .g = e("1")}}}));
          expect_throws<std::invalid_argument>(
-             [&] { (void)q.dirichlet_value(0, 0.0); },
+             [&] {
+               const MeshedProblem q(
+                   square(),
+                   poisson({{"bottom", neumann()},
+                            {"right", neumann()},
+                            {"top", neumann()},
+                            {"left", {.alpha = e("x"), .g = e("1")}}}));
+             },
              "The Dirichlet value g / alpha of region 'left' is not finite at "
              "node 0 (0, 0), t = 0");
        }},
@@ -807,7 +809,7 @@ int main() {
                        "has u = 0, g / alpha = 1",
                one.report().messages.back());
        }},
-      {"boundary data compared with u must be finite",
+      {"time-independent boundary data must be finite at construction",
        [] {
          // g / alpha = 1 / x is used at node 0 at every t, and infinite.
          Problem heat = poisson({{"bottom", neumann()},
@@ -820,9 +822,19 @@ int main() {
              [&] { MeshedProblem p(square(), heat); },
              "The Dirichlet value g / alpha of region 'left' is not finite at "
              "node 0 (0, 0), t = 0");
+         heat.initial.u = e("t");
+         expect_throws<std::invalid_argument>(
+             [&] { MeshedProblem p(square(), heat); },
+             "The Dirichlet value g / alpha of region 'left' is not finite");
+         heat.equation.m1 = e("0");
+         heat.initial.u.reset();
+         expect_throws<std::invalid_argument>(
+             [&] { MeshedProblem p(square(), heat); },
+             "The Dirichlet value g / alpha of region 'left' is not finite");
          // An initial condition that is not finite there (on the whole left
          // side, x = 0) is only reported.
          heat.boundary_conditions["left"] = dirichlet("1");
+         heat.equation.m1 = e("1");
          heat.initial.u = e("1/x");
          const MeshedProblem p(square(), heat);
          check(p.report().messages.back().starts_with(

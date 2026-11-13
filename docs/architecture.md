@@ -553,8 +553,10 @@ any `g`).
    `i` of the shrunk system is node `free_nodes()[i]`, and `free_index`
    goes back;
 4. every expression is compiled with the parameters; an error names the
-   coefficient ("Region 'wall', coefficient g: ..."). The competing
-   values at Dirichlet corners are then compared: equal as written, never
+   coefficient ("Region 'wall', coefficient g: ..."). The
+   time-independent winning boundary data is checked for finiteness at
+   every Dirichlet node, independently of initial conditions. The
+   competing values at Dirichlet corners are then compared: equal as written, never
    reported; otherwise, if one depends on t, reported as "may differ";
    otherwise evaluated at the node and reported when they differ;
 5. the initial conditions that `time_order` requires are compiled (a
