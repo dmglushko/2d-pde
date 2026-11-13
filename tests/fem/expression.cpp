@@ -66,6 +66,21 @@ template <class F> void truth_table(const char *condition, F expected) {
 
 int main() {
   return pde2d::test::run({
+      {"finite parents cannot hide infinite constant descendants",
+       [] {
+         for (const char *text :
+              {"tanh(exp(1000))", "atan(exp(1000))", "1 + tanh(exp(1000))"})
+           expect_throws<std::invalid_argument>([&] { Expression e(text); },
+                                                "finite real");
+         for (const char *text :
+              {"tanh(exp(k))", "atan(exp(k))", "x + tanh(exp(k))"})
+           expect_throws<std::invalid_argument>(
+               [&] { CompiledExpression f(Expression(text), {{"k", 1000}}); },
+               "finite");
+         const CompiledExpression finite(Expression("tanh(exp(k))"),
+                                         {{"k", 2}});
+         near(finite(0, 0, 0), std::tanh(std::exp(2.)), 1e-15, "finite child");
+       }},
       {"parse errors throw when the expression is built",
        [] {
          for (const char *text : {"", "   ", "exp(", "x y", "1 +"})

@@ -148,7 +148,8 @@ std::optional<std::string> bad_constant_part(const Basic &node) {
     }
     if (!std::isfinite(value))
       return node.__str__();
-    return std::nullopt;
+    // A finite outer value can hide an overflowing descendant, such as
+    // tanh(exp(1000)). Every constant part must be finite in its own right.
   }
   for (const auto &argument : node.get_args())
     if (auto bad = bad_constant_part(*argument))
@@ -228,6 +229,19 @@ std::shared_ptr<const Impl> make_impl(std::string text, RCP<const Basic> form) {
 } // namespace
 
 namespace detail {
+
+std::optional<std::string>
+unsupported_substitution(const SymEngine::RCP<const SymEngine::Basic> &form,
+                         const SymEngine::map_basic_basic &values) {
+  // Conditions are valid inside Piecewise, but not as standalone numbers.
+  if (!SymEngine::is_a_Boolean(*form))
+    if (auto reason = unsupported(*SymEngine::subs(form, values)))
+      return reason;
+  for (const auto &argument : form->get_args())
+    if (auto reason = unsupported_substitution(argument, values))
+      return reason;
+  return std::nullopt;
+}
 
 std::optional<std::string> unsupported(const Basic &form) {
   Findings found;

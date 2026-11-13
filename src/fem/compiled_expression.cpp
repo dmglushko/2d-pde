@@ -73,7 +73,7 @@ CompiledExpression::CompiledExpression(const Expression &expression,
   // may give a complex number (log(k) with k = -1) or one that is not
   // finite (1/k with k = 0): checked again, like the parsed form.
   const auto form = SymEngine::subs(source.form, values);
-  if (const auto reason = detail::unsupported(*form))
+  if (const auto reason = detail::unsupported_substitution(source.form, values))
     throw std::invalid_argument("The expression '" + source.text +
                                 "' with the given parameters " + *reason);
   try {
