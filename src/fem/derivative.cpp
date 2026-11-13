@@ -76,4 +76,21 @@ Expression time_derivative_of_quotient(const Expression &numerator,
   return derivative(quotient, Variable::t);
 }
 
+std::array<Expression, 2> divergence_of_a(const Expression &a_xx,
+                                          const Expression &a_xy,
+                                          const Expression &a_yy) {
+  const auto form = [](const Expression &expression) {
+    return ExpressionAccess::impl(expression).form;
+  };
+  const auto half =
+      SymEngine::div(SymEngine::integer(1), SymEngine::integer(2));
+  const auto d_xy_dx = form(derivative(a_xy, Variable::x));
+  const auto d_xy_dy = form(derivative(a_xy, Variable::y));
+  return {
+      expression_from_form(SymEngine::add(form(derivative(a_xx, Variable::x)),
+                                          SymEngine::mul(half, d_xy_dy))),
+      expression_from_form(SymEngine::add(
+          SymEngine::mul(half, d_xy_dx), form(derivative(a_yy, Variable::y))))};
+}
+
 } // namespace pde2d::fem::detail

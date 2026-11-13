@@ -575,12 +575,77 @@ int main() {
              "Region 'wall', time derivative of g / alpha: The expression "
              "'inf.0*t' contains a number that is not finite in double "
              "precision");
-         // Not needed below time order 2.
+         // Time order 1 needs the rate too (assembly lifts with it).
          wave.equation.m2 = e("0");
          wave.equation.m1 = e("1");
          wave.initial.u_t.reset();
+         expect_throws<std::invalid_argument>(
+             [&] {
+               MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+             },
+             "Region 'wall', time derivative of g / alpha");
+         // Not needed for time order 0.
+         wave.equation.m1 = e("0");
+         wave.initial.u.reset();
          const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
-         check(p.initial_values(1.0).value()[0] == 1e308, "1e308 t^2 at t = 1");
+         check(p.dirichlet_value(0, 1.0) == 1e308, "1e308 t^2 at t = 1");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)p.dirichlet_rate(0, 1.0); },
+             "not available for time order 0");
+       }},
+      {"Dirichlet rates and accelerations, averaged at corners",
+       [] {
+         // g / alpha is t^3 on the bottom and t^2 on the left (alpha = 2);
+         // node 0 is their equal-priority corner.
+         Problem wave = poisson({{"bottom", dirichlet("t^3")},
+                                 {"right", dirichlet("0")},
+                                 {"top", dirichlet("0")},
+                                 {"left", {.alpha = e("2"), .g = e("2*t^2")}}});
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(square(), wave);
+         const std::size_t corner = index_of(p, 0), bottom = index_of(p, 1);
+         check(p.dirichlet_rate(corner, 2.0) == (12.0 + 4.0) / 2, "rate");
+         check(p.dirichlet_acceleration(corner, 2.0) == (12.0 + 2.0) / 2,
+               "acceleration");
+         check(p.dirichlet_rate(bottom, 2.0) == 12.0, "3 t^2");
+         check(p.dirichlet_acceleration(bottom, 2.0) == 12.0, "6 t");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)p.dirichlet_acceleration(99, 0.0); },
+             "Dirichlet node 99 does not exist");
+         // Time order 1 has rates, but no accelerations.
+         wave.equation.m2 = e("0");
+         wave.equation.m1 = e("1");
+         wave.initial.u_t.reset();
+         const MeshedProblem heat(square(), wave);
+         check(heat.dirichlet_rate(bottom, 1.0) == 3.0, "3 t^2 at t = 1");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)heat.dirichlet_acceleration(bottom, 1.0); },
+             "not available for time order 1");
+       }},
+      {"the divergence of A",
+       [] {
+         Problem problem = poisson({{"wall", dirichlet("0")}});
+         problem.equation.a_xx = e("x^2*y");
+         problem.equation.a_xy = e("x*y");
+         problem.equation.a_yy = e("sin(y) + t");
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), problem);
+         const double x = 0.3, y = 0.7;
+         // d/dx a_xx + d/dy a_xy / 2 and d/dx a_xy / 2 + d/dy a_yy.
+         pde2d::test::near(p.divergence_of_a().x(x, y, 5.0), 2 * x * y + x / 2,
+                           1e-15, "x component");
+         pde2d::test::near(p.divergence_of_a().y(x, y, 5.0),
+                           y / 2 + std::cos(y), 1e-15, "y component");
+         check(!p.divergence_of_a().y.facts().depends_on_t,
+               "the derivative of sin(y) + t in y does not depend on t");
+         problem.equation.a_xx = e("-1");
+         problem.equation.a_xy = e("0");
+         problem.equation.a_yy = e("-1");
+         const MeshedProblem constant(grid({"wall", "wall", "wall", "wall"}),
+                                      problem);
+         check(constant.divergence_of_a().x.facts().zero &&
+                   constant.divergence_of_a().y.facts().zero,
+               "zero for a constant A");
        }},
       {"every allowed function has a time derivative (chain rule)",
        [] {

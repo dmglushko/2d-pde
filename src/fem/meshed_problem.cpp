@@ -5,6 +5,7 @@
 #include "symengine_expression.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <exception>
@@ -221,28 +222,30 @@ std::vector<double> at_free_nodes(const mesh::Mesh &mesh,
   return values;
 }
 
-// The average of d/dt (g / alpha) over the regions of `entry` at t, from
-// the compiled rates (one per region).
-double dirichlet_rate(const mesh::Mesh &mesh,
-                      const std::vector<CompiledExpression> &rates,
-                      const DirichletNode &entry, double t) {
+// The average over the regions of `entry` at t of a compiled time
+// derivative of g / alpha (one per region); `what` names it in errors.
+double averaged_derivative(const mesh::Mesh &mesh,
+                           const std::vector<CompiledExpression> &derivatives,
+                           const DirichletNode &entry, double t,
+                           const char *what) {
   const auto &p = mesh.nodes[entry.node];
   const double value = average(entry.regions, [&](std::size_t r) {
-    const double rate = rates[r](p.x, p.y, t);
-    if (!std::isfinite(rate))
+    const double derivative = derivatives[r](p.x, p.y, t);
+    if (!std::isfinite(derivative))
       throw std::invalid_argument(std::format(
-          "The time derivative of g / alpha of region {} is not finite at "
-          "{}, t = {}",
+          "The {} of g / alpha of region {} is not finite at {}, t = {}", what,
           in_quotes(mesh.region_names[r]), node_text(mesh, entry.node), t));
-    return rate;
+    return derivative;
   });
   if (!std::isfinite(value))
-    throw std::invalid_argument(std::format(
-        "The average time derivative of g / alpha is not finite at {}, t "
-        "= {}",
-        node_text(mesh, entry.node), t));
+    throw std::invalid_argument(
+        std::format("The average {} of g / alpha is not finite at {}, t = {}",
+                    what, node_text(mesh, entry.node), t));
   return value;
 }
+
+constexpr const char *rate_name = "time derivative";
+constexpr const char *acceleration_name = "second time derivative";
 
 // How many differing nodes a mismatch message lists.
 constexpr std::size_t listed_mismatches = 3;
@@ -426,31 +429,47 @@ MeshedProblem::MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh,
     }
 
   // 5. Initial conditions, compiled; they are evaluated on request at a
-  // start time. For time order 2 the initial velocity at a Dirichlet node
-  // comes from d/dt (g / alpha), differentiated here (symbolic work stays
-  // in the constructor).
+  // start time. At a Dirichlet node the initial velocity comes from
+  // d/dt (g / alpha), and assembly needs that rate for time order 1 or 2
+  // and the second derivative for time order 2; both are differentiated
+  // here (symbolic work stays in the constructor).
   const int order = time_order(problem_);
   initial_u_ = compile_initial(problem_, problem_.initial.u, order >= 1, "u",
                                "initial_values", report_.messages);
   initial_u_t_ = compile_initial(problem_, problem_.initial.u_t, order >= 2,
                                  "u_t", "initial_velocities", report_.messages);
-  if (order >= 2) {
+  if (order >= 1) {
     dirichlet_rates_.resize(regions);
+    if (order >= 2)
+      dirichlet_accelerations_.resize(regions);
     for (std::size_t r = 0; r < regions; ++r) {
       const auto &name = m.region_names[r];
       const auto &source = problem_.boundary_conditions.at(name);
       // Zero (the default) when g / alpha does not depend on t.
       if (!dirichlet(r) || !depends_on_t(source))
         continue;
-      const std::string label =
-          "Region " + in_quotes(name) + ", time derivative of g / alpha";
+      const std::string label = "Region " + in_quotes(name) + ", ";
       Expression rate;
       try {
         rate = detail::time_derivative_of_quotient(source.g, source.alpha);
       } catch (const std::invalid_argument &error) {
-        throw std::invalid_argument(label + ": " + error.what());
+        throw std::invalid_argument(
+            label + "time derivative of g / alpha: " + error.what());
       }
-      dirichlet_rates_[r] = compile(rate, parameters, label);
+      dirichlet_rates_[r] =
+          compile(rate, parameters, label + "time derivative of g / alpha");
+      if (order < 2)
+        continue;
+      Expression acceleration;
+      try {
+        acceleration = detail::derivative(rate, detail::Variable::t);
+      } catch (const std::invalid_argument &error) {
+        throw std::invalid_argument(
+            label + "second time derivative of g / alpha: " + error.what());
+      }
+      dirichlet_accelerations_[r] =
+          compile(acceleration, parameters,
+                  label + "second time derivative of g / alpha");
     }
   }
   // The boundary data wins over the initial condition at Dirichlet nodes;
@@ -478,11 +497,30 @@ MeshedProblem::MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh,
           return dirichlet_rates_[r].facts().depends_on_t;
         }),
         [&](std::size_t k) {
-          return dirichlet_rate(m, dirichlet_rates_, dirichlet_nodes_[k], 0.0);
+          return averaged_derivative(m, dirichlet_rates_, dirichlet_nodes_[k],
+                                     0.0, rate_name);
         },
         "u_t", "d/dt (g / alpha)", report_.messages);
 
-  // 6. Facts: each CompiledExpression carries the facts of the expression
+  // 6. The divergence of A, for assembly's convection term.
+  {
+    std::array<Expression, 2> divergence;
+    try {
+      divergence = detail::divergence_of_a(e.a_xx, e.a_xy, e.a_yy);
+    } catch (const std::invalid_argument &error) {
+      throw std::invalid_argument(
+          std::string(
+              "Equation: the divergence of A (from a_xx, a_xy, a_yy): ") +
+          error.what());
+    }
+    divergence_ = {
+        .x = compile(divergence[0], parameters,
+                     "Equation: the x component of the divergence of A"),
+        .y = compile(divergence[1], parameters,
+                     "Equation: the y component of the divergence of A")};
+  }
+
+  // 7. Facts: each CompiledExpression carries the facts of the expression
   // it was compiled from, so the summaries below read the compiled problem.
 
   report_.stage = "meshed_problem";
@@ -517,6 +555,34 @@ double MeshedProblem::dirichlet_value(std::size_t k, double t) const {
   return value;
 }
 
+double MeshedProblem::dirichlet_rate(std::size_t k, double t) const {
+  if (dirichlet_rates_.empty())
+    throw std::invalid_argument(std::format(
+        "The time derivative of the Dirichlet values is not available for "
+        "time order {}; it is compiled for time order 1 or 2",
+        time_order(*this)));
+  if (k >= dirichlet_nodes_.size())
+    throw std::invalid_argument(
+        std::format("Dirichlet node {} does not exist (there are {})", k,
+                    dirichlet_nodes_.size()));
+  return averaged_derivative(*mesh_, dirichlet_rates_, dirichlet_nodes_[k], t,
+                             rate_name);
+}
+
+double MeshedProblem::dirichlet_acceleration(std::size_t k, double t) const {
+  if (dirichlet_accelerations_.empty())
+    throw std::invalid_argument(std::format(
+        "The second time derivative of the Dirichlet values is not available "
+        "for time order {}; it is compiled for time order 2",
+        time_order(*this)));
+  if (k >= dirichlet_nodes_.size())
+    throw std::invalid_argument(
+        std::format("Dirichlet node {} does not exist (there are {})", k,
+                    dirichlet_nodes_.size()));
+  return averaged_derivative(*mesh_, dirichlet_accelerations_,
+                             dirichlet_nodes_[k], t, acceleration_name);
+}
+
 std::optional<std::vector<double>>
 MeshedProblem::initial_values(double t0) const {
   check_start_time(t0);
@@ -536,7 +602,8 @@ MeshedProblem::initial_velocities(double t0) const {
     return std::nullopt;
   auto values = at_free_nodes(*mesh_, free_nodes_, *initial_u_t_, "u_t", t0);
   for (const auto &entry : dirichlet_nodes_)
-    values[entry.node] = dirichlet_rate(*mesh_, dirichlet_rates_, entry, t0);
+    values[entry.node] =
+        averaged_derivative(*mesh_, dirichlet_rates_, entry, t0, rate_name);
   return values;
 }
 

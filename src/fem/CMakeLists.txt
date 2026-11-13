@@ -1,6 +1,9 @@
 add_library(pde2d_fem
+  assembler.cpp
   compiled_expression.cpp
+  csr_matrix.cpp
   derivative.cpp
+  element_blocks.cpp
   expression.cpp
   meshed_problem.cpp
   problem.cpp)

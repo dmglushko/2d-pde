@@ -22,6 +22,16 @@ struct CompiledEquation {
   CompiledExpression f{};
 };
 
+// The divergence of the matrix A = [[a_xx, a_xy / 2], [a_xy / 2, a_yy]] of
+// the equation's second-order part, which the weak form needs (assembly's
+// convection term):
+//   x = d/dx a_xx + d/dy a_xy / 2,   y = d/dx a_xy / 2 + d/dy a_yy.
+// Its facts are those of the derivatives as computed (a_xx = x + t gives
+// x = 1, which does not depend on t).
+struct CompiledDivergence {
+  CompiledExpression x{}, y{};
+};
+
 // One region's boundary condition, classified and compiled (members as in
 // BoundaryCondition).
 struct CompiledCondition {
@@ -55,8 +65,9 @@ struct DirichletNode {
 //    priority wins and equal priorities are averaged;
 // 4. compiles every expression with the problem's parameters;
 // 5. compiles the initial conditions that time_order() requires (u for 1,
-//    u and u_t for 2; a missing one is an error) and, for time order 2,
-//    the time derivative d/dt (g / alpha) of every Dirichlet condition. An
+//    u and u_t for 2; a missing one is an error), the time derivative
+//    d/dt (g / alpha) of every Dirichlet condition for time order 1 or 2,
+//    and its second derivative for time order 2. An
 //    initial condition that is not needed is ignored, and one that depends
 //    on t is evaluated at the start time; both get a report message. Each
 //    compiled initial condition is compared with the boundary data that
@@ -65,7 +76,8 @@ struct DirichletNode {
 //    (the boundary data must then be finite there), and a difference is
 //    reported with the number of nodes and the first three; otherwise they
 //    are reported once as possibly different;
-// 6. keeps each expression's facts with its compiled function, so the
+// 6. compiles the divergence of A (divergence_of_a());
+// 7. keeps each expression's facts with its compiled function, so the
 //    summaries below are computed from the compiled problem.
 //
 // Errors throw std::invalid_argument, with the coefficient or region they
@@ -90,6 +102,7 @@ public:
   const Problem &problem() const { return problem_; }
 
   const CompiledEquation &equation() const { return equation_; }
+  const CompiledDivergence &divergence_of_a() const { return divergence_; }
   // One per mesh region, indexed like Mesh::region_names.
   const std::vector<CompiledCondition> &conditions() const {
     return conditions_;
@@ -102,6 +115,14 @@ public:
   // The value at dirichlet_nodes()[k] at time t: the average of g / alpha
   // over its regions. Throws std::invalid_argument if it is not finite.
   double dirichlet_value(std::size_t k, double t) const;
+  // d/dt and d2/dt2 of the value at dirichlet_nodes()[k] at time t: the
+  // average over its regions of d/dt (g / alpha) and d2/dt2 (g / alpha),
+  // like dirichlet_value. They are compiled only when the time order needs
+  // them: the rate for time order 1 or 2, the acceleration for 2. Throws
+  // std::invalid_argument for a lower time order, for a k that does not
+  // exist and for a value that is not finite.
+  double dirichlet_rate(std::size_t k, double t) const;
+  double dirichlet_acceleration(std::size_t k, double t) const;
 
   // The other nodes, by increasing index: the unknowns of the shrunk
   // system. Unknown i is mesh node free_nodes()[i].
@@ -136,9 +157,12 @@ private:
   // The initial conditions the time order needs, compiled.
   std::optional<CompiledExpression> initial_u_;
   std::optional<CompiledExpression> initial_u_t_;
-  // Per region, for time order 2: d/dt (g / alpha) of a Dirichlet
-  // condition, zero otherwise. Empty for time order 0 or 1.
+  CompiledDivergence divergence_;
+  // Per region, for time order 1 or 2: d/dt (g / alpha) of a Dirichlet
+  // condition, zero otherwise. Empty for time order 0.
   std::vector<CompiledExpression> dirichlet_rates_;
+  // Per region, for time order 2: d2/dt2 (g / alpha), like the rates.
+  std::vector<CompiledExpression> dirichlet_accelerations_;
   mesh::StageReport report_;
 };
 
