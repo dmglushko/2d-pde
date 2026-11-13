@@ -30,8 +30,8 @@ impossible or unclear, ask.
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) |
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
-| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts) |
-| `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken) and `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) |
+| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`) |
+| `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
@@ -184,8 +184,20 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `Expression`'s `facts()` come from its parsed form; `time_order`,
   `coefficients_depend_on_t` and `data_depends_on_t` are computed from them each
   time (`src/fem/fact_summaries.hpp`).
+- **Assembly computes its own facts.** `AssembledProblem`'s
+  `is_zero`, `depends_on_t`, `time_order` and the right-hand side facts
+  come from the terms assembly builds, never from `MeshedProblem`'s
+  summaries. A term that depends on t goes to the time part, any other
+  to the constant part; `assemble` with `previous` must stay bit for bit
+  equal to a fresh assembly (`tests/fem/assembly.cpp`).
+- **Element block functions are pure** (`src/fem/element_blocks.hpp`):
+  no shared state, so only the driver in `assembler.cpp` would ever know
+  about threads. Elements are processed colour by colour, in index order
+  inside a colour; never sum into a slot in another order.
+- **Assembly does no symbolic work.** Derivatives it needs (div A, U_D',
+  U_D'') are compiled in the `MeshedProblem` constructor.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
-  assembly, matrices, solvers and time integration, well-posedness
+  solvers and time integration, well-posedness
   checks, callables, anisotropic meshing, planners,
   the simple-options facade, Gmsh export, reading the old boundary
   context of `.pde2d` files as curve links. Do not add them unless a task

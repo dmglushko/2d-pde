@@ -6,6 +6,8 @@
 
 #include "pde2d/fem/expression.hpp"
 
+#include <array>
+
 namespace pde2d::fem::detail {
 
 enum class Variable { x, y, t };
@@ -29,5 +31,12 @@ Expression derivative(const Expression &expression, Variable variable);
 // d/dt (numerator / denominator), through derivative(). Throws like it.
 Expression time_derivative_of_quotient(const Expression &numerator,
                                        const Expression &denominator);
+
+// The divergence of the matrix A = [[a_xx, a_xy / 2], [a_xy / 2, a_yy]]
+// of the second-order part: {d/dx a_xx + d/dy a_xy / 2,
+// d/dx a_xy / 2 + d/dy a_yy}, through derivative(). Throws like it.
+std::array<Expression, 2> divergence_of_a(const Expression &a_xx,
+                                          const Expression &a_xy,
+                                          const Expression &a_yy);
 
 } // namespace pde2d::fem::detail
