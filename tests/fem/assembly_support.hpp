@@ -89,9 +89,8 @@ inline std::shared_ptr<const mesh::Mesh> reference_triangle() {
 // The rectangle [0, width] x [0, height] meshed by the Mesher (Ruppert)
 // with edges at most `h`; its sides are the regions "bottom", "right",
 // "top" and "left".
-inline std::shared_ptr<const mesh::Mesh> rectangle_mesh(double width,
-                                                        double height,
-                                                        double h) {
+inline std::shared_ptr<const mesh::Mesh>
+rectangle_mesh(double width, double height, double h) {
   using geometry::Line;
   using geometry::Point;
   const Point a{0, 0}, b{width, 0}, c{width, height}, d{0, height};

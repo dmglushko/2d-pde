@@ -54,15 +54,15 @@ std::map<std::string, BoundaryCondition> all_dirichlet() {
 // u + u_n = 2 u) and an oblique Robin on the top (n = (0, 1),
 // 2 u + u_n + 0.5 u_x = 2.5 u - exp(x) sin(y)).
 std::map<std::string, BoundaryCondition> mixed() {
-  return {{"bottom", dirichlet()},
-          {"left", dirichlet()},
-          {"right",
-           {.alpha = e("1"), .beta_n = e("1"), .g = e("2*exp(x)*cos(y)")}},
-          {"top",
-           {.alpha = e("2"),
-            .beta_n = e("1"),
-            .beta_x = e("0.5"),
-            .g = e("2.5*exp(x)*cos(y) - exp(x)*sin(y)")}}};
+  return {
+      {"bottom", dirichlet()},
+      {"left", dirichlet()},
+      {"right", {.alpha = e("1"), .beta_n = e("1"), .g = e("2*exp(x)*cos(y)")}},
+      {"top",
+       {.alpha = e("2"),
+        .beta_n = e("1"),
+        .beta_x = e("0.5"),
+        .g = e("2.5*exp(x)*cos(y) - exp(x)*sin(y)")}}};
 }
 
 struct Result {

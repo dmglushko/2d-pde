@@ -34,8 +34,8 @@ BoundaryCondition dirichlet(const char *g) {
   return {.alpha = e("1"), .g = e(g)};
 }
 
-std::shared_ptr<const MeshedProblem>
-meshed(std::shared_ptr<const Mesh> mesh, const Problem &problem) {
+std::shared_ptr<const MeshedProblem> meshed(std::shared_ptr<const Mesh> mesh,
+                                            const Problem &problem) {
   return std::make_shared<const MeshedProblem>(std::move(mesh), problem);
 }
 
@@ -210,8 +210,7 @@ int main() {
       {"K for A = identity",
        [] {
          // On the diagonal edge kappa_tau = n . tau = 0, so T is zero.
-         const auto a =
-             assemble(on_triangle({.a_xx = e("1"), .a_yy = e("1")}));
+         const auto a = assemble(on_triangle({.a_xx = e("1"), .a_yy = e("1")}));
          near_matrix(dense(a.stiffness().free), scaled(k_identity, -1), tight,
                      "-K");
          check(a.stiffness().dirichlet.columns() == 0, "no Dirichlet columns");
@@ -224,7 +223,8 @@ int main() {
          const Dense k{{3, -1.25, -1.75}, {-1.25, 1, 0.25}, {-1.75, 0.25, 1.5}};
          // T per edge: kappa_tau / 2 * [[-1, 1], [-1, 1]], kappa_tau =
          // n . A tau: -0.5 on the bottom, 0.5 on the diagonal and the left.
-         const Dense t{{0.5, -0.25, -0.25}, {0.25, -0.5, 0.25}, {0.25, -0.25, 0}};
+         const Dense t{
+             {0.5, -0.25, -0.25}, {0.25, -0.5, 0.25}, {0.25, -0.25, 0}};
          const auto a = assemble(
              on_triangle({.a_xx = e("2"), .a_xy = e("1"), .a_yy = e("3")}));
          near_matrix(dense(a.stiffness().free), plus(scaled(k, -1), t), tight,
@@ -237,22 +237,21 @@ int main() {
          const auto c = assemble(on_triangle({.b_x = e("1"), .b_y = e("2")}));
          const std::vector<double> row{-3.0 / 6, 1.0 / 6, 2.0 / 6};
          near_matrix(dense(c.stiffness().free), {row, row, row}, tight, "C");
-         const auto r = assemble(on_triangle(
-             {.c = e("1"), .m1 = e("2"), .m2 = e("3"), .f = e("1")},
-             {}, {.u = e("0"), .u_t = e("0")}));
+         const auto r = assemble(
+             on_triangle({.c = e("1"), .m1 = e("2"), .m2 = e("3"), .f = e("1")},
+                         {}, {.u = e("0"), .u_t = e("0")}));
          near_matrix(dense(r.stiffness().free), mass_matrix, tight, "R");
          near_matrix(dense(r.damping().free), scaled(mass_matrix, 2), tight,
                      "M1");
-         near_matrix(dense(r.mass().free), scaled(mass_matrix, 3), tight,
-                     "M2");
+         near_matrix(dense(r.mass().free), scaled(mass_matrix, 3), tight, "M2");
          near_vector(r.load(), {1.0 / 6, 1.0 / 6, 1.0 / 6}, tight, "F");
        }},
       {"Robin: S",
        [] {
          // Bottom: 2 u + u_n = 0, A = identity: kappa_n alpha / beta_n = 2.
-         const auto a = assemble(on_triangle(
-             {.a_xx = e("1"), .a_yy = e("1")},
-             {{"bottom", {.alpha = e("2"), .beta_n = e("1")}}}));
+         const auto a = assemble(
+             on_triangle({.a_xx = e("1"), .a_yy = e("1")},
+                         {{"bottom", {.alpha = e("2"), .beta_n = e("1")}}}));
          const Dense s = on_edge(0, 1, edge_mass);
          near_matrix(dense(a.stiffness().free),
                      plus(scaled(k_identity, -1), scaled(s, -2)), tight,
@@ -295,10 +294,9 @@ int main() {
        [] {
          // Bottom: u_n + 4 u_t = 0, A = identity: D = 4 * edge mass, and
          // the damping is M1 - D = -D.
-         const auto a = assemble(
-             on_triangle({.a_xx = e("1"), .a_yy = e("1")},
-                         {{"bottom", {.beta_n = e("1"), .gamma = e("4")}}},
-                         {.u = e("0")}));
+         const auto a = assemble(on_triangle(
+             {.a_xx = e("1"), .a_yy = e("1")},
+             {{"bottom", {.beta_n = e("1"), .gamma = e("4")}}}, {.u = e("0")}));
          near_matrix(dense(a.damping().free),
                      scaled(on_edge(0, 1, edge_mass), -4), tight, "-D");
          check(!a.damping().is_zero && a.time_order() == 1,
@@ -313,13 +311,13 @@ int main() {
          std::map<std::string, BoundaryCondition> all_natural;
          for (const char *side : {"bottom", "right", "top", "left"})
            all_natural[side] = neumann();
-         const auto a = assemble(meshed(
-             mesh, {.equation = {.a_xx = e("1"),
-                                 .a_yy = e("1"),
-                                 .m2 = e("1"),
-                                 .f = e("1")},
-                    .boundary_conditions = all_natural,
-                    .initial = {.u = e("0"), .u_t = e("0")}}));
+         const auto a =
+             assemble(meshed(mesh, {.equation = {.a_xx = e("1"),
+                                                 .a_yy = e("1"),
+                                                 .m2 = e("1"),
+                                                 .f = e("1")},
+                                    .boundary_conditions = all_natural,
+                                    .initial = {.u = e("0"), .u_t = e("0")}}));
          const Dense k = dense(a.stiffness().free);
          check(k.size() == mesh->nodes.size(), "every node is free");
          for (std::size_t i = 0; i < k.size(); ++i) {
@@ -348,18 +346,16 @@ int main() {
          for (const bool with_dirichlet : {true, false}) {
            // Left, n = (-1, 0): u_n = -2.
            const auto problem = meshed(
-               mesh, linear_problem(with_dirichlet
-                                        ? dirichlet("1 + 2*x + 3*y")
-                                        : neumann("-2")));
+               mesh, linear_problem(with_dirichlet ? dirichlet("1 + 2*x + 3*y")
+                                                   : neumann("-2")));
            const auto a = assemble(problem);
            check(with_dirichlet == !problem->dirichlet_nodes().empty(),
                  "Dirichlet nodes");
-           near_vector(a.dirichlet_values(),
-                       at_nodes(*problem, dirichlet_node_list(*problem),
-                                linear_u),
-                       1e-15, "U_D");
-           const auto u =
-               at_nodes(*problem, problem->free_nodes(), linear_u);
+           near_vector(
+               a.dirichlet_values(),
+               at_nodes(*problem, dirichlet_node_list(*problem), linear_u),
+               1e-15, "U_D");
+           const auto u = at_nodes(*problem, problem->free_nodes(), linear_u);
            const auto lhs = a.stiffness().free.multiply(u);
            near_vector(lhs,
                        std::vector<double>(a.right_hand_side().begin(),
@@ -380,8 +376,8 @@ int main() {
            p.initial = {.u = e("0"), .u_t = e("0")};
            return p;
          };
-         const auto eliminated = meshed(
-             mesh, with_time(dirichlet("(1 + 2*x + 3*y)*(1 + t^2)")));
+         const auto eliminated =
+             meshed(mesh, with_time(dirichlet("(1 + 2*x + 3*y)*(1 + t^2)")));
          const auto full = meshed(mesh, with_time(neumann("0")));
          const double t = 0.7;
          const auto a = assemble(eliminated, t);
@@ -389,8 +385,8 @@ int main() {
          const auto &free = eliminated->free_nodes();
          const auto dirichlet_nodes = dirichlet_node_list(*eliminated);
          check(!dirichlet_nodes.empty(), "the left side is Dirichlet");
-         const auto compare = [&](const Operator &shrunk,
-                                  const Operator &whole, const char *what) {
+         const auto compare = [&](const Operator &shrunk, const Operator &whole,
+                                  const char *what) {
            const Dense w = dense(whole.free);
            const Dense s = dense(shrunk.free);
            const Dense d = dense(shrunk.dirichlet);
@@ -417,8 +413,7 @@ int main() {
          }
          near_vector(a.dirichlet_values(), u_d, 1e-14, "U_D");
          near_vector(a.dirichlet_rates(), rate, 1e-14, "U_D'");
-         near_vector(a.dirichlet_accelerations(), acceleration, 1e-14,
-                     "U_D''");
+         near_vector(a.dirichlet_accelerations(), acceleration, 1e-14, "U_D''");
          const auto lift_a = pde2d::test::times(
              dense(a.stiffness().dirichlet),
              {a.dirichlet_values().begin(), a.dirichlet_values().end()});
@@ -508,13 +503,12 @@ int main() {
        [] {
          const Equation laplace{.a_xx = e("1"), .a_yy = e("1")};
          const auto a = assemble(on_triangle(laplace));
-         check(a.time_order() == 0 && a.mass().is_zero &&
-                   a.damping().is_zero && !a.stiffness().is_zero,
+         check(a.time_order() == 0 && a.mass().is_zero && a.damping().is_zero &&
+                   !a.stiffness().is_zero,
                "static");
          Equation heat = laplace;
          heat.m1 = e("1");
-         check(assemble(on_triangle(heat, {}, {.u = e("0")})).time_order() ==
-                   1,
+         check(assemble(on_triangle(heat, {}, {.u = e("0")})).time_order() == 1,
                "heat");
          Equation wave = laplace;
          wave.m2 = e("1");
@@ -524,22 +518,22 @@ int main() {
          check(w.dirichlet_rates().empty(), "no Dirichlet nodes");
          // A dynamic condition with A = 0 has no D: the problem's time order
          // is 1, the assembled one 0.
-         const auto no_a =
-             on_triangle({.c = e("1")},
-                         {{"bottom", {.beta_n = e("1"), .gamma = e("1")}}},
-                         {.u = e("0")});
+         const auto no_a = on_triangle(
+             {.c = e("1")}, {{"bottom", {.beta_n = e("1"), .gamma = e("1")}}},
+             {.u = e("0")});
          check(time_order(*no_a) == 1, "problem: time order 1");
          const auto n = assemble(no_a);
          check(n.time_order() == 0 && n.damping().is_zero, "assembled: 0");
          Equation in_t = laplace;
          in_t.a_xx = e("1 + t");
          in_t.m2 = e("x");
-         const auto tt = assemble(
-             on_triangle(in_t, {}, {.u = e("0"), .u_t = e("0")}));
+         const auto tt =
+             assemble(on_triangle(in_t, {}, {.u = e("0"), .u_t = e("0")}));
          check(tt.stiffness().depends_on_t && !tt.mass().depends_on_t,
                "depends_on_t");
          // u_n = t on the bottom: the load depends on t through G.
-         const auto g = assemble(on_triangle(laplace, {{"bottom", neumann("t")}}));
+         const auto g =
+             assemble(on_triangle(laplace, {{"bottom", neumann("t")}}));
          check(g.load_depends_on_t() && !g.stiffness().depends_on_t, "G in t");
        }},
 
@@ -554,8 +548,8 @@ int main() {
          expect_throws<std::invalid_argument>(
              [&] { (void)assemble(q, 0.0, &a); },
              "built from another MeshedProblem object");
-         expect_throws<std::invalid_argument>(
-             [&] { (void)assemble(nullptr); }, "not null");
+         expect_throws<std::invalid_argument>([&] { (void)assemble(nullptr); },
+                                              "not null");
          for (const double t : {std::numeric_limits<double>::quiet_NaN(),
                                 std::numeric_limits<double>::infinity()})
            expect_throws<std::invalid_argument>([&] { (void)assemble(p, t); },
@@ -568,9 +562,8 @@ int main() {
          expect_throws<std::invalid_argument>(
              [&] {
                (void)assemble(on_triangle(
-                   laplace,
-                   {{"bottom",
-                     {.alpha = e("exp(2000*x)"), .beta_n = e("1")}}}));
+                   laplace, {{"bottom",
+                              {.alpha = e("exp(2000*x)"), .beta_n = e("1")}}}));
              },
              "Region 'bottom', coefficient alpha is not finite");
          // n = (0, -1) on the bottom: beta_n + beta_y n_y = 1 - 1 = 0.
@@ -592,8 +585,8 @@ int main() {
              meshed(mesh, linear_problem(dirichlet("1 + 2*x + 3*y")));
          const auto a = assemble(problem);
          check(same(a, assemble(problem)), "same problem object");
-         check(same(a, assemble(meshed(mesh, linear_problem(dirichlet(
-                                                 "1 + 2*x + 3*y"))))),
+         check(same(a, assemble(meshed(
+                           mesh, linear_problem(dirichlet("1 + 2*x + 3*y"))))),
                "another object with the same input");
          // No two triangles of one colour share a node, so there are at
          // least as many colours as triangles around the busiest node.
@@ -601,7 +594,8 @@ int main() {
          for (const auto &tri : mesh->triangles)
            for (const std::size_t node : tri.nodes)
              ++around[node];
-         check(metric(a, "triangle_colours") >= *std::ranges::max_element(around),
+         check(metric(a, "triangle_colours") >=
+                   *std::ranges::max_element(around),
                "colours");
          check(metric(a, "edge_colours") >= 2, "edge colours");
          check(metric(a, "free_nodes") ==
