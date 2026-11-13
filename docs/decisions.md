@@ -528,14 +528,31 @@ marked "architecture" below are decided.
   the area, gradients and coefficient values at quadrature points are
   computed once per triangle.
 - **The sparsity pattern is precomputed from the mesh** and reused for
-  every matrix and rebuild (one for A_FF, one for A_FD). How it is built is
-  still to be discussed.
+  every matrix and rebuild (one for A_FF, one for A_FD). It is built by one
+  loop over the triangles (decided 2026-11-13): every pair of a triangle's
+  nodes (p, q), including p = q, adds column q to row p when p is free, in
+  A_FF if q is free and in A_FD if q is a Dirichlet node; then each row is
+  sorted and duplicates are removed. Boundary edges add nothing: both nodes
+  of an edge already share a triangle. An entry finds its slot by binary
+  search in its row. Column k of A_FD is `dirichlet_nodes()[k]`.
+- **The pattern and the colours live in the assembled result**, shared by
+  its matrices and carried over through `previous` (decided 2026-11-13).
+- **The Dirichlet tables stay in `MeshedProblem`** (confirmed 2026-11-13,
+  after comparing with the owner's Poisson project, which keeps them in its
+  assembled problem). *Why:* here `assemble` runs at every time step while
+  the tables never depend on t, and `initial_values` needs them before any
+  assembly. A refined mesh gets a new `MeshedProblem`, which recomputes
+  them from the region tags.
 - **Parallel assembly uses colouring:** triangles are grouped so that no two
   in a colour share a node; colours run one after another, with no atomics.
   *Why:* atomics make results depend on thread timing (floating-point
   addition is not associative) and are slow under contention; storing all
   element blocks first costs about 2.5× the matrix in memory. The colouring
-  must itself be deterministic.
+  must itself be deterministic: greedy in triangle index order, each
+  triangle taking the smallest colour not used by a triangle that shares a
+  node with it; boundary edges are coloured the same way in their own pass
+  (decided 2026-11-13). The method is fixed for now; making it a choice is
+  GitHub issue #31.
 - **Quadrature is internal and fixed at compile time**, never a user input:
   a 3-point rule on triangles (exact for degree 2) and 2-point
   Gauss–Legendre on edges. *Why:* it keeps P1's convergence rates and is
@@ -591,7 +608,14 @@ comes first.
 
 ## Deferred
 
-- Handling pure Neumann problems: to be discussed.
+- Handling pure Neumann problems: to be discussed (the owner would
+  ideally require mean zero): GitHub issue #32. Assembly builds the matrix
+  as it is.
+- Sharing compiled expressions between the `MeshedProblem`s of one
+  `Problem` (adaptive refinement recompiles them per mesh): GitHub issue
+  #29.
+- Computing triangle and node adjacency once instead of in several places:
+  GitHub issue #30. No `neighbours` field in `Mesh` for now.
 - Anisotropic meshing (metric `MeshSpec`) and problem-aware planners.
 - Callables, interior regions and materials, well-posedness checks.
 - Robustness issues found in review, tracked as GitHub issues: a boundary
@@ -615,6 +639,5 @@ comes first.
 - Quality guarantees: an improver that runs after a refiner can break the
   refiner's guarantee (smoothing after Ruppert can lower the minimum
   angle). Whether to declare, warn and measure this is not decided yet.
-- How the sparsity pattern is built.
 - How second order in time is integrated (see "Solvers and time
   integration").
