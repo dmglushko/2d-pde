@@ -22,6 +22,62 @@ namespace {
 using SymEngine::Basic;
 using SymEngine::RCP;
 
+// Delay floating-literal evaluation until the power-aware substitution
+// pass. Otherwise the parser already turns (-2)^2.0 into a complex value.
+RCP<const Basic> parse_powers(const std::string &text,
+                              std::optional<std::string> &reason) {
+  std::string prefix = "pde2d_literal_";
+  while (text.find(prefix) != std::string::npos)
+    prefix += '_';
+  std::string masked;
+  SymEngine::map_basic_basic values;
+  for (std::size_t i = 0; i < text.size();) {
+    const auto start = i;
+    if (std::isalpha(static_cast<unsigned char>(text[i])) || text[i] == '_') {
+      while (
+          i < text.size() &&
+          (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_'))
+        ++i;
+    } else if (std::isdigit(static_cast<unsigned char>(text[i])) ||
+               (text[i] == '.' && i + 1 < text.size() &&
+                std::isdigit(static_cast<unsigned char>(text[i + 1])))) {
+      while (i < text.size() &&
+             std::isdigit(static_cast<unsigned char>(text[i])))
+        ++i;
+      if (i < text.size() && text[i] == '.') {
+        ++i;
+        while (i < text.size() &&
+               std::isdigit(static_cast<unsigned char>(text[i])))
+          ++i;
+      }
+      if (i < text.size() && (text[i] == 'e' || text[i] == 'E')) {
+        ++i;
+        if (i < text.size() && (text[i] == '+' || text[i] == '-'))
+          ++i;
+        while (i < text.size() &&
+               std::isdigit(static_cast<unsigned char>(text[i])))
+          ++i;
+      }
+      const auto token = text.substr(start, i - start);
+      if (token.find_first_of(".eE") != std::string::npos) {
+        // Let the original parser diagnose malformed numeric tokens.
+        const auto number = SymEngine::parse(token);
+        const auto name = prefix + std::to_string(values.size());
+        values[SymEngine::symbol(name)] = number;
+        masked += name;
+        continue;
+      }
+    } else {
+      ++i;
+    }
+    masked.append(text, start, i - start);
+  }
+  const auto form = SymEngine::parse(masked);
+  if (!values.empty())
+    reason = detail::unsupported_substitution(form, values);
+  return detail::substitute_powers(form, values);
+}
+
 std::string in_quotes(const std::string &text) { return "'" + text + "'"; }
 
 // Free symbol names of `form`, sorted (SymEngine's own sets are ordered by
@@ -235,12 +291,41 @@ unsupported_substitution(const SymEngine::RCP<const SymEngine::Basic> &form,
                          const SymEngine::map_basic_basic &values) {
   // Conditions are valid inside Piecewise, but not as standalone numbers.
   if (!SymEngine::is_a_Boolean(*form))
-    if (auto reason = unsupported(*SymEngine::subs(form, values)))
+    if (auto reason = unsupported(*substitute_powers(form, values)))
       return reason;
   for (const auto &argument : form->get_args())
     if (auto reason = unsupported_substitution(argument, values))
       return reason;
   return std::nullopt;
+}
+
+SymEngine::RCP<const SymEngine::Basic>
+substitute_powers(const SymEngine::RCP<const SymEngine::Basic> &form,
+                  const SymEngine::map_basic_basic &values) {
+  using namespace SymEngine;
+  if (const auto it = values.find(form); it != values.end())
+    return it->second;
+  if (is_a<Pow>(*form)) {
+    const auto &power = down_cast<const Pow &>(*form);
+    const auto base = substitute_powers(power.get_base(), values);
+    auto exponent = substitute_powers(power.get_exp(), values);
+    if (is_a<RealDouble>(*exponent)) {
+      const double value = down_cast<const RealDouble &>(*exponent).as_double();
+      if (std::isfinite(value) && std::trunc(value) == value) {
+        integer_class integral;
+        mp_set_d(integral, value);
+        exponent = integer(std::move(integral));
+      }
+    }
+    return pow(base, exponent);
+  }
+  map_basic_basic children;
+  for (const auto &argument : form->get_args()) {
+    const auto replacement = substitute_powers(argument, values);
+    if (!eq(*argument, *replacement))
+      children[argument] = replacement;
+  }
+  return children.empty() ? form : xreplace(form, children);
 }
 
 std::optional<std::string> unsupported(const Basic &form) {
@@ -298,12 +383,16 @@ Expression::Expression(std::string_view text) {
         "operators (SymEngine simplifies atan2(x, x) to pi/4 whatever the "
         "sign of x)");
   RCP<const Basic> form;
+  std::optional<std::string> reason;
   try {
-    form = SymEngine::parse(owned);
+    form = parse_powers(owned, reason);
   } catch (const std::exception &e) {
     throw std::invalid_argument("Cannot parse the expression " +
                                 in_quotes(owned) + ": " + e.what());
   }
+  if (reason)
+    throw std::invalid_argument("The expression " + in_quotes(owned) + " " +
+                                *reason);
   impl_ = make_impl(std::move(owned), std::move(form));
 }
 

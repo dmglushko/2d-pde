@@ -91,6 +91,17 @@ double metric(const MeshedProblem &problem, const std::string &name) {
 
 int main() {
   return pde2d::test::run({
+      {"negative bases with integral floating exponents stay real in time",
+       [] {
+         Problem wave = poisson({{"wall", dirichlet("(-2)^k*t^2")}});
+         wave.parameters = {{"k", 2}};
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         check(p.initial_velocities(0).value()[0] == 0, "zero velocity");
+         check(p.initial_velocities(2).value()[0] == 16, "8 t");
+         check(p.dirichlet_acceleration(0, 0) == 8, "constant acceleration");
+       }},
       {"guarded zero-base boundary powers have zero rates",
        [] {
          Problem wave = poisson(

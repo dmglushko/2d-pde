@@ -21,6 +21,7 @@ constexpr const char *texts[] = {
     "x + y - t",
     "x*y/(t + 2) - 3",
     "x^2 + y**3 + 2^t",
+    "(-2)^2.0 + (-3)^3.0 + x",
     "Piecewise((0^t, t > 0), (1, True))",
     "sqrt(abs(x) + 1)",
     "2.5*pi + E + 1/3 + x",

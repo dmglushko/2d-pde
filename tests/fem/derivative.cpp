@@ -51,6 +51,14 @@ void compare(const char *text, const Points &points, F expected) {
 
 int main() {
   return pde2d::test::run({
+      {"integral floating powers stay real in derivatives",
+       [] {
+         const CompiledExpression literal = derivative_in_x("(-2)^2.0*x");
+         check(literal(0, 0, 0) == 4, "constant multiplier");
+         const CompiledExpression parameter(
+             derivative(Expression("(-2)^k*x"), Variable::x), {{"k", 2}});
+         check(parameter(0, 0, 0) == 4, "parameter multiplier");
+       }},
       {"guarded zero-base powers differentiate branch by branch",
        [] {
          const Expression f("Piecewise((0^x, x > 0), (1, True))");
