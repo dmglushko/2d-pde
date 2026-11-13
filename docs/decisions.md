@@ -612,9 +612,36 @@ comes first.
   default) keeps the small records; solution snapshots are taken at exact
   `snapshot_times` (the stepper lands on them) and/or every n steps; the
   final solution is always returned.
-- **Still open:** how second order in time (m2 ≠ 0) is integrated
-  (rewriting as a first-order system with v = u_t, or a dedicated method
-  such as Newmark-β or generalized-α).
+- **Second order in time is handled by methods that support it** (decided
+  2026-11-13), not by refusing such problems or rewriting them as a
+  first-order system. The first one is Newmark with average acceleration
+  (β = 1/4, γ = 1/2): second-order accurate, one linear solve per step of
+  the same size, no symmetry needed. Generalized-α may follow if damping
+  of high frequencies is wanted.
+- **First time methods** (decided 2026-11-13): `ImplicitEuler` and
+  `ImplicitMidpoint` for time order 1, `Newmark` for time order 2, each a
+  component behind the `TimeMethod` interface. The midpoint method
+  evaluates the matrices and the right-hand side once, at the middle of
+  the step; it is named for what it does, since "Crank–Nicolson" has two
+  different meanings when the matrices change in time. The equation
+  integrated is M(t)·U′ + A(t)·U = b(t) as assembled (no M′ term).
+- **First linear solvers** (decided 2026-11-13): `SparseLu` (direct) and
+  `BiCgStab` (iterative), both for any matrix, behind the `LinearSolver`
+  interface. Conjugate gradients comes later, together with a symmetry
+  fact from assembly: the matrix is not symmetric in general and −K is
+  negative definite.
+- **A solve has an intermediate result and a separate building step**
+  (decided 2026-11-13, as in the owner's Poisson project): the linear
+  solver returns a `LinearSolveResult` (the vector over the free unknowns,
+  iterations, residual); the plain function `build_solution(meshed_problem,
+  free_values, t)` turns it into a `Solution` (a value for every mesh
+  node, the mesh, the time), filling Dirichlet nodes from
+  `dirichlet_value`. The integrator works on the short vector and builds a
+  `Solution` only for snapshots and at the end.
+- **Solvers live in their own library, `pde2d_solve`**, which depends on
+  `pde2d_fem`; Eigen is used only inside its `.cpp` files.
+- **Continuing a run:** `integrate(meshed, t1, t2, output, previous.final)`
+  starts from an earlier result; no new problem object is made.
 
 ## Deferred
 
@@ -649,5 +676,3 @@ comes first.
 - Quality guarantees: an improver that runs after a refiner can break the
   refiner's guarantee (smoothing after Ruppert can lower the minimum
   angle). Whether to declare, warn and measure this is not decided yet.
-- How second order in time is integrated (see "Solvers and time
-  integration").
