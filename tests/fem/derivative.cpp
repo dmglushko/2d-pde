@@ -51,6 +51,21 @@ void compare(const char *text, const Points &points, F expected) {
 
 int main() {
   return pde2d::test::run({
+      {"constant symbolic exponents have smooth derivatives at zero",
+       [] {
+         for (const char *text : {"(x^2)^k", "(sin(x))^k", "(x+y)^k"}) {
+           const Expression d = derivative(Expression(text), Variable::x);
+           const CompiledExpression first(d, {{"k", 2}});
+           const CompiledExpression second(derivative(d, Variable::x),
+                                           {{"k", 2}});
+           check(first(0, 0, 0) == 0, text);
+           check(second(0, 0, 0) == (std::string(text) == "(x^2)^k" ? 0 : 2),
+                 text);
+         }
+         // sqrt has a genuinely infinite derivative at zero.
+         check(!std::isfinite(derivative_in_x("sqrt(x)")(0, 0, 0)),
+               "sqrt singularity stays visible");
+       }},
       {"every allowed function: d/dx against its exact derivative",
        [] {
          compare("sin(x)", unit_points, [](double x) { return std::cos(x); });

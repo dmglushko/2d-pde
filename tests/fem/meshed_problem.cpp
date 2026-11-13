@@ -91,6 +91,19 @@ double metric(const MeshedProblem &problem, const std::string &name) {
 
 int main() {
   return pde2d::test::run({
+      {"a composite power is smooth at its zero",
+       [] {
+         Problem wave = poisson({{"wall", dirichlet("(t^2)^k")}});
+         wave.parameters = {{"k", 2}};
+         wave.equation.m2 = e("1");
+         wave.initial = {.u = e("0"), .u_t = e("0")};
+         const MeshedProblem p(grid({"wall", "wall", "wall", "wall"}), wave);
+         check(p.initial_velocities(0).value() == std::vector<double>(9, 0),
+               "t^4 has zero initial velocity");
+         check(p.dirichlet_acceleration(0, 0) == 0, "zero acceleration");
+         check(p.initial_velocities(2).value()[0] == 32, "4 t^3");
+         check(p.dirichlet_acceleration(0, 2) == 48, "12 t^2");
+       }},
       {"a null or invalid mesh is rejected",
        [] {
          expect_throws<std::invalid_argument>(
