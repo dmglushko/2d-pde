@@ -73,6 +73,17 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
     const Point &pj = nodes[(i + 1) % 3], &pk = nodes[(i + 2) % 3];
     gradient[i] = {(pj.y - pk.y) / det, (pk.x - pj.x) / det};
   }
+  // A valid triangle has det > 0; it can still underflow to zero or
+  // overflow for coordinates far outside the usual range of double.
+  bool representable = std::isfinite(det) && det > 0.0;
+  for (const Point &g : gradient)
+    representable = representable && std::isfinite(g.x) && std::isfinite(g.y);
+  if (!representable)
+    throw std::invalid_argument(std::format(
+        "The triangle ({}, {}), ({}, {}), ({}, {}) is too small or too large "
+        "for double arithmetic: its area or its gradients are not finite "
+        "positive numbers",
+        p0.x, p0.y, p1.x, p1.y, p2.x, p2.y));
   // Quadrature: barycentric (2/3, 1/6, 1/6) and its rotations.
   std::array<std::array<double, 3>, 3> lambda{};
   std::array<Point, 3> point{};
@@ -90,14 +101,19 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
   if (auto *d = destination(out, terms.k)) {
     Block3 k{};
     for (std::size_t q = 0; q < 3; ++q) {
-      const double xx = value(e.a_xx, equation_label("a_xx"), point[q], t);
-      const double xy = value(e.a_xy, equation_label("a_xy"), point[q], t) / 2;
-      const double yy = value(e.a_yy, equation_label("a_yy"), point[q], t);
+      // The weight goes in first, so that a sum of large coefficients
+      // does not overflow before it is scaled down.
+      const double xx =
+          weight * value(e.a_xx, equation_label("a_xx"), point[q], t);
+      const double xy =
+          weight * value(e.a_xy, equation_label("a_xy"), point[q], t) / 2;
+      const double yy =
+          weight * value(e.a_yy, equation_label("a_yy"), point[q], t);
       for (std::size_t i = 0; i < 3; ++i)
         for (std::size_t j = 0; j < 3; ++j) {
           const Point &gi = gradient[i], &gj = gradient[j];
-          k[i][j] += weight * (gi.x * (xx * gj.x + xy * gj.y) +
-                               gi.y * (xy * gj.x + yy * gj.y));
+          k[i][j] +=
+              gi.x * (xx * gj.x + xy * gj.y) + gi.y * (xy * gj.x + yy * gj.y);
         }
     }
     add(d->stiffness, -1.0, k);
@@ -166,10 +182,9 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
 ElementBlocks<2> edge_blocks(const MeshedProblem &problem, std::size_t region,
                              const std::array<std::size_t, 2> &nodes, double t,
                              const EdgeTerms &terms) {
+  // With every term skipped this still checks the condition (the caller
+  // decides when that is needed).
   ElementBlocks<2> out;
-  if (terms.s == Target::skip && terms.t == Target::skip &&
-      terms.d == Target::skip && terms.g == Target::skip)
-    return out;
   const auto &mesh = *problem.mesh();
   const auto &e = problem.equation();
   const auto &condition = problem.conditions()[region];
@@ -224,10 +239,14 @@ ElementBlocks<2> edge_blocks(const MeshedProblem &problem, std::size_t region,
           "condition cannot be solved for the normal derivative u_n",
           region_name, p.x, p.y, nodes[0], nodes[1], t));
     // u_n = (g - alpha u - beta_tau_hat u_tau - gamma u_t) / beta_n_hat.
-    const double factor = kappa_n / beta_n_hat;
+    // kappa_n / beta_n_hat times a coefficient; a zero coefficient gives
+    // zero even when the quotient itself would overflow.
+    const auto over_beta = [&](double coefficient) {
+      return coefficient == 0.0 ? 0.0 : kappa_n / beta_n_hat * coefficient;
+    };
     if (terms.s != Target::skip) {
       const double coefficient =
-          factor * value(condition.alpha, region_label("alpha"), p, t);
+          over_beta(value(condition.alpha, region_label("alpha"), p, t));
       for (std::size_t i = 0; i < 2; ++i)
         for (std::size_t j = 0; j < 2; ++j)
           s_block[i][j] += weight * coefficient * phi[i] * phi[j];
@@ -236,21 +255,21 @@ ElementBlocks<2> edge_blocks(const MeshedProblem &problem, std::size_t region,
       const double beta_tau_hat =
           value(condition.beta_tau, region_label("beta_tau"), p, t) +
           beta_x * tau.x + beta_y * tau.y;
-      const double coefficient = kappa_tau - factor * beta_tau_hat;
+      const double coefficient = kappa_tau - over_beta(beta_tau_hat);
       for (std::size_t i = 0; i < 2; ++i)
         for (std::size_t j = 0; j < 2; ++j)
           t_block[i][j] += weight * coefficient * phi[i] * phi_tau[j];
     }
     if (terms.d != Target::skip) {
       const double coefficient =
-          factor * value(condition.gamma, region_label("gamma"), p, t);
+          over_beta(value(condition.gamma, region_label("gamma"), p, t));
       for (std::size_t i = 0; i < 2; ++i)
         for (std::size_t j = 0; j < 2; ++j)
           d_block[i][j] += weight * coefficient * phi[i] * phi[j];
     }
     if (terms.g != Target::skip) {
       const double coefficient =
-          factor * value(condition.g, region_label("g"), p, t);
+          over_beta(value(condition.g, region_label("g"), p, t));
       for (std::size_t i = 0; i < 2; ++i)
         g_block[i] += weight * coefficient * phi[i];
     }

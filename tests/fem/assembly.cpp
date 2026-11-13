@@ -606,5 +606,92 @@ int main() {
                "free_nonzeros");
          check(a.report().stage == "assembly", "stage name");
        }},
+      {"review: reuse still checks a normal coefficient that depends on t",
+       [] {
+         // (1 - t) u_n = 0 on the bottom: every term there is constant or
+         // zero, but at t = 1 the condition cannot be solved for u_n.
+         const Equation laplace{.a_xx = e("1"), .a_yy = e("1")};
+         const auto problem = on_triangle(
+             laplace, {{"bottom", {.beta_n = e("1-t"), .g = e("0")}}});
+         const auto first = assemble(problem, 0.0);
+         expect_throws<std::invalid_argument>(
+             [&] { (void)assemble(problem, 1.0); },
+             "cannot be solved for the normal derivative");
+         expect_throws<std::invalid_argument>(
+             [&] { (void)assemble(problem, 1.0, &first); },
+             "cannot be solved for the normal derivative");
+       }},
+      {"review: a tiny normal coefficient does not spoil a zero term",
+       [] {
+         // exp(-710) is a nonzero denormal number, so 1 / beta_n overflows;
+         // the condition is still u_n = 0 and must give the same matrix.
+         const Equation laplace{.a_xx = e("1"), .a_yy = e("1")};
+         const auto tiny = on_triangle(
+             laplace, {{"bottom", {.beta_n = e("exp(-710*t)"), .g = e("0")}}});
+         const auto plain = on_triangle(laplace);
+         const auto a = assemble(tiny, 1.0);
+         const auto b = assemble(plain, 1.0);
+         check(a.stiffness().free.values == b.stiffness().free.values,
+               "same stiffness as u_n = 0");
+       }},
+      {"review: large coefficients do not overflow before the weight",
+       [] {
+         // K00 of the reference triangle for A = I is 1, so the entry is
+         // -1e308, which is representable.
+         const auto a =
+             assemble(on_triangle({.a_xx = e("1e308"), .a_yy = e("1e308")}));
+         near(a.stiffness().free.entry(0, 0), -1e308, 1e294, "K00");
+       }},
+      {"review: a triangle outside the range of double is an error",
+       [] {
+         for (const double scale : {1e-200, 1e200}) {
+           auto scaled =
+               std::make_shared<Mesh>(*pde2d::test::reference_triangle());
+           for (auto &node : scaled->nodes)
+             node = {node.x * scale, node.y * scale};
+           Problem problem{.equation = {.a_xx = e("1"), .a_yy = e("1")}};
+           for (const char *region : {"bottom", "diagonal", "left"})
+             problem.boundary_conditions.emplace(region, neumann());
+           const auto combined = meshed(scaled, problem);
+           expect_throws<std::invalid_argument>(
+               [&] { (void)assemble(combined); },
+               "too small or too large for double arithmetic");
+         }
+       }},
+      {"review: lifting includes the dynamic boundary matrix",
+       [] {
+         // u = exp(t) (1 + x + 2y) solves u_t - Laplace(u) - u = 0. Left
+         // edge Dirichlet; on the others u + 3 u_n + 2 u_t = g. Only node 1
+         // is free, and its two edges touch Dirichlet corners, so the
+         // right-hand side needs D_FD U_D'.
+         const auto problem = on_triangle(
+             {.a_xx = e("-1"), .a_yy = e("-1"), .c = e("-1"), .m1 = e("1")},
+             {{"left", dirichlet("exp(t)*(1+x+2*y)")},
+              {"bottom",
+               {.alpha = e("1"),
+                .beta_n = e("3"),
+                .gamma = e("2"),
+                .g = e("exp(t)*(3*(1+x+2*y)-6)")}},
+              {"diagonal",
+               {.alpha = e("1"),
+                .beta_n = e("3"),
+                .gamma = e("2"),
+                .g = e("exp(t)*(3*(1+x+2*y)+9/sqrt(2))")}}},
+             {.u = e("1+x+2*y")});
+         const double t = 0.3;
+         const auto a = assemble(problem, t);
+         check(problem->free_nodes() == std::vector<std::size_t>{1},
+               "node 1 is the free node");
+         // u = u_t = 2 exp(t) at node 1 = (1, 0).
+         const std::vector<double> exact{2.0 * std::exp(t)};
+         const double residual = a.damping().free.multiply(exact)[0] +
+                                 a.stiffness().free.multiply(exact)[0] -
+                                 a.right_hand_side()[0];
+         near(residual, 0.0, 1e-12, "residual at the exact solution");
+         check(
+             a.damping().dirichlet.values !=
+                 std::vector<double>(a.damping().dirichlet.values.size(), 0.0),
+             "the damping has Dirichlet columns");
+       }},
   });
 }

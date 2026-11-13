@@ -429,8 +429,21 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
                                  .d = target(region.d, reuse),
                                  .g = target(region.g, reuse)};
       if (edge_terms.s == Target::skip && edge_terms.t == Target::skip &&
-          edge_terms.d == Target::skip && edge_terms.g == Target::skip)
+          edge_terms.d == Target::skip && edge_terms.g == Target::skip) {
+        // Nothing to compute. A fresh assembly would still have computed
+        // this edge's constant terms and, with them, checked that the
+        // condition can be solved for u_n at this t; keep that check when
+        // the normal coefficient depends on t.
+        const auto &condition = problem.conditions()[edge.region];
+        const bool computed_when_fresh =
+            !(region.s.zero && region.t.zero && region.d.zero && region.g.zero);
+        if (reuse && computed_when_fresh &&
+            (condition.beta_n.facts().depends_on_t ||
+             condition.beta_x.facts().depends_on_t ||
+             condition.beta_y.facts().depends_on_t))
+          detail::edge_blocks(problem, edge.region, edge.nodes, t, edge_terms);
         continue;
+      }
       const auto blocks =
           detail::edge_blocks(problem, edge.region, edge.nodes, t, edge_terms);
       const auto where = destinations(*internals, edge.nodes);
