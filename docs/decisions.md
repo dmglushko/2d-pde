@@ -480,7 +480,10 @@ marked "architecture" below are decided.
 - **Weak form.** The second-order part is written as A : ∇²u with
   A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] and integrated by parts once:
   ∫ (A:∇²u) v = −∫ ∇v·A∇u − ∫ (∇·A)·∇u v + ∮ v (A∇u)·n. The term ∇·A
-  needs derivatives of the coefficients, which symbolic input provides.
+  needs derivatives of the coefficients, which symbolic input provides:
+  ∇·A = (∂ₓa_xx + ½∂ᵧa_xy, ½∂ₓa_xy + ∂ᵧa_yy). The formula holds where the
+  coefficients are smooth in x and y; a `Piecewise` coefficient that jumps
+  in space is not handled correctly (GitHub issue #33).
 - **Matrices.** Interior: stiffness K (∫ ∇φᵢ·A∇φⱼ), convection C
   (∫ (b − ∇·A)·∇φⱼ φᵢ), reaction R (c), masses M₁, M₂ (m1, m2), load F (f).
   Boundary: Robin mass S, tangential block T, dynamic mass D, boundary load
@@ -497,8 +500,11 @@ marked "architecture" below are decided.
   scattering of each block, not afterwards: an entry whose row is a
   Dirichlet node is skipped; an entry whose column is a Dirichlet node goes
   to a separate sparse matrix A_FD; every other entry goes to A_FF. The
-  right-hand side is b_F − A_FD U_D(t), plus −M₁,FD U_D′ − M₂,FD U_D″ for time
-  derivatives, which come from differentiating g symbolically. *Why:*
+  right-hand side is b_F − A_FD U_D(t), plus −B_FD U_D′ − M₂,FD U_D″ for time
+  derivatives, where B = M₁ − D is the whole damping operator (corrected
+  2026-11-13: the boundary matrix D was missing from the lifting; found by
+  an independent check). The derivatives come from differentiating g / α
+  symbolically. A static solve uses only b_F − A_FD U_D(t). *Why:*
   elimination is exact and standard (deal.II, FEniCS); keeping A_FD lets a
   time-dependent g cost one matrix–vector product per step. Edge blocks
   touching a Dirichlet corner are routed the same way. The same routing
@@ -508,8 +514,10 @@ marked "architecture" below are decided.
   back to mesh nodes for the full solution. *Why:* with full size and
   identity rows, the mass matrices have empty Dirichlet rows, so M becomes
   singular and every time stepper (explicit ones need M⁻¹) would have to
-  special-case those rows. Shrunk, time integration sees a plain system of
-  ODEs in the free unknowns.
+  special-case those rows. Shrunk, time integration no longer sees those
+  artificial rows. The mass matrix can still be singular for another
+  reason: with m1 = 0 and a boundary γ ≠ 0, only boundary nodes carry a
+  time derivative (noted 2026-11-13; implicit methods must cope with it).
 - **Each stage owns its facts** (clarified 2026-11-12). Facts of a later
   stage are computed by that stage from what it actually builds, never
   read off an earlier stage's summary. In particular, whether the **final
@@ -517,7 +525,9 @@ marked "architecture" below are decided.
   every term that feeds it: f, the Dirichlet values g/α, the lifting term
   A_FD·U_D (so also the left-hand side coefficients), and the natural
   boundary load (g, β and A on the boundary). A time-dependent Dirichlet
-  value makes it time-dependent even when f is not.
+  value makes it time-dependent even when f is not. The fact means "may
+  depend on t": it is decided from which terms depend on t, so a rare
+  exact cancellation is not noticed.
 - **Matrices are rebuilt per matrix, from the facts:** a matrix is
   recomputed in time only if a coefficient it uses depends on t (K only if
   A does, M₁ only if m1 does, and so on).
