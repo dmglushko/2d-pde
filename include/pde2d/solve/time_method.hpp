@@ -1,0 +1,81 @@
+#pragma once
+
+#include "pde2d/fem/assembled_problem.hpp"
+#include "pde2d/solve/linear_solver.hpp"
+
+#include <cstddef>
+#include <string>
+#include <vector>
+
+// The time method interface. The Integrator integrates the assembled system
+//
+//   M2 U'' + B U' + A U = b
+//
+// (AssembledProblem: mass(), damping(), stiffness(), right_hand_side(),
+// all in the free unknowns, with the Dirichlet lifting already in b). A
+// time method declares what it supports and how its step matrix is made;
+// the Integrator assembles, prepares the linear solver and calls
+// advance() once per step.
+namespace pde2d::solve {
+
+// The time orders a method can integrate. The Integrator checks them
+// against AssembledProblem::time_order() before the first step.
+struct TimeMethodCapabilities {
+  bool supports_first_order = false;  // B U' + A U = b
+  bool supports_second_order = false; // M2 U'' + B U' + A U = b
+};
+
+// The matrix of one step's linear system, as weights of the three
+// operators' free parts: mass * M2 + damping * B + stiffness * A. It
+// depends only on dt, so the Integrator can tell when it changes.
+struct StepMatrixWeights {
+  double mass = 0.0;
+  double damping = 0.0;
+  double stiffness = 0.0;
+};
+
+// The state of a time integration, in the free unknowns
+// (MeshedProblem::free_nodes()).
+struct TimeState {
+  std::vector<double> values{};        // U
+  std::vector<double> velocities{};    // U', for time order 2, else empty
+  std::vector<double> accelerations{}; // U'', if the method keeps it
+};
+
+// What one step reports about its linear solve.
+struct StepSolveInfo {
+  std::size_t linear_iterations = 0;
+  double residual = 0.0;
+};
+
+class TimeMethod {
+public:
+  virtual ~TimeMethod() = default;
+  virtual std::string name() const = 0;
+  virtual TimeMethodCapabilities capabilities() const = 0;
+
+  // Where in a step from t to t + dt the problem is assembled, as a
+  // fraction in [0, 1]: the step uses the AssembledProblem at
+  // t + fraction * dt (1 for the end of the step, 1/2 for its middle).
+  virtual double evaluation_fraction() const = 0;
+  // The weights of the step matrix for a step of length dt.
+  virtual StepMatrixWeights step_matrix_weights(double dt) const = 0;
+
+  // Called once before the first step, with the problem assembled at the
+  // start time and the state at the start (values, and velocities for
+  // time order 2). A method that needs more state (Newmark's
+  // accelerations) computes it here; it may prepare `linear_solver` for
+  // its own matrix. The default does nothing.
+  virtual void start(const fem::AssembledProblem &problem,
+                     const LinearSolver &linear_solver,
+                     TimeState &state) const;
+
+  // Advances `state` by one step of length dt. `problem` is assembled at
+  // t + evaluation_fraction() * dt, and `solver` is prepared for the step
+  // matrix step_matrix_weights(dt) of that problem.
+  virtual StepSolveInfo advance(const fem::AssembledProblem &problem,
+                                double dt, const PreparedLinearSolver &solver,
+                                TimeState &state) const = 0;
+};
+
+} // namespace pde2d::solve
