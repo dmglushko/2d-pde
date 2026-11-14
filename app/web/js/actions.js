@@ -28,13 +28,13 @@ const calls = {
 // that is still loaded, may change the state. Older answers are dropped.
 const latest = {};
 
-// The region edits the user added, by the geometry key that includes
-// them: their conditions move only once the library accepted the edit.
-const pendingEdits = new Map();
+// The region edits added since the conditions were last reconciled, in
+// order, with the case they belong to. Their conditions move only once
+// the library accepted a geometry that includes them.
+let pendingEdits = [];
 
-// Records that `edit` is the newest region edit of the current geometry.
 export function notePendingEdit(edit) {
-  pendingEdits.set(stageKey(store.caseData, "geometry"), edit);
+  pendingEdits.push({ edit, caseId: store.caseId });
 }
 
 // Runs one stage for the current case. Returns true when it worked, false
@@ -80,10 +80,13 @@ export function showField(field) {
 // geometry that is still in the case.
 function syncConditions(geometryView, key) {
   if (key !== stageKey(store.caseData, "geometry")) return;
-  const edit = pendingEdits.get(key) ?? null;
-  pendingEdits.clear();
+  // The pending edits of this case that are still in its geometry (an
+  // edit removed before it ran is not applied).
+  const present = store.caseData.geometry?.region_edits ?? [];
+  const edits = pendingEdits.filter((p) => p.caseId === store.caseId && present.includes(p.edit)).map((p) => p.edit);
+  pendingEdits = [];
   const regions = geometryView.regions.map((r) => r.name);
-  const next = reconcileConditions(store.caseData, regions, store.catalog.problem.default_condition, edit);
+  const next = reconcileConditions(store.caseData, regions, store.catalog.problem.default_condition, edits);
   const same = JSON.stringify([next.problem, next.view]) === JSON.stringify([store.caseData.problem, store.caseData.view]);
   if (same) return;
   editCase((c) => {

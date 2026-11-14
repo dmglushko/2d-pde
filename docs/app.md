@@ -208,7 +208,9 @@ is a reason; record the new choice here.
   API requests must name a loopback host (against DNS rebinding) and send
   JSON (which a cross-site form cannot).
 - **Region edits move boundary conditions** in the page, but only after
-  the library accepted the edit: a renamed region keeps its condition,
+  the library accepted a geometry that includes them; every edit added
+  since the last accepted geometry is applied in order (an edit removed
+  before it ran is not). A renamed region keeps its condition,
   the halves of a split region copy it, and a merged region takes its
   target's. A condition whose region disappears is kept in
   `view.condition_archive` and comes back with its region (an edit
@@ -218,8 +220,13 @@ is a reason; record the new choice here.
   generation, and every loaded case an id; an answer to an older request,
   or for a case that was replaced, is dropped. Conditions are synced only
   for the geometry that is still in the case.
+- **Region names are arbitrary keys**: the page keeps region-keyed
+  conditions in prototype-free dictionaries, so names such as
+  `constructor` or `__proto__` (valid region names) behave like any other.
 - **A case is normalized before it is shown** (`normalizeCase`): a missing
-  or malformed section is replaced by the default's, with a notice, and
+  or malformed section, down to the containers the forms write into
+  (shape options, component choices and their options, region edits,
+  each boundary condition), is replaced by the default's, with a notice, and
   a case the forms still cannot show is replaced by a new case instead of
   failing on every visit.
 - **Request bodies are limited** to 64 MiB (`ServerOptions::

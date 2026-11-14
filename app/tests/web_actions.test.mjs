@@ -2,7 +2,7 @@
 // fetch: an answer to an older request must not change the state. Run by
 // CTest as app_web_actions when Node.js is installed.
 import assert from "node:assert/strict";
-import { runStage, showField } from "../web/js/actions.js";
+import { notePendingEdit, runStage, showField } from "../web/js/actions.js";
 import { setCase, store } from "../web/js/state.js";
 
 // Every fetch waits until the test answers it.
@@ -56,6 +56,33 @@ test("an answer for an edited geometry does not touch the conditions", async () 
   pending.splice(0, 1)[0].answer(geometryView("bottom", "right", "top", "left"));
   assert.equal(await run, true, "kept as a (stale) result");
   assert.deepEqual(Object.keys(store.caseData.problem.boundary_conditions), ["left"], "no conditions synced for a geometry that changed");
+});
+
+test("edits made before the geometry runs all carry their conditions", async () => {
+  setCase({ format: "pde2d-app-case", geometry: { source: "shape", shape: "rectangle", region_edits: [] }, problem: { boundary_conditions: { bottom: { alpha: "1", g: "11" }, top: { alpha: "1", g: "22" } } } });
+  for (const edit of [{ op: "rename", from: "bottom", to: "floor" }, { op: "rename", from: "top", to: "roof" }]) {
+    store.caseData.geometry.region_edits.push(edit);
+    notePendingEdit(edit);
+  }
+  const run = runStage("geometry");
+  await flush();
+  pending.splice(0, 1)[0].answer(geometryView("floor", "roof"));
+  assert.equal(await run, true);
+  assert.equal(store.caseData.problem.boundary_conditions.floor.g, "11");
+  assert.equal(store.caseData.problem.boundary_conditions.roof.g, "22");
+});
+
+test("an edit removed before the geometry runs is not applied", async () => {
+  setCase({ format: "pde2d-app-case", geometry: { source: "shape", shape: "rectangle", region_edits: [] }, problem: { boundary_conditions: { bottom: { alpha: "1", g: "11" }, floor: { alpha: "1", g: "5" } } } });
+  const edit = { op: "rename", from: "bottom", to: "lower" };
+  store.caseData.geometry.region_edits.push(edit);
+  notePendingEdit(edit);
+  store.caseData.geometry.region_edits.pop();
+  const run = runStage("geometry");
+  await flush();
+  pending.splice(0, 1)[0].answer(geometryView("bottom", "floor", "lower"));
+  assert.equal(await run, true);
+  assert.equal(store.caseData.problem.boundary_conditions.lower.g, "0", "no condition carried by the removed edit");
 });
 
 let failed = 0;

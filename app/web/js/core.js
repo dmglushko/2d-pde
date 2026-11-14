@@ -144,40 +144,52 @@ export function barycentric(x, y, ax, ay, bx, by, cx, cy) {
 
 // --- the case ------------------------------------------------------------------
 
+// A dictionary for names the user chooses (region names may be
+// "constructor" or "__proto__"): no prototype, so every lookup and
+// assignment sees only its own entries.
+function dictionary(source) {
+  const out = Object.create(null);
+  for (const [key, value] of Object.entries(source ?? {})) out[key] = value;
+  return out;
+}
+
 // The case with exactly one boundary condition per region of `regions`
 // (the regions of a geometry the library accepted). Returns a new case;
 // the input is not changed.
 //
-// - `edit` is the region edit that produced these regions, or null. A
-//   rename gives the new name the old name's condition, a split gives both
-//   halves the condition of the whole; a merge needs nothing (the target
-//   keeps its own).
+// - `edits` are the region edits, in order, that produced these regions
+//   since the conditions were last reconciled. A rename gives the new
+//   name the old name's condition, a split gives both halves the
+//   condition of the whole; a merge needs nothing (the target keeps its
+//   own).
 // - A condition whose region is gone moves to view.condition_archive, so
 //   it comes back when its region does (an edit removed again).
 // - A region without a condition takes it from the archive, else a copy of
 //   `defaultCondition`.
 // - The conditions are listed in the order of `regions`.
-export function reconcileConditions(caseData, regions, defaultCondition, edit = null) {
+export function reconcileConditions(caseData, regions, defaultCondition, edits = []) {
   const next = structuredClone(caseData);
   const problem = (next.problem ??= {});
-  const old = problem.boundary_conditions ?? {};
   const view = (next.view ??= {});
-  const archive = (view.condition_archive ??= {});
-  const conditions = {};
-  const carried = {};
-  if (edit?.op === "rename" && old[edit.from] && regions.includes(edit.to) && !(edit.to in old)) carried[edit.to] = old[edit.from];
-  if (edit?.op === "split" && old[edit.region])
-    for (const name of [edit.first, edit.second]) if (regions.includes(name) && (name === edit.region || !(name in old))) carried[name] = old[edit.region];
-  for (const [name, condition] of Object.entries(old)) if (!regions.includes(name)) archive[name] = condition;
+  const archive = dictionary(view.condition_archive);
+  // The conditions as the edits leave them, applied one after another.
+  const known = dictionary(problem.boundary_conditions);
+  for (const edit of edits) {
+    if (edit?.op === "rename" && Object.hasOwn(known, edit.from) && !Object.hasOwn(known, edit.to)) known[edit.to] = structuredClone(known[edit.from]);
+    if (edit?.op === "split" && Object.hasOwn(known, edit.region))
+      for (const name of [edit.first, edit.second]) if (name !== edit.region && !Object.hasOwn(known, name)) known[name] = structuredClone(known[edit.region]);
+  }
+  for (const name of Object.keys(known)) if (!regions.includes(name)) archive[name] = known[name];
+  const conditions = Object.create(null);
   for (const region of regions) {
-    if (region in carried) conditions[region] = structuredClone(carried[region]);
-    else if (region in old) conditions[region] = old[region];
-    else if (region in archive) conditions[region] = archive[region];
+    if (Object.hasOwn(known, region)) conditions[region] = known[region];
+    else if (Object.hasOwn(archive, region)) conditions[region] = archive[region];
     else conditions[region] = structuredClone(defaultCondition);
     delete archive[region];
   }
   problem.boundary_conditions = conditions;
   if (Object.keys(archive).length === 0) delete view.condition_archive;
+  else view.condition_archive = archive;
   if (Object.keys(view).length === 0) delete next.view;
   return next;
 }
@@ -199,20 +211,37 @@ export function normalizeCase(input, defaults) {
       replaced.push(path);
     }
   };
+  const optional = (valid) => (value) => value === undefined || valid(value);
+  const isString = (value) => typeof value === "string";
+  const isList = (valid) => (value) => Array.isArray(value) && value.every(valid);
+  // A component choice: {"type": text, "options": object}.
+  const isChoice = (value) => isObject(value) && isString(value.type) && optional(isObject)(value.options);
+
   const sources = ["shape", "svg", "mesh_file"];
   ensure(caseData, "geometry", (g) => isObject(g) && sources.includes(g.source), defaults.geometry, "geometry");
-  ensure(caseData, "mesh", isObject, defaults.mesh, "mesh");
-  for (const key of ["spec", "discretizer", "triangulator"]) ensure(caseData.mesh, key, isObject, defaults.mesh[key], `mesh.${key}`);
-  ensure(caseData.mesh, "refiner", (r) => r === null || isObject(r), defaults.mesh.refiner, "mesh.refiner");
-  ensure(caseData.mesh, "improvers", (list) => Array.isArray(list) && list.every(isObject), defaults.mesh.improvers, "mesh.improvers");
-  ensure(caseData, "problem", isObject, defaults.problem, "problem");
-  for (const key of ["equation", "parameters", "boundary_conditions", "initial"])
-    ensure(caseData.problem, key, (v) => v === undefined || isObject(v), {}, `problem.${key}`);
-  ensure(caseData, "assembly", (a) => isObject(a) && (a.t === undefined || Number.isFinite(a.t)), defaults.assembly, "assembly");
-  if (caseData.view !== undefined && !isObject(caseData.view)) {
-    delete caseData.view;
-    replaced.push("view");
+  const geometry = caseData.geometry;
+  if (geometry.source === "shape") {
+    ensure(geometry, "shape", isString, defaults.geometry.shape, "geometry.shape");
+    ensure(geometry, "options", optional(isObject), {}, "geometry.options");
   }
+  if (geometry.source === "svg") ensure(geometry, "svg", optional(isString), "", "geometry.svg");
+  if (geometry.source === "mesh_file") ensure(geometry, "text", optional(isString), "", "geometry.text");
+  if (geometry.source !== "mesh_file") ensure(geometry, "region_edits", optional(isList(isObject)), [], "geometry.region_edits");
+
+  ensure(caseData, "mesh", isObject, defaults.mesh, "mesh");
+  ensure(caseData.mesh, "spec", isObject, defaults.mesh.spec, "mesh.spec");
+  for (const key of ["discretizer", "triangulator"]) ensure(caseData.mesh, key, isChoice, defaults.mesh[key], `mesh.${key}`);
+  ensure(caseData.mesh, "refiner", (r) => r === null || isChoice(r), defaults.mesh.refiner, "mesh.refiner");
+  ensure(caseData.mesh, "improvers", isList(isChoice), defaults.mesh.improvers, "mesh.improvers");
+
+  ensure(caseData, "problem", isObject, defaults.problem, "problem");
+  for (const key of ["equation", "parameters", "boundary_conditions", "initial"]) ensure(caseData.problem, key, optional(isObject), {}, `problem.${key}`);
+  const conditions = caseData.problem.boundary_conditions ?? {};
+  for (const region of Object.keys(conditions)) ensure(conditions, region, isObject, {}, `problem.boundary_conditions.${region}`);
+
+  ensure(caseData, "assembly", (a) => isObject(a) && (a.t === undefined || Number.isFinite(a.t)), defaults.assembly, "assembly");
+  ensure(caseData, "view", optional(isObject), {}, "view");
+  if (caseData.view !== undefined) ensure(caseData.view, "condition_archive", optional(isObject), {}, "view.condition_archive");
   return { caseData, replaced };
 }
 
