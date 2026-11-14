@@ -107,7 +107,8 @@ must not be ignored silently), and a missing value means its default.
   not set. `priority` is a whole number.
 - `solve` is reserved for the solvers and ignored for now; `view` and
   `notes` are free for the page and for people. The page keeps
-  `view.condition_archive` there (conditions of regions that are gone).
+  `view.region_edit_undo` (one undo record per region edit) and
+  `view.condition_archive` (conditions of regions that are gone) there.
 - `version` is checked: a case from a newer app is refused, not misread.
 
 ## The API
@@ -207,17 +208,19 @@ is a reason; record the new choice here.
 - **Only this machine can drive the server**: it listens on 127.0.0.1;
   API requests must name a loopback host (against DNS rebinding) and send
   JSON (which a cross-site form cannot).
-- **Region edits move boundary conditions** in the page, but only after
-  the library accepted a geometry that includes them; every edit added
-  since the last accepted geometry is applied in order, like the library
-  applies them (a region an edit removes is gone for later edits, which
-  may reuse its name; an edit removed before it ran is skipped). A
-  renamed region keeps its condition,
-  the halves of a split region copy it, and a merged region takes its
-  target's. A condition whose region disappears is kept in
-  `view.condition_archive` and comes back with its region (an edit
-  removed again); a region without either gets u = 0
-  (`reconcileConditions` in `core.js`).
+- **Region edits carry their boundary conditions and undo exactly.**
+  Adding an edit moves the conditions at once, as the library will apply
+  the edit (a renamed region keeps its condition, the halves of a split
+  copy it, a merged region takes its target's), and stores the earlier
+  condition of every name it touched in `view.region_edit_undo`, one
+  record per edit. Edits are undone last first, which restores those
+  conditions exactly, whether or not the library accepted the edit. The
+  case is consistent at every moment, so saving or reloading never loses
+  a move. Any other change of the regions (another SVG or shape) is
+  reconciled after the library accepts the geometry: a condition whose
+  region disappears is kept in `view.condition_archive` and comes back
+  with its region; a region without either gets u = 0 (`core.js`:
+  `applyRegionEdit`, `undoRegionEdit`, `reconcileConditions`).
 - **Only the latest answer counts.** Every request of a stage carries a
   generation, and every loaded case an id; an answer to an older request,
   or for a case that was replaced, is dropped. Conditions are synced only

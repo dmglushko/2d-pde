@@ -13,8 +13,10 @@ import {
   rgbToOklab,
   smallestAngle,
   stageKey,
+  applyRegionEdit,
   normalizeCase,
   reconcileConditions,
+  undoRegionEdit,
   triangleAngles,
 } from "../web/js/core.js";
 
@@ -71,86 +73,88 @@ test("barycentric coordinates", () => {
   assert.equal(barycentric(0, 0, 0, 0, 1, 1, 2, 2), null);
 });
 
-test("conditions follow the regions through accepted edits", () => {
+test("regions without a condition get one; vanished ones are archived", () => {
   const dirichlet = { alpha: "1", g: "0" };
   const neumann = { beta_n: "1", g: "0" };
   const base = { problem: { boundary_conditions: { left: neumann, right: dirichlet, gone: { beta_n: "2" } } } };
-  // Plain sync: a new region gets the default, a vanished one is archived.
   let next = reconcileConditions(base, ["left", "right", "top"], dirichlet);
   assert.deepEqual(Object.keys(next.problem.boundary_conditions), ["left", "right", "top"]);
   assert.deepEqual(next.problem.boundary_conditions.top, dirichlet);
   assert.deepEqual(next.view.condition_archive.gone, { beta_n: "2" });
   assert.ok("gone" in base.problem.boundary_conditions, "the input is not changed");
-  // The region comes back: its condition is restored from the archive.
   next = reconcileConditions(next, ["left", "right", "gone"], dirichlet);
-  assert.deepEqual(next.problem.boundary_conditions.gone, { beta_n: "2" });
-  assert.deepEqual(Object.keys(next.view.condition_archive), ["top"], "restored ones leave the archive; top is gone now");
+  assert.deepEqual(next.problem.boundary_conditions.gone, { beta_n: "2" }, "restored with its region");
+  assert.deepEqual(Object.keys(next.view.condition_archive), ["top"]);
   next = reconcileConditions(next, ["left", "right", "gone", "top"], dirichlet);
   assert.equal(next.view, undefined, "an empty archive is removed");
-  // Rename: the new name keeps the condition; removing the edit restores the old name.
-  next = reconcileConditions(base, ["walls", "right", "gone"], dirichlet, [{ op: "rename", from: "left", to: "walls" }]);
-  assert.deepEqual(next.problem.boundary_conditions.walls, neumann);
-  next = reconcileConditions(next, ["left", "right", "gone"], dirichlet);
-  assert.deepEqual(next.problem.boundary_conditions.left, neumann, "restored after the edit was removed");
-  // Split: both halves copy the whole; the old name may be one of them.
-  next = reconcileConditions(base, ["left", "left_b", "right", "gone"], dirichlet, [{ op: "split", region: "left", fraction: 0.5, first: "left", second: "left_b" }]);
-  assert.deepEqual(next.problem.boundary_conditions.left_b, neumann);
-  assert.deepEqual(next.problem.boundary_conditions.left, neumann);
-  // Merge: the target keeps its own; the source is archived.
-  next = reconcileConditions(base, ["right", "gone"], dirichlet, [{ op: "merge", source: "left", target: "right" }]);
-  assert.deepEqual(next.problem.boundary_conditions.right, dirichlet);
-  assert.deepEqual(next.view.condition_archive.left, neumann);
-});
-
-test("several edits carry their conditions in order", () => {
-  const dirichlet = { alpha: "1", g: "0" };
-  const base = { problem: { boundary_conditions: { bottom: { alpha: "1", g: "11" }, top: { alpha: "1", g: "22" }, side: dirichlet } } };
-  const edits = [
-    { op: "rename", from: "bottom", to: "floor" },
-    { op: "rename", from: "top", to: "roof" },
-    { op: "rename", from: "roof", to: "lid" },
-  ];
-  const next = reconcileConditions(base, ["floor", "lid", "side"], dirichlet, edits);
-  assert.equal(next.problem.boundary_conditions.floor.g, "11");
-  assert.equal(next.problem.boundary_conditions.lid.g, "22");
-  assert.deepEqual(Object.keys(next.view.condition_archive).sort(), ["bottom", "roof", "top"]);
-});
-
-test("a later edit may reuse a name an earlier one freed", () => {
-  const dirichlet = { alpha: "1", g: "0" };
-  const base = { problem: { boundary_conditions: { bottom: { alpha: "1", g: "11" }, top: { alpha: "1", g: "22" }, side: dirichlet } } };
-  let next = reconcileConditions(base, ["floor", "bottom", "side"], dirichlet, [
-    { op: "rename", from: "bottom", to: "floor" },
-    { op: "rename", from: "top", to: "bottom" },
-  ]);
-  assert.equal(next.problem.boundary_conditions.floor.g, "11");
-  assert.equal(next.problem.boundary_conditions.bottom.g, "22", "the reused name gets the condition of top");
-  assert.equal(next.view.condition_archive.top.g, "22");
-  // Merge then reuse the merged name in a split.
-  next = reconcileConditions(base, ["top", "side", "bottom"], dirichlet, [
-    { op: "merge", source: "bottom", target: "top" },
-    { op: "split", region: "top", fraction: 0.5, first: "top", second: "bottom" },
-  ]);
-  assert.equal(next.problem.boundary_conditions.bottom.g, "22", "the split half copies the whole (top), not the old bottom");
-  // An archived entry that is not a condition is never restored.
   next = reconcileConditions({ problem: { boundary_conditions: {} }, view: { condition_archive: { left: null } } }, ["left"], dirichlet);
-  assert.deepEqual(next.problem.boundary_conditions.left, dirichlet);
+  assert.deepEqual(next.problem.boundary_conditions.left, dirichlet, "an archived entry that is not a condition is never restored");
+});
+
+const g = (caseData, name) => caseData.problem.boundary_conditions[name]?.g;
+const names = (caseData) => Object.keys(caseData.problem.boundary_conditions).sort();
+const plate = () => ({ geometry: { source: "shape", region_edits: [] }, problem: { boundary_conditions: { bottom: { alpha: "1", g: "11" }, top: { alpha: "1", g: "22" }, side: { beta_n: "1", g: "0" } } } });
+
+test("region edits move conditions and undo restores them exactly", () => {
+  const start = plate();
+  let c = applyRegionEdit(start, { op: "rename", from: "bottom", to: "floor" });
+  assert.equal(g(c, "floor"), "11");
+  assert.deepEqual(names(c), ["floor", "side", "top"]);
+  c = applyRegionEdit(c, { op: "rename", from: "top", to: "bottom" });
+  assert.equal(g(c, "bottom"), "22", "a freed name can be reused");
+  c = undoRegionEdit(c);
+  assert.deepEqual(names(c), ["floor", "side", "top"]);
+  assert.equal(g(c, "top"), "22");
+  c = undoRegionEdit(c);
+  assert.deepEqual(names(c), ["bottom", "side", "top"]);
+  assert.equal(g(c, "bottom"), "11", "the original bottom, not the reused one");
+  assert.equal(g(c, "top"), "22");
+  assert.deepEqual(c.geometry.region_edits, []);
+  assert.equal(c.view, undefined, "no undo records left");
+  assert.equal(g(start, "bottom"), "11", "the input is not changed");
+});
+
+test("split, merge, and an edit the library refuses", () => {
+  let c = applyRegionEdit(plate(), { op: "split", region: "side", fraction: 0.5, first: "side", second: "side_b" });
+  assert.deepEqual(c.problem.boundary_conditions.side_b, { beta_n: "1", g: "0" });
+  assert.deepEqual(c.problem.boundary_conditions.side, { beta_n: "1", g: "0" });
+  c = applyRegionEdit(c, { op: "merge", source: "side_b", target: "top" });
+  assert.deepEqual(names(c), ["bottom", "side", "top"]);
+  c = undoRegionEdit(undoRegionEdit(c));
+  assert.deepEqual(names(c), ["bottom", "side", "top"]);
+  // Rename onto an existing name (the library refuses it): undo restores both.
+  c = applyRegionEdit(plate(), { op: "rename", from: "bottom", to: "top" });
+  assert.equal(g(c, "top"), "11");
+  c = undoRegionEdit(c);
+  assert.equal(g(c, "bottom"), "11");
+  assert.equal(g(c, "top"), "22");
+});
+
+test("edits survive saving: the case is consistent at every moment", () => {
+  let c = applyRegionEdit(plate(), { op: "rename", from: "bottom", to: "floor" });
+  c = JSON.parse(JSON.stringify(c)); // saved and opened again
+  assert.equal(g(c, "floor"), "11");
+  c = undoRegionEdit(c);
+  assert.equal(g(c, "bottom"), "11", "undo works after a reload");
+  // A hand-written case without undo records: the edit is only removed.
+  const bare = { geometry: { region_edits: [{ op: "rename", from: "a", to: "b" }] }, problem: { boundary_conditions: { b: { g: "1" } } } };
+  assert.deepEqual(undoRegionEdit(bare).geometry.region_edits, []);
 });
 
 test("region names that are names of object properties", () => {
-  const dirichlet = { alpha: "1", g: "0" };
   const neumann = { beta_n: "1", g: "0" };
-  const base = { problem: { boundary_conditions: { left: neumann, right: dirichlet } } };
-  let next = reconcileConditions(base, ["constructor", "right"], dirichlet, [{ op: "rename", from: "left", to: "constructor" }]);
-  assert.deepEqual({ ...next.problem.boundary_conditions.constructor }, neumann);
-  next = reconcileConditions(base, ["__proto__", "toString", "right"], dirichlet, [{ op: "rename", from: "left", to: "__proto__" }]);
-  assert.ok(Object.hasOwn(next.problem.boundary_conditions, "__proto__"), "an own entry, not the prototype");
-  assert.deepEqual({ ...next.problem.boundary_conditions.__proto__ }, neumann);
-  assert.deepEqual({ ...next.problem.boundary_conditions.toString }, dirichlet, "a new region gets the default");
-  const text = JSON.stringify(next);
+  const base = { geometry: { region_edits: [] }, problem: { boundary_conditions: { left: neumann, right: { alpha: "1", g: "0" } } } };
+  let c = applyRegionEdit(base, { op: "rename", from: "left", to: "constructor" });
+  assert.deepEqual({ ...c.problem.boundary_conditions.constructor }, neumann);
+  c = applyRegionEdit(base, { op: "rename", from: "left", to: "__proto__" });
+  assert.ok(Object.hasOwn(c.problem.boundary_conditions, "__proto__"), "an own entry, not the prototype");
+  const text = JSON.stringify(c);
   assert.ok(text.includes('"__proto__":{"beta_n"'), "saved like any other region");
-  const back = reconcileConditions(JSON.parse(text), ["__proto__", "toString", "right"], dirichlet);
-  assert.deepEqual({ ...back.problem.boundary_conditions.__proto__ }, neumann, "and read back");
+  c = reconcileConditions(JSON.parse(text), ["__proto__", "toString", "right"], { alpha: "1", g: "0" });
+  assert.deepEqual({ ...c.problem.boundary_conditions.__proto__ }, neumann, "and read back");
+  assert.deepEqual({ ...c.problem.boundary_conditions.toString }, { alpha: "1", g: "0" });
+  c = undoRegionEdit(applyRegionEdit(base, { op: "rename", from: "left", to: "__proto__" }));
+  assert.deepEqual(Object.keys(c.problem.boundary_conditions).sort(), ["left", "right"]);
 });
 
 test("cases are normalized before they are shown", () => {
@@ -178,6 +182,8 @@ test("cases are normalized before they are shown", () => {
   );
   const archived = normalizeCase({ format: "pde2d-app-case", view: { condition_archive: { bottom: null, top: { g: "1" } } } }, defaults);
   assert.ok(archived.replaced.includes("view.condition_archive.bottom"));
+  const misaligned = normalizeCase({ format: "pde2d-app-case", geometry: { source: "shape", shape: "rectangle", region_edits: [] }, view: { region_edit_undo: [{}] } }, defaults);
+  assert.ok(misaligned.replaced.includes("view.region_edit_undo"), "undo records must match the edits");
   assert.deepEqual(Object.keys(archived.caseData.view.condition_archive), ["top"]);
   assert.deepEqual(nested.replaced, [
     "geometry.options",

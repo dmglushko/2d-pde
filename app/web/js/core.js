@@ -155,44 +155,90 @@ function dictionary(source) {
   return out;
 }
 
+// The names a region edit touches: the regions it removes or creates.
+function touchedNames(edit) {
+  if (edit.op === "rename") return [edit.from, edit.to];
+  if (edit.op === "split") return [edit.region, edit.first, edit.second];
+  if (edit.op === "merge") return [edit.source];
+  return [];
+}
+
+// Adds a region edit to the case and moves the boundary conditions with
+// it, as the library will apply the edit: a rename gives the new name the
+// old name's condition, a split gives both halves the condition of the
+// whole, a merge removes the source's (the target keeps its own). The
+// condition each touched name had before goes into an undo record
+// (view.region_edit_undo, one per edit), so undoRegionEdit restores it
+// exactly, whatever the library later says about the edit. Returns a new
+// case.
+export function applyRegionEdit(caseData, edit) {
+  const next = structuredClone(caseData);
+  const geometry = next.geometry;
+  const problem = (next.problem ??= {});
+  const view = (next.view ??= {});
+  const edits = (geometry.region_edits ??= []);
+  const undo = Array.isArray(view.region_edit_undo) && view.region_edit_undo.length === edits.length ? view.region_edit_undo : edits.map(() => null);
+  const conditions = dictionary(problem.boundary_conditions);
+  const before = Object.create(null);
+  for (const name of touchedNames(edit)) before[name] = Object.hasOwn(conditions, name) ? conditions[name] : null;
+  const move = (from, ...to) => {
+    if (!Object.hasOwn(conditions, from)) return;
+    const condition = conditions[from];
+    delete conditions[from];
+    for (const name of to) conditions[name] = structuredClone(condition);
+  };
+  if (edit.op === "rename") move(edit.from, edit.to);
+  else if (edit.op === "split") move(edit.region, edit.first, edit.second);
+  else if (edit.op === "merge") move(edit.source);
+  edits.push(edit);
+  undo.push({ before });
+  problem.boundary_conditions = conditions;
+  view.region_edit_undo = undo;
+  return next;
+}
+
+// Removes the last region edit and gives every name it touched the
+// condition it had before the edit (none, for a name the edit created).
+// An edit without an undo record (a hand-written case) is only removed.
+// Returns a new case.
+export function undoRegionEdit(caseData) {
+  const next = structuredClone(caseData);
+  const edits = next.geometry?.region_edits ?? [];
+  if (edits.length === 0) return next;
+  const view = (next.view ??= {});
+  const undo = Array.isArray(view.region_edit_undo) && view.region_edit_undo.length === edits.length ? view.region_edit_undo : edits.map(() => null);
+  edits.pop();
+  const record = undo.pop();
+  const problem = (next.problem ??= {});
+  const conditions = dictionary(problem.boundary_conditions);
+  if (isObject(record?.before))
+    for (const [name, condition] of Object.entries(record.before)) {
+      if (isObject(condition)) conditions[name] = condition;
+      else delete conditions[name];
+    }
+  problem.boundary_conditions = conditions;
+  if (undo.length === 0 || undo.every((r) => r === null)) delete view.region_edit_undo;
+  else view.region_edit_undo = undo;
+  if (Object.keys(view).length === 0) delete next.view;
+  return next;
+}
+
 // The case with exactly one boundary condition per region of `regions`
 // (the regions of a geometry the library accepted). Returns a new case;
-// the input is not changed.
-//
-// - `edits` are the region edits, in order, that produced these regions
-//   since the conditions were last reconciled. A rename gives the new
-//   name the old name's condition, a split gives both halves the
-//   condition of the whole; a merge needs nothing (the target keeps its
-//   own).
-// - A condition whose region is gone moves to view.condition_archive, so
-//   it comes back when its region does (an edit removed again).
-// - A region without a condition takes it from the archive, else a copy of
-//   `defaultCondition`.
-// - The conditions are listed in the order of `regions`.
-export function reconcileConditions(caseData, regions, defaultCondition, edits = []) {
+// the input is not changed. Region edits have already moved their
+// conditions (applyRegionEdit); this covers every other change of the
+// regions (another SVG, another shape):
+// - a condition whose region is gone moves to view.condition_archive, so
+//   it comes back when its region does;
+// - a region without a condition takes it from the archive, else a copy
+//   of `defaultCondition`;
+// - the conditions are listed in the order of `regions`.
+export function reconcileConditions(caseData, regions, defaultCondition) {
   const next = structuredClone(caseData);
   const problem = (next.problem ??= {});
   const view = (next.view ??= {});
   const archive = dictionary(view.condition_archive);
-  // The conditions as the edits leave them, applied one after another
-  // like the library applies the edits: a region an edit removes is gone
-  // for the edits after it (its condition goes to the archive), so a later
-  // edit may reuse its name.
   const known = dictionary(problem.boundary_conditions);
-  const take = (name) => {
-    const condition = known[name];
-    delete known[name];
-    archive[name] = condition;
-    return condition;
-  };
-  for (const edit of edits) {
-    if (edit?.op === "rename" && Object.hasOwn(known, edit.from)) known[edit.to] = structuredClone(take(edit.from));
-    if (edit?.op === "split" && Object.hasOwn(known, edit.region)) {
-      const condition = take(edit.region);
-      for (const name of [edit.first, edit.second]) known[name] = structuredClone(condition);
-    }
-    if (edit?.op === "merge" && Object.hasOwn(known, edit.source)) take(edit.source);
-  }
   for (const name of Object.keys(known)) if (!regions.includes(name)) archive[name] = known[name];
   const conditions = Object.create(null);
   for (const region of regions) {
@@ -254,6 +300,12 @@ export function normalizeCase(input, defaults) {
   ensure(caseData, "assembly", (a) => isObject(a) && (a.t === undefined || Number.isFinite(a.t)), defaults.assembly, "assembly");
   ensure(caseData, "view", optional(isObject), {}, "view");
   if (caseData.view !== undefined) {
+    const edits = caseData.geometry.region_edits ?? [];
+    const undo = caseData.view.region_edit_undo;
+    if (undo !== undefined && !(Array.isArray(undo) && undo.length === edits.length && undo.every((r) => r === null || isObject(r)))) {
+      delete caseData.view.region_edit_undo;
+      replaced.push("view.region_edit_undo");
+    }
     ensure(caseData.view, "condition_archive", optional(isObject), {}, "view.condition_archive");
     const archive = caseData.view.condition_archive ?? {};
     for (const region of Object.keys(archive))

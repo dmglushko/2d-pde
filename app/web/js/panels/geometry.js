@@ -2,8 +2,8 @@
 // file), its regions and region edits.
 
 import { downloadExport } from "../api.js";
-import { notePendingEdit, runStage, toast } from "../actions.js";
-import { fileKind, formatNumber, regionToken } from "../core.js";
+import { runStage, toast } from "../actions.js";
+import { applyRegionEdit, fileKind, formatNumber, regionToken, undoRegionEdit } from "../core.js";
 import { actionButton, errorBox, h, markError, optionsForm, readFileText, stat, fill } from "../dom.js";
 import { editCase, freshResult, lastResult, store } from "../state.js";
 
@@ -145,14 +145,18 @@ function describeEdit(edit) {
   return JSON.stringify(edit);
 }
 
-// Adds a region edit. The boundary conditions follow only once the
-// library has accepted the edit (actions.js, syncConditions): a renamed
-// region keeps its condition, both halves of a split start with the
-// condition of the whole, a merged region gives way to its target's.
-function addEdit(edit) {
-  editCase((c) => (c.geometry.region_edits ??= []).push(edit), "structure");
-  notePendingEdit(edit);
+// Adds a region edit; its boundary conditions move with it, and undoing
+// it restores them (core.js, applyRegionEdit and undoRegionEdit).
+function replaceCase(next) {
+  editCase((c) => {
+    for (const key of Object.keys(c)) delete c[key];
+    Object.assign(c, next);
+  }, "structure");
   scheduleGeometry();
+}
+
+function addEdit(edit) {
+  replaceCase(applyRegionEdit(store.caseData, edit));
 }
 
 function regionEditor(region, regions) {
@@ -242,19 +246,11 @@ export const geometryPanel = {
                 h("span", { class: "chip" }, `${i + 1}`),
                 describeEdit(edit),
                 h("span", { class: "spacer" }),
-                h(
-                  "button",
-                  {
-                    type: "button",
-                    class: "icon",
-                    "aria-label": "Remove this edit",
-                    onclick: () => {
-                      editCase((c) => c.geometry.region_edits.splice(i, 1), "structure");
-                      scheduleGeometry();
-                    },
-                  },
-                  "✕",
-                ),
+                // Only the last edit can be undone: an earlier one changes
+                // the regions the later ones refer to.
+                i === edits.length - 1
+                  ? h("button", { type: "button", class: "small", "aria-label": "Undo the last region edit", onclick: () => replaceCase(undoRegionEdit(store.caseData)) }, "Undo")
+                  : null,
               ),
             ),
           )

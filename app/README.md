@@ -37,7 +37,9 @@ outdated because the case changed since (yellow), or failed (red).
 1. **Geometry.** Pick a ready-made shape, load an SVG drawing, or load a
    mesh file (Gmsh `.msh` or `.pde2d`). You can also drop a file onto the
    picture. The regions of the boundary are listed with their lengths;
-   **Edit** renames a region, merges it into another, or splits it in two.
+   **Edit** renames a region, merges it into another, or splits it in two
+   (the boundary conditions follow), and **Undo** takes back the last
+   edit.
    In an SVG, each `<path>` gives the region named by its `data-region`
    attribute or else its `id`; `app/examples/plate_with_hole.svg` is a
    small example.
