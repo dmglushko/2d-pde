@@ -253,6 +253,13 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
     } else {
       ++anchor_steps;
     }
+    // A dt below the spacing of doubles near t gives t_new == t: the state
+    // would change while the time stands still.
+    if (!(t_new > t))
+      throw std::runtime_error(std::format(
+          "integrator: the step {} at t = {} is too small to change t in "
+          "double precision",
+          dt, t));
 
     // The problem at the method's evaluation point (for fraction 1 exactly
     // t_new), reusing the previous assembly.

@@ -7,6 +7,7 @@
 #include "pde2d/fem/csr_matrix.hpp"
 #include "pde2d/solve/time_method.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <memory>
@@ -17,11 +18,25 @@
 
 namespace pde2d::solve::detail {
 
+// The largest |v_i|; 0 for an empty or zero vector.
+inline double max_abs(std::span<const double> v) {
+  double largest = 0.0;
+  for (const double x : v)
+    largest = std::max(largest, std::abs(x));
+  return largest;
+}
+
+// The Euclidean norm. The entries are divided by the largest one before
+// squaring, so a vector of tiny (1e-200) or huge (1e200) entries does not
+// underflow to 0 or overflow to infinity.
 inline double norm(std::span<const double> v) {
+  const double largest = max_abs(v);
+  if (largest == 0.0 || !std::isfinite(largest))
+    return largest;
   double sum = 0.0;
   for (const double x : v)
-    sum += x * x;
-  return std::sqrt(sum);
+    sum += (x / largest) * (x / largest);
+  return largest * std::sqrt(sum);
 }
 
 // |b - A x| / |b|, or |b - A x| when b is zero.
