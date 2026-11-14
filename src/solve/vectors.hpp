@@ -63,10 +63,10 @@ inline void check_right_hand_side(std::size_t rows,
                                   std::span<const double> right_hand_side,
                                   const std::string &solver) {
   if (right_hand_side.size() != rows)
-    throw std::invalid_argument(
-        solver + ": the right-hand side has " +
-        std::to_string(right_hand_side.size()) + " values for " +
-        std::to_string(rows) + " rows");
+    throw std::invalid_argument(solver + ": the right-hand side has " +
+                                std::to_string(right_hand_side.size()) +
+                                " values for " + std::to_string(rows) +
+                                " rows");
 }
 
 // out += scale * v.

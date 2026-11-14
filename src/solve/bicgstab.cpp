@@ -37,8 +37,7 @@ public:
 
   LinearSolveResult
   solve(std::span<const double> right_hand_side) const override {
-    detail::check_right_hand_side(matrix_->rows(), right_hand_side,
-                                  "bicgstab");
+    detail::check_right_hand_side(matrix_->rows(), right_hand_side, "bicgstab");
     LinearSolveResult result;
     if (matrix_->rows() == 0)
       return result;
@@ -53,9 +52,8 @@ public:
       std::ostringstream s;
       s << "bicgstab: did not converge in " << result.iterations
         << " iterations (maximum " << options_.max_iterations
-        << ", relative residual "
-        << (finite ? result.residual : std::nan("")) << ", tolerance "
-        << options_.tolerance << ")";
+        << ", relative residual " << (finite ? result.residual : std::nan(""))
+        << ", tolerance " << options_.tolerance << ")";
       throw std::runtime_error(s.str());
     }
     return result;

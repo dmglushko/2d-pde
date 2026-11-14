@@ -18,14 +18,13 @@ of the file is the detailed text.
 | How do mesh nodes map to matrix rows, and where do Dirichlet nodes go? | [Nodes and unknowns](#nodes-and-unknowns) |
 | What happens inside `assemble`? | [Inside assemble](#inside-assemble) |
 | What are the stages of meshing? | [Meshing pipeline](#meshing-pipeline) |
-| In what order does a time step run? (planned) | [One time step](#one-time-step-planned) |
+| In what order does a time step run? | [One time step](#one-time-step) |
 | Which interfaces exist and what implements them? | [Interfaces and their components](#interfaces-and-their-components) |
 
 ## Data flow
 
 Rectangles are steps (an object with one main function, or a function);
-rounded nodes are data. Dashed nodes are decided but not built yet (see
-"Solvers and time integration" in [decisions.md](decisions.md)).
+rounded nodes are data.
 
 ```mermaid
 flowchart LR
@@ -35,9 +34,9 @@ flowchart LR
     RM[Remesher]
     CMB[MeshedProblem constructor]
     ASM[Assembler]
-    LS[LinearSolver]:::planned
-    TM[TimeMethod step]:::planned
-    SB[build_solution]:::planned
+    LS[LinearSolver]
+    TM[TimeMethod step]
+    SB[build_solution]
 
     G([CurveGeometry])
     SPEC([MeshSpec])
@@ -45,8 +44,8 @@ flowchart LR
     P([Problem])
     MP([MeshedProblem])
     AP([AssembledProblem])
-    LR([LinearSolveResult]):::planned
-    S([Solution]):::planned
+    LR([LinearSolveResult])
+    S([Solution])
 
     SVG --> G
     G --> MSH
@@ -70,11 +69,9 @@ flowchart LR
     MP --> SB
     SB --> S
     S -. initial .-> TM
-
-    classDef planned stroke-dasharray: 5 5
 ```
 
-The `StaticSolver` and the `Integrator` (both planned) are the drivers of
+The `StaticSolver` and the `Integrator` are the drivers of
 the right-hand part: each takes a `MeshedProblem`, calls the `Assembler`
 itself, and returns a `Solution`. The static solver goes once through
 Assembler → LinearSolver → build_solution; the integrator repeats
@@ -91,9 +88,9 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | Remesher | `Remesher::run(mesh, spec)` | `Mesh`, `MeshSpec` | `MeshResult` | `pde2d_mesh` |
 | Combining | `MeshedProblem(mesh, problem)` | `Mesh`, `Problem` | `MeshedProblem` | `pde2d_fem` |
 | Assembler | `Assembler::assemble(meshed, t, previous)` | `MeshedProblem`, a time, optionally the previous result | `AssembledProblem` | `pde2d_fem` |
-| Linear solver (planned) | `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix`, a right-hand side | `LinearSolveResult` | `pde2d_solve` |
-| Time method (planned) | one step | two `AssembledProblem`s, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
-| Building the solution (planned) | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
+| Linear solver | `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix`, a right-hand side | `LinearSolveResult` | `pde2d_solve` |
+| Time method | `advance(assembled, dt, prepared, state)` | one `AssembledProblem` (at the method's evaluation point), the prepared solver, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
+| Building the solution | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
 
 ### Data
 
@@ -105,8 +102,8 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | `Problem` | the equation's coefficients, boundary conditions by region name and initial conditions as `Expression`s (each with its facts), and the parameter values | a plain struct |
 | `MeshedProblem` | the mesh and the problem; every expression compiled to a function of (x, y, t) with its facts; the Dirichlet nodes and the node ↔ unknown tables; ∇·A and the time derivatives of the Dirichlet data | never |
 | `AssembledProblem` | at one time t: the operators mass, damping, stiffness (each a `free` and a `dirichlet` `CsrMatrix`), the load, the Dirichlet values, the right-hand side, its own facts, a report | never |
-| `LinearSolveResult` (planned) | one value per free unknown, iterations, residual | never |
-| `Solution` (planned) | one value per mesh node, the mesh, the time | never |
+| `LinearSolveResult` | one value per free unknown, iterations, residual | never |
+| `Solution` | one value per mesh node, the mesh, the time (and, for time order 2, one velocity per node) | a plain struct |
 
 Every stage that does work also returns or holds a `StageReport` (time,
 metrics, "worked, but…" messages).
@@ -123,14 +120,12 @@ flowchart BT
     MESH[pde2d_mesh]
     IO["pde2d_io · libxml2"]
     FEM["pde2d_fem · SymEngine"]
-    SOLVE["pde2d_solve · Eigen"]:::planned
+    SOLVE["pde2d_solve · Eigen"]
 
     MESH --> GEO
     IO --> MESH
     FEM --> MESH
     SOLVE --> FEM
-
-    classDef planned stroke-dasharray: 5 5
 ```
 
 `pde2d_io` and `pde2d_fem` do not use each other.
@@ -335,7 +330,7 @@ Who uses the tables:
 | placing block entries | `free_index` | assembly (above) |
 | moving known values to the right-hand side | `dirichlet_value(k, t)` and its two time derivatives | assembly: `right_hand_side` |
 | starting values per node | `dirichlet_value(k, t0)` at Dirichlet nodes | `initial_values(t0)` |
-| the solver's short vector back to all nodes (planned) | `free_nodes`, `dirichlet_value` | `build_solution` |
+| the solver's short vector back to all nodes | `free_nodes`, `dirichlet_value` | `build_solution` |
 
 ## Inside assemble
 
@@ -400,11 +395,11 @@ flowchart LR
     FIN --> M
 ```
 
-## One time step (planned)
+## One time step
 
-Decided, not built yet. `Integrator::integrate(meshed, t0, t1, output,
-initial)`; the problem never changes, the state `U` (one value per free
-unknown) lives inside the call.
+`Integrator::integrate(meshed, t0, t1, output, initial)`; the problem
+never changes, the state (`TimeState`: U, and for time order 2 also U' and
+U'', one value per free unknown) lives inside the call.
 
 ```mermaid
 sequenceDiagram
@@ -413,17 +408,24 @@ sequenceDiagram
     participant A as Assembler
     participant M as TimeMethod
     participant L as LinearSolver
-    Note over I: U = initial, or initial_values(t0), free part
     I->>A: assemble(meshed, t0)
+    A-->>I: AssembledProblem (its time_order checked against the method)
+    Note over I: state = initial, or initial_values(t0) (and initial_velocities), free part
+    I->>M: start(assembled, linear solver, state)
+    Note over M: Newmark: prepare(M2), solve for U'' at t0
     loop until t reaches t1
-        I->>C: next dt
-        I->>A: assemble(meshed, new time, previous)
+        I->>C: next_step(t)
+        C-->>I: dt
+        Note over I: shorten the step to land on a snapshot time or t1
+        I->>A: assemble(meshed, t + fraction * dt, previous)
         A-->>I: AssembledProblem
-        I->>M: step(assembled, U, dt)
-        M->>L: prepare(matrix), only when the matrix or dt changed
+        I->>M: step_matrix_weights(dt)
+        I->>L: prepare(weighted M2 + B + A), only when dt changed or an operator in it depends on t
+        I->>M: advance(assembled, dt, prepared, state)
         M->>L: solve(right-hand side)
         L-->>M: LinearSolveResult
-        M-->>I: new U
+        M-->>I: new state, iterations and residual
+        Note over I: step record into the summary (kept if keep_step_history)
         Note over I: snapshot if asked: build_solution(meshed, U, t)
     end
     Note over I: return build_solution(meshed, U, t1), snapshots, history, report
@@ -436,8 +438,7 @@ linear solve of stiffness·U = load − A_FD·U_D, then `build_solution`.
 
 A component is passed in when the object that uses it is built
 (`Mesher{discretizer, triangulator, refiner, improvers}`,
-`Integrator(method, step_controller, linear_solver)`). Dashed boxes are
-planned.
+`Integrator(method, step_controller, linear_solver)`).
 
 ```mermaid
 flowchart LR
@@ -450,15 +451,14 @@ flowchart LR
         IMP([Improver]) --- DF[DelaunayFlips]
         IMP --- LS[LaplacianSmoothing]
     end
-    subgraph solve ["pde2d_solve (planned)"]
-        TMI([TimeMethod]):::planned --- IE[ImplicitEuler]:::planned
-        TMI --- IM[ImplicitMidpoint]:::planned
-        TMI --- NM[Newmark]:::planned
-        LSI([LinearSolver]):::planned --- SLU[SparseLu]:::planned
-        LSI --- BCG[BiCgStab]:::planned
-        SCI([StepController]):::planned --- FS[FixedStep]:::planned
+    subgraph solve [pde2d_solve]
+        TMI([TimeMethod]) --- IE[ImplicitEuler]
+        TMI --- IM[ImplicitMidpoint]
+        TMI --- NM[Newmark]
+        LSI([LinearSolver]) --- SLU[SparseLu]
+        LSI --- BCG[BiCgStab]
+        SCI([StepController]) --- FS[FixedStep]
     end
-    classDef planned stroke-dasharray: 5 5
 ```
 
 Rounded boxes are interfaces, rectangles implement them. An `Improver`

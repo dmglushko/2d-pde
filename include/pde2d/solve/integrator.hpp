@@ -92,8 +92,8 @@ public:
   // velocities time order 2 needs. Passes on the exceptions of assembly
   // and of the linear solver.
   [[nodiscard]] IntegrationResult
-  integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
-            double t0, double t1, const IntegrationOutput &output = {},
+  integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem, double t0,
+            double t1, const IntegrationOutput &output = {},
             const Solution *initial = nullptr) const;
 
 private:

@@ -55,9 +55,7 @@ inline std::shared_ptr<const fem::CsrMatrix> sparse(const Dense &dense) {
 // (y = 1) and "left" (x = 0).
 inline std::shared_ptr<const mesh::Mesh> unit_square(std::size_t n) {
   mesh::Mesh m;
-  const auto id = [n](std::size_t i, std::size_t j) {
-    return j * (n + 1) + i;
-  };
+  const auto id = [n](std::size_t i, std::size_t j) { return j * (n + 1) + i; };
   for (std::size_t j = 0; j <= n; ++j)
     for (std::size_t i = 0; i <= n; ++i)
       m.nodes.push_back({static_cast<double>(i) / static_cast<double>(n),
@@ -90,8 +88,8 @@ max_nodal_error(const mesh::Mesh &m, const std::vector<double> &values,
                 const std::function<double(double, double)> &exact) {
   double error = 0.0;
   for (std::size_t i = 0; i < m.nodes.size(); ++i)
-    error =
-        std::max(error, std::abs(values[i] - exact(m.nodes[i].x, m.nodes[i].y)));
+    error = std::max(error,
+                     std::abs(values[i] - exact(m.nodes[i].x, m.nodes[i].y)));
   return error;
 }
 
@@ -108,8 +106,8 @@ inline double l2_error(const mesh::Mesh &m, const std::vector<double> &values,
     for (std::size_t k = 0; k < 3; ++k) {
       const std::size_t a = triangle.nodes[k], b = triangle.nodes[(k + 1) % 3];
       const auto &u = m.nodes[a], &v = m.nodes[b];
-      const double d = (values[a] + values[b]) / 2 -
-                       exact((u.x + v.x) / 2, (u.y + v.y) / 2);
+      const double d =
+          (values[a] + values[b]) / 2 - exact((u.x + v.x) / 2, (u.y + v.y) / 2);
       sum += area / 3 * d * d;
     }
   }

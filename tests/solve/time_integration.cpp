@@ -90,14 +90,15 @@ Problem dynamic_boundary_problem() {
   const std::string u_t = "-2*" + p + "*sin(2*t) + " + q + "*cos(t)";
   const BoundaryCondition dirichlet{.alpha = e("1"), .g = e(u)};
   return {.equation = {.a_xx = e("-1"), .a_yy = e("-1")},
-          .boundary_conditions =
-              {{"bottom", dirichlet},
-               {"left", dirichlet},
-               {"right",
-                {.beta_n = e("1"),
-                 .gamma = e("1"),
-                 .g = e("cos(2*t) + sin(t) + " + u_t)}},
-               {"top", {.beta_n = e("1"), .g = e("2*cos(2*t) - sin(t)")}}},
+          .boundary_conditions = {{"bottom", dirichlet},
+                                  {"left", dirichlet},
+                                  {"right",
+                                   {.beta_n = e("1"),
+                                    .gamma = e("1"),
+                                    .g = e("cos(2*t) + sin(t) + " + u_t)}},
+                                  {"top",
+                                   {.beta_n = e("1"),
+                                    .g = e("2*cos(2*t) - sin(t)")}}},
           .initial = {.u = e(u)}};
 }
 
@@ -152,15 +153,17 @@ void time_rate(const std::shared_ptr<const TimeMethod> &method,
   const auto m = meshed(problem);
   std::vector<double> errors;
   for (const double dt : {0.05, 0.025, 0.0125}) {
-    const auto result = integrator(method, dt).integrate(
-        m, 0.0, 1.0, {.snapshot_times = {0.25, 0.5, 0.75, 1.0}});
+    const auto result =
+        integrator(method, dt)
+            .integrate(m, 0.0, 1.0, {.snapshot_times = {0.25, 0.5, 0.75, 1.0}});
     check(result.final.time == 1.0, "ends at t1");
     double error = 0.0;
     for (const auto &s : result.snapshots)
-      error = std::max(error, pde2d::test::max_nodal_error(
-                                  *m->mesh(), s.values, [&](double x, double y) {
-                                    return exact(x, y, s.time);
-                                  }));
+      error =
+          std::max(error, pde2d::test::max_nodal_error(
+                              *m->mesh(), s.values, [&](double x, double y) {
+                                return exact(x, y, s.time);
+                              }));
     errors.push_back(error);
   }
   for (std::size_t i = 1; i < errors.size(); ++i) {
@@ -189,14 +192,14 @@ double energy(const AssembledProblem &a, const MeshedProblem &m,
 
 void energy_is_conserved() {
   const BoundaryCondition zero{.alpha = e("1")};
-  const auto m = meshed(
-      {.equation = {.a_xx = e("-1"), .a_yy = e("-1"), .m2 = e("1")},
-       .boundary_conditions = {{"bottom", zero},
-                               {"right", zero},
-                               {"top", zero},
-                               {"left", zero}},
-       .initial = {.u = e("sin(pi*x)*sin(pi*y)"), .u_t = e("0")}},
-      8);
+  const auto m =
+      meshed({.equation = {.a_xx = e("-1"), .a_yy = e("-1"), .m2 = e("1")},
+              .boundary_conditions = {{"bottom", zero},
+                                      {"right", zero},
+                                      {"top", zero},
+                                      {"left", zero}},
+              .initial = {.u = e("sin(pi*x)*sin(pi*y)"), .u_t = e("0")}},
+             8);
   const auto result =
       integrator(std::make_shared<Newmark>(), 0.05)
           .integrate(m, 0.0, 5.0,
@@ -218,9 +221,9 @@ void counts_prepares() {
            std::make_shared<ImplicitEuler>(),
            std::make_shared<ImplicitMidpoint>()}) {
     const auto solver = std::make_shared<pde2d::test::CountingSolver>();
-    const auto result = integrator(method, 0.1, solver)
-                            .integrate(meshed(constant_heat_problem()), 0.0,
-                                       1.0);
+    const auto result =
+        integrator(method, 0.1, solver)
+            .integrate(meshed(constant_heat_problem()), 0.0, 1.0);
     check(result.report.metrics.at("steps") == 10, "10 steps");
     check(result.report.metrics.at("prepares") == 1, "prepared once");
     check(solver->count() == 1, "the solver saw one prepare");
@@ -228,8 +231,7 @@ void counts_prepares() {
   }
   // Stiffness and damping depend on t: prepared every step.
   const auto solver = std::make_shared<pde2d::test::CountingSolver>();
-  const auto result = integrator(std::make_shared<ImplicitEuler>(), 0.1,
-                                 solver)
+  const auto result = integrator(std::make_shared<ImplicitEuler>(), 0.1, solver)
                           .integrate(meshed(heat_problem()), 0.0, 1.0);
   check(result.report.metrics.at("prepares") == 10, "prepared every step");
   check(solver->count() == 10, "the solver saw ten prepares");
@@ -345,17 +347,15 @@ void checks_input() {
   const auto i = integrator(std::make_shared<ImplicitEuler>(), 0.1);
   expect_throws<std::invalid_argument>(
       [&] { (void)i.integrate(nullptr, 0.0, 1.0); }, "problem is null");
-  expect_throws<std::invalid_argument>(
-      [&] { (void)i.integrate(m, 1.0, 1.0); }, "greater than t0");
+  expect_throws<std::invalid_argument>([&] { (void)i.integrate(m, 1.0, 1.0); },
+                                       "greater than t0");
   expect_throws<std::invalid_argument>(
       [&] { (void)i.integrate(m, 0.0, std::nan("")); }, "finite");
   expect_throws<std::invalid_argument>(
       [&] { (void)i.integrate(m, 0.0, 1.0, {.snapshot_times = {1.5}}); },
       "not within [t0, t1]");
   expect_throws<std::invalid_argument>(
-      [&] {
-        (void)i.integrate(m, 0.0, 1.0, {.snapshot_times = {0.5, 0.5}});
-      },
+      [&] { (void)i.integrate(m, 0.0, 1.0, {.snapshot_times = {0.5, 0.5}}); },
       "strictly increasing");
   // An initial solution on another mesh object (equal contents).
   const auto other = meshed(constant_heat_problem());
@@ -371,11 +371,12 @@ void checks_input() {
             .integrate(wave, 0.0, 1.0, {}, &steady.solution);
       },
       "velocities");
-  expect_throws<std::invalid_argument>(
-      [] { FixedStep({.dt = 0.0}); }, "dt must be finite and positive");
+  expect_throws<std::invalid_argument>([] { FixedStep({.dt = 0.0}); },
+                                       "dt must be finite and positive");
   expect_throws<std::invalid_argument>(
       [] {
-        Integrator(nullptr, std::make_shared<FixedStep>(FixedStepOptions{.dt = 1}),
+        Integrator(nullptr,
+                   std::make_shared<FixedStep>(FixedStepOptions{.dt = 1}),
                    std::make_shared<SparseLu>());
       },
       "time method is null");
@@ -412,17 +413,15 @@ int main() {
          const auto m = meshed(heat_problem());
          const auto lu = integrator(std::make_shared<ImplicitMidpoint>(), 0.1)
                              .integrate(m, 0.0, 1.0);
-         const auto it =
-             integrator(std::make_shared<ImplicitMidpoint>(), 0.1,
-                        std::make_shared<BiCgStab>(
-                            BiCgStabOptions{.tolerance = 1e-13}))
-                 .integrate(m, 0.0, 1.0);
+         const auto it = integrator(std::make_shared<ImplicitMidpoint>(), 0.1,
+                                    std::make_shared<BiCgStab>(
+                                        BiCgStabOptions{.tolerance = 1e-13}))
+                             .integrate(m, 0.0, 1.0);
          for (std::size_t k = 0; k < lu.final.values.size(); ++k)
            near(it.final.values[k], lu.final.values[k], 1e-10, "same values");
          check(it.report.metrics.at("linear_iterations") > 0, "iterations");
        }},
-      {"Newmark conserves the energy of an undamped wave",
-       energy_is_conserved},
+      {"Newmark conserves the energy of an undamped wave", energy_is_conserved},
       {"the solver is prepared only when the step matrix changes",
        counts_prepares},
       {"methods are refused for time orders they do not support",

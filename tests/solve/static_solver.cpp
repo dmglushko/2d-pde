@@ -64,25 +64,24 @@ double exact(double x, double y) { return std::exp(x) * std::cos(y); }
 
 Problem mixed_problem() {
   const BoundaryCondition dirichlet{.alpha = e("1"), .g = e("exp(x)*cos(y)")};
-  return {
-      .equation =
-          {.a_xx = e("-(1 + x^2)"),
-           .a_xy = e("-x*y/2"),
-           .a_yy = e("-(1 + y^2)"),
-           .b_x = e("1"),
-           .b_y = e("0.5"),
-           .c = e("-1"),
-           .f = e("exp(x)*cos(y)*(y^2 - x^2) + exp(x)*sin(y)*(x*y - 1)/2")},
-      .boundary_conditions = {
-          {"bottom", dirichlet},
-          {"left", dirichlet},
-          {"right",
-           {.alpha = e("1"), .beta_n = e("1"), .g = e("2*exp(x)*cos(y)")}},
-          {"top",
-           {.alpha = e("2"),
-            .beta_n = e("1"),
-            .beta_x = e("0.5"),
-            .g = e("2.5*exp(x)*cos(y) - exp(x)*sin(y)")}}}};
+  return {.equation =
+              {.a_xx = e("-(1 + x^2)"),
+               .a_xy = e("-x*y/2"),
+               .a_yy = e("-(1 + y^2)"),
+               .b_x = e("1"),
+               .b_y = e("0.5"),
+               .c = e("-1"),
+               .f = e("exp(x)*cos(y)*(y^2 - x^2) + exp(x)*sin(y)*(x*y - 1)/2")},
+          .boundary_conditions = {
+              {"bottom", dirichlet},
+              {"left", dirichlet},
+              {"right",
+               {.alpha = e("1"), .beta_n = e("1"), .g = e("2*exp(x)*cos(y)")}},
+              {"top",
+               {.alpha = e("2"),
+                .beta_n = e("1"),
+                .beta_x = e("0.5"),
+                .g = e("2.5*exp(x)*cos(y) - exp(x)*sin(y)")}}}};
 }
 
 void converges(std::shared_ptr<const LinearSolver> linear_solver,
@@ -109,8 +108,7 @@ void converges(std::shared_ptr<const LinearSolver> linear_solver,
 // the solution is the harmonic function that equals the data, which P1
 // reproduces exactly.
 void drops_time_terms() {
-  const BoundaryCondition dirichlet{.alpha = e("1"),
-                                    .g = e("1 + x + 2*y + t")};
+  const BoundaryCondition dirichlet{.alpha = e("1"), .g = e("1 + x + 2*y + t")};
   const auto meshed = std::make_shared<const MeshedProblem>(
       pde2d::test::unit_square(4),
       Problem{.equation = {.a_xx = e("-1"), .a_yy = e("-1"), .m1 = e("1")},
@@ -120,8 +118,8 @@ void drops_time_terms() {
                                       {"left", dirichlet}},
               .initial = {.u = e("0")}});
   check(time_order(*meshed) == 1, "time order 1");
-  const StaticResult result = StaticSolver(std::make_shared<SparseLu>())
-                                  .solve(meshed, 0.5);
+  const StaticResult result =
+      StaticSolver(std::make_shared<SparseLu>()).solve(meshed, 0.5);
   check(result.solution.time == 0.5, "the time");
   const double error = pde2d::test::max_nodal_error(
       *meshed->mesh(), result.solution.values,
@@ -151,8 +149,8 @@ int main() {
       {"the static solver drops the time terms", drops_time_terms},
       {"the static solver rejects bad input",
        [] {
-         expect_throws<std::invalid_argument>(
-             [] { StaticSolver(nullptr); }, "linear solver is null");
+         expect_throws<std::invalid_argument>([] { StaticSolver(nullptr); },
+                                              "linear solver is null");
          const StaticSolver solver(std::make_shared<SparseLu>());
          expect_throws<std::invalid_argument>(
              [&] { (void)solver.solve(nullptr); }, "problem is null");

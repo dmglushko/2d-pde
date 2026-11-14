@@ -28,9 +28,9 @@ void check_output(const IntegrationOutput &output, double t0, double t1) {
   const auto &times = output.snapshot_times;
   for (std::size_t i = 0; i < times.size(); ++i) {
     if (!std::isfinite(times[i]) || times[i] < t0 || times[i] > t1)
-      throw std::invalid_argument(
-          "integrator: snapshot time " + std::to_string(times[i]) +
-          " is not within [t0, t1]");
+      throw std::invalid_argument("integrator: snapshot time " +
+                                  std::to_string(times[i]) +
+                                  " is not within [t0, t1]");
     if (i > 0 && !(times[i] > times[i - 1]))
       throw std::invalid_argument(
           "integrator: snapshot times must be strictly increasing");
@@ -56,10 +56,10 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
       throw std::invalid_argument(
           "integrator: the initial solution is on another mesh object");
     if (initial->values.size() != nodes)
-      throw std::invalid_argument(
-          "integrator: the initial solution has " +
-          std::to_string(initial->values.size()) + " values for " +
-          std::to_string(nodes) + " nodes");
+      throw std::invalid_argument("integrator: the initial solution has " +
+                                  std::to_string(initial->values.size()) +
+                                  " values for " + std::to_string(nodes) +
+                                  " nodes");
     state.values = free_part(meshed, initial->values);
     if (time_order == 2) {
       if (initial->velocities.size() != nodes)
@@ -115,8 +115,8 @@ bool step_matrix_depends_on_t(const fem::AssembledProblem &problem,
          changes(problem.stiffness(), weights.stiffness);
 }
 
-Solution make_solution(const fem::MeshedProblem &meshed,
-                       const TimeState &state, int time_order, double t) {
+Solution make_solution(const fem::MeshedProblem &meshed, const TimeState &state,
+                       int time_order, double t) {
   Solution solution = build_solution(meshed, state.values, t);
   if (time_order == 2) {
     solution.velocities.assign(solution.values.size(), 0.0);

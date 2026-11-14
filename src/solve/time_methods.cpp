@@ -21,8 +21,7 @@ void TimeMethod::start(const fem::AssembledProblem &, const LinearSolver &,
 namespace {
 
 StepSolveInfo info(const LinearSolveResult &solved) {
-  return {.linear_iterations = solved.iterations,
-          .residual = solved.residual};
+  return {.linear_iterations = solved.iterations, .residual = solved.residual};
 }
 
 } // namespace
@@ -79,8 +78,7 @@ StepMatrixWeights Newmark::step_matrix_weights(double dt) const {
 }
 
 void Newmark::start(const fem::AssembledProblem &problem,
-                    const LinearSolver &linear_solver,
-                    TimeState &state) const {
+                    const LinearSolver &linear_solver, TimeState &state) const {
   // M2(t0) W0 = b(t0) - B(t0) V0 - A(t0) U0
   std::vector<double> rhs = detail::right_hand_side(problem);
   detail::add_product(rhs, -1.0, problem.damping(), state.velocities);
@@ -90,8 +88,8 @@ void Newmark::start(const fem::AssembledProblem &problem,
   state.accelerations = prepared->solve(rhs).values;
 }
 
-StepSolveInfo Newmark::advance(const fem::AssembledProblem &problem,
-                               double dt, const PreparedLinearSolver &solver,
+StepSolveInfo Newmark::advance(const fem::AssembledProblem &problem, double dt,
+                               const PreparedLinearSolver &solver,
                                TimeState &state) const {
   const std::vector<double> &u0 = state.values;
   const std::vector<double> &v0 = state.velocities;

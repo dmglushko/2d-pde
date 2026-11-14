@@ -67,14 +67,13 @@ public:
   // accelerations) computes it here; it may prepare `linear_solver` for
   // its own matrix. The default does nothing.
   virtual void start(const fem::AssembledProblem &problem,
-                     const LinearSolver &linear_solver,
-                     TimeState &state) const;
+                     const LinearSolver &linear_solver, TimeState &state) const;
 
   // Advances `state` by one step of length dt. `problem` is assembled at
   // t + evaluation_fraction() * dt, and `solver` is prepared for the step
   // matrix step_matrix_weights(dt) of that problem.
-  virtual StepSolveInfo advance(const fem::AssembledProblem &problem,
-                                double dt, const PreparedLinearSolver &solver,
+  virtual StepSolveInfo advance(const fem::AssembledProblem &problem, double dt,
+                                const PreparedLinearSolver &solver,
                                 TimeState &state) const = 0;
 };
 

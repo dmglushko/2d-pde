@@ -35,9 +35,8 @@ StaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   std::vector<double> rhs(assembled.load().begin(), assembled.load().end());
   const fem::Operator &stiffness = assembled.stiffness();
   if (!stiffness.is_zero && !assembled.dirichlet_values().empty())
-    detail::add_scaled(rhs, -1.0,
-                       stiffness.dirichlet.multiply(
-                           assembled.dirichlet_values()));
+    detail::add_scaled(
+        rhs, -1.0, stiffness.dirichlet.multiply(assembled.dirichlet_values()));
 
   const auto prepared = linear_solver_->prepare(
       std::make_shared<const fem::CsrMatrix>(stiffness.free));
@@ -50,8 +49,7 @@ StaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   report.stage = "static_solver";
   report.metrics["free_unknowns"] =
       static_cast<double>(meshed_problem->free_nodes().size());
-  report.metrics["linear_iterations"] =
-      static_cast<double>(solved.iterations);
+  report.metrics["linear_iterations"] = static_cast<double>(solved.iterations);
   report.metrics["residual"] = solved.residual;
   report.time = std::chrono::steady_clock::now() - start;
   result.reports.push_back(std::move(report));
