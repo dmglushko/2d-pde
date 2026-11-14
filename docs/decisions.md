@@ -567,6 +567,28 @@ marked "architecture" below are decided.
   a 3-point rule on triangles (exact for degree 2) and 2-point
   Gauss–Legendre on edges. *Why:* it keeps P1's convergence rates and is
   exact for constant-coefficient mass matrices.
+- **Eight choices of the assembly implementation, accepted 2026-11-14:**
+  1. `Assembler::assemble(meshed_problem, t, previous)` takes `previous` as
+     a plain pointer to const, null by default. It is only read during the
+     call; the result does not keep it.
+  2. The divergence of A is taken symbolically and compiled in the
+     `MeshedProblem` constructor (`divergence_of_a()`), so assembly does no
+     symbolic work.
+  3. Matrix indices are signed (`std::ptrdiff_t`).
+  4. `SparsityPattern` and `CsrMatrix` are plain structs with public
+     members; a `CsrMatrix` holds its pattern through a shared pointer.
+  5. An operator that is zero is still stored, as zeros on the shared
+     pattern, with `is_zero` set. *Why:* every operator then has the same
+     shape and the solver needs no special case.
+  6. With `previous`, what is rebuilt is decided per term and per boundary
+     region from the facts, not per whole matrix.
+  7. The tangential boundary matrix T counts as non-zero whenever A is: it
+     is not tested for cancelling to zero.
+  8. `dirichlet_rate` and `dirichlet_acceleration` are compiled only when
+     the time order needs them (the rate for 1 or 2, the acceleration for
+     2) and throw `std::invalid_argument` below that. *Why:* asking for
+     them on a lower time order is a mistake in the caller, and a static
+     problem must not be rejected because of a derivative it never uses.
 
 ## Solvers and time integration
 
