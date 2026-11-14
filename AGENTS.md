@@ -7,6 +7,12 @@ linear scalar PDE with P1 finite elements. Read
 specification), then [docs/architecture.md](docs/architecture.md) (modules,
 types, data flow) and [docs/vision.md](docs/vision.md) (direction).
 
+The graphical interface in `app/` is a separate program on top of the
+library, and **its design is delegated to agents**: inside `app/` you
+decide yourself and record the decision in [docs/app.md](docs/app.md).
+Read [app/AGENTS.md](app/AGENTS.md) before working there. Everything
+below about the owner deciding applies to the library.
+
 ## Architecture decisions belong to the owner
 
 **Architecture decisions belong to the owner. Do not make a design choice
@@ -32,6 +38,7 @@ impossible or unclear, ask.
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
+| `app/` | the graphical interface (`pde2d_app`): `src/` (case format, component catalog, stages, local HTTP server), `web/` (the page, plain JS modules), `examples/` (cases), `tests/`, `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md` and its design `docs/app.md` |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
@@ -63,6 +70,9 @@ configure, for example `tools/test.sh
 is cached in the build directory), Node.js (optional: the viewer tests
 are skipped without it).
 `PDE2D_BUILD_EXAMPLES` (on by default) builds `examples/`.
+`PDE2D_BUILD_APP` (on by default) builds the app (`build/app/pde2d_app`,
+needs nlohmann/json); `pde2d::pde2d` is one target that links every
+module.
 `PDE2D_BUILD_DIR` picks the build directory, `PDE2D_BUILD_JOBS` the build
 parallelism (capped at 4; run one build at a time), `PDE2D_TEST_JOBS` the
 test parallelism. Every test program prints `PASS/FAIL <case>`.
@@ -72,7 +82,8 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - Names: snake_case for functions, variables and members; PascalCase for
   types; enumerators in snake_case.
 - One CMake library per module (`pde2d_geometry`, `pde2d_mesh`,
-  `pde2d_io`, `pde2d_fem`). Dependencies point one way: mesh may include
+  `pde2d_io`, `pde2d_fem`); the interface target `pde2d::pde2d` only
+  bundles them. Nothing in the library depends on `app/`. Dependencies point one way: mesh may include
   geometry, io and fem may include mesh and geometry, never the reverse
   (and io and fem not each other). Heavy dependencies (Boost, later Eigen,
   SymEngine, libxml2) only in `.cpp` files, never in public headers.

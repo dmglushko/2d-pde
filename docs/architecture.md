@@ -133,7 +133,10 @@ flowchart BT
     classDef planned stroke-dasharray: 5 5
 ```
 
-`pde2d_io` and `pde2d_fem` do not use each other.
+`pde2d_io` and `pde2d_fem` do not use each other. The interface target
+`pde2d::pde2d` links all of them for programs that use the whole
+library, such as the app (`app/`, [app.md](app.md)), which sits on top
+and is never used by the library.
 
 ## What each object contains
 
@@ -489,6 +492,10 @@ arbitrary-precision evaluation. The viewer tests need Node.js and are
 skipped without it.
 
 Namespaces: `pde2d::geometry`, `pde2d::mesh`, `pde2d::io` and `pde2d::fem`.
+
+The graphical interface in `app/` (namespace `pde2d::app`) is not a
+module: it is a program over the public headers, described in
+[app.md](app.md).
 
 ## Geometry
 

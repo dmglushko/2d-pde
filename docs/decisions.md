@@ -41,6 +41,14 @@ Started 2026-11-11. The previous header-only code is on the branch
   stay exact for every finite input, and the fallback stays isolated in one
   file. Linking a program with `-ffast-math` still flushes subnormals to
   zero process-wide; no single file can prevent that.
+- **The graphical interface is delegated** (2026-11-14). It lives in
+  `app/` as a separate program over the library's public headers;
+  agents decide its design themselves and record it in
+  [app.md](app.md). The library's own design stays with the owner, and
+  the app may not change it. `pde2d::pde2d` links every module as one
+  target; the modules stay separate libraries. *Why:* the owner wants a
+  working interface to enter settings and see results without
+  overseeing its details.
 - **The archive is a reference, not a source.** Agents may port
   self-contained, well-tested pieces (the exact geometric predicates and the
   curve math). Everything else is written fresh to this design. *Why:* the

@@ -31,6 +31,14 @@ What exists now:
   Dirichlet nodes (corners included) and compiles every expression into
   a fast numeric function. Assembly and solvers come later.
 
+## Graphical interface
+
+`app/` holds a browser interface over the library: pick a shape or load
+an SVG or mesh file, choose the meshing components and their options,
+write the problem, assemble it and look at meshes and fields. Start it
+with `build/app/pde2d_app` after building, and open the printed address.
+See [app/README.md](app/README.md).
+
 ## Build and test
 
 Linux (or WSL) with CMake 3.25+ and a C++23 compiler. `pde2d_geometry`
@@ -40,7 +48,8 @@ libxml2 development files (`libxml2-dev`), used privately to parse SVG;
 on the first configure if CMake does not find it).
 The tests need Boost (only the header-only Boost.Multiprecision, used as
 an independent oracle for the exact predicates); the viewer tests run
-when Node.js is installed.
+when Node.js is installed. The app needs nlohmann/json
+(`nlohmann-json3-dev`); configure with `-DPDE2D_BUILD_APP=OFF` to skip it.
 
 ```sh
 tools/test.sh          # configure, build (at most -j4) and run every test
