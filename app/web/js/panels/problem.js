@@ -211,7 +211,8 @@ export const problemPanel = {
       if (facts) fill(facts, ...(errors.has(path) ? [] : factChips(check?.facts?.[path])));
     }
     for (const chip of container.querySelectorAll("[data-kind-of]")) {
-      const kind = check?.conditions?.[chip.dataset.kindOf];
+      const conditions = check?.conditions ?? {};
+      const kind = Object.hasOwn(conditions, chip.dataset.kindOf) ? conditions[chip.dataset.kindOf] : null;
       chip.textContent = kind ? `${kind.kind}${kind.oblique ? ", oblique" : ""}` : errors.has(`problem.boundary_conditions.${chip.dataset.kindOf}`) ? "not supported" : "…";
       chip.classList.toggle("bad", !kind && errors.has(`problem.boundary_conditions.${chip.dataset.kindOf}`));
     }

@@ -144,6 +144,8 @@ export function barycentric(x, y, ax, ay, bx, by, cx, cy) {
 
 // --- the case ------------------------------------------------------------------
 
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
 // A dictionary for names the user chooses (region names may be
 // "constructor" or "__proto__"): no prototype, so every lookup and
 // assignment sees only its own entries.
@@ -172,18 +174,30 @@ export function reconcileConditions(caseData, regions, defaultCondition, edits =
   const problem = (next.problem ??= {});
   const view = (next.view ??= {});
   const archive = dictionary(view.condition_archive);
-  // The conditions as the edits leave them, applied one after another.
+  // The conditions as the edits leave them, applied one after another
+  // like the library applies the edits: a region an edit removes is gone
+  // for the edits after it (its condition goes to the archive), so a later
+  // edit may reuse its name.
   const known = dictionary(problem.boundary_conditions);
+  const take = (name) => {
+    const condition = known[name];
+    delete known[name];
+    archive[name] = condition;
+    return condition;
+  };
   for (const edit of edits) {
-    if (edit?.op === "rename" && Object.hasOwn(known, edit.from) && !Object.hasOwn(known, edit.to)) known[edit.to] = structuredClone(known[edit.from]);
-    if (edit?.op === "split" && Object.hasOwn(known, edit.region))
-      for (const name of [edit.first, edit.second]) if (name !== edit.region && !Object.hasOwn(known, name)) known[name] = structuredClone(known[edit.region]);
+    if (edit?.op === "rename" && Object.hasOwn(known, edit.from)) known[edit.to] = structuredClone(take(edit.from));
+    if (edit?.op === "split" && Object.hasOwn(known, edit.region)) {
+      const condition = take(edit.region);
+      for (const name of [edit.first, edit.second]) known[name] = structuredClone(condition);
+    }
+    if (edit?.op === "merge" && Object.hasOwn(known, edit.source)) take(edit.source);
   }
   for (const name of Object.keys(known)) if (!regions.includes(name)) archive[name] = known[name];
   const conditions = Object.create(null);
   for (const region of regions) {
     if (Object.hasOwn(known, region)) conditions[region] = known[region];
-    else if (Object.hasOwn(archive, region)) conditions[region] = archive[region];
+    else if (Object.hasOwn(archive, region) && isObject(archive[region])) conditions[region] = archive[region];
     else conditions[region] = structuredClone(defaultCondition);
     delete archive[region];
   }
@@ -193,8 +207,6 @@ export function reconcileConditions(caseData, regions, defaultCondition, edits =
   if (Object.keys(view).length === 0) delete next.view;
   return next;
 }
-
-const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
 // A case as the page can show it: the format is checked, and a section
 // that is missing or of the wrong type is replaced by the default's (also
@@ -241,7 +253,15 @@ export function normalizeCase(input, defaults) {
 
   ensure(caseData, "assembly", (a) => isObject(a) && (a.t === undefined || Number.isFinite(a.t)), defaults.assembly, "assembly");
   ensure(caseData, "view", optional(isObject), {}, "view");
-  if (caseData.view !== undefined) ensure(caseData.view, "condition_archive", optional(isObject), {}, "view.condition_archive");
+  if (caseData.view !== undefined) {
+    ensure(caseData.view, "condition_archive", optional(isObject), {}, "view.condition_archive");
+    const archive = caseData.view.condition_archive ?? {};
+    for (const region of Object.keys(archive))
+      if (!isObject(archive[region])) {
+        delete archive[region];
+        replaced.push(`view.condition_archive.${region}`);
+      }
+  }
   return { caseData, replaced };
 }
 

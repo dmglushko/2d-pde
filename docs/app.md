@@ -209,8 +209,10 @@ is a reason; record the new choice here.
   JSON (which a cross-site form cannot).
 - **Region edits move boundary conditions** in the page, but only after
   the library accepted a geometry that includes them; every edit added
-  since the last accepted geometry is applied in order (an edit removed
-  before it ran is not). A renamed region keeps its condition,
+  since the last accepted geometry is applied in order, like the library
+  applies them (a region an edit removes is gone for later edits, which
+  may reuse its name; an edit removed before it ran is skipped). A
+  renamed region keeps its condition,
   the halves of a split region copy it, and a merged region takes its
   target's. A condition whose region disappears is kept in
   `view.condition_archive` and comes back with its region (an edit

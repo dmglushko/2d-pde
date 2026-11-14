@@ -116,6 +116,27 @@ test("several edits carry their conditions in order", () => {
   assert.deepEqual(Object.keys(next.view.condition_archive).sort(), ["bottom", "roof", "top"]);
 });
 
+test("a later edit may reuse a name an earlier one freed", () => {
+  const dirichlet = { alpha: "1", g: "0" };
+  const base = { problem: { boundary_conditions: { bottom: { alpha: "1", g: "11" }, top: { alpha: "1", g: "22" }, side: dirichlet } } };
+  let next = reconcileConditions(base, ["floor", "bottom", "side"], dirichlet, [
+    { op: "rename", from: "bottom", to: "floor" },
+    { op: "rename", from: "top", to: "bottom" },
+  ]);
+  assert.equal(next.problem.boundary_conditions.floor.g, "11");
+  assert.equal(next.problem.boundary_conditions.bottom.g, "22", "the reused name gets the condition of top");
+  assert.equal(next.view.condition_archive.top.g, "22");
+  // Merge then reuse the merged name in a split.
+  next = reconcileConditions(base, ["top", "side", "bottom"], dirichlet, [
+    { op: "merge", source: "bottom", target: "top" },
+    { op: "split", region: "top", fraction: 0.5, first: "top", second: "bottom" },
+  ]);
+  assert.equal(next.problem.boundary_conditions.bottom.g, "22", "the split half copies the whole (top), not the old bottom");
+  // An archived entry that is not a condition is never restored.
+  next = reconcileConditions({ problem: { boundary_conditions: {} }, view: { condition_archive: { left: null } } }, ["left"], dirichlet);
+  assert.deepEqual(next.problem.boundary_conditions.left, dirichlet);
+});
+
 test("region names that are names of object properties", () => {
   const dirichlet = { alpha: "1", g: "0" };
   const neumann = { beta_n: "1", g: "0" };
@@ -155,6 +176,9 @@ test("cases are normalized before they are shown", () => {
     },
     defaults,
   );
+  const archived = normalizeCase({ format: "pde2d-app-case", view: { condition_archive: { bottom: null, top: { g: "1" } } } }, defaults);
+  assert.ok(archived.replaced.includes("view.condition_archive.bottom"));
+  assert.deepEqual(Object.keys(archived.caseData.view.condition_archive), ["top"]);
   assert.deepEqual(nested.replaced, [
     "geometry.options",
     "geometry.region_edits",
