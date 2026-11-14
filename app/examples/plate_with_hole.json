@@ -1,0 +1,79 @@
+{
+  "format": "pde2d-app-case",
+  "version": 1,
+  "notes": "Potential flow through a plate with a hole, imported from plate_with_hole.svg: u = 1 at the inlet, 0 at the outlet, no flux through the walls and the hole.",
+  "geometry": {
+    "source": "svg",
+    "name": "plate_with_hole.svg",
+    "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.2 -0.2 4.4 2.4\">\n  <!-- A 4 x 2 plate with a round hole. Each path's region is its id, or\n       data-region when several paths share one. -->\n  <path id=\"inlet\" d=\"M 0 0 L 0 2\" fill=\"none\" stroke=\"#2a78d6\" stroke-width=\"0.03\"/>\n  <path data-region=\"wall\" d=\"M 0 2 L 4 2\" fill=\"none\" stroke=\"#898781\" stroke-width=\"0.03\"/>\n  <path id=\"outlet\" d=\"M 4 2 L 4 0\" fill=\"none\" stroke=\"#eb6834\" stroke-width=\"0.03\"/>\n  <path data-region=\"wall\" d=\"M 4 0 L 0 0\" fill=\"none\" stroke=\"#898781\" stroke-width=\"0.03\"/>\n  <path id=\"hole\" d=\"M 2.5 1 A 0.5 0.5 0 1 0 1.5 1 A 0.5 0.5 0 1 0 2.5 1 Z\" fill=\"none\" stroke=\"#1baf7a\" stroke-width=\"0.03\"/>\n</svg>\n",
+    "region_edits": []
+  },
+  "mesh": {
+    "spec": {
+      "max_edge_length": {
+        "absolute": null,
+        "relative": 0.03
+      }
+    },
+    "discretizer": {
+      "type": "chord_length",
+      "options": {
+        "max_curve_deviation": {
+          "absolute": null,
+          "relative": 0.001
+        },
+        "corner_angle_degrees": 30
+      }
+    },
+    "triangulator": {
+      "type": "cdt",
+      "options": {}
+    },
+    "refiner": {
+      "type": "longest_edge_bisection",
+      "options": {
+        "max_points": 10000000
+      }
+    },
+    "improvers": [
+      {
+        "type": "laplacian_smoothing",
+        "options": {
+          "iterations": 3,
+          "use": "final_only"
+        }
+      }
+    ]
+  },
+  "problem": {
+    "equation": {
+      "a_xx": "-1",
+      "a_yy": "-1",
+      "f": "0"
+    },
+    "parameters": {},
+    "boundary_conditions": {
+      "inlet": {
+        "alpha": "1",
+        "g": "1"
+      },
+      "outlet": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "wall": {
+        "beta_n": "1",
+        "g": "0"
+      },
+      "hole": {
+        "beta_n": "1",
+        "g": "0"
+      }
+    },
+    "initial": {}
+  },
+  "assembly": {
+    "t": 0.0
+  },
+  "solve": null
+}

@@ -1,0 +1,72 @@
+{
+  "format": "pde2d-app-case",
+  "version": 1,
+  "notes": "Heat flow u_t = k (u_xx + u_yy) in an annulus; the hole heats up from 0 towards 1.",
+  "geometry": {
+    "source": "shape",
+    "shape": "annulus",
+    "options": {
+      "outer_radius": 1,
+      "inner_radius": 0.4
+    },
+    "region_edits": []
+  },
+  "mesh": {
+    "spec": {
+      "max_edge_length": {
+        "absolute": null,
+        "relative": 0.04
+      }
+    },
+    "discretizer": {
+      "type": "chord_length",
+      "options": {
+        "max_curve_deviation": {
+          "absolute": null,
+          "relative": 0.002
+        },
+        "corner_angle_degrees": 30
+      }
+    },
+    "triangulator": {
+      "type": "cdt",
+      "options": {}
+    },
+    "refiner": {
+      "type": "ruppert",
+      "options": {
+        "min_angle_degrees": 25,
+        "max_points": 10000000
+      }
+    },
+    "improvers": []
+  },
+  "problem": {
+    "equation": {
+      "m1": "1",
+      "a_xx": "-k",
+      "a_yy": "-k",
+      "f": "0"
+    },
+    "parameters": {
+      "k": 0.1
+    },
+    "boundary_conditions": {
+      "outer": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "inner": {
+        "alpha": "1",
+        "g": "1 - exp(-t)"
+      }
+    },
+    "initial": {
+      "u": "0"
+    }
+  },
+  "assembly": {
+    "t": 0.0
+  },
+  "solve": null
+}

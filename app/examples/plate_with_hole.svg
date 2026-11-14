@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.2 -0.2 4.4 2.4">
+  <!-- A 4 x 2 plate with a round hole. Each path's region is its id, or
+       data-region when several paths share one. -->
+  <path id="inlet" d="M 0 0 L 0 2" fill="none" stroke="#2a78d6" stroke-width="0.03"/>
+  <path data-region="wall" d="M 0 2 L 4 2" fill="none" stroke="#898781" stroke-width="0.03"/>
+  <path id="outlet" d="M 4 2 L 4 0" fill="none" stroke="#eb6834" stroke-width="0.03"/>
+  <path data-region="wall" d="M 4 0 L 0 0" fill="none" stroke="#898781" stroke-width="0.03"/>
+  <path id="hole" d="M 2.5 1 A 0.5 0.5 0 1 0 1.5 1 A 0.5 0.5 0 1 0 2.5 1 Z" fill="none" stroke="#1baf7a" stroke-width="0.03"/>
+</svg>

@@ -10,6 +10,7 @@ endif()
 
 option(PDE2D_BUILD_TESTS "Build the tests" ON)
 option(PDE2D_BUILD_EXAMPLES "Build the example programs" ON)
+option(PDE2D_BUILD_APP "Build the graphical interface (app/)" ON)
 option(PDE2D_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
 # Warning flags shared by every target of this project.
@@ -37,6 +38,14 @@ endif()
 find_package(SymEngine 0.14 CONFIG REQUIRED)
 add_subdirectory(src/fem)
 
+# The whole library as one target: link pde2d::pde2d to use every module.
+# The modules stay separate libraries (one per module, dependencies one
+# way); this target only bundles them.
+add_library(pde2d INTERFACE)
+add_library(pde2d::pde2d ALIAS pde2d)
+target_link_libraries(pde2d INTERFACE pde2d_geometry pde2d_mesh pde2d_io
+                                      pde2d_fem)
+
 if(PDE2D_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
@@ -48,4 +57,10 @@ if(PDE2D_BUILD_TESTS)
   find_package(Boost 1.74 REQUIRED CONFIG)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+# The graphical interface: a separate program on top of the library
+# (app/README.md, docs/app.md). The library never depends on it.
+if(PDE2D_BUILD_APP)
+  add_subdirectory(app)
 endif()

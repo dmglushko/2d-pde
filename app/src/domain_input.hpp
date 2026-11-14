@@ -1,0 +1,56 @@
+#pragma once
+
+#include "options.hpp"
+
+#include "pde2d/geometry/curve_geometry.hpp"
+#include "pde2d/mesh/mesh.hpp"
+
+#include <optional>
+
+// The "geometry" section of a case: where the domain comes from.
+//
+//   {"source": "svg", "name": "plate.svg", "svg": "<svg ...>...</svg>",
+//    "region_edits": [...]}
+//   {"source": "shape", "shape": "rectangle",
+//    "options": {"width": 2, "height": 1}, "region_edits": [...]}
+//   {"source": "mesh_file", "format": "gmsh" or "pde2d",
+//    "name": "plate.msh", "text": "..."}
+//
+// An SVG or a shape gives a CurveGeometry, which the Mesher meshes. A mesh
+// file gives a Mesh directly; the mesh section's refiner and improvers
+// then run on it (the Remesher), and its discretizer and triangulator are
+// not used. The SVG and mesh texts are kept in the case, so a saved case
+// is complete on its own.
+//
+// Region edits apply in order to a CurveGeometry, each with the
+// library's CurveGeometry methods:
+//   {"op": "rename", "from": "a", "to": "b"}
+//   {"op": "merge", "source": "a", "target": "b"}
+//   {"op": "split", "region": "a", "fraction": 0.5,
+//    "first": "a1", "second": "a2"}
+namespace pde2d::app {
+
+// Exactly one of the two is set.
+struct Domain {
+  std::optional<geometry::CurveGeometry> geometry;
+  std::optional<mesh::Mesh> mesh;
+};
+
+// Throws std::invalid_argument naming the path in the case file
+// ("geometry.svg: ...") with the library's message for a document, shape
+// or edit it refuses; std::runtime_error from the library passes through.
+Domain build_domain(const Json &geometry_section);
+
+// What the page draws: for a CurveGeometry its loops (depth, parent and
+// curves, each curve sampled as a polyline with its region and kind),
+// regions with their lengths, the bounding box and the domain size; for a
+// mesh file its boundary edges by region.
+Json domain_json(const Domain &domain);
+
+// The shapes of geometry/shapes.hpp with their parameters.
+Json shape_catalog_json();
+
+// A 2 x 1 rectangle.
+Json default_geometry_section();
+
+} // namespace pde2d::app

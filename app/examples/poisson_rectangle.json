@@ -1,0 +1,75 @@
+{
+  "format": "pde2d-app-case",
+  "version": 1,
+  "notes": "-(u_xx + u_yy) = 1 on a 2 x 1 rectangle, u = 0 on the boundary.",
+  "geometry": {
+    "source": "shape",
+    "shape": "rectangle",
+    "options": {
+      "width": 2,
+      "height": 1
+    },
+    "region_edits": []
+  },
+  "mesh": {
+    "spec": {
+      "max_edge_length": {
+        "absolute": null,
+        "relative": 0.04
+      }
+    },
+    "discretizer": {
+      "type": "chord_length",
+      "options": {
+        "max_curve_deviation": {
+          "absolute": null,
+          "relative": null
+        },
+        "corner_angle_degrees": 30
+      }
+    },
+    "triangulator": {
+      "type": "cdt",
+      "options": {}
+    },
+    "refiner": {
+      "type": "ruppert",
+      "options": {
+        "min_angle_degrees": 25,
+        "max_points": 10000000
+      }
+    },
+    "improvers": []
+  },
+  "problem": {
+    "equation": {
+      "a_xx": "-1",
+      "a_yy": "-1",
+      "f": "1"
+    },
+    "parameters": {},
+    "boundary_conditions": {
+      "bottom": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "right": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "top": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "left": {
+        "alpha": "1",
+        "g": "0"
+      }
+    },
+    "initial": {}
+  },
+  "assembly": {
+    "t": 0.0
+  },
+  "solve": null
+}
