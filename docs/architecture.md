@@ -18,14 +18,13 @@ of the file is the detailed text.
 | How do mesh nodes map to matrix rows, and where do Dirichlet nodes go? | [Nodes and unknowns](#nodes-and-unknowns) |
 | What happens inside `assemble`? | [Inside assemble](#inside-assemble) |
 | What are the stages of meshing? | [Meshing pipeline](#meshing-pipeline) |
-| In what order does a time step run? (planned) | [One time step](#one-time-step-planned) |
+| In what order does a time step run? | [One time step](#one-time-step) |
 | Which interfaces exist and what implements them? | [Interfaces and their components](#interfaces-and-their-components) |
 
 ## Data flow
 
 Rectangles are steps (an object with one main function, or a function);
-rounded nodes are data. Dashed nodes are decided but not built yet (see
-"Solvers and time integration" in [decisions.md](decisions.md)).
+rounded nodes are data.
 
 ```mermaid
 flowchart LR
@@ -35,9 +34,9 @@ flowchart LR
     RM[Remesher]
     CMB[MeshedProblem constructor]
     ASM[Assembler]
-    LS[LinearSolver]:::planned
-    TM[TimeMethod step]:::planned
-    SB[build_solution]:::planned
+    LS[LinearSolver]
+    TM[TimeMethod step]
+    SB[build_solution]
 
     G([CurveGeometry])
     SPEC([MeshSpec])
@@ -45,8 +44,8 @@ flowchart LR
     P([Problem])
     MP([MeshedProblem])
     AP([AssembledProblem])
-    LR([LinearSolveResult]):::planned
-    S([Solution]):::planned
+    LR([LinearSolveResult])
+    S([Solution])
 
     SVG --> G
     G --> MSH
@@ -70,11 +69,9 @@ flowchart LR
     MP --> SB
     SB --> S
     S -. initial .-> TM
-
-    classDef planned stroke-dasharray: 5 5
 ```
 
-The `StaticSolver` and the `Integrator` (both planned) are the drivers of
+The `StaticSolver` and the `Integrator` are the drivers of
 the right-hand part: each takes a `MeshedProblem`, calls the `Assembler`
 itself, and returns a `Solution`. The static solver goes once through
 Assembler → LinearSolver → build_solution; the integrator repeats
@@ -91,9 +88,9 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | Remesher | `Remesher::run(mesh, spec)` | `Mesh`, `MeshSpec` | `MeshResult` | `pde2d_mesh` |
 | Combining | `MeshedProblem(mesh, problem)` | `Mesh`, `Problem` | `MeshedProblem` | `pde2d_fem` |
 | Assembler | `Assembler::assemble(meshed, t, previous)` | `MeshedProblem`, a time, optionally the previous result | `AssembledProblem` | `pde2d_fem` |
-| Linear solver (planned) | `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix`, a right-hand side | `LinearSolveResult` | `pde2d_solve` |
-| Time method (planned) | one step | two `AssembledProblem`s, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
-| Building the solution (planned) | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
+| Linear solver | `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix`, a right-hand side | `LinearSolveResult` | `pde2d_solve` |
+| Time method | `advance(assembled, dt, prepared, state)` | one `AssembledProblem` (at the method's evaluation point), the prepared solver, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
+| Building the solution | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
 
 ### Data
 
@@ -105,8 +102,8 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | `Problem` | the equation's coefficients, boundary conditions by region name and initial conditions as `Expression`s (each with its facts), and the parameter values | a plain struct |
 | `MeshedProblem` | the mesh and the problem; every expression compiled to a function of (x, y, t) with its facts; the Dirichlet nodes and the node ↔ unknown tables; ∇·A and the time derivatives of the Dirichlet data | never |
 | `AssembledProblem` | at one time t: the operators mass, damping, stiffness (each a `free` and a `dirichlet` `CsrMatrix`), the load, the Dirichlet values, the right-hand side, its own facts, a report | never |
-| `LinearSolveResult` (planned) | one value per free unknown, iterations, residual | never |
-| `Solution` (planned) | one value per mesh node, the mesh, the time | never |
+| `LinearSolveResult` | one value per free unknown, iterations, residual | never |
+| `Solution` | one value per mesh node, the mesh, the time (and, for time order 2, one velocity per node) | a plain struct |
 
 Every stage that does work also returns or holds a `StageReport` (time,
 metrics, "worked, but…" messages).
@@ -123,14 +120,12 @@ flowchart BT
     MESH[pde2d_mesh]
     IO["pde2d_io · libxml2"]
     FEM["pde2d_fem · SymEngine"]
-    SOLVE["pde2d_solve · Eigen"]:::planned
+    SOLVE["pde2d_solve · Eigen"]
 
     MESH --> GEO
     IO --> MESH
     FEM --> MESH
     SOLVE --> FEM
-
-    classDef planned stroke-dasharray: 5 5
 ```
 
 `pde2d_io` and `pde2d_fem` do not use each other.
@@ -335,7 +330,7 @@ Who uses the tables:
 | placing block entries | `free_index` | assembly (above) |
 | moving known values to the right-hand side | `dirichlet_value(k, t)` and its two time derivatives | assembly: `right_hand_side` |
 | starting values per node | `dirichlet_value(k, t0)` at Dirichlet nodes | `initial_values(t0)` |
-| the solver's short vector back to all nodes (planned) | `free_nodes`, `dirichlet_value` | `build_solution` |
+| the solver's short vector back to all nodes | `free_nodes`, `dirichlet_value` | `build_solution` |
 
 ## Inside assemble
 
@@ -400,11 +395,11 @@ flowchart LR
     FIN --> M
 ```
 
-## One time step (planned)
+## One time step
 
-Decided, not built yet. `Integrator::integrate(meshed, t0, t1, output,
-initial)`; the problem never changes, the state `U` (one value per free
-unknown) lives inside the call.
+`Integrator::integrate(meshed, t0, t1, output, initial)`; the problem
+never changes, the state (`TimeState`: U, and for time order 2 also U' and
+U'', one value per free unknown) lives inside the call.
 
 ```mermaid
 sequenceDiagram
@@ -413,17 +408,24 @@ sequenceDiagram
     participant A as Assembler
     participant M as TimeMethod
     participant L as LinearSolver
-    Note over I: U = initial, or initial_values(t0), free part
     I->>A: assemble(meshed, t0)
+    A-->>I: AssembledProblem (its time_order checked against the method)
+    Note over I: state = initial, or initial_values(t0) (and initial_velocities), free part
+    I->>M: start(assembled, linear solver, state)
+    Note over M: Newmark: prepare(M2), solve for U'' at t0
     loop until t reaches t1
-        I->>C: next dt
-        I->>A: assemble(meshed, new time, previous)
+        I->>C: next_step(t)
+        C-->>I: dt
+        Note over I: shorten the step to land on a snapshot time or t1
+        I->>A: assemble(meshed, t + fraction * dt, previous)
         A-->>I: AssembledProblem
-        I->>M: step(assembled, U, dt)
-        M->>L: prepare(matrix), only when the matrix or dt changed
+        I->>M: step_matrix_weights(dt)
+        I->>L: prepare(weighted M2 + B + A), only when dt changed or an operator in it depends on t
+        I->>M: advance(assembled, dt, prepared, state)
         M->>L: solve(right-hand side)
         L-->>M: LinearSolveResult
-        M-->>I: new U
+        M-->>I: new state, iterations and residual
+        Note over I: step record into the summary (kept if keep_step_history)
         Note over I: snapshot if asked: build_solution(meshed, U, t)
     end
     Note over I: return build_solution(meshed, U, t1), snapshots, history, report
@@ -436,8 +438,7 @@ linear solve of stiffness·U = load − A_FD·U_D, then `build_solution`.
 
 A component is passed in when the object that uses it is built
 (`Mesher{discretizer, triangulator, refiner, improvers}`,
-`Integrator(method, step_controller, linear_solver)`). Dashed boxes are
-planned.
+`Integrator(method, step_controller, linear_solver)`).
 
 ```mermaid
 flowchart LR
@@ -450,15 +451,14 @@ flowchart LR
         IMP([Improver]) --- DF[DelaunayFlips]
         IMP --- LS[LaplacianSmoothing]
     end
-    subgraph solve ["pde2d_solve (planned)"]
-        TMI([TimeMethod]):::planned --- IE[ImplicitEuler]:::planned
-        TMI --- IM[ImplicitMidpoint]:::planned
-        TMI --- NM[Newmark]:::planned
-        LSI([LinearSolver]):::planned --- SLU[SparseLu]:::planned
-        LSI --- BCG[BiCgStab]:::planned
-        SCI([StepController]):::planned --- FS[FixedStep]:::planned
+    subgraph solve [pde2d_solve]
+        TMI([TimeMethod]) --- IE[ImplicitEuler]
+        TMI --- IM[ImplicitMidpoint]
+        TMI --- NM[Newmark]
+        LSI([LinearSolver]) --- SLU[SparseLu]
+        LSI --- BCG[BiCgStab]
+        SCI([StepController]) --- FS[FixedStep]
     end
-    classDef planned stroke-dasharray: 5 5
 ```
 
 Rounded boxes are interfaces, rectangles implement them. An `Improver`
@@ -473,22 +473,28 @@ include/pde2d/geometry/   src/geometry/   ->  library pde2d_geometry
 include/pde2d/mesh/       src/mesh/       ->  library pde2d_mesh
 include/pde2d/io/         src/io/         ->  library pde2d_io
 include/pde2d/fem/        src/fem/        ->  library pde2d_fem
+include/pde2d/solve/      src/solve/      ->  library pde2d_solve
 ```
 
 `pde2d_mesh` depends on `pde2d_geometry`, and `pde2d_io` and `pde2d_fem`
-each on `pde2d_mesh` (so on both), never the reverse. Public headers are in
+each on `pde2d_mesh` (so on both), and `pde2d_solve` on `pde2d_fem`, never
+the reverse. Public headers are in
 `include/pde2d/<module>/`; everything in `src/` is private, including the
-private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`, `src/fem/*.hpp`).
+private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`, `src/fem/*.hpp`,
+`src/solve/*.hpp`).
 `pde2d_geometry` and `pde2d_mesh` have no external dependencies;
 `pde2d_io` links libxml2 privately (only `src/io/svg_import.cpp` includes
 it), and `pde2d_fem` links SymEngine 0.14 privately (only through the
-private header `src/fem/symengine_expression.hpp`). The tests use
+private header `src/fem/symengine_expression.hpp`), and `pde2d_solve` uses
+Eigen 3 (header-only) privately (only in the private header
+`src/solve/eigen_view.hpp`, `sparse_lu.cpp` and `bicgstab.cpp`). The tests use
 Boost.Multiprecision (header-only) in one place:
 `geometry_predicates_oracle` checks the adaptive predicates against an
 arbitrary-precision evaluation. The viewer tests need Node.js and are
 skipped without it.
 
-Namespaces: `pde2d::geometry`, `pde2d::mesh`, `pde2d::io` and `pde2d::fem`.
+Namespaces: `pde2d::geometry`, `pde2d::mesh`, `pde2d::io`, `pde2d::fem`
+and `pde2d::solve`.
 
 ## Geometry
 
@@ -1174,6 +1180,110 @@ The result is the same bit for bit as a fresh assembly at that t.
 `used_previous`, and `mass_rebuilt`, `damping_rebuilt`,
 `stiffness_rebuilt`, `load_rebuilt` (1 when something of it was computed,
 0 when reused whole).
+
+## Solvers and time integration (`pde2d_solve`)
+
+```cpp
+auto meshed = std::make_shared<const MeshedProblem>(mesh, problem);
+
+// Static: the time terms dropped, A U = load - A_FD U_D at t.
+StaticResult s = StaticSolver(std::make_shared<SparseLu>()).solve(meshed);
+
+// In time.
+const Integrator integrator(std::make_shared<ImplicitMidpoint>(),
+                            std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.01}),
+                            std::make_shared<BiCgStab>());
+IntegrationResult r = integrator.integrate(meshed, 0.0, 1.0,
+                                           {.snapshot_times = {0.5}});
+// Continuing the run.
+IntegrationResult r2 = integrator.integrate(meshed, 1.0, 2.0, {}, &r.final);
+```
+
+**Linear solvers** (`linear_solver.hpp`). `LinearSolver::prepare(
+std::shared_ptr<const CsrMatrix>)` returns a
+`std::unique_ptr<const PreparedLinearSolver>`, which holds the matrix and
+solves `solve(rhs) -> LinearSolveResult` (values, iterations, relative
+residual |b − Ax| / |b| computed after the solve) as often as needed.
+`SparseLu` (Eigen's SparseLU with COLAMD; the matrix is copied once into
+Eigen's column-major format; a zero pivot throws `std::runtime_error` in
+`prepare`, a result that is not finite throws in `solve`) and `BiCgStab`
+(`BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000}`; Jacobi
+preconditioner; views our arrays through `Eigen::Map` without copying;
+starts from zero; non-convergence throws `std::runtime_error`). An empty
+(0 × 0) system has an empty solution. Eigen appears only in
+`src/solve/eigen_view.hpp` and the two solver `.cpp` files.
+
+**Solution** (`solution.hpp`). `Solution{mesh, time, values, velocities}`;
+`build_solution(meshed, free_values, t)` places the free values at
+`free_nodes()` and `dirichlet_value(k, t)` at the Dirichlet nodes.
+`velocities` is filled only by the `Integrator` for time order 2 (free
+part from the state, Dirichlet nodes from `dirichlet_rate`), so that a run
+can be continued.
+
+**StaticSolver** (`static_solver.hpp`). Assembles at t, solves
+`stiffness().free · U = load() − stiffness().dirichlet · U_D` (not
+`right_hand_side()`, which for time order 1 or 2 also holds the lifting of
+U_D' and U_D''), and returns `StaticResult{solution, reports}` with the
+reports "assembly" and "static_solver" (free_unknowns, linear_iterations,
+residual).
+
+**Time methods** (`time_method.hpp`). A `TimeMethod` declares
+`capabilities()` (`TimeMethodCapabilities{supports_first_order,
+supports_second_order}`), `evaluation_fraction()` (where in the step the
+problem is assembled) and `step_matrix_weights(dt)` (`StepMatrixWeights{
+mass, damping, stiffness}`: the step matrix is mass·M₂ + damping·B +
+stiffness·A, so the integrator can build it and tell when it changes). It
+has `start(assembled at t0, linear_solver, state)` (default: nothing) and
+`advance(assembled, dt, prepared, state) -> StepSolveInfo`. The state is a
+`TimeState{values, velocities, accelerations}` in the free unknowns. The
+right-hand side the methods use is `right_hand_side()`, which already
+holds the whole lifting.
+
+| Method | Orders | Assembled at | Step matrix | Right-hand side |
+| --- | --- | --- | --- | --- |
+| `ImplicitEuler` | 1 | t + dt | B/dt + A | b + B U₀/dt |
+| `ImplicitMidpoint` | 1 | t + dt/2 | B/dt + A/2 | b + (B/dt − A/2) U₀ |
+| `Newmark` (β = 1/4, γ = 1/2) | 2 | t + dt | M₂/(β dt²) + γ B/(β dt) + A | b + M₂(U₀/(β dt²) + V₀/(β dt) + (1/(2β) − 1) W₀) + B(γ U₀/(β dt) + (γ/β − 1) V₀ + dt (γ/(2β) − 1) W₀) |
+
+None inverts B or M₂ during the steps, so B may be singular (m1 = 0 with
+a dynamic condition). `Newmark::start` solves M₂(t0) W₀ = b − B V₀ − A U₀
+for the starting acceleration, so M₂ must not be singular.
+
+**Step control** (`step_controller.hpp`, `fixed_step.hpp`).
+`StepController::next_step(t)`; `FixedStep({.dt = ...})`.
+
+**Integrator** (`integrator.hpp`). `Integrator(method, step_controller,
+linear_solver)`; `integrate(meshed, t0, t1, IntegrationOutput, const
+Solution *initial = nullptr) -> IntegrationResult{final, snapshots,
+history, report}`.
+
+- The time order is `AssembledProblem::time_order()` at t0, checked
+  against the method's capabilities (0 is refused: use the static
+  solver).
+- The state comes from `initial` (same mesh object; velocities required
+  for time order 2) or from `initial_values(t0)` / `initial_velocities(t0)`,
+  free part only.
+- Times: on a stretch of equal steps from an anchor, step k ends at
+  anchor + k·dt; a step ending within 1e-9·dt of the next target (a
+  snapshot time or t1) lands on it, and a step that would pass it is
+  shortened. The anchor moves to every target landed on, so a run that
+  lands on t1 and a run that starts there take the same steps.
+- Each step assembles at `(1 − fraction)·t + fraction·t_new` with the
+  previous result as `previous`, and prepares the linear solver only when
+  there is none yet, dt changed, or an operator with a non-zero weight in
+  the step matrix (and not `is_zero`) `depends_on_t`.
+- Each step's `StepRecord{t, dt, accepted, linear_iterations, residual,
+  time}` updates a running summary and is kept only with
+  `keep_step_history`; snapshots are taken at `snapshot_times` (strictly
+  increasing in [t0, t1]; t0 keeps the start) and every `snapshot_every`
+  steps, once per step. The summary becomes the report "integrator"
+  (t0, t1, time_order, steps, rejected_steps, min_dt, max_dt,
+  linear_iterations, max_linear_iterations, max_residual, assemblies,
+  prepares, snapshots).
+- Continuing a run from `previous.final` gives the same values bit for
+  bit for the first-order methods when the long run lands on the split
+  time; for `Newmark` the acceleration is computed again at the split
+  time, so equal to rounding.
 
 ## Determinism
 

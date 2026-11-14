@@ -1,8 +1,9 @@
 # Agent guide
 
 C++23 library (compiled, not header-only) for 2D geometry, triangle
-meshing, their file formats and the problem description, the first slice of a from-scratch rewrite that will grow into one
-linear scalar PDE with P1 finite elements. Read
+meshing, their file formats, the problem description, its P1 finite
+element assembly and its static and time-dependent solution: a
+from-scratch rewrite for one linear scalar PDE with P1 finite elements. Read
 [docs/decisions.md](docs/decisions.md) (the owner's decisions: your
 specification), then [docs/architecture.md](docs/architecture.md) (modules,
 types, data flow) and [docs/vision.md](docs/vision.md) (direction).
@@ -32,6 +33,8 @@ impossible or unclear, ask.
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
+| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
+| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors; Eigen is included only there and in `sparse_lu.cpp` and `bicgstab.cpp`) and `vectors.hpp` (norms, residual, operator products); `time_methods.cpp` holds the three time methods |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
@@ -57,7 +60,9 @@ ctest --test-dir build -R mesh_pipeline --output-on-failure   # one test
 ```
 
 Dependencies: Boost (tests only), libxml2 development files (`pde2d_io`),
-SymEngine 0.14 (`pde2d_fem`; give its config directory on the first
+Eigen 3.3 or later (`pde2d_solve`; header-only, found with
+`find_package(Eigen3)`), SymEngine 0.14 (`pde2d_fem`; give its config
+directory on the first
 configure, for example `tools/test.sh
 -DSymEngine_DIR=$HOME/.local/opt/symengine-0.14/lib/cmake/symengine`; it
 is cached in the build directory), Node.js (optional: the viewer tests
@@ -72,9 +77,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - Names: snake_case for functions, variables and members; PascalCase for
   types; enumerators in snake_case.
 - One CMake library per module (`pde2d_geometry`, `pde2d_mesh`,
-  `pde2d_io`, `pde2d_fem`). Dependencies point one way: mesh may include
-  geometry, io and fem may include mesh and geometry, never the reverse
-  (and io and fem not each other). Heavy dependencies (Boost, later Eigen,
+  `pde2d_io`, `pde2d_fem`, `pde2d_solve`). Dependencies point one way:
+  mesh may include geometry, io and fem may include mesh and geometry,
+  solve may include fem (and below), never the reverse (and io and fem
+  not each other, nor io and solve). Heavy dependencies (Boost, Eigen,
   SymEngine, libxml2) only in `.cpp` files, never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
   headers in `src/<module>/`. Tests use only public headers. Narrow
@@ -196,8 +202,28 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   inside a colour; never sum into a slot in another order.
 - **Assembly does no symbolic work.** Derivatives it needs (div A, U_D',
   U_D'') are compiled in the `MeshedProblem` constructor.
+- **Eigen stays in `src/solve/`** (`eigen_view.hpp` and the solver
+  `.cpp` files); public headers use `fem::CsrMatrix` and
+  `std::vector`/`std::span`.
+- **The integrator decides from declarations.** A method's supported time
+  orders come from `capabilities()`, checked against
+  `AssembledProblem::time_order()`; whether to prepare the linear solver
+  again comes from dt and the operators' `depends_on_t` / `is_zero` for
+  the non-zero weights of `step_matrix_weights(dt)`. Never test a
+  method's type or name.
+- **Time methods use `right_hand_side()` as it is**: it already holds the
+  whole lifting (load − A_FD U_D − B_FD U_D' − M2_FD U_D''). The static
+  solver must not use it for time order 1 or 2; it builds load − A_FD U_D.
+- **Never invert B or M2 in a step**: B can be singular (m1 = 0 with a
+  dynamic condition) and either can be a zero operator. Only `Newmark`'s
+  `start` solves with M2.
+- **Step times are anchor + k·dt**, not sums, and steps land exactly on
+  snapshot times and t1, so a continued run (`integrate(meshed, t1, t2,
+  output, &previous.final)`) matches one long run that lands on t1 (bit
+  for bit for the first-order methods; `tests/solve/time_integration.cpp`).
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
-  solvers and time integration, well-posedness
+  adaptive time stepping, conjugate gradients, explicit time methods,
+  handling pure Neumann problems, well-posedness
   checks, callables, anisotropic meshing, planners,
   the simple-options facade, Gmsh export, reading the old boundary
   context of `.pde2d` files as curve links. Do not add them unless a task

@@ -37,6 +37,11 @@ endif()
 find_package(SymEngine 0.14 CONFIG REQUIRED)
 add_subdirectory(src/fem)
 
+# Eigen 3 (header-only) solves the linear systems in pde2d_solve, only in its
+# .cpp files.
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+add_subdirectory(src/solve)
+
 if(PDE2D_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
