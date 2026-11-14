@@ -9,6 +9,8 @@ export function h(tag, attributes = {}, ...children) {
     if (value === undefined || value === null || value === false) continue;
     if (name.startsWith("on")) element.addEventListener(name.slice(2), value);
     else if (name === "class") element.className = value;
+    // A textarea's value attribute does not set its text: use the property.
+    else if (name === "value" && "value" in element && element.tagName !== "OPTION" && element.tagName !== "SELECT") element.value = value;
     else if (name === "dataset") Object.assign(element.dataset, value);
     else if (name in element && typeof value !== "string") element[name] = value;
     else element.setAttribute(name, value === true ? "" : value);

@@ -3,6 +3,8 @@
 #include "pde2d/fem/compiled_expression.hpp"
 
 #include <array>
+#include <cmath>
+#include <limits>
 #include <format>
 #include <functional>
 #include <optional>
@@ -184,10 +186,13 @@ fem::Problem read_problem(const Json &section, Errors &errors) {
         if (priority.is_null())
           return;
         const double value = require_number(priority, where + ".priority");
-        if (value != static_cast<double>(static_cast<int>(value)) ||
-            value < -1'000'000 || value > 1'000'000)
-          throw std::invalid_argument(where +
-                                      ".priority: expected a whole number");
+        // Checked before the conversion: converting a double outside int's
+        // range is undefined behaviour.
+        if (value != std::floor(value) ||
+            value < std::numeric_limits<int>::min() ||
+            value > std::numeric_limits<int>::max())
+          throw std::invalid_argument(
+              where + ".priority: expected a whole number that fits an int");
         condition.priority = static_cast<int>(value);
       });
       problem.boundary_conditions.emplace(item.key(), std::move(condition));

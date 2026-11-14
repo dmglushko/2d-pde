@@ -3,7 +3,7 @@
 
 import { api, saveBlob } from "./api.js";
 import { runAll, runStage, scheduleProblemCheck, toast } from "./actions.js";
-import { fileKind, stageKey } from "./core.js";
+import { fileKind, normalizeCase, stageKey } from "./core.js";
 import { h, readFileText, fill } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
 import { geometryPanel, loadDomainFile } from "./panels/geometry.js";
@@ -31,8 +31,24 @@ function showStep(step) {
   }
 }
 
+let recovering = false;
+
 function buildPanels() {
-  for (const [name, panel] of Object.entries(panels)) panel.build(element(`panel-${name}`));
+  try {
+    for (const [name, panel] of Object.entries(panels)) panel.build(element(`panel-${name}`));
+  } catch (error) {
+    // A case the forms cannot show: start over rather than fail on every
+    // visit (the broken case would otherwise be restored from storage).
+    console.error(error);
+    if (recovering) throw error;
+    recovering = true;
+    try {
+      toast(`This case cannot be shown (${error.message}); a new case was started.`);
+      loadCase(structuredClone(store.catalog.default_case));
+    } finally {
+      recovering = false;
+    }
+  }
 }
 
 function updateDots() {
@@ -83,14 +99,19 @@ function refresh(reason) {
 
 // A case read from a file or an example replaces the current one; every
 // result is dropped.
-function loadCase(caseData) {
-  if (caseData?.format !== "pde2d-app-case") {
-    toast("This file is not a pde2d app case.");
-    return;
+function loadCase(input) {
+  let normalized;
+  try {
+    normalized = normalizeCase(input, store.catalog.default_case);
+  } catch (error) {
+    toast(error.message);
+    return false;
   }
+  if (normalized.replaced.length) toast(`Replaced by defaults: ${normalized.replaced.join(", ")}`);
   for (const stage of Object.keys(store.results)) store.results[stage] = null;
-  setCase(caseData);
+  setCase(normalized.caseData);
   runStage("geometry");
+  return true;
 }
 
 function saveCase() {
@@ -184,7 +205,7 @@ async function start() {
 
   subscribe(refresh);
   const saved = savedCase();
-  loadCase(saved?.format === "pde2d-app-case" ? saved : structuredClone(store.catalog.default_case));
+  if (!saved || !loadCase(saved)) loadCase(structuredClone(store.catalog.default_case));
 }
 
 start();

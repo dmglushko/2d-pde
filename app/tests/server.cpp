@@ -121,6 +121,23 @@ int main() {
          const auto bad = client.Post("/api/mesh", "{", "application/json");
          check(bad && bad->status == 400, "not JSON");
        }},
+      {"large bodies are refused",
+       [] {
+         app::Server server({.host = "127.0.0.1",
+                             .port = 0,
+                             .web_dir = PDE2D_APP_WEB_DIR,
+                             .examples_dir = {},
+                             .max_body_bytes = 1024});
+         const int port = server.bind();
+         std::thread thread([&] { server.listen(); });
+         httplib::Client client("127.0.0.1", port);
+         const auto response = client.Post("/api/mesh", std::string(4096, ' '),
+                                           "application/json");
+         const int status = response ? response->status : 0;
+         server.stop();
+         thread.join();
+         check(status == 413, "status " + std::to_string(status));
+       }},
       {"other sites cannot drive the server",
        [] {
          const Running running;

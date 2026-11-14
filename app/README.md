@@ -93,5 +93,5 @@ This prints a JSON summary of every stage and, with `--output`, writes
 
 `ctest --test-dir build -R app_` runs the app's tests: the stages and
 the catalog (`app_session`), the HTTP API (`app_server`), every example
-case on the command line (`app_run_*`) and the page's helpers in Node.js
-(`app_web`, skipped without Node).
+case on the command line (`app_run_*`) and the page's code in Node.js
+(`app_web`, `app_web_actions`; skipped without Node).

@@ -93,6 +93,7 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
   const bool check_host = is_loopback(impl_->options.host);
 
   http.set_mount_point("/", web.string());
+  http.set_payload_max_length(impl_->options.max_body_bytes);
   http.set_default_headers({{"Cache-Control", "no-store"}});
 
   // A page on another site must not drive this server: API requests must

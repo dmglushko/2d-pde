@@ -120,6 +120,11 @@ double OptionReader::number(std::string_view name) const {
 
 long long OptionReader::integer(std::string_view name) const {
   const Json &json = value(spec(name, OptionKind::integer));
+  if (json.is_number_unsigned() &&
+      json.get<unsigned long long>() >
+          static_cast<unsigned long long>(
+              std::numeric_limits<long long>::max()))
+    fail(path(name), "is out of range");
   if (json.is_number_integer())
     return json.get<long long>();
   // A form may send 3.0 for 3.
@@ -130,6 +135,14 @@ long long OptionReader::integer(std::string_view name) const {
       return static_cast<long long>(number);
   }
   fail(path(name), "expected a whole number");
+}
+
+int OptionReader::small_integer(std::string_view name) const {
+  const long long number = integer(name);
+  if (number < std::numeric_limits<int>::min() ||
+      number > std::numeric_limits<int>::max())
+    fail(path(name), "is out of range");
+  return static_cast<int>(number);
 }
 
 std::size_t OptionReader::count(std::string_view name) const {

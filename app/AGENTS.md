@@ -39,6 +39,7 @@ meshing) in the app or the page.
 
 1. `tools/format.sh --check` (C++ of the app included).
 2. `tools/test.sh`: the app's tests are `app_session`, `app_server`,
-   `app_run_*` (every case in `examples/`) and `app_web` (Node).
+   `app_run_*` (every case in `examples/`), `app_web` and
+   `app_web_actions` (Node).
 3. For a page change, open it in a browser and use the changed step.
 4. Update `docs/app.md` (and `README.md` if use changes).

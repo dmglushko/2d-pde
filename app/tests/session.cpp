@@ -173,6 +173,38 @@ int main() {
              [&] { (void)app::build_mesh_setup(section); },
              "mesh.improvers[0].options.use: 'sometimes' is not one of");
        }},
+      {"whole numbers out of range are refused, not narrowed",
+       [] {
+         Json section = app::default_mesh_section();
+         section["improvers"] =
+             Json::array({{{"type", "laplacian_smoothing"},
+                           {"options", {{"iterations", -4294967295LL}}}}});
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_mesh_setup(section); },
+             "mesh.improvers[0].options.iterations: is out of range");
+         section["improvers"][0]["options"]["iterations"] =
+             18446744073709551615ULL;
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_mesh_setup(section); }, "out of range");
+         section = app::default_mesh_section();
+         section["refiner"]["options"]["max_points"] = -1;
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_mesh_setup(section); },
+             "must not be negative");
+
+         Json problem = app::default_problem_section();
+         problem["boundary_conditions"]["left"] = {
+             {"alpha", "1"}, {"g", "0"}, {"priority", 1e100}};
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_problem(problem); },
+             "problem.boundary_conditions.left.priority: expected a whole "
+             "number that fits an int");
+         problem["boundary_conditions"]["left"]["priority"] = -2147483648.0;
+         check(app::build_problem(problem)
+                       .boundary_conditions.at("left")
+                       .priority == -2147483647 - 1,
+               "the smallest int is accepted");
+       }},
       {"a missing refiner is no refiner",
        [] {
          Json section = app::default_mesh_section();
@@ -298,6 +330,25 @@ int main() {
          request["field"] = {{"kind", "initial_u"}};
          expect_stage_error([&] { (void)session.field(request); }, "field",
                             "time order 0");
+
+         // The right-hand side at the time asked for, not at assembly.t.
+         case_json["problem"]["equation"]["f"] = "t";
+         request["case"] = case_json;
+         request["field"] = {{"kind", "right_hand_side"}, {"t", 2.0}};
+         const Json at_two = session.field(request);
+         check(at_two["t"] == 2.0, "assembled at t = 2");
+         Json later = case_json;
+         later["assembly"]["t"] = 2.0;
+         request["case"] = later;
+         request["field"] = {{"kind", "right_hand_side"}};
+         check(session.field(request)["values"] == at_two["values"],
+               "the same as assembling the case at t = 2");
+         request["case"] = case_json;
+         request["field"] = {{"kind", "right_hand_side"}};
+         bool zero = true;
+         for (const Json &value : session.field(request)["values"])
+           zero = zero && (value.is_null() || value.get<double>() == 0.0);
+         check(zero, "f = t is zero at the case's t = 0");
        }},
       {"errors carry their stage",
        [] {

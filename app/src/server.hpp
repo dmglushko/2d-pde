@@ -3,6 +3,7 @@
 #include "session.hpp"
 
 #include <filesystem>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -19,6 +20,9 @@ struct ServerOptions {
   std::filesystem::path web_dir;
   // Example cases (*.json) offered by GET /api/examples; may be empty.
   std::filesystem::path examples_dir;
+  // Larger request bodies are refused (413). A case carries its SVG or
+  // mesh text, so this is generous.
+  std::size_t max_body_bytes = 64 * 1024 * 1024;
 };
 
 class Server {

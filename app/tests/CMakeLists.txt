@@ -33,4 +33,6 @@ find_program(PDE2D_NODE node)
 if(PDE2D_NODE)
   add_test(NAME app_web
     COMMAND ${PDE2D_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/web.test.mjs)
+  add_test(NAME app_web_actions
+    COMMAND ${PDE2D_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/web_actions.test.mjs)
 endif()

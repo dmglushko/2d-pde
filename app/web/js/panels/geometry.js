@@ -2,7 +2,7 @@
 // file), its regions and region edits.
 
 import { downloadExport } from "../api.js";
-import { runStage, toast } from "../actions.js";
+import { notePendingEdit, runStage, toast } from "../actions.js";
 import { fileKind, formatNumber, regionToken } from "../core.js";
 import { actionButton, errorBox, h, markError, optionsForm, readFileText, stat, fill } from "../dom.js";
 import { editCase, freshResult, lastResult, store } from "../state.js";
@@ -145,24 +145,13 @@ function describeEdit(edit) {
   return JSON.stringify(edit);
 }
 
-// Adds a region edit. The boundary conditions follow: a renamed region
-// keeps its condition, a merged one gives way to its target's, and both
-// halves of a split start with the condition of the whole.
+// Adds a region edit. The boundary conditions follow only once the
+// library has accepted the edit (actions.js, syncConditions): a renamed
+// region keeps its condition, both halves of a split start with the
+// condition of the whole, a merged region gives way to its target's.
 function addEdit(edit) {
-  editCase((c) => {
-    (c.geometry.region_edits ??= []).push(edit);
-    const conditions = c.problem?.boundary_conditions;
-    if (!conditions) return;
-    const move = (from, ...to) => {
-      if (!(from in conditions)) return;
-      const condition = conditions[from];
-      delete conditions[from];
-      for (const name of to) conditions[name] = structuredClone(condition);
-    };
-    if (edit.op === "rename") move(edit.from, edit.to);
-    else if (edit.op === "merge") delete conditions[edit.source];
-    else if (edit.op === "split") move(edit.region, edit.first, edit.second);
-  }, "structure");
+  editCase((c) => (c.geometry.region_edits ??= []).push(edit), "structure");
+  notePendingEdit(edit);
   scheduleGeometry();
 }
 

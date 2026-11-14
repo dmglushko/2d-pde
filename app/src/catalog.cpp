@@ -234,12 +234,9 @@ MeshCatalog make_mesh_catalog() {
                      use_option(defaults.use)},
          .make = [](const OptionReader &options)
              -> std::shared_ptr<const mesh::Improver> {
-           const long long iterations = options.integer("iterations");
-           if (iterations > 1'000'000'000)
-             throw std::invalid_argument("iterations is too large");
            return std::make_shared<mesh::LaplacianSmoothing>(
                mesh::LaplacianSmoothingOptions{
-                   .iterations = static_cast<int>(iterations),
+                   .iterations = options.small_integer("iterations"),
                    .use = use_from_name(options.choice("use"))});
          }});
   }

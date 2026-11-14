@@ -144,17 +144,76 @@ export function barycentric(x, y, ax, ay, bx, by, cx, cy) {
 
 // --- the case ------------------------------------------------------------------
 
-// The case with exactly one boundary condition per region: regions without
-// one get `defaultCondition`, conditions for regions that no longer exist
-// are dropped. Returns a new case; the input is not changed.
-export function withConditionsFor(caseData, regions, defaultCondition) {
+// The case with exactly one boundary condition per region of `regions`
+// (the regions of a geometry the library accepted). Returns a new case;
+// the input is not changed.
+//
+// - `edit` is the region edit that produced these regions, or null. A
+//   rename gives the new name the old name's condition, a split gives both
+//   halves the condition of the whole; a merge needs nothing (the target
+//   keeps its own).
+// - A condition whose region is gone moves to view.condition_archive, so
+//   it comes back when its region does (an edit removed again).
+// - A region without a condition takes it from the archive, else a copy of
+//   `defaultCondition`.
+// - The conditions are listed in the order of `regions`.
+export function reconcileConditions(caseData, regions, defaultCondition, edit = null) {
   const next = structuredClone(caseData);
   const problem = (next.problem ??= {});
   const old = problem.boundary_conditions ?? {};
+  const view = (next.view ??= {});
+  const archive = (view.condition_archive ??= {});
   const conditions = {};
-  for (const region of regions) conditions[region] = old[region] ?? structuredClone(defaultCondition);
+  const carried = {};
+  if (edit?.op === "rename" && old[edit.from] && regions.includes(edit.to) && !(edit.to in old)) carried[edit.to] = old[edit.from];
+  if (edit?.op === "split" && old[edit.region])
+    for (const name of [edit.first, edit.second]) if (regions.includes(name) && (name === edit.region || !(name in old))) carried[name] = old[edit.region];
+  for (const [name, condition] of Object.entries(old)) if (!regions.includes(name)) archive[name] = condition;
+  for (const region of regions) {
+    if (region in carried) conditions[region] = structuredClone(carried[region]);
+    else if (region in old) conditions[region] = old[region];
+    else if (region in archive) conditions[region] = archive[region];
+    else conditions[region] = structuredClone(defaultCondition);
+    delete archive[region];
+  }
   problem.boundary_conditions = conditions;
+  if (Object.keys(archive).length === 0) delete view.condition_archive;
+  if (Object.keys(view).length === 0) delete next.view;
   return next;
+}
+
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+// A case as the page can show it: the format is checked, and a section
+// that is missing or of the wrong type is replaced by the default's (also
+// the parts of the mesh section the forms need). Everything else is left
+// for the server, which reads the case strictly. Returns {caseData,
+// replaced: [paths]}; throws an Error for something that is not a case.
+export function normalizeCase(input, defaults) {
+  if (!isObject(input) || input.format !== "pde2d-app-case") throw new Error("This file is not a pde2d app case.");
+  const caseData = structuredClone(input);
+  const replaced = [];
+  const ensure = (object, key, valid, fallback, path) => {
+    if (!valid(object[key])) {
+      object[key] = structuredClone(fallback);
+      replaced.push(path);
+    }
+  };
+  const sources = ["shape", "svg", "mesh_file"];
+  ensure(caseData, "geometry", (g) => isObject(g) && sources.includes(g.source), defaults.geometry, "geometry");
+  ensure(caseData, "mesh", isObject, defaults.mesh, "mesh");
+  for (const key of ["spec", "discretizer", "triangulator"]) ensure(caseData.mesh, key, isObject, defaults.mesh[key], `mesh.${key}`);
+  ensure(caseData.mesh, "refiner", (r) => r === null || isObject(r), defaults.mesh.refiner, "mesh.refiner");
+  ensure(caseData.mesh, "improvers", (list) => Array.isArray(list) && list.every(isObject), defaults.mesh.improvers, "mesh.improvers");
+  ensure(caseData, "problem", isObject, defaults.problem, "problem");
+  for (const key of ["equation", "parameters", "boundary_conditions", "initial"])
+    ensure(caseData.problem, key, (v) => v === undefined || isObject(v), {}, `problem.${key}`);
+  ensure(caseData, "assembly", (a) => isObject(a) && (a.t === undefined || Number.isFinite(a.t)), defaults.assembly, "assembly");
+  if (caseData.view !== undefined && !isObject(caseData.view)) {
+    delete caseData.view;
+    replaced.push("view");
+  }
+  return { caseData, replaced };
 }
 
 // The path an error message names ("mesh.refiner.options.x: ..."), or

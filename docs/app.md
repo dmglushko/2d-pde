@@ -59,7 +59,7 @@ flowchart LR
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`) and the command line |
 | `app/web/` | `index.html`, `style.css`, `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `dom.js` (forms from specs), `view.js` (the picture), `panels/*.js` (one per step), `main.js` |
 | `app/examples/` | example cases and an example SVG |
-| `app/tests/` | `session.cpp`, `server.cpp`, `web.test.mjs` |
+| `app/tests/` | `session.cpp`, `server.cpp`, `web.test.mjs` (pure helpers), `web_actions.test.mjs` (overlapping requests, with a mocked fetch) |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
 
 ## The case
@@ -106,7 +106,8 @@ must not be ignored silently), and a missing value means its default.
 - Problem coefficients are expression texts; an empty or missing one is
   not set. `priority` is a whole number.
 - `solve` is reserved for the solvers and ignored for now; `view` and
-  `notes` are free for the page and for people.
+  `notes` are free for the page and for people. The page keeps
+  `view.condition_archive` there (conditions of regions that are gone).
 - `version` is checked: a case from a newer app is refused, not misread.
 
 ## The API
@@ -124,7 +125,7 @@ All on `127.0.0.1:8765` by default. Every POST body is a case (or, for
 | `POST /api/mesh` | the mesh (flat arrays), stats, `target_met`, the resolved bound, every stage report |
 | `POST /api/problem` | the check: `ok`, `errors` (`path`, `message`), facts per path, each condition's kind, time order, needed initial conditions |
 | `POST /api/assemble` | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
-| `POST /api/field` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`) |
+| `POST /api/field` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`; the right-hand side is assembled at that t) |
 | `POST /api/export/<kind>` | a file: `mesh.pde2d`, `mesh.svg` or `geometry.svg` |
 
 A failure is `{"error": {"stage", "kind", "message"}}`. The HTTP status
@@ -206,9 +207,25 @@ is a reason; record the new choice here.
 - **Only this machine can drive the server**: it listens on 127.0.0.1;
   API requests must name a loopback host (against DNS rebinding) and send
   JSON (which a cross-site form cannot).
-- **Region edits move boundary conditions** in the page: a renamed region
-  keeps its condition, the halves of a split region copy it, and a merged
-  region takes its target's. Regions without a condition get u = 0.
+- **Region edits move boundary conditions** in the page, but only after
+  the library accepted the edit: a renamed region keeps its condition,
+  the halves of a split region copy it, and a merged region takes its
+  target's. A condition whose region disappears is kept in
+  `view.condition_archive` and comes back with its region (an edit
+  removed again); a region without either gets u = 0
+  (`reconcileConditions` in `core.js`).
+- **Only the latest answer counts.** Every request of a stage carries a
+  generation, and every loaded case an id; an answer to an older request,
+  or for a case that was replaced, is dropped. Conditions are synced only
+  for the geometry that is still in the case.
+- **A case is normalized before it is shown** (`normalizeCase`): a missing
+  or malformed section is replaced by the default's, with a notice, and
+  a case the forms still cannot show is replaced by a new case instead of
+  failing on every visit.
+- **Request bodies are limited** to 64 MiB (`ServerOptions::
+  max_body_bytes`); larger ones get 413.
+- **Whole numbers are checked before they are narrowed** (`OptionReader::
+  small_integer`, priorities): a value that does not fit is an error.
 - **Fields are drawn with exact linear interpolation** per pixel; values
   given at some nodes only (Dirichlet values, b) are drawn as dots.
 - **Colours** follow a fixed categorical order for regions (eight, then

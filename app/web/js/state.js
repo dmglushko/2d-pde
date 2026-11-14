@@ -14,6 +14,9 @@ export const store = {
   // Per stage: the ApiError of its last run, or null.
   errors: { geometry: null, mesh: null, problem: null, assemble: null, field: null },
   busy: new Set(),
+  // Changes whenever a case replaces the current one, so answers to
+  // requests made for the old case can be told apart.
+  caseId: 0,
 };
 
 const listeners = new Set();
@@ -30,6 +33,7 @@ export function notify(reason) {
 }
 
 export function setCase(caseData) {
+  store.caseId += 1;
   store.caseData = caseData;
   for (const stage of Object.keys(store.errors)) store.errors[stage] = null;
   persist();

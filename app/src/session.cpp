@@ -165,9 +165,13 @@ struct Session::State {
     return meshed;
   }
 
-  const fem::AssembledProblem &get_assembled(const Json &case_json) {
+  // At `time`, or at the case's assembly time when it is not given.
+  const fem::AssembledProblem &
+  get_assembled(const Json &case_json,
+                std::optional<double> time = std::nullopt) {
     const double t =
-        staged("assembly", [&] { return assembly_time(case_json); });
+        time ? *time
+             : staged("assembly", [&] { return assembly_time(case_json); });
     const auto &problem = get_meshed(case_json);
     std::string key = meshed_key + "\n" + std::format("{}", t);
     if (!assembled || key != assembled_key) {
@@ -399,7 +403,8 @@ Json Session::field(const Json &request) {
     return out;
   }
   if (kind == "right_hand_side") {
-    const fem::AssembledProblem &assembled = state_->get_assembled(case_json);
+    const fem::AssembledProblem &assembled =
+        state_->get_assembled(case_json, t);
     const fem::MeshedProblem &meshed = *assembled.meshed_problem();
     std::vector<double> values(meshed.mesh()->nodes.size(), std::nan(""));
     const auto rhs = assembled.right_hand_side();

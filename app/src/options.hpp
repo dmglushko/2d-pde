@@ -63,7 +63,11 @@ public:
                std::span<const OptionSpec> specs);
 
   double number(std::string_view name) const;
+  // A whole number; 3.0 counts as 3. Throws std::invalid_argument for a
+  // fraction or a value outside long long.
   long long integer(std::string_view name) const;
+  // A whole number that fits an int (std::invalid_argument otherwise).
+  int small_integer(std::string_view name) const;
   // A whole number that is not negative.
   std::size_t count(std::string_view name) const;
   std::string choice(std::string_view name) const;

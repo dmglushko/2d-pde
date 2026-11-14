@@ -13,8 +13,9 @@ import {
   rgbToOklab,
   smallestAngle,
   stageKey,
+  normalizeCase,
+  reconcileConditions,
   triangleAngles,
-  withConditionsFor,
 } from "../web/js/core.js";
 
 const cases = [];
@@ -70,13 +71,49 @@ test("barycentric coordinates", () => {
   assert.equal(barycentric(0, 0, 0, 0, 1, 1, 2, 2), null);
 });
 
-test("conditions follow the regions", () => {
-  const caseData = { problem: { boundary_conditions: { left: { alpha: "2", g: "1" }, gone: { beta_n: "1" } } } };
-  const next = withConditionsFor(caseData, ["left", "right"], { alpha: "1", g: "0" });
-  assert.deepEqual(Object.keys(next.problem.boundary_conditions), ["left", "right"]);
-  assert.equal(next.problem.boundary_conditions.left.alpha, "2", "kept");
-  assert.deepEqual(next.problem.boundary_conditions.right, { alpha: "1", g: "0" });
-  assert.ok("gone" in caseData.problem.boundary_conditions, "the input is not changed");
+test("conditions follow the regions through accepted edits", () => {
+  const dirichlet = { alpha: "1", g: "0" };
+  const neumann = { beta_n: "1", g: "0" };
+  const base = { problem: { boundary_conditions: { left: neumann, right: dirichlet, gone: { beta_n: "2" } } } };
+  // Plain sync: a new region gets the default, a vanished one is archived.
+  let next = reconcileConditions(base, ["left", "right", "top"], dirichlet);
+  assert.deepEqual(Object.keys(next.problem.boundary_conditions), ["left", "right", "top"]);
+  assert.deepEqual(next.problem.boundary_conditions.top, dirichlet);
+  assert.deepEqual(next.view.condition_archive.gone, { beta_n: "2" });
+  assert.ok("gone" in base.problem.boundary_conditions, "the input is not changed");
+  // The region comes back: its condition is restored from the archive.
+  next = reconcileConditions(next, ["left", "right", "gone"], dirichlet);
+  assert.deepEqual(next.problem.boundary_conditions.gone, { beta_n: "2" });
+  assert.deepEqual(Object.keys(next.view.condition_archive), ["top"], "restored ones leave the archive; top is gone now");
+  next = reconcileConditions(next, ["left", "right", "gone", "top"], dirichlet);
+  assert.equal(next.view, undefined, "an empty archive is removed");
+  // Rename: the new name keeps the condition; removing the edit restores the old name.
+  next = reconcileConditions(base, ["walls", "right", "gone"], dirichlet, { op: "rename", from: "left", to: "walls" });
+  assert.deepEqual(next.problem.boundary_conditions.walls, neumann);
+  next = reconcileConditions(next, ["left", "right", "gone"], dirichlet);
+  assert.deepEqual(next.problem.boundary_conditions.left, neumann, "restored after the edit was removed");
+  // Split: both halves copy the whole; the old name may be one of them.
+  next = reconcileConditions(base, ["left", "left_b", "right", "gone"], dirichlet, { op: "split", region: "left", fraction: 0.5, first: "left", second: "left_b" });
+  assert.deepEqual(next.problem.boundary_conditions.left_b, neumann);
+  assert.deepEqual(next.problem.boundary_conditions.left, neumann);
+  // Merge: the target keeps its own; the source is archived.
+  next = reconcileConditions(base, ["right", "gone"], dirichlet, { op: "merge", source: "left", target: "right" });
+  assert.deepEqual(next.problem.boundary_conditions.right, dirichlet);
+  assert.deepEqual(next.view.condition_archive.left, neumann);
+});
+
+test("cases are normalized before they are shown", () => {
+  const defaults = { geometry: { source: "shape" }, mesh: { spec: {}, discretizer: { type: "d" }, triangulator: { type: "t" }, refiner: { type: "r" }, improvers: [] }, problem: { equation: {} }, assembly: { t: 0 } };
+  assert.throws(() => normalizeCase({ geometry: {} }, defaults), /not a pde2d app case/);
+  assert.throws(() => normalizeCase(null, defaults), /not a pde2d app case/);
+  const bare = normalizeCase({ format: "pde2d-app-case" }, defaults);
+  assert.deepEqual(bare.replaced, ["geometry", "mesh", "problem", "assembly"]);
+  assert.deepEqual(bare.caseData.mesh.discretizer, { type: "d" });
+  const partial = normalizeCase({ format: "pde2d-app-case", geometry: { source: "svg", svg: "" }, mesh: { refiner: null, improvers: "x" }, problem: { equation: 3 }, assembly: { t: 2 } }, defaults);
+  assert.deepEqual(partial.replaced, ["mesh.spec", "mesh.discretizer", "mesh.triangulator", "mesh.improvers", "problem.equation"]);
+  assert.equal(partial.caseData.mesh.refiner, null, "no refiner is kept");
+  assert.equal(partial.caseData.geometry.source, "svg");
+  assert.equal(partial.caseData.assembly.t, 2);
 });
 
 test("error paths and stage keys", () => {
