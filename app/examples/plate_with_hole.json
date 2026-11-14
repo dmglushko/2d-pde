@@ -37,10 +37,9 @@
     },
     "improvers": [
       {
-        "type": "laplacian_smoothing",
+        "type": "delaunay_flips",
         "options": {
-          "iterations": 3,
-          "use": "final_only"
+          "use": "local_and_final"
         }
       }
     ]

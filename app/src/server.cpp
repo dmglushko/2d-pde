@@ -3,7 +3,11 @@
 // cpp-httplib is used only in this file.
 #include "httplib.h"
 
+#include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
+#include <vector>
 #include <string_view>
 #include <utility>
 
@@ -65,6 +69,11 @@ void handle(const httplib::Request &request, httplib::Response &response,
   }
 }
 
+std::string read_text(const std::filesystem::path &path) {
+  std::ifstream in(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
 } // namespace
 
 struct Server::Impl {
@@ -113,6 +122,39 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
            [](const httplib::Request &, httplib::Response &response) {
              send_json(response, Session::catalog());
            });
+  // The example cases: their names and notes, and each case by name.
+  const std::filesystem::path examples = impl_->options.examples_dir;
+  http.Get("/api/examples", [examples](const httplib::Request &,
+                                       httplib::Response &response) {
+    Json list = Json::array();
+    std::vector<std::filesystem::path> files;
+    if (!examples.empty() && std::filesystem::is_directory(examples))
+      for (const auto &entry : std::filesystem::directory_iterator(examples))
+        if (entry.path().extension() == ".json")
+          files.push_back(entry.path());
+    std::ranges::sort(files);
+    for (const auto &file : files) {
+      Json item = Json::object();
+      item["name"] = file.filename().string();
+      try {
+        item["notes"] = member(Json::parse(read_text(file)), "notes");
+      } catch (const std::exception &) {
+        continue; // not a readable case: not offered
+      }
+      list.push_back(std::move(item));
+    }
+    send_json(response, list);
+  });
+  http.Get(
+      R"(/api/examples/([a-z0-9_]+\.json))",
+      [examples](const httplib::Request &request, httplib::Response &response) {
+        const auto file = examples / request.matches[1].str();
+        if (examples.empty() || !std::filesystem::is_regular_file(file)) {
+          send_error(response, 404, "request", "input", "no such example");
+          return;
+        }
+        response.set_content(read_text(file), "application/json");
+      });
   http.Get("/api/default-case",
            [](const httplib::Request &, httplib::Response &response) {
              send_json(response, Session::default_case());

@@ -17,6 +17,8 @@ struct ServerOptions {
   std::string host = "127.0.0.1";
   int port = 8765; // 0 picks a free port
   std::filesystem::path web_dir;
+  // Example cases (*.json) offered by GET /api/examples; may be empty.
+  std::filesystem::path examples_dir;
 };
 
 class Server {

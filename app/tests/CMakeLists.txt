@@ -15,7 +15,8 @@ pde2d_app_add_test(app_server server.cpp pde2d_app_server)
 target_include_directories(app_server SYSTEM
   PRIVATE ${PROJECT_SOURCE_DIR}/app/third_party/cpp-httplib)
 target_compile_definitions(app_server
-  PRIVATE PDE2D_APP_WEB_DIR="${PROJECT_SOURCE_DIR}/app/web")
+  PRIVATE PDE2D_APP_WEB_DIR="${PROJECT_SOURCE_DIR}/app/web"
+          PDE2D_APP_EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/app/examples")
 
 # The command line on every example case.
 file(GLOB example_cases CONFIGURE_DEPENDS

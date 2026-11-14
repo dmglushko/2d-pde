@@ -31,7 +31,8 @@ add_executable(pde2d_app src/main.cpp)
 # The page files are served from the source tree, so editing them needs
 # no rebuild; --web DIR serves another copy.
 target_compile_definitions(pde2d_app
-  PRIVATE PDE2D_APP_WEB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/web")
+  PRIVATE PDE2D_APP_WEB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/web"
+          PDE2D_APP_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 target_link_libraries(pde2d_app PRIVATE pde2d_app_server pde2d_warnings)
 
 if(PDE2D_BUILD_TESTS)

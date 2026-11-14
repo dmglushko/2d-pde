@@ -20,6 +20,9 @@
 #ifndef PDE2D_APP_WEB_DIR
 #define PDE2D_APP_WEB_DIR "web"
 #endif
+#ifndef PDE2D_APP_EXAMPLES_DIR
+#define PDE2D_APP_EXAMPLES_DIR ""
+#endif
 
 namespace {
 
@@ -93,8 +96,10 @@ int serve(pde2d::app::ServerOptions options) {
 
 int main(int argc, char **argv) {
   const std::span<char *> args(argv, static_cast<std::size_t>(argc));
-  pde2d::app::ServerOptions options{
-      .host = "127.0.0.1", .port = 8765, .web_dir = PDE2D_APP_WEB_DIR};
+  pde2d::app::ServerOptions options{.host = "127.0.0.1",
+                                    .port = 8765,
+                                    .web_dir = PDE2D_APP_WEB_DIR,
+                                    .examples_dir = PDE2D_APP_EXAMPLES_DIR};
   std::optional<std::filesystem::path> case_path;
   std::optional<std::filesystem::path> output;
   try {

@@ -23,7 +23,10 @@ namespace {
 class Running {
 public:
   Running()
-      : server_({.host = "127.0.0.1", .port = 0, .web_dir = PDE2D_APP_WEB_DIR}),
+      : server_({.host = "127.0.0.1",
+                 .port = 0,
+                 .web_dir = PDE2D_APP_WEB_DIR,
+                 .examples_dir = PDE2D_APP_EXAMPLES_DIR}),
         port_(server_.bind()), thread_([this] { server_.listen(); }) {}
   ~Running() {
     server_.stop();
@@ -89,6 +92,22 @@ int main() {
                    file->get_header_value("Content-Disposition")
                            .find("mesh.svg") != std::string::npos,
                "export");
+       }},
+      {"the examples are listed and served",
+       [] {
+         const Running running;
+         auto client = running.client();
+         const Json list = Json::parse(client.Get("/api/examples")->body);
+         check(list.size() == 3, "three examples");
+         const std::string name = list[0]["name"].get<std::string>();
+         const auto example = client.Get("/api/examples/" + name);
+         check(example && example->status == 200, "served");
+         check(Json::parse(example->body)["format"] == "pde2d-app-case",
+               "a case");
+         const auto missing = client.Get("/api/examples/none.json");
+         check(missing && missing->status == 404, "missing");
+         const auto escape = client.Get("/api/examples/..%2Fsecret.json");
+         check(escape && escape->status != 200, "no path escape");
        }},
       {"errors are JSON with their stage",
        [] {
