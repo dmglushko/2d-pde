@@ -473,22 +473,28 @@ include/pde2d/geometry/   src/geometry/   ->  library pde2d_geometry
 include/pde2d/mesh/       src/mesh/       ->  library pde2d_mesh
 include/pde2d/io/         src/io/         ->  library pde2d_io
 include/pde2d/fem/        src/fem/        ->  library pde2d_fem
+include/pde2d/solve/      src/solve/      ->  library pde2d_solve
 ```
 
 `pde2d_mesh` depends on `pde2d_geometry`, and `pde2d_io` and `pde2d_fem`
-each on `pde2d_mesh` (so on both), never the reverse. Public headers are in
+each on `pde2d_mesh` (so on both), and `pde2d_solve` on `pde2d_fem`, never
+the reverse. Public headers are in
 `include/pde2d/<module>/`; everything in `src/` is private, including the
-private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`, `src/fem/*.hpp`).
+private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`, `src/fem/*.hpp`,
+`src/solve/*.hpp`).
 `pde2d_geometry` and `pde2d_mesh` have no external dependencies;
 `pde2d_io` links libxml2 privately (only `src/io/svg_import.cpp` includes
 it), and `pde2d_fem` links SymEngine 0.14 privately (only through the
-private header `src/fem/symengine_expression.hpp`). The tests use
+private header `src/fem/symengine_expression.hpp`), and `pde2d_solve` uses
+Eigen 3 (header-only) privately (only in the private header
+`src/solve/eigen_view.hpp`, `sparse_lu.cpp` and `bicgstab.cpp`). The tests use
 Boost.Multiprecision (header-only) in one place:
 `geometry_predicates_oracle` checks the adaptive predicates against an
 arbitrary-precision evaluation. The viewer tests need Node.js and are
 skipped without it.
 
-Namespaces: `pde2d::geometry`, `pde2d::mesh`, `pde2d::io` and `pde2d::fem`.
+Namespaces: `pde2d::geometry`, `pde2d::mesh`, `pde2d::io`, `pde2d::fem`
+and `pde2d::solve`.
 
 ## Geometry
 
@@ -1174,6 +1180,110 @@ The result is the same bit for bit as a fresh assembly at that t.
 `used_previous`, and `mass_rebuilt`, `damping_rebuilt`,
 `stiffness_rebuilt`, `load_rebuilt` (1 when something of it was computed,
 0 when reused whole).
+
+## Solvers and time integration (`pde2d_solve`)
+
+```cpp
+auto meshed = std::make_shared<const MeshedProblem>(mesh, problem);
+
+// Static: the time terms dropped, A U = load - A_FD U_D at t.
+StaticResult s = StaticSolver(std::make_shared<SparseLu>()).solve(meshed);
+
+// In time.
+const Integrator integrator(std::make_shared<ImplicitMidpoint>(),
+                            std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.01}),
+                            std::make_shared<BiCgStab>());
+IntegrationResult r = integrator.integrate(meshed, 0.0, 1.0,
+                                           {.snapshot_times = {0.5}});
+// Continuing the run.
+IntegrationResult r2 = integrator.integrate(meshed, 1.0, 2.0, {}, &r.final);
+```
+
+**Linear solvers** (`linear_solver.hpp`). `LinearSolver::prepare(
+std::shared_ptr<const CsrMatrix>)` returns a
+`std::unique_ptr<const PreparedLinearSolver>`, which holds the matrix and
+solves `solve(rhs) -> LinearSolveResult` (values, iterations, relative
+residual |b − Ax| / |b| computed after the solve) as often as needed.
+`SparseLu` (Eigen's SparseLU with COLAMD; the matrix is copied once into
+Eigen's column-major format; a zero pivot throws `std::runtime_error` in
+`prepare`, a result that is not finite throws in `solve`) and `BiCgStab`
+(`BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000}`; Jacobi
+preconditioner; views our arrays through `Eigen::Map` without copying;
+starts from zero; non-convergence throws `std::runtime_error`). An empty
+(0 × 0) system has an empty solution. Eigen appears only in
+`src/solve/eigen_view.hpp` and the two solver `.cpp` files.
+
+**Solution** (`solution.hpp`). `Solution{mesh, time, values, velocities}`;
+`build_solution(meshed, free_values, t)` places the free values at
+`free_nodes()` and `dirichlet_value(k, t)` at the Dirichlet nodes.
+`velocities` is filled only by the `Integrator` for time order 2 (free
+part from the state, Dirichlet nodes from `dirichlet_rate`), so that a run
+can be continued.
+
+**StaticSolver** (`static_solver.hpp`). Assembles at t, solves
+`stiffness().free · U = load() − stiffness().dirichlet · U_D` (not
+`right_hand_side()`, which for time order 1 or 2 also holds the lifting of
+U_D' and U_D''), and returns `StaticResult{solution, reports}` with the
+reports "assembly" and "static_solver" (free_unknowns, linear_iterations,
+residual).
+
+**Time methods** (`time_method.hpp`). A `TimeMethod` declares
+`capabilities()` (`TimeMethodCapabilities{supports_first_order,
+supports_second_order}`), `evaluation_fraction()` (where in the step the
+problem is assembled) and `step_matrix_weights(dt)` (`StepMatrixWeights{
+mass, damping, stiffness}`: the step matrix is mass·M₂ + damping·B +
+stiffness·A, so the integrator can build it and tell when it changes). It
+has `start(assembled at t0, linear_solver, state)` (default: nothing) and
+`advance(assembled, dt, prepared, state) -> StepSolveInfo`. The state is a
+`TimeState{values, velocities, accelerations}` in the free unknowns. The
+right-hand side the methods use is `right_hand_side()`, which already
+holds the whole lifting.
+
+| Method | Orders | Assembled at | Step matrix | Right-hand side |
+| --- | --- | --- | --- | --- |
+| `ImplicitEuler` | 1 | t + dt | B/dt + A | b + B U₀/dt |
+| `ImplicitMidpoint` | 1 | t + dt/2 | B/dt + A/2 | b + (B/dt − A/2) U₀ |
+| `Newmark` (β = 1/4, γ = 1/2) | 2 | t + dt | M₂/(β dt²) + γ B/(β dt) + A | b + M₂(U₀/(β dt²) + V₀/(β dt) + (1/(2β) − 1) W₀) + B(γ U₀/(β dt) + (γ/β − 1) V₀ + dt (γ/(2β) − 1) W₀) |
+
+None inverts B or M₂ during the steps, so B may be singular (m1 = 0 with
+a dynamic condition). `Newmark::start` solves M₂(t0) W₀ = b − B V₀ − A U₀
+for the starting acceleration, so M₂ must not be singular.
+
+**Step control** (`step_controller.hpp`, `fixed_step.hpp`).
+`StepController::next_step(t)`; `FixedStep({.dt = ...})`.
+
+**Integrator** (`integrator.hpp`). `Integrator(method, step_controller,
+linear_solver)`; `integrate(meshed, t0, t1, IntegrationOutput, const
+Solution *initial = nullptr) -> IntegrationResult{final, snapshots,
+history, report}`.
+
+- The time order is `AssembledProblem::time_order()` at t0, checked
+  against the method's capabilities (0 is refused: use the static
+  solver).
+- The state comes from `initial` (same mesh object; velocities required
+  for time order 2) or from `initial_values(t0)` / `initial_velocities(t0)`,
+  free part only.
+- Times: on a stretch of equal steps from an anchor, step k ends at
+  anchor + k·dt; a step ending within 1e-9·dt of the next target (a
+  snapshot time or t1) lands on it, and a step that would pass it is
+  shortened. The anchor moves to every target landed on, so a run that
+  lands on t1 and a run that starts there take the same steps.
+- Each step assembles at `(1 − fraction)·t + fraction·t_new` with the
+  previous result as `previous`, and prepares the linear solver only when
+  there is none yet, dt changed, or an operator with a non-zero weight in
+  the step matrix (and not `is_zero`) `depends_on_t`.
+- Each step's `StepRecord{t, dt, accepted, linear_iterations, residual,
+  time}` updates a running summary and is kept only with
+  `keep_step_history`; snapshots are taken at `snapshot_times` (strictly
+  increasing in [t0, t1]; t0 keeps the start) and every `snapshot_every`
+  steps, once per step. The summary becomes the report "integrator"
+  (t0, t1, time_order, steps, rejected_steps, min_dt, max_dt,
+  linear_iterations, max_linear_iterations, max_residual, assemblies,
+  prepares, snapshots).
+- Continuing a run from `previous.final` gives the same values bit for
+  bit for the first-order methods when the long run lands on the split
+  time; for `Newmark` the acceleration is computed again at the split
+  time, so equal to rounding.
 
 ## Determinism
 
