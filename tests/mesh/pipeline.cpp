@@ -60,6 +60,11 @@ public:
     for (const auto *l : local)
       report.messages.push_back("local " + l->name());
   }
+  std::optional<Parents> refine(WorkingMesh &, std::span<const std::size_t>,
+                                std::span<const LocalImprover *const>,
+                                StageReport &) const override {
+    return std::nullopt;
+  }
 };
 
 // An improver with declared effects and roles (both by default); it does
@@ -359,7 +364,8 @@ int main() {
          const double size = std::sqrt(5.0);
          near(r.domain_size, size, 1e-15, "domain size");
          near(r.max_edge_length, 0.1 * size, 1e-15, "resolved edge length");
-         check(r.target_met && r.longest_edge <= 0.1 * size, "target met");
+         check(r.target_met && r.properties.longest_edge <= 0.1 * size,
+               "target met");
          for (const auto &s : r.reports)
            if (s.stage == "chord_length" || s.stage == "ruppert") {
              near(s.metrics.at("domain_size"), size, 1e-15,
@@ -433,8 +439,9 @@ int main() {
          auto r = Mesher(chords(), ears())
                       .run(circle(1), {.max_edge_length = {.absolute = 0.2}});
          check(!r.target_met, "target missed");
-         near(r.longest_edge, longest_edge(r.mesh), 0, "longest edge");
-         check(r.longest_edge > 0.2, "longest edge above h");
+         near(r.properties.longest_edge, longest_edge(r.mesh), 0,
+              "longest edge");
+         check(r.properties.longest_edge > 0.2, "longest edge above h");
          auto ok = Mesher(chords(), ears(), bisection())
                        .run(circle(1), {.max_edge_length = {.absolute = 0.2}});
          check(ok.target_met, "with a refiner");

@@ -1,35 +1,29 @@
-// Repeated refinement on straight domains: the mesh stays conforming and
-// shape regular. Newest vertex bisection makes at most four similarity
-// classes per initial triangle; red-green-blue refinement, whose red
-// children are similar to their parent, makes no others.
+// Repeated refinement of marked triangles on straight domains: the mesh
+// stays conforming and shape regular. Newest vertex bisection makes at
+// most four similarity classes per initial triangle; red-green-blue
+// refinement, whose red children are similar to their parent, makes no
+// others. Longest-edge bisection (whose bisection edges are the longest
+// edges at each refinement, not inherited) is checked for its smallest
+// angle only.
 
-#include "adapt/refinement_checks.hpp"
+#include "mesh/refinement_checks.hpp"
 #include "support/check.hpp"
 #include "support/mesh_checks.hpp"
 #include "support/shapes.hpp"
-
-#include "pde2d/adapt/dorfler_marking.hpp"
-#include "pde2d/adapt/maximum_marking.hpp"
-#include "pde2d/adapt/newest_vertex_bisection.hpp"
-#include "pde2d/adapt/red_green_blue_refinement.hpp"
 
 #include <algorithm>
 #include <functional>
 #include <memory>
 #include <vector>
 
-using namespace pde2d::adapt;
+using namespace pde2d::mesh;
 using namespace pde2d::test;
 
 namespace {
 
-using Marked = std::vector<std::size_t>;
-using Indicators = std::function<std::vector<double>(const Mesh &)>;
-
-std::vector<std::shared_ptr<const RefinementMethod>> methods() {
-  return {std::make_shared<NewestVertexBisection>(),
-          std::make_shared<RedGreenBlueRefinement>()};
-}
+// Which triangles a cycle marks (the marking strategies are in
+// pde2d_adapt; these are the plain cases, written out).
+using Marking = std::function<Marked(const Mesh &)>;
 
 // A cheap conformity check for big meshes (check_valid_mesh is brute
 // force): counterclockwise triangles, every directed edge used once, and
@@ -58,80 +52,73 @@ void check_conforming(const Mesh &m) {
   check(open == boundary, "edges used once are the boundary edges");
 }
 
-// Refines `cycles` times with the marks of `marker` applied to
-// `indicators`, checking each result, and checks the shapes: at most four
-// similarity classes per initial triangle over all cycles, and the
-// smallest angle never below the smallest of the first three cycles.
-void cycles(const std::string &label, Mesh m, int count,
-            const MarkingStrategy &marker, const Indicators &indicators,
+// Refines `count` times with the marks of `marking`, checking each
+// result, and checks the shapes: at most four similarity classes per
+// initial triangle over all cycles (newest vertex and red-green-blue),
+// and the smallest angle never below the smallest of the first three
+// cycles.
+void cycles(const std::string &label, Mesh m, int count, const Marking &marking,
             std::size_t full_check_up_to = 1'000'000) {
-  for (const auto &method : methods()) {
+  for (const auto &refiner : bisection_refiners()) {
     Mesh mesh = m;
     const std::size_t initial = mesh.triangles.size();
     const double area = mesh_area(mesh);
     auto classes = shape_classes(mesh);
     std::vector<double> min_angles{min_angle_degrees(mesh)};
     for (int cycle = 1; cycle <= count; ++cycle) {
-      const Marked marked = marker.mark(mesh, indicators(mesh));
+      const Marked marked = marking(mesh);
       check(!marked.empty(), "something is marked");
-      auto r = method->refine(mesh, marked);
+      auto r = refine_with(refiner, mesh, marked);
       if (r.mesh.triangles.size() <= full_check_up_to) {
-        check_refinement(mesh, r, marked);
+        check_refinement(mesh, r, marked,
+                         {.marked_children = marked_children(*refiner)});
       } else {
         check_conforming(r.mesh);
         near(mesh_area(r.mesh), area, 1e-10 * area, "area preserved");
       }
+      near(refiner_report(r).metrics.at("incompatible_splits"), 0, 0,
+           "refinement edges stay compatible");
       mesh = std::move(r.mesh);
       classes = shape_classes(mesh, classes);
       min_angles.push_back(min_angle_degrees(mesh));
-      std::cout << "INFO " << method->name() << ' ' << label << " cycle "
+      std::cout << "INFO " << refiner->name() << ' ' << label << " cycle "
                 << cycle << ": " << mesh.triangles.size()
                 << " triangles, min angle " << min_angles.back()
                 << ", shape classes so far " << classes.size() << '\n';
     }
-    check(classes.size() <= 4 * initial,
-          method->name() + " " + label +
-              ": at most four similarity classes per initial triangle");
+    if (refiner->name() != "longest_edge_bisection")
+      check(classes.size() <= 4 * initial,
+            refiner->name() + " " + label +
+                ": at most four similarity classes per initial triangle");
     const double early =
         *std::min_element(min_angles.begin(), min_angles.begin() + 4);
     for (std::size_t k = 4; k < min_angles.size(); ++k)
       check(min_angles[k] >= early - 1e-9,
-            method->name() + " " + label +
+            refiner->name() + " " + label +
                 ": the minimum angle does not drop after the first cycles");
   }
 }
 
-Indicators everywhere() {
+Marking everything() {
   return [](const Mesh &m) {
-    return std::vector<double>(m.triangles.size(), 1.0);
+    Marked all;
+    for (std::size_t t = 0; t < m.triangles.size(); ++t)
+      all.push_back(t);
+    return all;
   };
 }
 
-// 1 on the triangles touching node position `corner`, else 0.
-Indicators touching(Point corner) {
+// The triangles touching node position `corner`.
+Marking touching(Point corner) {
   return [corner](const Mesh &m) {
-    std::vector<double> eta(m.triangles.size(), 0.0);
+    Marked marked;
     for (std::size_t t = 0; t < m.triangles.size(); ++t)
       for (auto v : m.triangles[t].nodes)
-        if (m.nodes[v] == corner)
-          eta[t] = 1.0;
-    return eta;
-  };
-}
-
-// sqrt(area) / distance to `corner`: like the error of a corner
-// singularity.
-Indicators peaked(Point corner) {
-  return [corner](const Mesh &m) {
-    std::vector<double> eta;
-    for (std::size_t t = 0; t < m.triangles.size(); ++t) {
-      auto c = corners(m, t);
-      Point centroid{(c[0].x + c[1].x + c[2].x) / 3,
-                     (c[0].y + c[1].y + c[2].y) / 3};
-      eta.push_back(std::sqrt(triangle_area(c[0], c[1], c[2])) /
-                    distance(centroid, corner));
-    }
-    return eta;
+        if (m.nodes[v] == corner) {
+          marked.push_back(t);
+          break;
+        }
+    return marked;
   };
 }
 
@@ -140,30 +127,23 @@ void uniform_triangle() {
   Mesh m = initial_mesh(
       CurveGeometry({polygon_loop({{0, 0}, {3, 0}, {1, 2}}, "edge")}), 10);
   check(m.triangles.size() == 1, "one triangle");
-  cycles("uniform triangle", m, 10, MaximumMarking({.theta = 0}), everywhere(),
-         20'000);
+  cycles("uniform triangle", m, 10, everything(), 20'000);
 }
 
 void uniform_l_shape() {
-  cycles("uniform L-shape", initial_mesh(l_shape(), 0.8), 6,
-         MaximumMarking({.theta = 0}), everywhere(), 20'000);
+  cycles("uniform L-shape", initial_mesh(l_shape(), 0.8), 6, everything(),
+         20'000);
 }
 
 // Corner-focused: the triangles at the re-entrant corner, 15 times.
 void corner_l_shape() {
-  cycles("corner L-shape", initial_mesh(l_shape(), 0.5), 15,
-         MaximumMarking({.theta = 1}), touching({1, 1}));
+  cycles("corner L-shape", initial_mesh(l_shape(), 0.5), 15, touching({1, 1}));
 }
 
 void corner_square() {
   cycles("corner square",
          initial_mesh(CurveGeometry({square_loop({0, 0}, 1, "square")}), 0.3),
-         15, MaximumMarking({.theta = 1}), touching({0, 0}));
-}
-
-void dorfler_l_shape() {
-  cycles("Dorfler L-shape", initial_mesh(l_shape(), 0.5), 12,
-         DorflerMarking({.theta = 0.3}), peaked({1, 1}));
+         15, touching({0, 0}));
 }
 
 } // namespace
@@ -172,6 +152,5 @@ int main() {
   return run({{"uniform_triangle", uniform_triangle},
               {"uniform_l_shape", uniform_l_shape},
               {"corner_l_shape", corner_l_shape},
-              {"corner_square", corner_square},
-              {"dorfler_l_shape", dorfler_l_shape}});
+              {"corner_square", corner_square}});
 }

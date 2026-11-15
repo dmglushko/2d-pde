@@ -6,13 +6,26 @@
 
 namespace pde2d::mesh {
 
+namespace {
+
+// The internal Remesher's options, checked under the Mesher's name.
+RemesherOptions remesher_options(const MesherOptions &options) {
+  validate_warning_angle(options.warning_angle_degrees,
+                         "MesherOptions::warning_angle_degrees");
+  return {.warning_angle_degrees = options.warning_angle_degrees};
+}
+
+} // namespace
+
 Mesher::Mesher(std::shared_ptr<const BoundaryDiscretizer> discretizer,
                std::shared_ptr<const InitialTriangulator> triangulator,
                std::shared_ptr<const Refiner> refiner,
-               std::vector<std::shared_ptr<const Improver>> improvers)
+               std::vector<std::shared_ptr<const Improver>> improvers,
+               MesherOptions options)
     : discretizer_(std::move(discretizer)),
-      triangulator_(std::move(triangulator)),
-      remesher_(std::move(refiner), std::move(improvers)) {
+      triangulator_(std::move(triangulator)), options_(options),
+      remesher_(std::move(refiner), std::move(improvers),
+                remesher_options(options_)) {
   if (!discretizer_)
     throw std::invalid_argument("Mesher needs a boundary discretizer");
   if (!triangulator_)

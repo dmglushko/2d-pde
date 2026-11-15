@@ -1,16 +1,19 @@
 #pragma once
 
-// Independent checks of a refinement result, shared by the adapt tests.
-// They use plain long double arithmetic and std::map / std::set, not the
-// library's predicates or edge tables.
+// Independent checks of a refinement result (Remesher::refine), shared by
+// the refinement tests. They use plain long double arithmetic and std::map
+// / std::set, not the library's predicates or edge tables.
 
 #include "support/check.hpp"
 #include "support/mesh_checks.hpp"
 
-#include "pde2d/adapt/refinement.hpp"
-#include "pde2d/mesh/chord_length_discretizer.hpp"
 #include "pde2d/mesh/cdt.hpp"
+#include "pde2d/mesh/chord_length_discretizer.hpp"
+#include "pde2d/mesh/longest_edge_bisection.hpp"
 #include "pde2d/mesh/mesher.hpp"
+#include "pde2d/mesh/newest_vertex_bisection.hpp"
+#include "pde2d/mesh/red_green_blue_refinement.hpp"
+#include "pde2d/mesh/remesher.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,7 +27,34 @@
 
 namespace pde2d::test {
 
-using pde2d::adapt::RefinementResult;
+using pde2d::mesh::Parents;
+using pde2d::mesh::RefinementResult;
+using Marked = std::vector<std::size_t>;
+
+// The three bisection refiners.
+inline std::vector<std::shared_ptr<const mesh::Refiner>> bisection_refiners() {
+  return {std::make_shared<mesh::LongestEdgeBisection>(),
+          std::make_shared<mesh::NewestVertexBisection>(),
+          std::make_shared<mesh::RedGreenBlueRefinement>()};
+}
+
+// How many children a marked triangle has at least: two after one
+// bisection, four when all its edges are halved (red-green-blue).
+inline std::size_t marked_children(const mesh::Refiner &refiner) {
+  return refiner.name() == "red_green_blue" ? 4 : 2;
+}
+
+// Refines with a Remesher that has only this refiner.
+inline RefinementResult
+refine_with(const std::shared_ptr<const mesh::Refiner> &refiner,
+            const Mesh &mesh, std::span<const std::size_t> marked) {
+  return mesh::Remesher(refiner).refine(mesh, marked);
+}
+
+// The refiner's report (after the pipeline report).
+inline const mesh::StageReport &refiner_report(const RefinementResult &r) {
+  return r.reports.at(1);
+}
 
 // A mesh of the geometry (chord-length discretizer and CDT, by default no
 // refiner), with its refinement edges set to the longest edges.
@@ -35,7 +65,7 @@ initial_mesh(const geometry::CurveGeometry &g, double h,
   mesh::Mesher mesher(std::make_shared<mesh::ChordLengthDiscretizer>(),
                       std::make_shared<mesh::Cdt>(), std::move(refiner));
   Mesh m = mesher.run(g, {.max_edge_length = {.absolute = h}}).mesh;
-  adapt::set_longest_edges_as_refinement_edges(m);
+  mesh::set_longest_edges_as_refinement_edges(m);
   return m;
 }
 
@@ -78,6 +108,8 @@ edges_of(const Mesh &m) {
 // itself.
 struct RefinementExpectations {
   bool straight = true;
+  // Children of each marked triangle, at least (marked_children).
+  std::size_t marked_children = 2;
 };
 
 // The checks every refinement result must pass, given its input and the
@@ -89,28 +121,32 @@ struct RefinementExpectations {
 //  - every child names a parent; its corners are the parent's corners or
 //    nodes on the parent's edges; with `straight` the children lie in the
 //    parent and their areas add up to it;
-//  - every marked triangle has four children (all its edges halved); an
-//    unrefined triangle is copied with its vertex order;
+//  - every marked triangle has at least expect.marked_children children;
+//    an unrefined triangle is copied with its vertex order;
 //  - boundary edges: an unsplit edge is kept with its region and link, a
 //    split one becomes two halves through the new node with its region;
 //    links stay valid;
-//  - the report's counts.
+//  - the report's counts and the measured properties.
 inline void check_refinement(const Mesh &in, const RefinementResult &r,
                              std::span<const std::size_t> marked,
                              RefinementExpectations expect = {}) {
   const Mesh &out = r.mesh;
   check_valid_mesh(out);
+  check(r.parents.has_value(), "the result has parents");
+  if (!r.parents)
+    return;
+  const Parents &parents = *r.parents;
   const std::size_t n = in.nodes.size();
   check(out.region_names == in.region_names, "region names kept");
   check(out.chains.size() == in.chains.size(), "chains kept");
-  check(r.node_parents.size() == out.nodes.size(), "a parent per node");
-  check(r.triangle_parents.size() == out.triangles.size(),
+  check(parents.nodes.size() == out.nodes.size(), "a parent per node");
+  check(parents.triangles.size() == out.triangles.size(),
         "a parent per triangle");
   check(out.nodes.size() >= n, "no node removed");
 
   const auto input_edges = edges_of(in);
   for (std::size_t v = 0; v < out.nodes.size(); ++v) {
-    auto [a, b] = r.node_parents[v];
+    auto [a, b] = parents.nodes[v];
     if (v < n) {
       check(a == v && b == v, "an input node is its own parent");
       check(out.nodes[v] == in.nodes[v], "an input node does not move");
@@ -126,22 +162,20 @@ inline void check_refinement(const Mesh &in, const RefinementResult &r,
   }
   std::set<std::pair<std::size_t, std::size_t>> split_edges;
   for (std::size_t v = n; v < out.nodes.size(); ++v)
-    check(
-        split_edges.insert({r.node_parents[v][0], r.node_parents[v][1]}).second,
-        "one new node per split edge");
+    check(split_edges.insert({parents.nodes[v][0], parents.nodes[v][1]}).second,
+          "one new node per split edge");
 
-  // Children grouped by parent; parents in non-decreasing order.
+  // Children grouped by parent.
   std::map<std::size_t, std::vector<std::size_t>> children;
   for (std::size_t t = 0; t < out.triangles.size(); ++t) {
-    std::size_t p = r.triangle_parents[t];
+    std::size_t p = parents.triangles[t];
     check(p < in.triangles.size(), "parent index in range");
-    if (t > 0)
-      check(r.triangle_parents[t - 1] <= p, "triangles listed by parent");
     children[p].push_back(t);
   }
   check(children.size() == in.triangles.size(), "every input triangle has "
                                                 "children (or itself)");
-  std::size_t refined = 0;
+  std::set<std::size_t> distinct(marked.begin(), marked.end());
+  std::size_t refined_unmarked = 0;
   for (const auto &[p, list] : children) {
     const auto &pv = in.triangles[p].nodes;
     if (list.size() == 1) {
@@ -149,7 +183,7 @@ inline void check_refinement(const Mesh &in, const RefinementResult &r,
             "an unrefined triangle is copied with its vertex order");
       continue;
     }
-    ++refined;
+    refined_unmarked += distinct.count(p) == 0 ? 1 : 0;
     check(list.size() <= 4, "at most four children");
     const auto pc = corners(in, p);
     long double area = 0;
@@ -159,7 +193,7 @@ inline void check_refinement(const Mesh &in, const RefinementResult &r,
           check(std::find(pv.begin(), pv.end(), v) != pv.end(),
                 "a child's input corner is a corner of its parent");
         } else {
-          auto [a, b] = r.node_parents[v];
+          auto [a, b] = parents.nodes[v];
           check(std::find(pv.begin(), pv.end(), a) != pv.end() &&
                     std::find(pv.begin(), pv.end(), b) != pv.end(),
                 "a child's new corner lies on an edge of its parent");
@@ -175,9 +209,10 @@ inline void check_refinement(const Mesh &in, const RefinementResult &r,
            1e-12 * triangle_area(pc[0], pc[1], pc[2]),
            "children's areas add up to their parent's");
   }
-  std::set<std::size_t> distinct(marked.begin(), marked.end());
   for (auto t : distinct)
-    check(children[t].size() == 4, "a marked triangle has four children");
+    check(children[t].size() >= expect.marked_children,
+          "a marked triangle has at least " +
+              std::to_string(expect.marked_children) + " children");
   if (expect.straight)
     near(mesh_area(out), mesh_area(in), 1e-12 * mesh_area(in),
          "area preserved");
@@ -204,7 +239,7 @@ inline void check_refinement(const Mesh &in, const RefinementResult &r,
     }
     check((u < n) != (w < n), "a half has one old and one new node");
     std::size_t m = u < n ? w : u;
-    auto [a, b] = r.node_parents[m];
+    auto [a, b] = parents.nodes[m];
     auto it = input_boundary.find({a, b});
     if (it == input_boundary.end())
       it = input_boundary.find({b, a});
@@ -232,23 +267,23 @@ inline void check_refinement(const Mesh &in, const RefinementResult &r,
             in.boundary_edges.size() + split_boundary / 2,
         "each split boundary edge gives two halves");
 
-  const auto &metrics = r.report.metrics;
+  const auto &metrics = refiner_report(r).metrics;
   near(metrics.at("marked"), static_cast<double>(distinct.size()), 0,
        "reported marked count");
-  near(metrics.at("refined_by_closure"),
-       static_cast<double>(refined - distinct.size()), 0,
-       "reported closure count");
-  near(metrics.at("new_nodes"), static_cast<double>(out.nodes.size() - n), 0,
-       "reported new nodes");
-  near(metrics.at("new_triangles"),
-       static_cast<double>(out.triangles.size() - in.triangles.size()), 0,
-       "reported new triangles");
+  near(metrics.at("refined_by_closure"), static_cast<double>(refined_unmarked),
+       0, "reported closure count");
+  check(r.properties.nodes == out.nodes.size() &&
+            r.properties.triangles == out.triangles.size(),
+        "measured counts");
 }
 
 // Same refined mesh, links and parents.
 inline bool same_result(const RefinementResult &a, const RefinementResult &b) {
-  if (!same_mesh(a.mesh, b.mesh) || a.triangle_parents != b.triangle_parents ||
-      a.node_parents != b.node_parents)
+  if (!same_mesh(a.mesh, b.mesh) ||
+      a.parents.has_value() != b.parents.has_value())
+    return false;
+  if (a.parents && (a.parents->triangles != b.parents->triangles ||
+                    a.parents->nodes != b.parents->nodes))
     return false;
   for (std::size_t k = 0; k < a.mesh.boundary_edges.size(); ++k) {
     const auto &x = a.mesh.boundary_edges[k].link,

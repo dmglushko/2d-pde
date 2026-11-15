@@ -41,4 +41,29 @@ void validate(const MeshSpec &spec) {
 
 void validate(const Mesh &mesh) { (void)WorkingMesh::from_mesh(mesh); }
 
+void set_longest_edges_as_refinement_edges(Mesh &mesh) {
+  for (std::size_t t = 0; t < mesh.triangles.size(); ++t) {
+    auto &v = mesh.triangles[t].nodes;
+    for (auto i : v)
+      if (i >= mesh.nodes.size())
+        throw std::invalid_argument(
+            "set_longest_edges_as_refinement_edges: triangle " +
+            std::to_string(t) + " uses a node index out of range");
+    // The squared length of the edge opposite vertex i.
+    auto opposite_length = [&](std::size_t i) {
+      geometry::Point d =
+          mesh.nodes[v[(i + 1) % 3]] - mesh.nodes[v[(i + 2) % 3]];
+      return geometry::dot(d, d);
+    };
+    std::size_t first = 0;
+    for (std::size_t i = 1; i < 3; ++i) {
+      const double length = opposite_length(i), best = opposite_length(first);
+      if (length > best || (length == best && v[i] < v[first]))
+        first = i;
+    }
+    // A rotation keeps the triangle counterclockwise.
+    v = {v[first], v[(first + 1) % 3], v[(first + 2) % 3]};
+  }
+}
+
 } // namespace pde2d::mesh

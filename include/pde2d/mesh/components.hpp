@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -35,16 +36,27 @@ struct ImproverEffects {
   bool flips_edges = false;
   bool moves_nodes = false;
   bool makes_delaunay = false; // the mesh is Delaunay afterwards
+  // Its changes keep every triangle inside the input triangle it came
+  // from and every node on its input node or edge (see Parents in
+  // report.hpp). Flips and node moves do not.
+  bool keeps_parents = false;
 };
 
 // What a refiner tolerates from local improvers during refinement, and
 // what it already maintains in its output. When the pipeline is
 // assembled, these decide which improvers the refiner accepts as local
 // improvers (see plan_pipeline).
+//
+// keeps_parents: its own edits keep every new triangle inside an input
+// triangle and every new node on an input edge, so refine() can return
+// the parents. A refiner that declares it may still lose them in one run
+// (a bisection refiner when the boundary split policy re-triangulates);
+// refine() then returns none and its report says why.
 struct RefinerCapabilities {
   bool tolerates_flips = false;
   bool tolerates_node_moves = false;
   bool maintains_delaunay = false;
+  bool keeps_parents = false;
 };
 
 // How an improver given to the Mesher (or Remesher) wants to be used:
@@ -101,6 +113,10 @@ public:
                    StageReport &report) const = 0;
 };
 
+// A refiner works in two ways: run() refines towards a MeshSpec (inside
+// the Mesher or Remesher::run), refine() refines marked triangles once
+// (Remesher::refine, for adaptive refinement). The same refiners serve
+// both.
 class Refiner {
 public:
   virtual ~Refiner() = default;
@@ -115,6 +131,22 @@ public:
   virtual void run(WorkingMesh &mesh, const MeshSpec &spec,
                    std::span<const LocalImprover *const> local_improvers,
                    StageReport &report) const = 0;
+  // Refines the marked triangles (indices into mesh.triangles(), any
+  // order, repetitions allowed; none deleted) and as many others as the
+  // refiner needs to keep the mesh conforming, once: what "refined" means
+  // is the refiner's own rule (see each refiner). Updates boundary edges
+  // like run() and calls the local improvers after each change. Nothing
+  // marked leaves the mesh unchanged. Returns the parents of the refined
+  // mesh relative to the mesh it was given (see Parents in report.hpp)
+  // when the refiner's own edits kept them true, else none, with the
+  // reason in the report; local improvers are not judged here (the
+  // Remesher does that from their declarations). Throws
+  // std::invalid_argument for a marked index out of range or of a
+  // deleted triangle.
+  virtual std::optional<Parents>
+  refine(WorkingMesh &mesh, std::span<const std::size_t> marked_triangles,
+         std::span<const LocalImprover *const> local_improvers,
+         StageReport &report) const = 0;
 };
 
 // What goes into the improver list of a Mesher or Remesher. It declares

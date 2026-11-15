@@ -44,8 +44,8 @@ int main(int argc, char **argv) {
     mesh::MeshResult result =
         mesher.run(geometry, {.max_edge_length = {.absolute = 0.2}});
     if (!result.target_met)
-      std::cerr << "warning: the longest edge is " << result.longest_edge
-                << ", above the target\n";
+      std::cerr << "warning: the longest edge is "
+                << result.properties.longest_edge << ", above the target\n";
 
     io::export_pde2d(result.mesh, argv[1]);
     if (argc == 3)

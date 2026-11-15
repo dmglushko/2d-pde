@@ -57,7 +57,8 @@ void check_ruppert(const CurveGeometry &g, double h, double angle,
     check(min_angle_degrees(m) >= angle - 1e-9, "min angle bound");
     check(result.target_met, "target met");
     check(longest_edge(m) <= h, "every edge at most max_edge_length");
-    near(result.longest_edge, longest_edge(m), 0, "reported longest edge");
+    near(result.properties.longest_edge, longest_edge(m), 0,
+         "reported longest edge");
   }
 }
 

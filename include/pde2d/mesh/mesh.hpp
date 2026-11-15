@@ -12,6 +12,20 @@
 namespace pde2d::mesh {
 
 // A triangle by its three node indices, counterclockwise.
+//
+// THE REFINEMENT EDGE CONVENTION. Every triangle has a refinement edge:
+// the edge opposite its vertex 0 (nodes[0], the "newest vertex"). The
+// bisection refiners (newest_vertex_bisection.hpp and
+// red_green_blue_refinement.hpp) bisect a triangle there and write the
+// convention into the triangles they make (newest vertex first), so it
+// persists from one refinement to the next with no extra field. The
+// vertex order stays counterclockwise; only which vertex comes first
+// carries the information. Code that copies a mesh keeps every vertex
+// order (to_mesh/from_mesh, the .pde2d round trip and refinement do).
+// Code that builds or edits triangles (flips, Ruppert, a triangulator, a
+// Gmsh import) chooses vertex 0 freely, which keeps every mesh valid for
+// refinement but loses the shape guarantee of newest vertex bisection;
+// call set_longest_edges_as_refinement_edges() after such a change.
 struct Triangle {
   std::array<std::size_t, 3> nodes{};
 };
@@ -53,5 +67,16 @@ struct Mesh {
 // inside a triangle that does not use it (no piece inside another).
 // Throws std::invalid_argument naming the problem.
 void validate(const Mesh &mesh);
+
+// Sets the refinement edge of every triangle to its longest edge: rotates
+// each triangle's vertices (keeping them counterclockwise) so that the
+// vertex opposite the longest edge comes first. Among equally long
+// longest edges (exactly equal squared lengths) the one whose opposite
+// vertex has the smallest node index is taken. Use it once on a mesh that
+// did not come from bisection (from the Mesher with Ruppert or flips, a
+// file), before the first refinement by newest vertex bisection or
+// red-green-blue refinement. Throws std::invalid_argument for a node
+// index out of range.
+void set_longest_edges_as_refinement_edges(Mesh &mesh);
 
 } // namespace pde2d::mesh
