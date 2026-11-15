@@ -357,7 +357,8 @@ int main() {
                "four snapshots of every node");
          check(layout["bytes"] == 4 * 4 * nodes, "bytes");
          const auto exact = session.solution_values(case_json);
-         const std::string bytes = session.solution_values_float32(case_json);
+         const std::string bytes = session.solution_values_float32(
+             summary["job"].get<std::uint64_t>(), 0, 4);
          check(bytes.size() == layout["bytes"].get<std::size_t>(), "size");
          double low = exact[0][0];
          double high = exact[0][0];

@@ -927,3 +927,96 @@ canvas.spy {
     padding-right: 16px;
   }
 }
+
+/* --- foldable sections -------------------------------------------------- */
+
+/* The title of a section or card is the button that folds it. */
+button.fold-toggle {
+  min-height: 0;
+  padding: 2px 4px 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  white-space: normal;
+  gap: 6px;
+  min-width: 0;
+}
+
+button.fold-toggle:hover {
+  background: none;
+  color: var(--accent);
+}
+
+.fold-toggle .chevron {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.12s ease;
+  flex: none;
+}
+
+.fold-toggle[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.section-head h3 {
+  margin: 4px 0;
+}
+
+.fold-body[hidden] {
+  display: none;
+}
+
+/* --- settings ------------------------------------------------------------ */
+
+dialog.settings {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 12px 18px 16px;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+dialog.settings::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+dialog.settings .setting .label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* --- a running solve ------------------------------------------------------ */
+
+.run-progress progress {
+  height: 10px;
+  accent-color: var(--accent);
+}

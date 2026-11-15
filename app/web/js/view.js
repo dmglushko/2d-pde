@@ -2,14 +2,28 @@
 // (smallest angle per triangle, or a field with linear interpolation), with
 // panning, zooming and a readout under the pointer.
 
-import { barycentric, fieldScale, formatNumber, parseColor, rampTable, regionToken, triangleAngles } from "./core.js";
+import { barycentric, fieldScale, formatNumber, getDefaultDigits, nodePositions, parseColor, rampTable, regionToken, triangleAngles, viewTransform } from "./core.js";
 import { h } from "./dom.js";
+import { settings } from "./settings.js";
 
 const QUALITY_MAX_DEGREES = 60;
+// A pan or zoom shows the last full picture moved and scaled; the full
+// picture is drawn again once the gesture pauses this long.
+const SETTLE_MS = 120;
 
+// The colour tokens, read once per theme (getComputedStyle is not free).
+let tokens = new Map();
 function token(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  let value = tokens.get(name);
+  if (value === undefined) {
+    value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    tokens.set(name, value);
+  }
+  return value;
 }
+
+const sameLayers = (a = {}, b = {}) => a.geometry === b.geometry && a.mesh === b.mesh && a.dirichlet === b.dirichlet;
+const sameField = (a, b) => a === b || (a && b && a.values === b.values && a.scale === b.scale && a.label === b.label);
 
 export class Viewer {
   constructor(canvas, tooltip, status) {
@@ -22,31 +36,75 @@ export class Viewer {
     this.data = {};
     this.fittedKey = null;
     this.offscreen = document.createElement("canvas");
+    this.image = null;
+    // The last full picture and the view it was drawn at.
+    this.frame = document.createElement("canvas");
+    this.frameView = null;
+    this.blitRequest = null;
+    this.settleTimer = null;
 
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
-    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.draw());
+    const themeChanged = () => {
+      tokens = new Map();
+      this.tables = null;
+      this.qualityStyles = null;
+      this.draw();
+    };
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChanged);
+    new MutationObserver(themeChanged).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     this.listen();
   }
 
   // data: {geometry (view), mesh (mesh view), meshStale, regions (names),
   // dirichlet (node indices), field ({label, values, scale?}), colorBy,
-  // layers}.
+  // layers}. Draws only when something shown changed; returns whether it
+  // did (the legend changes only then).
   set(data) {
-    const meshChanged = data.mesh !== this.data.mesh;
+    const previous = this.data;
+    const changed =
+      ["geometry", "mesh", "meshStale", "dirichlet", "colorBy"].some((k) => previous[k] !== data[k]) || !sameLayers(previous.layers, data.layers) || !sameField(previous.field, data.field);
+    if (!changed) return false;
+    const meshChanged = data.mesh !== previous.mesh;
+    const fieldChanged = !sameField(previous.field, data.field);
     this.data = data;
     if (meshChanged) this.prepareMesh();
+    if (meshChanged || fieldChanged) this.prepareField();
     const box = this.boundingBox();
     const key = box ? JSON.stringify(box) : null;
     if (key && key !== this.fittedKey) {
       this.fittedKey = key;
       this.fit();
     } else this.draw();
+    return true;
   }
 
+  // What does not depend on the view, once per mesh.
   prepareMesh() {
     const mesh = this.data.mesh;
     this.angles = mesh ? triangleAngles(mesh) : null;
     this.grid = mesh ? buildGrid(mesh) : null;
+    // Triangles by their quality colour, so each colour is one path.
+    this.qualityBuckets = null;
+    if (mesh) {
+      const buckets = Array.from({ length: 256 }, () => []);
+      for (let k = 0; k < this.angles.length; k++) buckets[Math.round(255 * (1 - Math.min(this.angles[k], QUALITY_MAX_DEGREES) / QUALITY_MAX_DEGREES))].push(k);
+      this.qualityBuckets = buckets;
+    }
+  }
+
+  // ... and once per field: whether it has a value at every node, and the
+  // colour position of each node's value.
+  prepareField() {
+    const field = this.data.field;
+    const mesh = this.data.mesh;
+    this.fieldComplete = Boolean(field && mesh && field.values.length * 2 === mesh.nodes.length && Array.prototype.every.call(field.values, (v) => Number.isFinite(v)));
+    this.positions = this.fieldComplete ? nodePositions(field.values, this.scaleOf(field.values)) : null;
+  }
+
+  // The pixel ratio the picture is drawn at: the screen's, at most the
+  // "picture quality" setting.
+  pixelRatio() {
+    return Math.min(window.devicePixelRatio || 1, settings.pixelRatioCap);
   }
 
   boundingBox() {
@@ -64,7 +122,7 @@ export class Viewer {
   }
 
   resize() {
-    const ratio = window.devicePixelRatio || 1;
+    const ratio = this.pixelRatio();
     const { clientWidth: width, clientHeight: height } = this.canvas.parentElement;
     this.canvas.width = Math.max(1, Math.round(width * ratio));
     this.canvas.height = Math.max(1, Math.round(height * ratio));
@@ -98,6 +156,7 @@ export class Viewer {
   // --- drawing ---------------------------------------------------------------
 
   draw() {
+    this.cancelGesture();
     const ctx = this.context;
     const ratio = this.canvas.width / Math.max(1, this.canvas.parentElement.clientWidth);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -113,7 +172,7 @@ export class Viewer {
     if (geometry?.kind === "curves" && (!hasMesh || meshStale)) this.fillGeometry(geometry);
     if (hasMesh && !meshStale) {
       if (colorBy === "quality") this.drawQuality(mesh);
-      if (colorBy === "field" && this.fieldIsComplete()) this.rasterField(mesh, this.data.field.values);
+      if (colorBy === "field" && this.fieldIsComplete()) this.rasterField(mesh);
     }
     if (hasMesh && layers.mesh) {
       const drawn = this.drawEdges(mesh, meshStale ? 0.35 : 1);
@@ -128,11 +187,53 @@ export class Viewer {
     if (hasMesh && !meshStale && layers.dirichlet && this.data.dirichlet) this.drawNodes(mesh, this.data.dirichlet);
     if (meshStale) note = "mesh outdated: run the Mesh step";
     this.status.textContent = note;
+    this.keepFrame();
   }
 
   fieldIsComplete() {
-    const field = this.data.field;
-    return field && field.values.length * 2 === this.data.mesh?.nodes.length && field.values.every((v) => Number.isFinite(v));
+    return Boolean(this.data.field) && this.fieldComplete;
+  }
+
+  // --- gestures --------------------------------------------------------------
+
+  keepFrame() {
+    this.frame.width = this.canvas.width;
+    this.frame.height = this.canvas.height;
+    this.frame.getContext("2d").drawImage(this.canvas, 0, 0);
+    this.frameView = { scale: this.scale, offset: { ...this.offset } };
+  }
+
+  cancelGesture() {
+    if (this.blitRequest !== null) cancelAnimationFrame(this.blitRequest);
+    this.blitRequest = null;
+    clearTimeout(this.settleTimer);
+    this.settleTimer = null;
+  }
+
+  // The view moved (pan or zoom): at most one frame per animation frame,
+  // the last full picture moved and scaled; the full picture once the
+  // gesture pauses.
+  viewMoved() {
+    this.userMoved = true;
+    if (!this.frameView || this.frame.width !== this.canvas.width || this.frame.height !== this.canvas.height) return this.draw();
+    if (this.blitRequest === null)
+      this.blitRequest = requestAnimationFrame(() => {
+        this.blitRequest = null;
+        this.blit();
+      });
+    clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => this.draw(), SETTLE_MS);
+  }
+
+  blit() {
+    const ctx = this.context;
+    const r = this.ratio;
+    const t = viewTransform(this.frameView, { scale: this.scale, offset: this.offset });
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = token("--surface");
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.drawImage(this.frame, t.x * r, t.y * r, this.frame.width * t.scale, this.frame.height * t.scale);
+    ctx.setTransform(r, 0, 0, r, 0, 0);
   }
 
   fillGeometry(geometry) {
@@ -237,33 +338,48 @@ export class Viewer {
     return true;
   }
 
+  // The colour tables, once per theme.
+  colorTables() {
+    this.tables ??= {
+      sequential: rampTable([parseColor(token("--seq-low")), parseColor(token("--seq-high"))]),
+      diverging: rampTable([parseColor(token("--div-low")), parseColor(token("--div-mid")), parseColor(token("--div-high"))]),
+    };
+    return this.tables;
+  }
+
   sequentialTable() {
-    return rampTable([parseColor(token("--seq-low")), parseColor(token("--seq-high"))]);
+    return this.colorTables().sequential;
   }
 
   divergingTable() {
-    return rampTable([parseColor(token("--div-low")), parseColor(token("--div-mid")), parseColor(token("--div-high"))]);
+    return this.colorTables().diverging;
   }
 
-  // Each triangle filled by its smallest angle: dark for small angles.
+  // Each triangle filled by its smallest angle: dark for small angles. One
+  // path per colour.
   drawQuality(mesh) {
     const ctx = this.context;
     const table = this.sequentialTable();
     const n = mesh.nodes;
     const t = mesh.triangles;
-    for (let k = 0; k < this.angles.length; k++) {
-      const index = Math.round(255 * (1 - Math.min(this.angles[k], QUALITY_MAX_DEGREES) / QUALITY_MAX_DEGREES));
-      ctx.fillStyle = `rgb(${table[3 * index]},${table[3 * index + 1]},${table[3 * index + 2]})`;
+    const { x: ox, y: oy } = this.offset;
+    const s = this.scale;
+    ctx.lineWidth = 0.5;
+    this.qualityBuckets.forEach((bucket, index) => {
+      if (bucket.length === 0) return;
       ctx.beginPath();
-      ctx.moveTo(...this.toScreen(n[2 * t[3 * k]], n[2 * t[3 * k] + 1]));
-      ctx.lineTo(...this.toScreen(n[2 * t[3 * k + 1]], n[2 * t[3 * k + 1] + 1]));
-      ctx.lineTo(...this.toScreen(n[2 * t[3 * k + 2]], n[2 * t[3 * k + 2] + 1]));
-      ctx.closePath();
-      ctx.fill();
+      for (const k of bucket) {
+        const a = t[3 * k], b = t[3 * k + 1], c = t[3 * k + 2];
+        ctx.moveTo(ox + n[2 * a] * s, oy - n[2 * a + 1] * s);
+        ctx.lineTo(ox + n[2 * b] * s, oy - n[2 * b + 1] * s);
+        ctx.lineTo(ox + n[2 * c] * s, oy - n[2 * c + 1] * s);
+        ctx.closePath();
+      }
+      ctx.fillStyle = `rgb(${table[3 * index]},${table[3 * index + 1]},${table[3 * index + 2]})`;
       ctx.strokeStyle = ctx.fillStyle;
-      ctx.lineWidth = 0.5;
+      ctx.fill();
       ctx.stroke();
-    }
+    });
   }
 
   // A field may bring its scale (a solution: one scale for every time).
@@ -276,25 +392,32 @@ export class Viewer {
   }
 
   // A P1 field: every pixel inside a triangle gets the linear interpolant
-  // of the three node values.
-  rasterField(mesh, values) {
+  // of the three node values (of their colour positions, prepareField).
+  rasterField(mesh) {
     const width = this.canvas.width;
     const height = this.canvas.height;
-    const scale = this.scaleOf(values);
-    const table = this.fieldTable(scale);
-    this.offscreen.width = width;
-    this.offscreen.height = height;
-    const off = this.offscreen.getContext("2d");
-    const image = off.createImageData(width, height);
+    const table = this.fieldTable(this.scaleOf(this.data.field.values));
+    const positions = this.positions;
+    if (this.offscreen.width !== width || this.offscreen.height !== height || !this.image) {
+      this.offscreen.width = width;
+      this.offscreen.height = height;
+      this.image = this.offscreen.getContext("2d").createImageData(width, height);
+    }
+    const image = this.image;
     const data = image.data;
+    data.fill(0);
     const n = mesh.nodes;
     const t = mesh.triangles;
     const r = this.ratio;
-    const sx = (i) => (this.offset.x + n[2 * i] * this.scale) * r;
-    const sy = (i) => (this.offset.y - n[2 * i + 1] * this.scale) * r;
+    const ox = this.offset.x * r;
+    const oy = this.offset.y * r;
+    const s = this.scale * r;
+    const tolerance = -1e-6;
     for (let k = 0; k < t.length; k += 3) {
-      const [a, b, c] = [t[k], t[k + 1], t[k + 2]];
-      const ax = sx(a), ay = sy(a), bx = sx(b), by = sy(b), cx = sx(c), cy = sy(c);
+      const a = t[k], b = t[k + 1], c = t[k + 2];
+      const ax = ox + n[2 * a] * s, ay = oy - n[2 * a + 1] * s;
+      const bx = ox + n[2 * b] * s, by = oy - n[2 * b + 1] * s;
+      const cx = ox + n[2 * c] * s, cy = oy - n[2 * c + 1] * s;
       const x0 = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
       const x1 = Math.min(width - 1, Math.ceil(Math.max(ax, bx, cx)));
       const y0 = Math.max(0, Math.floor(Math.min(ay, by, cy)));
@@ -302,29 +425,28 @@ export class Viewer {
       if (x0 > x1 || y0 > y1) continue;
       const det = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
       if (det === 0) continue;
-      const va = values[a], vb = values[b], vc = values[c];
-      const tolerance = -1e-6;
+      const pa = positions[a], pb = positions[b], pc = positions[c];
+      // l1 and l2 are linear in x along a row: step them.
+      const d1x = (by - cy) / det, d2x = (cy - ay) / det;
       for (let py = y0; py <= y1; py++) {
         const y = py + 0.5;
-        for (let px = x0; px <= x1; px++) {
-          const x = px + 0.5;
-          const l1 = ((by - cy) * (x - cx) + (cx - bx) * (y - cy)) / det;
-          if (l1 < tolerance) continue;
-          const l2 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / det;
-          if (l2 < tolerance) continue;
+        let l1 = (by - cy) * (x0 + 0.5 - cx) / det + ((cx - bx) * (y - cy)) / det;
+        let l2 = (cy - ay) * (x0 + 0.5 - cx) / det + ((ax - cx) * (y - cy)) / det;
+        let o = 4 * (py * width + x0);
+        for (let px = x0; px <= x1; px++, l1 += d1x, l2 += d2x, o += 4) {
+          if (l1 < tolerance || l2 < tolerance) continue;
           const l3 = 1 - l1 - l2;
           if (l3 < tolerance) continue;
-          const v = l1 * va + l2 * vb + l3 * vc;
-          const index = Math.max(0, Math.min(255, Math.round(255 * scale.position(v))));
-          const o = 4 * (py * width + px);
-          data[o] = table[3 * index];
-          data[o + 1] = table[3 * index + 1];
-          data[o + 2] = table[3 * index + 2];
+          const p = l1 * pa + l2 * pb + l3 * pc;
+          const index = 3 * (p <= 0 ? 0 : p >= 1 ? 255 : Math.round(255 * p));
+          data[o] = table[index];
+          data[o + 1] = table[index + 1];
+          data[o + 2] = table[index + 2];
           data[o + 3] = 255;
         }
       }
     }
-    off.putImageData(image, 0, 0);
+    this.offscreen.getContext("2d").putImageData(image, 0, 0);
     const ctx = this.context;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -393,9 +515,8 @@ export class Viewer {
     canvas.addEventListener("pointermove", (event) => {
       if (drag) {
         this.offset = { x: drag.offset.x + event.clientX - drag.x, y: drag.offset.y + event.clientY - drag.y };
-        this.userMoved = true;
         this.tooltip.hidden = true;
-        this.draw();
+        this.viewMoved();
       } else this.hover(event);
     });
     const end = () => {
@@ -416,8 +537,7 @@ export class Viewer {
         const factor = Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015));
         this.scale *= factor;
         this.offset = { x: px - wx * this.scale, y: py + wy * this.scale };
-        this.userMoved = true;
-        this.draw();
+        this.viewMoved();
         this.hover(event);
       },
       { passive: false },
@@ -431,17 +551,18 @@ export class Viewer {
     const py = event.clientY - rect.top;
     const [x, y] = this.toWorld(px, py);
     const rows = [["x, y", `${formatNumber(x)}, ${formatNumber(y)}`]];
+    const digits = getDefaultDigits();
     const { mesh, meshStale, field, geometry } = this.data;
     const region = this.regionNear(px, py);
     if (region) rows.push(["region", region]);
     if (mesh && !meshStale && this.grid) {
       const found = locate(mesh, this.grid, x, y);
       if (found) {
-        rows.push(["triangle", `${found.triangle} · smallest angle ${formatNumber(this.angles[found.triangle], 3)}°`]);
+        rows.push(["triangle", `${found.triangle} · smallest angle ${formatNumber(this.angles[found.triangle], Math.max(2, digits - 1))}°`]);
         if (field && this.fieldIsComplete()) {
           const [a, b, c] = [3 * found.triangle, 3 * found.triangle + 1, 3 * found.triangle + 2].map((k) => mesh.triangles[k]);
           const v = found.weights[0] * field.values[a] + found.weights[1] * field.values[b] + found.weights[2] * field.values[c];
-          rows.push([field.label, formatNumber(v, 6)]);
+          rows.push([field.label, formatNumber(v, digits + 2)]);
         }
       }
     }

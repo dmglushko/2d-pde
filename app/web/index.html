@@ -25,6 +25,7 @@
         <button id="save-case" type="button">Save case</button>
         <span id="unsaved" class="chip" hidden>unsaved changes</span>
         <button id="run-all" class="primary" type="button">Run all</button>
+        <button id="open-settings" class="icon" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog">⚙</button>
       </div>
     </header>
 
@@ -62,6 +63,15 @@
         <div class="legend" id="legend"></div>
       </section>
     </main>
+
+    <dialog id="settings" class="settings" aria-labelledby="settings-title">
+      <div class="settings-head">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="icon" data-close aria-label="Close settings">✕</button>
+      </div>
+      <p class="note">Kept in this browser, not in the case.</p>
+      <div class="settings-body"></div>
+    </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </body>

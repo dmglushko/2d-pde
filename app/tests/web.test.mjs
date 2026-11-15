@@ -27,6 +27,13 @@ import {
   splitSnapshots,
   parseNumberText,
   renameParameter,
+  requestCase,
+  viewTransform,
+  nodePositions,
+  normalizeSettings,
+  SETTINGS_DEFAULTS,
+  parseFolds,
+  setDefaultDigits,
 } from "../web/js/core.js";
 
 const cases = [];
@@ -319,6 +326,68 @@ test("a mesh file keeps its region edits through normalization", () => {
   assert.deepEqual(replaced, []);
   input.geometry.region_edits = "nope";
   assert.deepEqual(normalizeCase(input, defaults).replaced, ["geometry.region_edits"]);
+});
+
+test("a request carries the stage's sections and nothing else", () => {
+  const caseData = { format: "pde2d-app-case", version: 1, notes: "n", view: {}, geometry: { svg: "big" }, mesh: {}, problem: { equation: {} }, assembly: { t: 0 }, solve: { mode: "static" } };
+  assert.deepEqual(requestCase(caseData, "problem"), { format: "pde2d-app-case", version: 1, problem: { equation: {} } });
+  assert.deepEqual(Object.keys(requestCase(caseData, "solve")).sort(), ["format", "geometry", "mesh", "problem", "solve", "version"]);
+  assert.deepEqual(Object.keys(requestCase(caseData, "field")).sort(), ["assembly", "format", "geometry", "mesh", "problem", "version"]);
+  // The server's keys come from the same sections.
+  assert.equal(stageKey(requestCase(caseData, "assemble"), "assemble"), stageKey(caseData, "assemble"));
+});
+
+test("a frame drawn at one view lands where the new view puts it", () => {
+  const from = { scale: 10, offset: { x: 5, y: 100 } };
+  const to = { scale: 25, offset: { x: -40, y: 160 } };
+  const t = viewTransform(from, to);
+  // A world point: its pixel on the old frame, moved by the transform, is
+  // its pixel in the new view.
+  for (const [wx, wy] of [
+    [0, 0],
+    [3, -2],
+    [-7.5, 11],
+  ]) {
+    const old = [from.offset.x + wx * from.scale, from.offset.y - wy * from.scale];
+    const now = [to.offset.x + wx * to.scale, to.offset.y - wy * to.scale];
+    assert.ok(Math.abs(t.x + old[0] * t.scale - now[0]) < 1e-9 && Math.abs(t.y + old[1] * t.scale - now[1]) < 1e-9);
+  }
+  assert.deepEqual(viewTransform(from, from), { scale: 1, x: 0, y: 0 });
+});
+
+test("node colour positions are the scale's, NaN without a value", () => {
+  const scale = fieldScale([-2, 1]);
+  const positions = nodePositions([-2, 0, 1, null, NaN], scale);
+  assert.equal(positions[0], 0);
+  assert.equal(positions[1], 0.5);
+  assert.equal(positions[2], 0.75);
+  assert.ok(Number.isNaN(positions[3]) && Number.isNaN(positions[4]));
+  // Linear: the position of a mean is the mean of the positions.
+  const s = fieldScale([1, 5]);
+  const [a, b] = nodePositions([1.5, 4.5], s);
+  assert.ok(Math.abs(s.position(3) - (a + b) / 2) < 1e-6);
+});
+
+test("settings are made whole and kept in range", () => {
+  assert.deepEqual(normalizeSettings(null), SETTINGS_DEFAULTS);
+  assert.deepEqual(normalizeSettings({ digits: 99, playbackFps: 0.2, checkWhileTyping: "yes", pixelRatioCap: 1.5, other: 1 }), { ...SETTINGS_DEFAULTS, digits: 10, playbackFps: 1, pixelRatioCap: 1.5 });
+  assert.equal(normalizeSettings({ checkDelayMs: 777.4 }).checkDelayMs, 777);
+  assert.equal(normalizeSettings({ followRun: false }).followRun, false);
+});
+
+test("folded sections are read back safely", () => {
+  assert.deepEqual({ ...parseFolds('{"mesh.discretizer": true, "x": 3, "__proto__": false}') }, { "mesh.discretizer": true, ["__proto__"]: false });
+  assert.deepEqual({ ...parseFolds("not json") }, {});
+  assert.deepEqual({ ...parseFolds(null) }, {});
+});
+
+test("the significant digits setting is formatNumber's default", () => {
+  setDefaultDigits(6);
+  assert.equal(formatNumber(Math.PI), "3.14159");
+  setDefaultDigits(4);
+  assert.equal(formatNumber(Math.PI), "3.142");
+  setDefaultDigits(1);
+  assert.equal(formatNumber(Math.PI), "3.142", "out of range: unchanged");
 });
 
 let failed = 0;

@@ -2,15 +2,16 @@
 // picture.
 
 import { api, saveBlob } from "./api.js";
-import { runAll, runStage, scheduleProblemCheck, toast } from "./actions.js";
-import { STEPS, fileKind, formatNumber, normalizeCase, stageInfo, stageKey } from "./core.js";
+import { caseChanged, runAll, runStage, scheduleProblemCheck, toast } from "./actions.js";
+import { STEPS, fileKind, formatNumber, normalizeCase, stageInfo } from "./core.js";
 import { h, readFileText, fill } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
 import { geometryPanel, loadDomainFile } from "./panels/geometry.js";
 import { meshPanel } from "./panels/mesh.js";
 import { problemPanel } from "./panels/problem.js";
 import { solvePanel } from "./panels/solve.js";
-import { currentError, freshResult, lastResult, markSaved, openStep, savedCase, setCase, setColorBy, stageStatus, store, subscribe } from "./state.js";
+import { onSettings, wireSettings } from "./settings.js";
+import { currentError, currentKey, freshResult, lastResult, markSaved, openStep, savedCase, setCase, setColorBy, stageStatus, store, subscribe } from "./state.js";
 import { Viewer } from "./view.js";
 
 const panels = { geometry: geometryPanel, mesh: meshPanel, problem: problemPanel, assemble: assemblePanel, solve: solvePanel };
@@ -65,7 +66,7 @@ function buildPanels() {
   }
 }
 
-const DOT_TITLES = { done: "up to date", stale: "outdated: the case changed", failed: "failed", busy: "running", none: "not run" };
+const DOT_TITLES = { done: "up to date", stale: "outdated: the case changed", stopped: "stopped before the end", failed: "failed", busy: "running", none: "not run" };
 
 function problemStatus() {
   if (store.busy.has("problem")) return "busy";
@@ -80,7 +81,7 @@ function updateDots() {
     const step = button.dataset.step;
     const s = step === "problem" ? problemStatus() : stageStatus(step);
     const dot = button.querySelector(".dot");
-    dot.className = `dot ${s === "none" ? "" : s}`.trim();
+    dot.className = `dot ${s === "none" ? "" : s === "stopped" ? "stale" : s}`.trim();
     dot.title = DOT_TITLES[s];
   }
 }
@@ -104,7 +105,17 @@ function shownField() {
     return { label: `u at t = ${formatNumber(solved.times[i], 5)}`, values: solved.values[i], scale: solved.scale };
   }
   const field = store.results.field;
-  return field && field.key === stageKey(store.caseData, "field") ? field.data : null;
+  return field && field.key === currentKey("field") ? field.data : null;
+}
+
+// The field shown keeps its identity while nothing about it changed, so
+// the picture is not drawn again.
+let shown = null;
+function stableField() {
+  const next = shownField();
+  if (next && shown && next.values === shown.values && next.scale === shown.scale && next.label === shown.label) return shown;
+  shown = next;
+  return next;
 }
 
 function updateViewer() {
@@ -114,16 +125,16 @@ function updateViewer() {
   const mesh = meshResult?.mesh ?? null;
   const meshFresh = freshResult("mesh") !== null;
   element("color-by").value = store.view.colorBy;
-  viewer.set({
+  const drawn = viewer.set({
     geometry,
     mesh,
     meshStale: mesh !== null && !meshFresh,
     dirichlet: assembled && freshResult("assemble") ? assembled.meshed_problem.dirichlet_nodes : null,
-    field: shownField(),
+    field: stableField(),
     colorBy: store.view.colorBy,
     layers: { geometry: element("layer-geometry").checked, mesh: element("layer-mesh").checked, dirichlet: element("layer-dirichlet").checked },
   });
-  element("legend").replaceChildren(...viewer.legend());
+  if (drawn) element("legend").replaceChildren(...viewer.legend());
   element("empty-view").hidden = Boolean(geometry || mesh);
 }
 
@@ -153,9 +164,18 @@ function refresh(reason) {
     applyStep();
     return;
   }
-  // The problem check is cheap: keep it current whatever changed the case.
+  if (reason === "progress") {
+    // A time run moved on: its panel, the dots and the picture.
+    panels.solve.update(element("panel-solve"));
+    updateDots();
+    updateViewer();
+    return;
+  }
+  caseChanged();
+  // The problem check is cheap: keep it current whatever changed the case
+  // (typing waits for the pause the settings say).
   const problem = stageStatus("problem");
-  if (problem === "stale" || problem === "none") scheduleProblemCheck();
+  if (problem === "stale" || problem === "none") scheduleProblemCheck({ now: reason !== "edit" });
   if (reason === "case" || reason === "structure") buildPanels();
   else for (const [name, panel] of Object.entries(panels)) panel.update(element(`panel-${name}`));
   updateDots();
@@ -260,6 +280,17 @@ async function start() {
   applyStep();
 
   for (const id of ["layer-geometry", "layer-mesh", "layer-dirichlet"]) element(id).addEventListener("change", updateViewer);
+  wireSettings(element("open-settings"), element("settings"));
+  onSettings((key) => {
+    if (key === "pixelRatioCap") viewer.resize();
+    // Digits and the playback speed show in the panels.
+    else if (key === "digits" || key === "playbackFps") {
+      buildPanels();
+      updateDots();
+      viewer.draw();
+      element("legend").replaceChildren(...viewer.legend());
+    }
+  });
   element("color-by").addEventListener("change", (event) => setColorBy(event.target.value));
   element("fit-view").addEventListener("click", () => viewer.fit());
   element("new-case").addEventListener("click", () => loadCase(structuredClone(store.catalog.default_case), { message: "Started a new case." }));

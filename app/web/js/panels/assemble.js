@@ -4,7 +4,7 @@
 import { downloadExport } from "../api.js";
 import { runWithPrerequisites, toast } from "../actions.js";
 import { formatNumber, rampTable, parseColor } from "../core.js";
-import { actionButton, busyNote, errorBox, exportButton, h, markError, numberHandler, reportsView, stat, fill } from "../dom.js";
+import { actionButton, busyNote, errorBox, exportButton, foldable, h, markError, numberHandler, reportsView, stat, fill } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, openStep, outdatedError, store } from "../state.js";
 
 const assemble = () => runWithPrerequisites("assemble");
@@ -37,10 +37,8 @@ function fieldSection() {
     fieldKinds.map(([value, label]) => h("option", { value, selected: value === fieldForm.kind }, label)),
   );
   const t = h("input", { type: "number", step: "any", value: fieldForm.t, placeholder: "assembly t", style: "width:110px", "aria-label": "t", oninput: (e) => (fieldForm.t = e.target.value) });
-  return h(
-    "div",
-    { id: "field-form" },
-    h("h3", {}, "Show a field on the mesh"),
+  return foldable(
+    { id: "assemble.field", title: "Show a field on the mesh", kind: "section", attributes: { id: "field-form" } },
     h("div", { class: "row" }, kind, h("label", { class: "row", style: "gap:4px" }, "t =", t)),
     textRow,
     h(
@@ -124,7 +122,7 @@ export const assemblePanel = {
         "div",
         { class: "field", dataset: { path: "assembly.t" } },
         h("div", { class: "label" }, "Time t"),
-        h("div", { class: "inputs" }, h("input", { type: "number", step: "any", value: String(assembly.t ?? 0), "aria-label": "Time t", oninput: numberHandler((t) => editCase((c) => (c.assembly.t = t))) })),
+        h("div", { class: "inputs" }, h("input", { type: "number", step: "any", value: String(assembly.t ?? 0), "aria-label": "Time t", oninput: numberHandler((t) => editCase((c) => (c.assembly.t = t), "edit", { sections: ["assembly"] })) })),
       ),
       h(
         "div",
@@ -180,7 +178,8 @@ export const assemblePanel = {
       const spy = h("canvas", { class: "spy", "aria-label": "Where the stiffness matrix has entries" });
       if (assembly.sparsity) drawSpy(spy, assembly.sparsity);
       children.push(
-        h("div", { class: "row" }, h("h3", { style: "margin:8px 0" }, `Result at t = ${formatNumber(assembly.t)}`), fresh ? null : h("span", { class: "chip" }, "outdated: the case changed")),
+        foldable(
+          { id: "assemble.result", title: `Result at t = ${formatNumber(assembly.t)}`, kind: "section", extras: [fresh ? null : h("span", { class: "chip" }, "outdated: the case changed")] },
         h(
           "div",
           { class: "stats" },
@@ -192,8 +191,7 @@ export const assemblePanel = {
         h("p", { class: "note" }, `Symmetric "yes" holds at every t (from the formulas); "at this t" only for these numbers. The system: M2 U'' + B U' + A U = b in the unknowns U. The load ${assembly.load_depends_on_t ? "changes" : "does not change"} with t; b ${assembly.right_hand_side_depends_on_t ? "changes" : "does not change"} with t.`),
         operatorsTable(assembly.operators),
         assembly.sparsity ? h("div", { style: "margin-top:12px" }, h("div", { class: "label", style: "font-size:13px;font-weight:550" }, `Entries of A (unknowns × unknowns, ${formatNumber(assembly.sparsity.nonzeros)} entries)`), spy) : null,
-        h("h3", {}, "Reports"),
-        reportsView([meshed.report, assembly.report]),
+        foldable({ id: "assemble.reports", title: "Reports", kind: "section", folded: true }, reportsView([meshed.report, assembly.report])),
         h(
           "div",
           { class: "row", style: "margin-top:12px" },
@@ -205,6 +203,7 @@ export const assemblePanel = {
           ].map(([kind, label]) => exportButton(label, () => downloadExport(kind, store.caseData).catch((e) => toast(e.message)), { fresh, staleReason: "The system shown is outdated: assemble again to export it." })),
         ),
         h("p", { class: "note" }, "Matrix Market files of the free part (unknowns × unknowns, 1-based) and of b, at this t."),
+        ),
       );
     }
     fill(slot, ...children);

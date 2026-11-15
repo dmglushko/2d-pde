@@ -5,12 +5,16 @@
 import { downloadExport } from "../api.js";
 import { runWithPrerequisites, toast } from "../actions.js";
 import { formatNumber } from "../core.js";
-import { actionButton, busyNote, errorBox, exportButton, h, markError, optionsForm, reportsView, stat, fill } from "../dom.js";
+import { actionButton, busyNote, errorBox, exportButton, foldable, h, markError, optionsForm, reportsView, stat, fill } from "../dom.js";
 import { choiceCard, componentBody, defaultChoice } from "./components.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 
+// The boundary discretizer and the initial triangulator are rarely
+// changed: their cards start folded.
+const RARELY_CHANGED = new Set(["discretizer", "triangulator"]);
+
 function singleSlot(slot, mesh) {
-  return choiceCard(slot, mesh[slot.id], `mesh.${slot.id}`, (next) => editCase((c) => (c.mesh[slot.id] = next), "structure"));
+  return choiceCard(slot, mesh[slot.id], `mesh.${slot.id}`, (next) => editCase((c) => (c.mesh[slot.id] = next), "structure"), { folded: RARELY_CHANGED.has(slot.id) });
 }
 
 function listSlot(slot, mesh) {
@@ -32,28 +36,27 @@ function listSlot(slot, mesh) {
     h("option", { value: "" }, "Add…"),
     slot.components.map((c) => h("option", { value: c.type }, c.label)),
   );
-  return h(
-    "div",
-    { class: "card" },
-    h("div", { class: "card-head" }, h("span", { class: "title" }, slot.label), h("span", { class: "spacer" }), add),
+  return foldable(
+    { id: `mesh.${slot.id}`, title: slot.label, extras: [h("span", { class: "spacer" }), add] },
     h("div", { class: "help" }, slot.description),
     list.length === 0 ? h("p", { class: "note" }, "None.") : null,
     list.map((choice, i) => {
       const path = `mesh.${slot.id}[${i}]`;
       const component = slot.components.find((c) => c.type === choice.type);
-      return h(
-        "div",
-        { class: "card field", dataset: { path } },
-        h(
-          "div",
-          { class: "card-head" },
-          h("span", { class: "chip" }, String(i + 1)),
-          h("span", { class: "title" }, component?.label ?? choice.type),
-          h("span", { class: "spacer" }),
-          h("button", { type: "button", class: "icon", "aria-label": "Move up", disabled: i === 0, onclick: () => move(i, i - 1) }, "↑"),
-          h("button", { type: "button", class: "icon", "aria-label": "Move down", disabled: i === list.length - 1, onclick: () => move(i, i + 1) }, "↓"),
-          h("button", { type: "button", class: "icon", "aria-label": "Remove", onclick: () => editCase((c) => c.mesh[slot.id].splice(i, 1), "structure") }, "✕"),
-        ),
+      // Folded per position in the list: a moved card keeps its place's
+      // state, which is what the eye follows.
+      return foldable(
+        {
+          id: `${path}`,
+          title: [h("span", { class: "chip" }, String(i + 1)), " ", component?.label ?? choice.type],
+          extras: [
+            h("span", { class: "spacer" }),
+            h("button", { type: "button", class: "icon", "aria-label": "Move up", disabled: i === 0, onclick: () => move(i, i - 1) }, "↑"),
+            h("button", { type: "button", class: "icon", "aria-label": "Move down", disabled: i === list.length - 1, onclick: () => move(i, i + 1) }, "↓"),
+            h("button", { type: "button", class: "icon", "aria-label": "Remove", onclick: () => editCase((c) => c.mesh[slot.id].splice(i, 1), "structure") }, "✕"),
+          ],
+          attributes: { class: "field", dataset: { path } },
+        },
         componentBody(slot, choice, path).slice(1),
       );
     }),
@@ -72,11 +75,9 @@ export const meshPanel = {
       h("h2", {}, "Mesh"),
       h("p", { class: "lead" }, "The stages run in order: boundary discretizer, initial triangulator, refiner, improvers."),
       fromFile ? h("div", { class: "notice" }, "The domain is an imported mesh: only the refiner and the improvers run on it.") : null,
-      h(
-        "div",
-        { class: "card", dataset: { path: `mesh.${section.settings.key}` } },
-        h("div", { class: "card-head" }, h("span", { class: "title" }, section.settings.label)),
-        optionsForm(section.settings.options, mesh[section.settings.key], `mesh.${section.settings.key}`, () => editCase(() => {})),
+      foldable(
+        { id: `mesh.${section.settings.key}`, title: section.settings.label, attributes: { dataset: { path: `mesh.${section.settings.key}` } } },
+        optionsForm(section.settings.options, mesh[section.settings.key], `mesh.${section.settings.key}`, () => editCase(() => {}, "edit", { sections: ["mesh"] })),
       ),
       section.slots.map((slot) => (slot.cardinality === "list" ? listSlot(slot, mesh) : singleSlot(slot, mesh))),
       h(
@@ -107,13 +108,13 @@ export const meshPanel = {
     if (result) {
       const s = result.stats;
       children.push(
-        h(
-          "div",
-          { class: "row", style: "margin-top:4px" },
-          h("h3", { style: "margin:8px 0" }, "Result"),
-          fresh ? null : h("span", { class: "chip" }, "outdated: the case changed"),
-          result.target_met ? h("span", { class: "chip good" }, "✓ target met") : h("span", { class: "chip bad" }, "✕ target missed"),
-        ),
+        foldable(
+          {
+            id: "mesh.result",
+            title: "Result",
+            kind: "section",
+            extras: [fresh ? null : h("span", { class: "chip" }, "outdated: the case changed"), result.target_met ? h("span", { class: "chip good" }, "✓ target met") : h("span", { class: "chip bad" }, "✕ target missed")],
+          },
         h(
           "div",
           { class: "stats" },
@@ -125,8 +126,7 @@ export const meshPanel = {
           stat("Edge bound", formatNumber(result.max_edge_length)),
         ),
         result.target_met ? null : h("p", { class: "note" }, "Some edge is longer than the bound. Without a refiner the mesh has only the boundary points; smoothing can also lengthen edges."),
-        h("h3", {}, "Reports"),
-        reportsView(result.reports),
+        foldable({ id: "mesh.reports", title: "Reports", kind: "section", folded: true }, reportsView(result.reports)),
         h(
           "div",
           { class: "row", style: "margin-top:12px" },
@@ -134,6 +134,7 @@ export const meshPanel = {
           exportButton("Export mesh .svg", () => downloadExport("mesh.svg", store.caseData).catch((e) => toast(e.message)), { fresh, staleReason: STALE }),
         ),
         h("p", { class: "note" }, "A .pde2d file opens in the old mesh viewer (tools/mesh_viewer) and can be imported here as a mesh file."),
+        ),
       );
     }
     fill(slot, ...children);

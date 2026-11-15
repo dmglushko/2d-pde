@@ -3,7 +3,7 @@
 // component's description, its declared traits and its options. The Mesh
 // and Solve steps build their cards from these.
 
-import { h, optionsForm } from "../dom.js";
+import { foldable, h, optionsForm } from "../dom.js";
 import { editCase } from "../state.js";
 
 export function defaultChoice(component) {
@@ -42,17 +42,22 @@ export function componentBody(slot, choice, path) {
   return [
     h("div", { class: "help" }, component.description),
     traitChips(component.traits),
-    component.options.length ? h("div", { dataset: { path: `${path}.options` } }, optionsForm(component.options, choice.options, `${path}.options`, () => editCase(() => {}))) : null,
+    component.options.length ? h("div", { dataset: { path: `${path}.options` } }, optionsForm(component.options, choice.options, `${path}.options`, () => editCase(() => {}, "edit", { sections: [path.split(".")[0]] }))) : null,
   ];
 }
 
 // A card for a slot that holds one component (or none, when optional).
-// pick(next) stores the new choice in the case.
-export function choiceCard(slot, choice, path, pick) {
-  return h(
-    "div",
-    { class: "card field", dataset: { path } },
-    h("div", { class: "card-head" }, h("span", { class: "title" }, slot.label), h("span", { class: "spacer" }), componentSelect(slot, choice, path, pick, slot.cardinality === "optional")),
+// pick(next) stores the new choice in the case. It folds (the select
+// stays in its header); `folded`: how it starts for a new viewer.
+export function choiceCard(slot, choice, path, pick, { folded = false } = {}) {
+  return foldable(
+    {
+      id: path,
+      title: slot.label,
+      folded,
+      extras: [h("span", { class: "spacer" }), componentSelect(slot, choice, path, pick, slot.cardinality === "optional")],
+      attributes: { class: "field", dataset: { path } },
+    },
     h("div", { class: "help" }, slot.description),
     componentBody(slot, choice, path),
   );

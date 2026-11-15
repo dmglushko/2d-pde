@@ -2,8 +2,17 @@
 
 // --- numbers -----------------------------------------------------------------
 
+// The significant digits numbers are shown with (a setting).
+let defaultDigits = 4;
+export function setDefaultDigits(digits) {
+  if (Number.isInteger(digits) && digits >= 2 && digits <= 10) defaultDigits = digits;
+}
+export function getDefaultDigits() {
+  return defaultDigits;
+}
+
 // A short, readable form of a number for labels and tables.
-export function formatNumber(value, digits = 4) {
+export function formatNumber(value, digits = defaultDigits) {
   if (value === null || value === undefined) return "–";
   if (typeof value !== "number") return String(value);
   if (!Number.isFinite(value)) return String(value);
@@ -363,6 +372,16 @@ export function stageKey(caseData, stage) {
   return JSON.stringify(stageInfo(stage).sections.map((p) => caseData?.[p] ?? null));
 }
 
+// What a stage's request carries: the case's format and version and the
+// sections its result depends on, nothing else (a problem check need not
+// send an SVG or a mesh file). The server reads only those sections, so
+// its cache keys are the same as for the whole case.
+export function requestCase(caseData, stage) {
+  const out = { format: caseData?.format, version: caseData?.version };
+  for (const section of stageInfo(stage).sections) if (caseData?.[section] !== undefined) out[section] = caseData[section];
+  return out;
+}
+
 // The stages to run, in order, to run `stage`: its prerequisites that are
 // not fresh (isFresh(id)), then the stage itself.
 export function stagesToRun(stage, isFresh) {
@@ -383,6 +402,27 @@ export function solutionBytes(solveSection, nodes) {
 // Above this the Solve step warns before a run (the values travel to the
 // page and stay in its memory).
 export const LARGE_SOLUTION_BYTES = 50 * 1024 * 1024;
+
+// Where a picture drawn at view `from` ({scale, offset: {x, y}}, CSS
+// pixels) lands at view `to`: drawn scaled by `scale` with its top left
+// corner at (x, y). A point at p on the old picture is at
+// to.offset + (p - from.offset) * scale.
+export function viewTransform(from, to) {
+  const scale = to.scale / from.scale;
+  return { scale, x: to.offset.x - from.offset.x * scale, y: to.offset.y - from.offset.y * scale };
+}
+
+// The colour position (0..1, scale.position) of every node's value, or
+// NaN where it has none. Positions are linear in the value for every
+// scale kind, so interpolating them is interpolating the values.
+export function nodePositions(values, scale) {
+  const out = new Float32Array(values.length);
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    out[i] = v === null || !Number.isFinite(v) ? NaN : scale.position(v);
+  }
+  return out;
+}
 
 // Splits float32 little-endian values (snapshots x nodes, in order) into
 // one Float32Array per snapshot. Throws when the size does not fit.
@@ -429,4 +469,54 @@ export function fileKind(name) {
   if (lower.endsWith(".pde2d")) return "pde2d";
   if (lower.endsWith(".json")) return "case";
   return null;
+}
+
+// --- settings ------------------------------------------------------------------
+
+// The app's preferences (settings.js) and their defaults.
+export const SETTINGS_DEFAULTS = Object.freeze({
+  checkWhileTyping: true,
+  checkDelayMs: 350,
+  playbackFps: 12,
+  followRun: true,
+  digits: 4,
+  pixelRatioCap: 2,
+});
+
+const SETTING_RANGES = {
+  checkDelayMs: [100, 3000],
+  playbackFps: [1, 60],
+  digits: [2, 10],
+  pixelRatioCap: [1, 4],
+};
+
+// Settings as stored, made whole: a missing or malformed value takes its
+// default, a number out of range is clamped, unknown keys are dropped.
+export function normalizeSettings(input) {
+  const out = { ...SETTINGS_DEFAULTS };
+  if (!isObject(input)) return out;
+  for (const [key, fallback] of Object.entries(SETTINGS_DEFAULTS)) {
+    const value = input[key];
+    if (typeof fallback === "boolean") {
+      if (typeof value === "boolean") out[key] = value;
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      const [low, high] = SETTING_RANGES[key];
+      const clamped = Math.min(high, Math.max(low, value));
+      out[key] = key === "pixelRatioCap" ? clamped : Math.round(clamped);
+    }
+  }
+  return out;
+}
+
+// The folded sections, as stored: {id: true (folded) or false (open)}.
+export function parseFolds(text) {
+  try {
+    const value = JSON.parse(text ?? "null");
+    if (!isObject(value)) return Object.create(null);
+    const out = Object.create(null);
+    for (const [key, folded] of Object.entries(value)) if (typeof folded === "boolean") out[key] = folded;
+    return out;
+  } catch {
+    return Object.create(null);
+  }
 }

@@ -1,5 +1,6 @@
 #include "domain_input.hpp"
 
+#include "pde2d/geometry/polygon.hpp"
 #include "pde2d/geometry/shapes.hpp"
 #include "pde2d/io/gmsh.hpp"
 #include "pde2d/io/pde2d_mesh.hpp"
@@ -7,7 +8,9 @@
 #include "pde2d/mesh/domain_size.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -415,6 +418,102 @@ Json domain_json(const Domain &domain) {
   if (domain.geometry)
     return geometry_view(*domain.geometry);
   return mesh_file_view(*domain.mesh);
+}
+
+namespace {
+
+double segment_distance(geometry::Point p, geometry::Point a,
+                        geometry::Point b) {
+  const double dx = b.x - a.x;
+  const double dy = b.y - a.y;
+  const double length = dx * dx + dy * dy;
+  const double s =
+      length == 0.0 ? 0.0
+                    : std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / length,
+                                 0.0, 1.0);
+  return std::hypot(p.x - (a.x + s * dx), p.y - (a.y + s * dy));
+}
+
+// The candidate with the largest distance to the segments (ties: the
+// first), among those `inside` accepts.
+template <class Inside>
+void farthest(
+    DomainFacts &facts, const std::vector<geometry::Point> &candidates,
+    const std::vector<std::pair<geometry::Point, geometry::Point>> &segments,
+    Inside inside) {
+  facts.clearance = -1.0;
+  for (const geometry::Point &p : candidates) {
+    if (!inside(p))
+      continue;
+    double nearest = std::numeric_limits<double>::infinity();
+    for (const auto &[a, b] : segments)
+      nearest = std::min(nearest, segment_distance(p, a, b));
+    if (nearest > facts.clearance) {
+      facts.clearance = nearest;
+      facts.inner = p;
+    }
+  }
+  if (facts.clearance < 0)
+    facts.clearance = 0.0;
+}
+
+} // namespace
+
+DomainFacts domain_facts(const Domain &domain) {
+  DomainFacts facts;
+  std::vector<std::pair<geometry::Point, geometry::Point>> segments;
+  if (domain.geometry) {
+    const geometry::CurveGeometry &geometry = *domain.geometry;
+    facts.regions = geometry.region_names();
+    facts.domain_size = mesh::domain_size(geometry);
+    std::vector<std::vector<geometry::Point>> polygons;
+    for (const geometry::Loop &loop : geometry.loops()) {
+      std::vector<geometry::Point> polygon;
+      for (const geometry::BoundaryCurve &curve : loop.curves) {
+        const int pieces = geometry::is_line(curve.curve) ? 1 : 48;
+        for (int i = 0; i < pieces; ++i)
+          polygon.push_back(curve.curve.point_at(static_cast<double>(i) /
+                                                 static_cast<double>(pieces)));
+      }
+      for (std::size_t i = 0; i < polygon.size(); ++i)
+        segments.emplace_back(polygon[i], polygon[(i + 1) % polygon.size()]);
+      polygons.push_back(std::move(polygon));
+    }
+    const geometry::BoundingBox box = geometry.bounding_box();
+    constexpr int grid = 40;
+    std::vector<geometry::Point> candidates;
+    for (int j = 0; j < grid; ++j)
+      for (int i = 0; i < grid; ++i)
+        candidates.push_back(
+            {box.min.x + (box.max.x - box.min.x) * (i + 0.5) / grid,
+             box.min.y + (box.max.y - box.min.y) * (j + 0.5) / grid});
+    // Inside the domain: inside an odd number of loops.
+    farthest(facts, candidates, segments, [&](geometry::Point p) {
+      int count = 0;
+      for (const auto &polygon : polygons)
+        if (polygon.size() >= 3 && geometry::locate_in_polygon(polygon, p) > 0)
+          ++count;
+      return count % 2 == 1;
+    });
+    return facts;
+  }
+  const mesh::Mesh &mesh = *domain.mesh;
+  facts.regions = mesh.region_names;
+  facts.domain_size = mesh::domain_size(mesh);
+  for (const mesh::BoundaryEdge &edge : mesh.boundary_edges)
+    segments.emplace_back(mesh.nodes[edge.nodes[0]], mesh.nodes[edge.nodes[1]]);
+  std::vector<geometry::Point> candidates;
+  const std::size_t stride =
+      std::max<std::size_t>(1, mesh.triangles.size() / 2000);
+  for (std::size_t k = 0; k < mesh.triangles.size(); k += stride) {
+    const auto &t = mesh.triangles[k].nodes;
+    const geometry::Point a = mesh.nodes[t[0]];
+    const geometry::Point b = mesh.nodes[t[1]];
+    const geometry::Point c = mesh.nodes[t[2]];
+    candidates.push_back({(a.x + b.x + c.x) / 3, (a.y + b.y + c.y) / 3});
+  }
+  farthest(facts, candidates, segments, [](geometry::Point) { return true; });
+  return facts;
 }
 
 Json shape_catalog_json() {

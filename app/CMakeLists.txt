@@ -12,6 +12,7 @@ add_library(pde2d_app_core STATIC
   src/catalog.cpp
   src/domain_input.cpp
   src/options.cpp
+  src/presets.cpp
   src/problem_input.cpp
   src/session.cpp
   src/views.cpp)

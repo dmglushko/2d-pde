@@ -47,12 +47,18 @@ export const api = {
   assemble: (caseData) => request("/api/assemble", caseData),
   field: (caseData, field) => request("/api/field", { case: caseData, field }),
   solve: (caseData) => request("/api/solve", caseData),
-  // The solution's values as one Float32Array per kept time; `layout` is
-  // the summary's "values" ({path, format, snapshots, nodes}).
-  solveValues: async (caseData, layout) => {
+  solveProgress: (job) => request("/api/solve/progress", { job }),
+  solveStop: (job) => request("/api/solve/stop", { job }),
+  // Snapshots `first` up to the ready ones of a run as one Float32Array
+  // each; `layout` is the summary's "values" ({path, format, snapshots,
+  // nodes}).
+  solveValues: async (job, first, layout) => {
     if (layout?.format !== "float32le") throw new ApiError({ stage: "solve", message: `unknown values format ${layout?.format}` });
-    return splitSnapshots(await requestBinary(layout.path, caseData), layout.snapshots, layout.nodes);
+    const count = layout.snapshots - first;
+    if (count <= 0) return [];
+    return splitSnapshots(await requestBinary(layout.path, { job, first, count }), count, layout.nodes);
   },
+  preset: (caseData, preset) => request("/api/preset", { case: caseData, preset }),
 };
 
 // Asks the server for an export of the case and saves it as a file.

@@ -4,7 +4,7 @@
 import { downloadExport } from "../api.js";
 import { runStage, toast } from "../actions.js";
 import { applyRegionEdit, fileKind, formatNumber, regionToken, undoRegionEdit } from "../core.js";
-import { busyNote, errorBox, exportButton, h, markError, optionsForm, readFileText, stat, fill } from "../dom.js";
+import { busyNote, errorBox, exportButton, foldable, h, markError, optionsForm, readFileText, stat, fill } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 
 let geometryTimer = null;
@@ -96,7 +96,7 @@ function shapeForm(geometry) {
   geometry.options ??= {};
   return [
     h("div", { class: "field", dataset: { path: "geometry.shape" } }, h("div", { class: "label" }, "Shape"), select, h("div", { class: "help" }, shape.description)),
-    h("div", { dataset: { path: "geometry.options" } }, optionsForm(shape.options, geometry.options, "geometry.options", () => editCase(() => scheduleGeometry()))),
+    h("div", { dataset: { path: "geometry.options" } }, optionsForm(shape.options, geometry.options, "geometry.options", () => editCase(() => scheduleGeometry(), "edit", { sections: ["geometry"] }))),
   ];
 }
 
@@ -115,10 +115,14 @@ function svgForm(geometry) {
     value: geometry.svg ?? "",
     dataset: { path: "geometry.svg" },
     oninput: (event) =>
-      editCase((c) => {
-        c.geometry.svg = event.target.value;
-        scheduleGeometry();
-      }),
+      editCase(
+        (c) => {
+          c.geometry.svg = event.target.value;
+          scheduleGeometry();
+        },
+        "edit",
+        { sections: ["geometry"] },
+      ),
   });
   return [drop, h("details", { class: "report", style: "margin-top:8px" }, h("summary", {}, "SVG text"), h("div", { class: "body field", dataset: { path: "geometry.svg" } }, editor))];
 }
@@ -282,7 +286,8 @@ export const geometryPanel = {
       const loops = view.kind === "curves" ? view.loops : [];
       const holes = loops.filter((l) => l.depth % 2 === 1).length;
       children.push(
-        h("h3", {}, "Domain"),
+        foldable(
+          { id: "geometry.domain", title: "Domain", kind: "section" },
         h(
           "div",
           { class: "stats" },
@@ -290,8 +295,8 @@ export const geometryPanel = {
           stat("Domain size", formatNumber(view.domain_size)),
         ),
         h("p", { class: "note" }, "Relative lengths in the Mesh step multiply the domain size: the diagonal of the bounding box."),
-        h("h3", {}, "Boundary regions"),
-        regionsTable(view, true, view.kind === "curves"),
+        ),
+        foldable({ id: "geometry.regions", title: "Boundary regions", kind: "section" }, regionsTable(view, true, view.kind === "curves")),
         view.kind === "curves"
           ? h(
               "div",

@@ -54,12 +54,13 @@ flowchart LR
 | `app/src/catalog.*` | the mesh and solve catalogs: every component, its options with the library's defaults, a function that builds it; `build_mesh_setup`, `build_solve_setup` |
 | `app/src/domain_input.*` | the `geometry` section: shapes, SVG, mesh files, region edits; the geometry view |
 | `app/src/problem_input.*` | the `problem` section: `build_problem`, `check_problem` (every error at once, with paths), the problem catalog and templates |
+| `app/src/presets.*` | problem presets: a complete problem and its solve settings for any geometry, scaled by `DomainFacts` (`domain_input.*`: regions, domain size, a point well inside) |
 | `app/src/views.*` | meshes, reports and sparsity as JSON |
-| `app/src/session.*` | `Session`: the stages with their cache, `StageError`, the default case, exports, `run` for the command line |
+| `app/src/session.*` | `Session`: the stages with their cache, solves as runs in chunks (`SessionOptions`, the background runner), `StageError`, the default case, presets, exports, `run` for the command line |
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`) and the command line |
-| `app/web/` | `index.html`, `style.css`, `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `dom.js` (forms from specs), `view.js` (the picture), `panels/*.js` (one per step, and `components.js`: the cards of component slots), `main.js` |
+| `app/web/` | `index.html`, `style.css`, `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `settings.js` (preferences and their dialog), `dom.js` (forms from specs, foldable sections), `view.js` (the picture), `panels/*.js` (one per step, and `components.js`: the cards of component slots), `main.js` |
 | `app/examples/` | example cases and an example SVG |
-| `app/tests/` | `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `server.cpp`, `web.test.mjs` (pure helpers, the stage registry), `web_actions.test.mjs` (overlapping requests, prerequisites, errors per input, the binary solve, with a mocked fetch) |
+| `app/tests/` | `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks against one call, stop and continue, every preset on a rectangle and an annulus), `server.cpp`, `web.test.mjs` (pure helpers, the stage registry), `web_actions.test.mjs` (overlapping requests, prerequisites, errors per input, the binary solve, following a run, Stop, presets, settings, debounced storage, with a mocked fetch) |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
 
 ## The case
@@ -137,8 +138,10 @@ must not be ignored silently), and a missing value means its default.
 ## The API
 
 All on `127.0.0.1:8765` by default. Every POST body is a case (or, for
-`/api/field`, `{"case", "field"}`) and must be sent as
-`application/json`.
+`/api/field`, `{"case", "field"}`, for `/api/preset` `{"case", "preset"}`,
+and for a run's calls `{"job", ...}`) and must be sent as
+`application/json`. A stage reads only the sections it needs (the page
+sends only those: `requestCase`).
 
 | Call | Gives |
 | --- | --- |
@@ -149,8 +152,11 @@ All on `127.0.0.1:8765` by default. Every POST body is a case (or, for
 | `POST /api/mesh` | the mesh (flat arrays), stats, `target_met`, the resolved bound, every stage report |
 | `POST /api/problem` | the check: `ok`, `errors` (`path`, `message`), facts per path, each condition's kind, time order, needed initial conditions |
 | `POST /api/assemble` | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
-| `POST /api/solve` | the summary: `mode`, `times`, `min` and `max` over every value (exact doubles), `time_order` (assembly's, `Assembler::time_order`) and `problem_time_order` (as written), `free_unknowns`, the reports (`assembly` and `static_solver`, or `integrator`), and `values`: `{"path": "/api/solve/values", "format": "float32le", "snapshots", "nodes", "bytes"}` |
-| `POST /api/solve/values` | the same case's values as `application/octet-stream`: float32, little-endian, snapshot after snapshot, each one value per mesh node (NaN for a value that is not finite) |
+| `POST /api/solve` | starts the solve of the case, or finds the current one with the same inputs (see "Runs in chunks"), and answers its progress: `job` (the run's id), `state` (`running`, `done`, `failed`, `stopped`), `mode`, `times` of the snapshots ready, `min` and `max` over their values (exact doubles), `time_order` (assembly's, `Assembler::time_order`) and `problem_time_order` (as written), `free_unknowns`, the reports (`static_solver`, or one `integrator` report combining the chunks', with `chunks`), and `values`: `{"path": "/api/solve/values", "format": "float32le", "snapshots" (ready), "nodes", "bytes"}`. A time run adds `t0`, `t1`, `t` (reached) and `snapshots_total`; a failed one `error` (`stage`, `kind`, `message`). A static solve is `done` at once |
+| `POST /api/solve/progress` | `{"job"}`: the same progress, now |
+| `POST /api/solve/stop` | `{"job"}`: stops the run after the chunk that is running; its progress. A solve of the same inputs continues it |
+| `POST /api/solve/values` | `{"job", "first", "count"}`: snapshots `first` to `first + count` (ready ones only) as `application/octet-stream`: float32, little-endian, snapshot after snapshot, each one value per mesh node (NaN for a value that is not finite) |
+| `POST /api/preset` | `{"case", "preset"}`: the case with its `problem` and `solve` sections replaced by the preset for the case's geometry (see "Presets") |
 | `POST /api/field` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`; the right-hand side is assembled at that t). The request has only `case` and `field`, and `field` only `kind`, `text` and `t`: another key is an error |
 | `POST /api/export/<kind>` | a file: `mesh.pde2d`, `mesh.svg`, `geometry.svg`, `solution.csv` (x, y and u at every kept time, one row per node, full doubles), or the system assembled at `assembly.t` in Matrix Market form: `stiffness.mtx`, `damping.mtx`, `mass.mtx` (the free part, `coordinate real general`, 1-based; a zero operator has no entries) and `rhs.mtx` (`array`) |
 
@@ -184,7 +190,8 @@ lands on the field itself.
 - `shapes`: the ready-made shapes with their options.
 - `problem`: the coefficients of the equation, of a condition and of the
   initial conditions in order, with the term each multiplies; help text;
-  templates of common equations and conditions.
+  templates of common equations and conditions; `presets` (`id`,
+  `label`, `description`).
 - `default_case`.
 
 ## Adding a component
@@ -204,11 +211,81 @@ validates its options, and its message is shown at the field.
 ## The Solve step
 
 `Session::solve` is cached like the other stages, keyed by the mesh,
-problem and solve sections (not by `assembly`). The page shows the
+problem and solve sections (not by `assembly`): the current run (see
+"Runs in chunks"). The page shows the
 solution in the picture as a field with one colour scale for every
 snapshot (from `min` to `max`), so a colour means the same value at
 every time; a slider and a player walk through the snapshots, changing
 only the picture.
+
+## Runs in chunks
+
+A time run is integrated in chunks that end on snapshot times. Each chunk
+is one `Integrator::integrate(meshed, ta, tb, output, &last)` from the
+state the previous chunk ended with (`IntegrationResult::final`, with its
+velocities for time order 2); the library guarantees that a run that
+lands on a time and one that starts there take the same steps. The
+`Session` keeps one run at a time (`SolveJob`): its inputs' key, the
+snapshots so far, the last state, the combined report.
+
+- `Session::solve` runs the first chunk (one snapshot interval) before it
+  answers, so the library's refusals (a time order the method does not
+  support, a solver's requirement) are thrown as before and land on their
+  field. With `SessionOptions::background_runs` (the server) a thread then
+  runs the next chunks; without (the command line, tests) `solve` runs
+  them all before it returns. Both use `advance`, the same code.
+- Each chunk holds the session mutex only while it integrates; between
+  chunks the runner releases it for a moment, so a problem check or a
+  field is answered after at most one chunk.
+- The next chunk's number of snapshot intervals is scaled so that it
+  takes about `chunk_seconds` (0.4 s): between half and four times the
+  last one, at least one interval.
+- The combined `integrator` report adds up `steps`, `rejected_steps`,
+  `linear_iterations`, `assemblies`, `prepares`, `snapshots`, takes the
+  largest `max_linear_iterations`, `max_residual`, `max_dt`, the smallest
+  `min_dt`, the first `t0` and the last `t1`, and adds `chunks`.
+  `prepares` counts one more per chunk (each chunk prepares the linear
+  solver once).
+- A solve of the same inputs reuses the run: a running or done one is
+  answered as it is, a stopped one continues, a failed one starts again.
+  Other inputs replace it (the old one is dropped under the mutex: it
+  holds expressions).
+- **Exactness.** For implicit Euler and the implicit midpoint rule the
+  state is U (and U' for time order 2), which `final` carries, so the
+  snapshots of a chunked run are bit for bit those of one call
+  (`tests/runs.cpp`). Newmark's state also has the acceleration, which
+  `Solution` does not carry: each chunk's start computes it again from
+  the equation (M2 a = b − B v − A u at the chunk's start), so the
+  snapshots differ from one call by rounding (below 1e-8 of the largest
+  value in the test).
+- What a chunk cannot do: show progress or stop inside one snapshot
+  interval. A run with few, long intervals still answers late; that needs
+  a progress callback in the library (docs/library-requests.md, item 2).
+
+The page (`actions.js`, `followRun`) polls the progress every 250 ms,
+fetches only the new snapshots by range and shows the newest unless the
+slider was moved during the run (or the setting is off). The colour scale
+is the range so far, so it can change while the run goes on. **Stop**
+keeps what arrived; the step's dot says "stopped before the end", and
+**Continue** solves again, which continues the run on the server. A change
+of the case that changes the solve's inputs stops the run.
+
+## Presets
+
+`POST /api/preset` fills a whole problem for the case's geometry:
+equation, parameters, a condition for every region (the heated preset
+gives the first region its own), initial conditions and the solve section
+(mode, linear solver, method, dt, t1, snapshots). Lengths and times are
+scaled to the domain (`DomainFacts`): its size, and a point well inside it
+with its distance to the boundary, found on a grid over the bounding box
+(inside an odd number of loops, farthest from the sampled boundary) or
+among the triangle centroids of a mesh file. Bumps are centred there with
+a width of half that distance. The page names presets only by the ids the
+catalog gives; every physical choice is in `presets.cpp`, which spells out
+the sign conventions (−k Δu is `a_xx = a_yy = -k`; cooling is
+`alpha = h, beta_n = 1, g = h u_out`). Each preset runs on the default
+rectangle and on an annulus in `tests/runs.cpp` (finite, not zero;
+Laplace gives u = x exactly; the bump, cooling and damped wave decay).
 
 ## Decisions
 
@@ -299,19 +376,76 @@ is a reason; record the new choice here.
   does not divide the interval shortens steps to land on them, which makes
   the integrator prepare the linear solver again for each changed step:
   pick snapshots and dt so that they fit.
-- **A long run blocks the app until it ends.** The Integrator offers no
-  progress or cancellation, and all work runs under the session mutex.
-  If long runs become common, a progress and cancel callback in the
-  library is the change to ask for.
+- **Time runs go in chunks that end on snapshot times** (2026-11-15; was:
+  a long run blocked the app). The library's continuation
+  (`integrate(..., &previous.final)`) gives progress, Stop and the
+  snapshots during the run without a library change, at the price of
+  granularity (one snapshot interval) and, for Newmark, a recomputed
+  acceleration at each chunk start (see "Runs in chunks").
+- **Every solve is a run with an id**, even a static one (done at once):
+  one way for the page to get values (by run and snapshot range) and one
+  progress shape. The values are no longer fetched by sending the case
+  again.
+- **One run at a time**, replaced by a solve of other inputs; a stopped
+  run continues when the same inputs are solved again, since the server
+  still has its state.
+- **The first chunk runs inside `POST /api/solve`**, so the library's
+  refusals keep landing on their fields; it is one snapshot interval, so
+  the answer is quick.
+- **A case change stops a running run** (the page sends Stop): the run
+  would answer a question nobody asks any more and hold the server.
+- **Typing stays instant** (2026-11-15). A keystroke used to redraw the
+  picture (a per-pixel field raster), stringify the whole case for local
+  storage and for every stage key (an SVG or mesh file included, several
+  times), and send the whole case to the problem check. Now: stage keys
+  are kept per section and recomputed only for the sections an edit
+  names (`editCase(..., {sections})`; every edit must go through
+  `editCase`); the picture is drawn only when something it shows changed
+  (`Viewer.set` returns whether it drew; the legend is rebuilt only then);
+  the case is written to storage 600 ms after the last edit and at once
+  when the page is hidden or closed; a stage's request carries only its
+  sections; the problem check runs after a pause (a setting) and an answer
+  for a problem edited since is dropped. Measured in Chrome (heat annulus
+  solved, colouring by u, 1280×800 at 2×): 50 input events in f took
+  11.5 ms each before, 6.1 ms after on average and 0.38 ms each once the
+  first one has updated the panel.
+- **Pan and zoom move the last picture** (2026-11-15): during a gesture,
+  at most one frame per animation frame shows the last full picture moved
+  and scaled (`viewTransform`, `drawImage`); the full picture is drawn
+  once the gesture pauses for 120 ms. What does not depend on the view is
+  computed once: per mesh the quality buckets (one path per colour), per
+  field the colour position of each node (interpolated per pixel instead
+  of the value), per theme the colour tokens and tables. Measured: a pan
+  frame took 34 ms before (a full redraw per move), now a move costs
+  0.01 ms and the frame is a blit (16 ms per frame is the display's
+  rate); the full redraw takes 4.2 ms at 1720×1328 pixels.
+- **Every section folds** (2026-11-15): the title of each card and
+  section is a button with `aria-expanded`; the state is remembered per
+  section id in local storage (a per-viewer preference). Rarely changed
+  ones start folded: the boundary discretizer and initial triangulator,
+  the linear solver, every Reports section, region conditions when there
+  are more than four regions. An error marked inside a folded section
+  opens it (without changing the stored state).
+- **Settings are the viewer's, not the case's** (2026-11-15): kept in
+  local storage, read with `normalizeSettings` (a bad value takes its
+  default). Problem check while typing (on/off, delay), playback speed,
+  following the newest snapshot, significant digits, picture quality (the
+  largest pixel ratio). Parallel assembly and solves are shown disabled
+  with the note that the library request is recorded: visible and
+  honest, not a dead control that pretends.
+- **Presets come from the server** (2026-11-15) and are applied there,
+  where the geometry is known: the page stays free of physics and
+  presets are tested in C++ on two shapes. Applying one is undone from
+  its toast.
 - **The solution travels in binary** (2026-11-15): `POST /api/solve`
   answers the summary, `POST /api/solve/values` the values as float32
   (snapshots × nodes), decoded into one `Float32Array` per snapshot. JSON
   numbers took about 20 bytes a value and a parse; float32 takes 4, which
   matters at 1000 snapshots. Float32 is plenty for colours and the
   readout; `min` and `max` stay exact doubles in the summary (the colour
-  scale), and the CSV export keeps full doubles. The page sends the same
-  case to both calls; the server's cache answers the second without
-  solving again. The Solve step estimates the size from the fresh mesh
+  scale), and the CSV export keeps full doubles. The values are asked for by
+  run and snapshot range (since 2026-11-15, see "Runs in chunks"), so a
+  run's new snapshots travel once. The Solve step estimates the size from the fresh mesh
   before a run and warns above 50 MB (the page keeps every snapshot in
   memory).
 - **One stage registry** (`STAGES` in `web/js/core.js`): each stage's id,

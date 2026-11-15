@@ -32,13 +32,15 @@ meshing) in the app or the page.
   mutex. Do not add work that builds or drops `Expression`s outside it.
 - **`httplib.h` only in `src/server.cpp`.** The library never includes
   anything from `app/`.
+- **Every case edit goes through `editCase`** (state.js): stage keys are
+  kept per section and recomputed only for the sections an edit names.
 - **The page has no build step**: plain ES modules. Pure helpers go to
   `web/js/core.js` and get a test in `tests/web.test.mjs`.
 
 ## Before finishing a change
 
 1. `tools/format.sh --check` (C++ of the app included).
-2. `tools/test.sh`: the app's tests are `app_session`, `app_solve`,
+2. `tools/test.sh`: the app's tests are `app_session`, `app_solve`, `app_runs`,
    `app_server`, `app_run_*` (every case in `examples/`), `app_web` and
    `app_web_actions` (Node).
 3. For a page change, open it in a browser and use the changed step.

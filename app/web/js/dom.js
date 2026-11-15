@@ -1,6 +1,6 @@
 // Small DOM helpers and the forms built from catalog option specs.
 
-import { errorPath, formatNumber, parseNumberText } from "./core.js";
+import { errorPath, formatNumber, parseFolds, parseNumberText } from "./core.js";
 
 // h("div", {class: "x", onclick: f}, child, "text", ...)
 export function h(tag, attributes = {}, ...children) {
@@ -33,6 +33,77 @@ export function fill(container, ...children) {
   container.replaceChildren(...nodes(children));
 }
 
+// --- foldable sections -----------------------------------------------------------
+
+// Which sections are folded is a per-viewer preference, kept in this
+// browser: {id: folded}.
+const FOLDS_KEY = "pde2d-app-folds";
+let folds = null;
+
+function foldStore() {
+  if (!folds) {
+    try {
+      folds = parseFolds(globalThis.localStorage?.getItem(FOLDS_KEY));
+    } catch {
+      folds = Object.create(null);
+    }
+  }
+  return folds;
+}
+
+export function isFolded(id, fallback = false) {
+  const stored = foldStore();
+  return Object.hasOwn(stored, id) ? stored[id] : fallback;
+}
+
+function setOpen(button, open, remember) {
+  const body = document.getElementById(button.getAttribute("aria-controls"));
+  button.setAttribute("aria-expanded", String(open));
+  if (body) body.hidden = !open;
+  if (!remember) return;
+  foldStore()[button.dataset.fold] = !open;
+  try {
+    globalThis.localStorage?.setItem(FOLDS_KEY, JSON.stringify(folds));
+  } catch {
+    // Not kept: the section stays as it is for this visit.
+  }
+}
+
+let foldCount = 0;
+
+// A section that folds: a header whose title is a button (aria-expanded,
+// so Enter and Space toggle it) and a body. `id` names the section for
+// the stored preference; `folded` is how it starts when nothing is
+// stored. kind "card" gives a .card, "section" a heading (h3) with the
+// body below. `extras` go into the header after the title (controls of
+// the section, which do not toggle it); `attributes` go on the outer
+// element.
+export function foldable({ id, title, folded = false, kind = "card", extras = [], attributes = {} }, ...children) {
+  const bodyId = `fold-${++foldCount}`;
+  const shut = isFolded(id, folded);
+  const button = h(
+    "button",
+    { type: "button", class: "fold-toggle", "aria-expanded": String(!shut), "aria-controls": bodyId, dataset: { fold: id } },
+    h("span", { class: "chevron", "aria-hidden": "true" }),
+    h("span", { class: "title" }, title),
+  );
+  button.addEventListener("click", () => setOpen(button, button.getAttribute("aria-expanded") !== "true", true));
+  const body = h("div", { id: bodyId, class: "fold-body", hidden: shut }, children);
+  const head = kind === "card" ? h("div", { class: "card-head" }, button, extras) : h("div", { class: "section-head" }, h("h3", {}, button), extras);
+  const base = kind === "card" ? "card foldable" : "fold-section";
+  return h("div", { ...attributes, class: attributes.class ? `${base} ${attributes.class}` : base }, head, body);
+}
+
+// Opens every folded section around `element` (an error marked inside
+// must be seen), without changing the stored preference.
+export function revealFolded(element) {
+  for (let node = element?.parentElement; node; node = node.parentElement)
+    if (node.classList?.contains("fold-body") && node.hidden) {
+      const button = document.querySelector(`[aria-controls="${node.id}"]`);
+      if (button) setOpen(button, true, false);
+    }
+}
+
 // Marks `input`'s field as locally invalid with `message` (null clears
 // it). Local marks are the page's own (text that is not a number yet),
 // apart from the server's errors.
@@ -47,6 +118,7 @@ export function markLocal(input, message) {
     return;
   }
   field?.classList.add("local-field-invalid");
+  revealFolded(input);
   if (!note && field) {
     note = h("div", { class: "error-text", "data-local-error": "" });
     field.append(note);
@@ -145,6 +217,7 @@ export function markError(container, error) {
       const field = target.closest(".field") ?? target;
       field.classList.add("invalid");
       field.append(h("div", { class: "error-text", "data-error": "" }, error.message.slice(error.message.indexOf(": ") + 2)));
+      revealFolded(field);
       return true;
     }
     const cut = Math.max(path.lastIndexOf("."), path.lastIndexOf("["));

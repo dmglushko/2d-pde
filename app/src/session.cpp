@@ -2,6 +2,7 @@
 
 #include "catalog.hpp"
 #include "domain_input.hpp"
+#include "presets.hpp"
 #include "problem_input.hpp"
 #include "views.hpp"
 
@@ -15,10 +16,12 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <format>
 #include <limits>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <utility>
@@ -202,12 +205,177 @@ struct MeshOutcome {
   double domain_size = 0.0;
 };
 
-struct SolveOutcome {
-  // The kept solutions in time order: one for a static solve, the
-  // snapshots of a time integration.
+// A solve: a static one is done when it is made; a time integration runs
+// in chunks that end on snapshot times, each continuing from the state the
+// previous one ended with (Integrator::integrate with `initial`), so the
+// page sees the snapshots while the run goes on (docs/app.md, "Runs in
+// chunks").
+struct SolveJob {
+  std::uint64_t id = 0;
+  std::string key;               // the inputs it was made from
+  std::string state = "running"; // running, done, failed, stopped
+  std::shared_ptr<const fem::MeshedProblem> meshed;
+  SolveSetup setup;
+  // The snapshot times of a time run (snapshot_times); the kept solutions
+  // are the first solutions.size() of them.
+  std::vector<double> times;
   std::vector<solve::Solution> solutions;
-  Json summary; // everything the page gets but the values
+  // The state at the end of the last chunk (with velocities for time
+  // order 2), the start of the next one.
+  std::optional<solve::Solution> last;
+  std::size_t chunk = 1; // snapshot intervals in the next chunk
+  std::size_t chunks = 0;
+  Json base = Json::object(); // mode, time orders, free unknowns
+  Json static_reports = Json::array();
+  std::optional<mesh::StageReport> integrator; // the chunks' reports, combined
+  double low = std::numeric_limits<double>::infinity();
+  double high = -std::numeric_limits<double>::infinity();
+  Json error = nullptr; // {stage, kind, message} of a failed run
 };
+
+namespace {
+
+void keep_range(SolveJob &job, const solve::Solution &solution) {
+  for (const double value : solution.values)
+    if (std::isfinite(value)) {
+      job.low = std::min(job.low, value);
+      job.high = std::max(job.high, value);
+    }
+}
+
+// One report for the chunks of a run: counts add up, extremes combine,
+// t1 is the last chunk's.
+void combine_report(std::optional<mesh::StageReport> &total,
+                    const mesh::StageReport &part) {
+  if (!total) {
+    total = part;
+    return;
+  }
+  auto &m = total->metrics;
+  const auto value = [&](const std::string &name) {
+    const auto it = part.metrics.find(name);
+    return it == part.metrics.end() ? 0.0 : it->second;
+  };
+  for (const char *name : {"steps", "rejected_steps", "linear_iterations",
+                           "assemblies", "prepares", "snapshots"})
+    m[name] += value(name);
+  for (const char *name : {"max_linear_iterations", "max_residual"})
+    m[name] = std::max(m[name], value(name));
+  if (value("steps") > 0) {
+    m["min_dt"] = m["steps"] == value("steps")
+                      ? value("min_dt")
+                      : std::min(m["min_dt"], value("min_dt"));
+    m["max_dt"] = std::max(m["max_dt"], value("max_dt"));
+  }
+  m["t1"] = value("t1");
+  total->time += part.time;
+  for (const std::string &message : part.messages)
+    if (std::ranges::find(total->messages, message) == total->messages.end())
+      total->messages.push_back(message);
+}
+
+// Runs the next chunk of a running time run: from the last kept snapshot
+// time over `chunk` snapshot intervals. A failure ends the run with its
+// error. The next chunk is scaled so that it takes about chunk_seconds.
+void advance(SolveJob &job, const SessionOptions &options) {
+  if (job.state != "running")
+    return;
+  const auto started = std::chrono::steady_clock::now();
+  try {
+    staged("solve", [&] {
+      const std::size_t last_index = job.times.size() - 1;
+      const std::size_t ready = job.solutions.size();
+      const std::size_t from = ready == 0 ? 0 : ready - 1;
+      const std::size_t to = std::min(last_index, from + job.chunk);
+      solve::IntegrationOutput output;
+      output.snapshot_times.assign(
+          job.times.begin() + static_cast<std::ptrdiff_t>(ready),
+          job.times.begin() + static_cast<std::ptrdiff_t>(to) + 1);
+      solve::IntegrationResult result =
+          solve::Integrator(job.setup.method, job.setup.step_controller,
+                            job.setup.linear_solver)
+              .integrate(job.meshed, job.times[from], job.times[to], output,
+                         job.last ? &*job.last : nullptr);
+      combine_report(job.integrator, result.report);
+      for (solve::Solution &solution : result.snapshots) {
+        keep_range(job, solution);
+        job.solutions.push_back(std::move(solution));
+      }
+      job.last = std::move(result.final);
+      ++job.chunks;
+      if (job.solutions.size() != to + 1)
+        throw std::logic_error("a chunk did not keep its snapshots");
+      if (to == last_index)
+        job.state = "done";
+    });
+  } catch (const StageError &error) {
+    job.state = "failed";
+    job.error = Json::object();
+    job.error["stage"] = error.stage();
+    job.error["kind"] = error.kind();
+    job.error["message"] = error.what();
+  }
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - started)
+          .count();
+  if (options.chunk_seconds <= 0) {
+    job.chunk = 1;
+    return;
+  }
+  const double scaled = static_cast<double>(job.chunk) * options.chunk_seconds /
+                        std::max(seconds, 1e-3);
+  const double low = std::max(1.0, static_cast<double>(job.chunk) / 2);
+  const double high = static_cast<double>(job.chunk) * 4;
+  job.chunk =
+      static_cast<std::size_t>(std::round(std::clamp(scaled, low, high)));
+}
+
+Json progress_json(const SolveJob &job) {
+  Json out = job.base;
+  out["job"] = job.id;
+  out["state"] = job.state;
+  Json times = Json::array();
+  for (const solve::Solution &solution : job.solutions)
+    times.push_back(solution.time);
+  out["times"] = std::move(times);
+  out["min"] = std::isfinite(job.low) ? Json(job.low) : Json(nullptr);
+  out["max"] = std::isfinite(job.high) ? Json(job.high) : Json(nullptr);
+  if (job.setup.mode == SolveMode::time_integration) {
+    out["t0"] = job.setup.t0;
+    out["t1"] = job.setup.t1;
+    out["t"] = job.last ? job.last->time : job.setup.t0;
+    out["snapshots_total"] = job.times.size();
+    Json reports = Json::array();
+    if (job.integrator) {
+      mesh::StageReport report = *job.integrator;
+      report.metrics["chunks"] = static_cast<double>(job.chunks);
+      reports.push_back(report_json(report));
+    }
+    out["reports"] = std::move(reports);
+  } else
+    out["reports"] = job.static_reports;
+  // Where the values are: POST {"job", "first", "count"} to
+  // /api/solve/values.
+  const std::size_t nodes = job.meshed->mesh()->nodes.size();
+  Json layout = Json::object();
+  layout["path"] = "/api/solve/values";
+  layout["format"] = "float32le";
+  layout["snapshots"] = job.solutions.size();
+  layout["nodes"] = nodes;
+  layout["bytes"] = job.solutions.size() * nodes * 4;
+  out["values"] = std::move(layout);
+  if (!job.error.is_null())
+    out["error"] = job.error;
+  return out;
+}
+
+StageError job_error(const SolveJob &job) {
+  return StageError(job.error["stage"].get<std::string>(),
+                    job.error["kind"].get<std::string>(),
+                    job.error["message"].get<std::string>());
+}
+
+} // namespace
 
 // The last result of each stage and the key (the case sections) it was
 // built from.
@@ -220,8 +388,9 @@ struct Session::State {
   std::shared_ptr<const fem::MeshedProblem> meshed;
   std::string assembled_key;
   std::shared_ptr<const fem::AssembledProblem> assembled;
-  std::string solved_key;
-  std::shared_ptr<const SolveOutcome> solved;
+  // The current solve (one at a time) and the id the next one gets.
+  std::unique_ptr<SolveJob> job;
+  std::uint64_t next_job = 1;
 
   const Domain &get_domain(const Json &case_json) {
     std::string key = key_of(case_json, "geometry");
@@ -266,7 +435,6 @@ struct Session::State {
     const MeshOutcome &outcome = get_mesh(case_json);
     std::string key = mesh_key + "\n" + key_of(case_json, "problem");
     if (!meshed || key != meshed_key) {
-      solved.reset();
       assembled.reset();
       meshed.reset();
       const fem::Problem problem = staged("problem", [&] {
@@ -310,75 +478,94 @@ struct Session::State {
     return *assembled;
   }
 
-  const SolveOutcome &get_solved(const Json &case_json) {
+  // A new solve of the case; a static one is solved, a time one has run
+  // its first chunk. Throws the StageError of either.
+  std::unique_ptr<SolveJob> make_job(const Json &case_json,
+                                     const SessionOptions &options) {
     const auto &problem = get_meshed(case_json);
-    std::string key = meshed_key + "\n" + key_of(case_json, "solve");
-    if (solved && key == solved_key)
-      return *solved;
-    solved.reset();
-    const SolveSetup setup = staged("solve", [&] {
+    auto made = std::make_unique<SolveJob>();
+    made->key = meshed_key + "\n" + key_of(case_json, "solve");
+    made->meshed = problem;
+    made->setup = staged("solve", [&] {
       return build_solve_setup(section(case_json, "solve"));
     });
-    auto outcome = std::make_shared<SolveOutcome>();
-    Json summary = Json::object();
-    summary["time_order"] =
+    made->base["time_order"] =
         staged("solve", [&] { return fem::Assembler().time_order(*problem); });
-    summary["problem_time_order"] = fem::time_order(*problem);
-    summary["free_unknowns"] = problem->free_nodes().size();
-    if (setup.mode == SolveMode::static_solve) {
+    made->base["problem_time_order"] = fem::time_order(*problem);
+    made->base["free_unknowns"] = problem->free_nodes().size();
+    if (made->setup.mode == SolveMode::static_solve) {
       solve::StaticResult result = staged("solve", [&] {
-        return solve::StaticSolver(setup.linear_solver).solve(problem, setup.t);
+        return solve::StaticSolver(made->setup.linear_solver)
+            .solve(problem, made->setup.t);
       });
-      summary["mode"] = "static";
-      summary["reports"] = reports_json(result.reports);
-      outcome->solutions.push_back(std::move(result.solution));
+      made->base["mode"] = "static";
+      made->static_reports = reports_json(result.reports);
+      keep_range(*made, result.solution);
+      made->solutions.push_back(std::move(result.solution));
+      made->state = "done";
     } else {
-      solve::IntegrationOutput output;
-      output.snapshot_times = snapshot_times(setup);
-      solve::IntegrationResult result = staged("solve", [&] {
-        return solve::Integrator(setup.method, setup.step_controller,
-                                 setup.linear_solver)
-            .integrate(problem, setup.t0, setup.t1, output);
-      });
-      summary["mode"] = "time";
-      summary["reports"] = Json::array({report_json(result.report)});
-      outcome->solutions = std::move(result.snapshots);
-      if (outcome->solutions.empty() ||
-          outcome->solutions.back().time != result.final.time)
-        outcome->solutions.push_back(std::move(result.final));
+      made->base["mode"] = "time";
+      made->times = snapshot_times(made->setup);
+      if (made->times.size() < 2) {
+        // An interval the library refuses: let it say why.
+        staged("solve", [&] {
+          (void)solve::Integrator(made->setup.method,
+                                  made->setup.step_controller,
+                                  made->setup.linear_solver)
+              .integrate(problem, made->setup.t0, made->setup.t1);
+        });
+        throw StageError("solve", "internal", "the time interval is empty");
+      }
+      made->chunk = std::max<std::size_t>(1, options.first_chunk);
+      advance(*made, options);
+      if (made->state == "failed")
+        throw job_error(*made);
     }
-    Json times = Json::array();
-    double low = std::numeric_limits<double>::infinity();
-    double high = -std::numeric_limits<double>::infinity();
-    for (const solve::Solution &solution : outcome->solutions) {
-      times.push_back(solution.time);
-      for (const double value : solution.values)
-        if (std::isfinite(value)) {
-          low = std::min(low, value);
-          high = std::max(high, value);
-        }
-    }
-    summary["times"] = std::move(times);
-    summary["min"] = std::isfinite(low) ? Json(low) : Json(nullptr);
-    summary["max"] = std::isfinite(high) ? Json(high) : Json(nullptr);
-    // Where the values are: POST the same case to /api/solve/values.
-    const std::size_t nodes = problem->mesh()->nodes.size();
-    Json layout = Json::object();
-    layout["path"] = "/api/solve/values";
-    layout["format"] = "float32le";
-    layout["snapshots"] = outcome->solutions.size();
-    layout["nodes"] = nodes;
-    layout["bytes"] = outcome->solutions.size() * nodes * 4;
-    summary["values"] = std::move(layout);
-    outcome->summary = std::move(summary);
-    solved = std::move(outcome);
-    solved_key = std::move(key);
-    return *solved;
+    made->id = next_job++;
+    return made;
+  }
+
+  // The current job if it is `id`, else a StageError.
+  SolveJob &job_of(std::uint64_t id) {
+    if (!job || job->id != id)
+      throw StageError("solve", "input",
+                       std::format("the run {} is no longer the current one "
+                                   "(another solve replaced it)",
+                                   id));
+    return *job;
   }
 };
 
-Session::Session() : state_(std::make_unique<State>()) {}
-Session::~Session() = default;
+Session::Session(SessionOptions options)
+    : options_(options), state_(std::make_unique<State>()) {
+  if (options_.background_runs)
+    worker_ = std::thread([this] { background_loop(); });
+}
+
+Session::~Session() {
+  {
+    const std::scoped_lock lock(mutex_);
+    closing_ = true;
+  }
+  wake_.notify_all();
+  if (worker_.joinable())
+    worker_.join();
+}
+
+// Runs the current time run chunk by chunk. The mutex is released between
+// chunks, so other requests (a problem check, a field) are served then.
+void Session::background_loop() {
+  std::unique_lock lock(mutex_);
+  while (!closing_) {
+    if (state_->job && state_->job->state == "running") {
+      advance(*state_->job, options_);
+      lock.unlock();
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      lock.lock();
+    } else
+      wake_.wait(lock);
+  }
+}
 
 // --- the catalog and the default case ---------------------------------------
 
@@ -394,6 +581,7 @@ Json Session::catalog() {
   out["shapes"] = shape_catalog_json();
   out["sections"] = std::move(sections);
   out["problem"] = problem_catalog_json();
+  out["problem"]["presets"] = preset_catalog_json();
   out["default_case"] = default_case();
   return out;
 }
@@ -618,37 +806,124 @@ Json Session::field(const Json &request) {
 }
 
 Json Session::solve(const Json &case_json) {
+  std::uint64_t id = 0;
+  {
+    const std::scoped_lock lock(mutex_);
+    staged("case", [&] { check_case(case_json); });
+    State &state = *state_;
+    const auto &problem = state.get_meshed(case_json);
+    (void)problem;
+    const std::string key =
+        state.meshed_key + "\n" + key_of(case_json, "solve");
+    if (state.job && state.job->key == key && state.job->state != "failed") {
+      if (state.job->state == "stopped") {
+        state.job->state = "running";
+        wake_.notify_all();
+      }
+    } else {
+      // Dropped under the mutex: the run holds expressions.
+      state.job.reset();
+      state.job = state.make_job(case_json, options_);
+      wake_.notify_all();
+    }
+    id = state.job->id;
+    if (state.job->state != "running" || options_.background_runs)
+      return progress_json(*state.job);
+  }
+  return finish_run(id);
+}
+
+Json Session::finish_run(std::uint64_t job) {
+  while (advance_solve(job)) {
+  }
   const std::scoped_lock lock(mutex_);
-  staged("case", [&] { check_case(case_json); });
-  return state_->get_solved(case_json).summary;
+  const SolveJob &current = state_->job_of(job);
+  if (current.state == "failed")
+    throw job_error(current);
+  return progress_json(current);
+}
+
+bool Session::advance_solve(std::uint64_t job) {
+  const std::scoped_lock lock(mutex_);
+  SolveJob &current = state_->job_of(job);
+  advance(current, options_);
+  return current.state == "running";
+}
+
+Json Session::solve_progress(std::uint64_t job) {
+  const std::scoped_lock lock(mutex_);
+  return progress_json(state_->job_of(job));
+}
+
+Json Session::stop_solve(std::uint64_t job) {
+  const std::scoped_lock lock(mutex_);
+  SolveJob &current = state_->job_of(job);
+  if (current.state == "running")
+    current.state = "stopped";
+  return progress_json(current);
 }
 
 std::vector<std::vector<double>>
 Session::solution_values(const Json &case_json) {
+  const Json progress = solve(case_json);
+  const auto id = progress["job"].get<std::uint64_t>();
+  (void)finish_run(id);
   const std::scoped_lock lock(mutex_);
-  staged("case", [&] { check_case(case_json); });
   std::vector<std::vector<double>> out;
-  for (const solve::Solution &solution :
-       state_->get_solved(case_json).solutions)
+  for (const solve::Solution &solution : state_->job_of(id).solutions)
     out.push_back(solution.values);
   return out;
 }
 
-std::string Session::solution_values_float32(const Json &case_json) {
+std::string Session::solution_values_float32(std::uint64_t job,
+                                             std::size_t first,
+                                             std::size_t count) {
   const std::scoped_lock lock(mutex_);
-  staged("case", [&] { check_case(case_json); });
-  const SolveOutcome &solved = state_->get_solved(case_json);
+  const SolveJob &current = state_->job_of(job);
+  if (first > current.solutions.size() ||
+      count > current.solutions.size() - first)
+    throw StageError("solve", "input",
+                     std::format("snapshots {} to {} are not ready ({} are)",
+                                 first, first + count,
+                                 current.solutions.size()));
   std::string out;
-  if (!solved.solutions.empty())
-    out.reserve(solved.solutions.size() *
-                solved.solutions.front().values.size() * 4);
-  for (const solve::Solution &solution : solved.solutions)
-    append_float32(out, solution.values);
+  if (count > 0)
+    out.reserve(count * current.solutions[first].values.size() * 4);
+  for (std::size_t k = first; k < first + count; ++k)
+    append_float32(out, current.solutions[k].values);
   return out;
+}
+
+Json Session::apply_preset(const Json &request) {
+  const std::scoped_lock lock(mutex_);
+  staged("preset", [&] {
+    require_object(request, "request");
+    static constexpr std::string_view known[] = {"case", "preset"};
+    reject_unknown_keys(request, "request", known);
+  });
+  const Json &case_json = member(request, "case");
+  staged("case", [&] { check_case(case_json); });
+  const std::string id = staged("preset", [&] {
+    return require_string(member(request, "preset"), "preset");
+  });
+  const Domain &domain = state_->get_domain(case_json);
+  return staged("preset", [&] {
+    return app::apply_preset(case_json, id, domain_facts(domain));
+  });
 }
 
 ExportedFile Session::export_file(const Json &case_json,
                                   std::string_view kind) {
+  if (kind == "solution.csv") {
+    // Solved to the end first, chunk by chunk (each under the mutex).
+    const auto id = solve(case_json)["job"].get<std::uint64_t>();
+    (void)finish_run(id);
+    const std::scoped_lock lock(mutex_);
+    const SolveJob &job = state_->job_of(id);
+    return {.name = "solution.csv",
+            .content_type = "text/csv",
+            .content = solution_csv(*job.meshed->mesh(), job.solutions)};
+  }
   const std::scoped_lock lock(mutex_);
   staged("case", [&] { check_case(case_json); });
   std::ostringstream out;
@@ -661,13 +936,6 @@ ExportedFile Session::export_file(const Json &case_json,
     return {.name = "geometry.svg",
             .content_type = "image/svg+xml",
             .content = out.str()};
-  }
-  if (kind == "solution.csv") {
-    const SolveOutcome &solved = state_->get_solved(case_json);
-    return {.name = "solution.csv",
-            .content_type = "text/csv",
-            .content =
-                solution_csv(*solved.solutions.front().mesh, solved.solutions)};
   }
   if (kind == "stiffness.mtx" || kind == "mass.mtx" || kind == "damping.mtx" ||
       kind == "rhs.mtx") {
@@ -744,7 +1012,13 @@ Json Session::run(const Json &case_json) {
       result["assembly"].erase("sparsity");
       out["assembly"] = std::move(result);
     }
-    out["solve"] = solve(case_json);
+    {
+      // The same chunks as the page's runs, run here to the end.
+      Json solved = solve(case_json);
+      if (solved["state"] == "running")
+        solved = finish_run(solved["job"].get<std::uint64_t>());
+      out["solve"] = std::move(solved);
+    }
     out["ok"] = true;
   } catch (const StageError &error) {
     Json item = Json::object();

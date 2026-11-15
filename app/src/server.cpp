@@ -4,7 +4,11 @@
 #include "httplib.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <fstream>
+#include <span>
+#include <tuple>
 #include <iterator>
 #include <stdexcept>
 #include <vector>
@@ -74,11 +78,41 @@ std::string read_text(const std::filesystem::path &path) {
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
+// A run's id from a request {"job": n, ...} with only the keys `known`.
+std::uint64_t job_of(const Json &body,
+                     std::span<const std::string_view> known) {
+  require_object(body, "request");
+  reject_unknown_keys(body, "request", known);
+  const double job = require_number(member(body, "job"), "job");
+  if (job != std::floor(job) || job < 1 || job > 9e15)
+    throw std::invalid_argument("job: expected a run's id");
+  return static_cast<std::uint64_t>(job);
+}
+
+std::size_t count_of(const Json &body, std::string_view key) {
+  const double value = require_number(member(body, key), std::string(key));
+  if (value != std::floor(value) || value < 0 || value > 1e9)
+    throw std::invalid_argument(std::string(key) +
+                                ": expected a whole number from 0");
+  return static_cast<std::size_t>(value);
+}
+
+// Runs `read` on the request, as a StageError of the solve stage when it
+// refuses it.
+template <class Read> auto read_request(Read read) {
+  try {
+    return read();
+  } catch (const std::invalid_argument &error) {
+    throw StageError("solve", "input", error.what());
+  }
+}
+
 } // namespace
 
 struct Server::Impl {
   ServerOptions options;
-  Session session;
+  // Time runs continue in the background, chunk by chunk.
+  Session session{SessionOptions{.background_runs = true}};
   httplib::Server http;
 };
 
@@ -179,14 +213,33 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
         [&session](const Json &body) { return session.assemble(body); });
   route("/api/solve",
         [&session](const Json &body) { return session.solve(body); });
-  // The solution's values as float32 (Session::solution_values_float32).
+  // A run's progress and stopping it: {"job": n}.
+  route("/api/solve/progress", [&session](const Json &body) {
+    static constexpr std::string_view known[] = {"job"};
+    return session.solve_progress(
+        read_request([&] { return job_of(body, known); }));
+  });
+  route("/api/solve/stop", [&session](const Json &body) {
+    static constexpr std::string_view known[] = {"job"};
+    return session.stop_solve(
+        read_request([&] { return job_of(body, known); }));
+  });
+  // Snapshots of a run as float32 (Session::solution_values_float32):
+  // {"job": n, "first": k, "count": c}.
   http.Post("/api/solve/values", [&session](const httplib::Request &request,
                                             httplib::Response &response) {
     handle(request, response, [&](const Json &body, httplib::Response &out) {
-      out.set_content(session.solution_values_float32(body),
+      static constexpr std::string_view known[] = {"job", "first", "count"};
+      const auto [job, first, count] = read_request([&] {
+        return std::tuple(job_of(body, known), count_of(body, "first"),
+                          count_of(body, "count"));
+      });
+      out.set_content(session.solution_values_float32(job, first, count),
                       "application/octet-stream");
     });
   });
+  route("/api/preset",
+        [&session](const Json &body) { return session.apply_preset(body); });
   route("/api/field",
         [&session](const Json &body) { return session.field(body); });
 

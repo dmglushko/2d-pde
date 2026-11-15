@@ -1,7 +1,7 @@
 // The page's state: the catalog, the case being edited and the last result
 // of each stage. Panels and the viewer subscribe and redraw on changes.
 
-import { STAGES, stageKey } from "./core.js";
+import { STAGES, stageInfo } from "./core.js";
 
 const STORAGE_KEY = "pde2d-app-case";
 const NAME_KEY = "pde2d-app-case-name";
@@ -34,6 +34,9 @@ export const store = {
   fieldSource: "field",
   // The snapshot of the solution shown (an index into its times).
   solveFrame: 0,
+  // True once the user moved the slider during the current run: the
+  // picture then stops following the newest snapshot.
+  solveFrameChosen: false,
   // The picture's settings: colorBy is "none", "quality" or "field".
   view: { colorBy: "none" },
   // The open step.
@@ -66,14 +69,18 @@ export function setCase(caseData, { name = store.caseName, dirty = false } = {})
   store.caseName = name;
   store.dirty = dirty;
   for (const stage of Object.keys(store.errors)) store.errors[stage] = null;
+  forgetKeys(null);
   persist();
   notify("case");
 }
 
-export function editCase(mutate, reason = "edit") {
+// `sections`: the case sections the edit changes (their keys are
+// computed again); by default every section.
+export function editCase(mutate, reason = "edit", { sections = null } = {}) {
   mutate(store.caseData);
   store.dirty = true;
-  persist();
+  forgetKeys(sections);
+  schedulePersist();
   notify(reason);
 }
 
@@ -82,6 +89,32 @@ export function markSaved() {
   store.dirty = false;
   persist();
   notify("view");
+}
+
+// --- stage keys ------------------------------------------------------------------
+
+// Each section's JSON text, computed once per change of the section: a
+// keystroke in the problem must not stringify an SVG or a mesh file again
+// (every panel asks for stage keys on every change).
+let sectionTexts = new Map();
+
+function forgetKeys(sections) {
+  if (!sections) sectionTexts = new Map();
+  else for (const section of sections) sectionTexts.delete(section);
+}
+
+function sectionText(section) {
+  let text = sectionTexts.get(section);
+  if (text === undefined) {
+    text = JSON.stringify(store.caseData?.[section] ?? null);
+    sectionTexts.set(section, text);
+  }
+  return text;
+}
+
+// The current case's key for `stage` (core.js stageKey: the same text).
+export function currentKey(stage) {
+  return `[${stageInfo(stage).sections.map(sectionText).join(",")}]`;
 }
 
 export function openStep(step) {
@@ -98,7 +131,7 @@ export function setColorBy(colorBy) {
 // A stage's result, if it was built from the current case.
 export function freshResult(stage) {
   const result = store.results[stage];
-  return result && result.key === stageKey(store.caseData, stage) ? result.data : null;
+  return result && result.key === currentKey(stage) ? result.data : null;
 }
 
 // The last result of a stage even if the case changed since.
@@ -110,28 +143,50 @@ export function lastResult(stage) {
 // case, else null.
 export function currentError(stage) {
   const error = store.errors[stage];
-  return error && error.key === stageKey(store.caseData, stage) ? error : null;
+  return error && error.key === currentKey(stage) ? error : null;
 }
 
 // The error of a stage's last run when it was produced for an earlier
 // input, else null.
 export function outdatedError(stage) {
   const error = store.errors[stage];
-  return error && error.key !== stageKey(store.caseData, stage) ? error : null;
+  return error && error.key !== currentKey(stage) ? error : null;
 }
 
 export function stageStatus(stage) {
   if (store.busy.has(stage)) return "busy";
   if (currentError(stage)) return "failed";
   const result = store.results[stage];
-  if (result && result.key === stageKey(store.caseData, stage)) return "done";
+  if (result && result.key === currentKey(stage)) return result.data?.state === "stopped" ? "stopped" : "done";
   if (result || store.errors[stage]) return "stale";
   return "none";
 }
 
 // The case is kept in this browser between visits (a convenience; saving
-// a case file is the reliable way to keep it).
+// a case file is the reliable way to keep it). Writing it stringifies the
+// whole case, so edits write it a moment after the last one, and a page
+// that is hidden or closed writes it at once.
+let persistTimer = null;
+const PERSIST_DELAY_MS = 600;
+
+function schedulePersist() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(persist, PERSIST_DELAY_MS);
+}
+
+export function flushPersist() {
+  if (persistTimer === null) return;
+  persist();
+}
+
+globalThis.addEventListener?.("pagehide", flushPersist);
+globalThis.document?.addEventListener("visibilitychange", () => {
+  if (globalThis.document.visibilityState === "hidden") flushPersist();
+});
+
 function persist() {
+  clearTimeout(persistTimer);
+  persistTimer = null;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store.caseData));
     localStorage.setItem(NAME_KEY, store.caseName);

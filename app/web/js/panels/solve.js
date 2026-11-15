@@ -4,9 +4,10 @@
 // over its snapshots.
 
 import { downloadExport } from "../api.js";
-import { runWithPrerequisites, toast } from "../actions.js";
+import { followedRun, runWithPrerequisites, stopRun, toast } from "../actions.js";
 import { LARGE_SOLUTION_BYTES, formatNumber, solutionBytes } from "../core.js";
-import { actionButton, busyNote, errorBox, exportButton, fill, h, markError, optionsForm, reportsView, stat } from "../dom.js";
+import { actionButton, busyNote, errorBox, exportButton, fill, foldable, h, markError, optionsForm, reportsView, stat } from "../dom.js";
+import { settings } from "../settings.js";
 import { currentError, editCase, freshResult, lastResult, notify, openStep, outdatedError, store } from "../state.js";
 import { choiceCard } from "./components.js";
 
@@ -34,7 +35,6 @@ function sizeEstimate() {
 
 // --- the player -------------------------------------------------------------
 
-const FRAMES_PER_SECOND = 12;
 let playTimer = null;
 
 function stopPlaying() {
@@ -49,19 +49,27 @@ function showFrame(index) {
   notify("frame");
 }
 
+// The slider and the player over the snapshots. While a run goes on, new
+// snapshots extend the slider (refresh) and the newest is shown unless
+// the slider was moved.
 function player(result, container) {
-  const last = result.times.length - 1;
+  const last = () => result.values.length - 1;
   const label = h("span", { class: "num", style: "min-width:9em" });
-  const slider = h("input", { type: "range", min: "0", max: String(last), step: "1", value: String(Math.min(store.solveFrame, last)), "aria-label": "Snapshot", style: "flex:1;min-width:120px" });
+  const count = h("span", { class: "note" });
+  const scaleNote = h("p", { class: "note" });
+  const slider = h("input", { type: "range", min: "0", max: String(last()), step: "1", value: String(Math.min(store.solveFrame, last())), "aria-label": "Snapshot", style: "flex:1;min-width:120px" });
   const play = h("button", { type: "button", class: "small", "aria-label": "Play" }, "▶ Play");
   const sync = () => {
     const i = Number(slider.value);
     label.textContent = `t = ${formatNumber(result.times[i], 5)}`;
     play.textContent = playTimer ? "❚❚ Pause" : "▶ Play";
     play.setAttribute("aria-label", playTimer ? "Pause" : "Play");
+    count.textContent = result.state === "running" ? `${result.values.length} of ${result.snapshots_total} times` : `${result.times.length} times`;
+    scaleNote.textContent = `The colours use one scale for every time: ${formatNumber(result.min)} to ${formatNumber(result.max)}${result.state === "running" ? " so far (it grows while the run goes on)" : ""}.`;
   };
   slider.addEventListener("input", () => {
     stopPlaying();
+    store.solveFrameChosen = true;
     showFrame(Number(slider.value));
     sync();
   });
@@ -71,7 +79,8 @@ function player(result, container) {
       return sync();
     }
     // From the start when at the end.
-    if (Number(slider.value) >= last) slider.value = "0";
+    if (Number(slider.value) >= last()) slider.value = "0";
+    store.solveFrameChosen = true;
     showFrame(Number(slider.value));
     playTimer = setInterval(() => {
       // Stop when the panel shows another result, was rebuilt or left,
@@ -81,24 +90,66 @@ function player(result, container) {
         return sync();
       }
       const next = Number(slider.value) + 1;
-      if (next > last) {
+      if (next > last()) {
         stopPlaying();
         return sync();
       }
       slider.value = String(next);
       showFrame(next);
       sync();
-    }, 1000 / FRAMES_PER_SECOND);
+    }, 1000 / settings.playbackFps);
     sync();
   });
   sync();
-  return h(
+  const element = h("div", { class: "card" }, h("div", { class: "card-head" }, h("span", { class: "title" }, "Snapshots"), h("span", { class: "spacer" }), count), h("div", { class: "row" }, play, slider, label), scaleNote);
+  // More snapshots arrived.
+  element.refresh = () => {
+    slider.max = String(last());
+    if (!playTimer) slider.value = String(Math.min(store.solveFrame, last()));
+    sync();
+  };
+  return element;
+}
+
+// How far a time run got, with Stop.
+function progressView(result) {
+  const bar = h("progress", { max: "1", value: "0", style: "flex:1;min-width:120px" });
+  const text = h("span", { class: "num" });
+  const element = h(
     "div",
-    { class: "card" },
-    h("div", { class: "card-head" }, h("span", { class: "title" }, "Snapshots"), h("span", { class: "spacer" }), h("span", { class: "note" }, `${result.times.length} times`)),
-    h("div", { class: "row" }, play, slider, label),
-    h("p", { class: "note" }, `The colours use one scale for every time: ${formatNumber(result.min)} to ${formatNumber(result.max)}.`),
+    { class: "card run-progress", role: "status" },
+    h("div", { class: "row" }, bar, actionButton("Stop", stopRun, { small: true })),
+    text,
   );
+  element.refresh = () => {
+    const span = result.t1 - result.t0;
+    const done = span > 0 ? (result.t - result.t0) / span : 0;
+    bar.value = Math.max(0, Math.min(1, done));
+    const steps = result.reports?.[0]?.metrics?.steps ?? 0;
+    text.textContent = `Running: t = ${formatNumber(result.t, 5)} of ${formatNumber(result.t1)} · ${formatNumber(steps)} steps · ${result.values.length} of ${result.snapshots_total} snapshots`;
+  };
+  element.refresh();
+  return element;
+}
+
+function resultStats(result) {
+  const report = (stage) => result.reports.find((r) => r.stage === stage)?.metrics ?? {};
+  const integrator = report("integrator");
+  const staticReport = report("static_solver");
+  return [
+    stat("Unknowns", formatNumber(result.free_unknowns)),
+    stat("Time order", result.time_order === result.problem_time_order ? String(result.time_order) : `${result.time_order} (as written ${result.problem_time_order})`),
+    stat("u from", formatNumber(result.min)),
+    stat("u to", formatNumber(result.max)),
+    result.mode === "time"
+      ? [
+          stat("Steps", formatNumber(integrator.steps)),
+          stat("dt", formatNumber(integrator.min_dt) === formatNumber(integrator.max_dt) ? formatNumber(integrator.max_dt) : `${formatNumber(integrator.min_dt)} – ${formatNumber(integrator.max_dt)}`),
+          stat("Linear iterations", formatNumber(integrator.linear_iterations)),
+          stat("Largest residual", formatNumber(integrator.max_residual, 2)),
+        ]
+      : [stat("Linear iterations", formatNumber(staticReport.linear_iterations)), stat("Residual", formatNumber(staticReport.residual, 2))],
+  ];
 }
 
 // --- the form ---------------------------------------------------------------
@@ -150,7 +201,7 @@ export const solvePanel = {
     }
     const solveCase = store.caseData.solve;
     const mode = section.modes.find((m) => m.id === solveCase.mode) ?? section.modes[0];
-    const settings = (solveCase[mode.settings.key] ??= {});
+    const modeSettings = (solveCase[mode.settings.key] ??= {});
     const pickLinear = (next) => editCase((c) => (c.solve.linear_solver = next), "structure");
     fill(
       container,
@@ -159,14 +210,13 @@ export const solvePanel = {
       modeSwitch(section, solveCase),
       h("p", { class: "note" }, mode.description),
       h("div", { id: "solve-hint" }),
-      h(
-        "div",
-        { class: "card", dataset: { path: `solve.${mode.settings.key}` } },
-        h("div", { class: "card-head" }, h("span", { class: "title" }, mode.settings.label)),
-        optionsForm(mode.settings.options, settings, `solve.${mode.settings.key}`, () => editCase(() => {})),
+      foldable(
+        { id: `solve.${mode.settings.key}`, title: mode.settings.label, attributes: { dataset: { path: `solve.${mode.settings.key}` } } },
+        optionsForm(mode.settings.options, modeSettings, `solve.${mode.settings.key}`, () => editCase(() => {}, "edit", { sections: ["solve"] })),
       ),
-      mode.slots.map((slot) => choiceCard(slot, settings[slot.id], `solve.${mode.settings.key}.${slot.id}`, (next) => editCase((c) => (c.solve[mode.settings.key][slot.id] = next), "structure"))),
-      choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear),
+      mode.slots.map((slot) => choiceCard(slot, modeSettings[slot.id], `solve.${mode.settings.key}.${slot.id}`, (next) => editCase((c) => (c.solve[mode.settings.key][slot.id] = next), "structure"))),
+      // Its options are rarely changed: folded for a new viewer.
+      choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear, { folded: true }),
       h("div", { id: "solve-size" }),
       h("div", { class: "row", style: "margin-top:12px" }, actionButton("Solve", solve, { primary: true })),
       h("div", { class: "result", id: "solve-result" }),
@@ -194,42 +244,57 @@ export const solvePanel = {
     const fresh = freshResult("solve");
     const result = fresh ?? lastResult("solve");
     const busy = store.busy.has("solve");
-    if (slot.shown && slot.shown.result === result && slot.shown.error === error && slot.shown.old === old && slot.shown.busy === busy && slot.shown.fresh === fresh) return;
-    slot.shown = { result, error, old, busy, fresh };
+    const running = Boolean(followedRun()) && result?.state === "running";
+    const state = result?.state;
+    if (slot.shown && slot.shown.result === result && slot.shown.error === error && slot.shown.old === old && slot.shown.busy === busy && slot.shown.fresh === fresh && slot.shown.running === running && slot.shown.state === state) {
+      // The same run, further on: update what shows progress in place
+      // (rebuilding would take the slider from under the pointer).
+      for (const live of slot.querySelectorAll("[data-live]")) live.refresh?.();
+      return;
+    }
+    slot.shown = { result, error, old, busy, fresh, running, state };
     stopPlaying();
     const placed = markError(container, error);
     const children = [];
     if (error && !placed) children.push(errorBox(error, { openProblem }));
     if (old) children.push(errorBox(old, { outdated: true }));
-    if (busy) children.push(busyNote("solve", "Solving"), h("p", { class: "note" }, "A long time run keeps the app busy until it ends."));
+    if (busy && !running) children.push(busyNote("solve", "Solving"));
     if (result) {
-      const report = (stage) => result.reports.find((r) => r.stage === stage)?.metrics ?? {};
-      const integrator = report("integrator");
-      const staticReport = report("static_solver");
+      const live = (element) => ((element.dataset.live = ""), element);
+      const stats = live(h("div", { class: "stats" }, resultStats(result)));
+      stats.refresh = () => fill(stats, resultStats(result));
+      const stopped = result.state === "stopped";
+      const title = result.mode === "time" ? `Solution from t = ${formatNumber(result.t0 ?? result.times[0])} to ${formatNumber(result.t1 ?? result.times.at(-1))}` : `Solution at t = ${formatNumber(result.times[0])}`;
       children.push(
-        h("div", { class: "row" }, h("h3", { style: "margin:8px 0" }, result.mode === "time" ? `Solution from t = ${formatNumber(result.times[0])} to ${formatNumber(result.times.at(-1))}` : `Solution at t = ${formatNumber(result.times[0])}`), fresh ? null : h("span", { class: "chip" }, "outdated: the case changed")),
-        h(
-          "div",
-          { class: "stats" },
-          stat("Unknowns", formatNumber(result.free_unknowns)),
-          stat("Time order", result.time_order === result.problem_time_order ? String(result.time_order) : `${result.time_order} (as written ${result.problem_time_order})`),
-          stat("u from", formatNumber(result.min)),
-          stat("u to", formatNumber(result.max)),
-          result.mode === "time"
-            ? [
-                stat("Steps", formatNumber(integrator.steps)),
-                stat("dt", formatNumber(integrator.min_dt) === formatNumber(integrator.max_dt) ? formatNumber(integrator.max_dt) : `${formatNumber(integrator.min_dt)} – ${formatNumber(integrator.max_dt)}`),
-                stat("Linear iterations", formatNumber(integrator.linear_iterations)),
-                stat("Largest residual", formatNumber(integrator.max_residual, 2)),
-              ]
-            : [stat("Linear iterations", formatNumber(staticReport.linear_iterations)), stat("Residual", formatNumber(staticReport.residual, 2))],
+        running ? live(progressView(result)) : null,
+        stopped && fresh ? h("div", { class: "row" }, actionButton("Continue", solve, { small: true }), h("span", { class: "note" }, "Goes on from where it stopped.")) : null,
+        foldable(
+          {
+            id: "solve.result",
+            title,
+            kind: "section",
+            extras: [
+              fresh ? null : h("span", { class: "chip" }, "outdated: the case changed"),
+              stopped ? h("span", { class: "chip" }, `stopped at t = ${formatNumber(result.t, 5)}`) : null,
+              result.state === "failed" ? h("span", { class: "chip bad" }, `failed after t = ${formatNumber(result.t, 5)}`) : null,
+            ],
+          },
+          stats,
+          fresh && result.mode === "time" && result.values.length > 0 ? live(player(result, container)) : null,
+          fresh ? null : h("p", { class: "note" }, "The picture shows the solution only while it is up to date: solve again."),
         ),
-        fresh && result.mode === "time" ? player(result, container) : null,
-        fresh ? null : h("p", { class: "note" }, "The picture shows the solution only while it is up to date: solve again."),
-        h("h3", {}, "Reports"),
-        reportsView(result.reports),
-        h("div", { class: "row", style: "margin-top:12px" }, exportButton("Export solution .csv", () => downloadExport("solution.csv", store.caseData).catch((e) => toast(e.message)), { fresh, staleReason: "The solution shown is outdated: solve again to export it." })),
-        h("p", { class: "note" }, "One row per mesh node: x, y and u at every kept time."),
+        running ? null : foldable({ id: "solve.reports", title: "Reports", kind: "section", folded: true }, reportsView(result.reports)),
+        running
+          ? null
+          : h(
+              "div",
+              { class: "row", style: "margin-top:12px" },
+              exportButton("Export solution .csv", () => downloadExport("solution.csv", store.caseData).catch((e) => toast(e.message)), {
+                fresh: fresh && result.state === "done",
+                staleReason: result.state === "done" ? "The solution shown is outdated: solve again to export it." : "The run did not reach t1: continue it to export.",
+              }),
+            ),
+        running ? null : h("p", { class: "note" }, "One row per mesh node: x, y and u at every kept time."),
       );
     }
     fill(slot, ...children);

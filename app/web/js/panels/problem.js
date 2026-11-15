@@ -3,15 +3,25 @@
 // edit is checked by the server a moment later; errors and what each
 // coefficient depends on are shown next to the fields.
 
-import { scheduleProblemCheck } from "../actions.js";
+import { applyPreset, scheduleProblemCheck } from "../actions.js";
 import { regionToken, renameParameter } from "../core.js";
-import { errorBox, h, fill, markLocal, numberHandler } from "../dom.js";
+import { errorBox, foldable, h, fill, markLocal, numberHandler, revealFolded } from "../dom.js";
+import { settings } from "../settings.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 
+// Every edit here changes only the problem section, so the other stages'
+// keys are not computed again. Typing is checked after a pause (the
+// settings); a change of structure (a template, a parameter added) at
+// once.
 function edit(mutate, reason = "edit") {
-  editCase(mutate, reason);
-  scheduleProblemCheck();
+  editCase(mutate, reason, { sections: ["problem"] });
+  scheduleProblemCheck({ now: reason !== "edit" });
 }
+
+// With the check while typing off, a field is checked when it is left.
+const checkOnCommit = () => {
+  if (!settings.checkWhileTyping) scheduleProblemCheck({ now: true });
+};
 
 // One coefficient row: its name, the term it multiplies, a text input.
 function coefficientRow(field, object, path, placeholder = "0") {
@@ -29,6 +39,7 @@ function coefficientRow(field, object, path, placeholder = "0") {
         if (text.trim() === "") delete object[field.name];
         else object[field.name] = text;
       }),
+    onchange: checkOnCommit,
   });
   return [
     h("div", { class: "name" }, field.name, field.term ? h("small", {}, `× ${field.term}`) : h("small", {}, "right side")),
@@ -52,19 +63,37 @@ function templateSelect(label, templates, apply) {
   );
 }
 
+// A complete problem for the current geometry, from the server's presets
+// (equation, conditions for every region, initial conditions, parameters
+// and the solve settings). The toast that follows can undo it.
+function presetSelect(presets) {
+  return h(
+    "select",
+    {
+      "aria-label": "Problem preset",
+      onchange: (event) => {
+        const preset = presets.find((p) => p.id === event.target.value);
+        event.target.value = "";
+        if (preset) applyPreset(preset);
+      },
+    },
+    h("option", { value: "" }, "Preset…"),
+    presets.map((p) => h("option", { value: p.id, title: p.description }, p.label)),
+  );
+}
+
 function equationSection(catalog, problem) {
   problem.equation ??= {};
-  return [
-    h(
-      "div",
-      { class: "row", style: "margin-top:16px" },
-      h("h3", { style: "margin:0" }, "Equation"),
-      h("span", { class: "spacer" }),
-      templateSelect("Start from…", catalog.equation_templates, (values) => edit((c) => (c.problem.equation = values), "structure")),
-    ),
+  return foldable(
+    {
+      id: "problem.equation",
+      title: "Equation",
+      kind: "section",
+      extras: [h("span", { class: "spacer" }), templateSelect("Start from…", catalog.equation_templates, (values) => edit((c) => (c.problem.equation = values), "structure"))],
+    },
     h("div", { class: "form-line" }, catalog.equation_form),
     h("div", { class: "coefficients", style: "margin-top:8px" }, catalog.equation_fields.map((f) => coefficientRow(f, problem.equation, "problem.equation"))),
-  ];
+  );
 }
 
 function parametersSection(problem) {
@@ -83,8 +112,9 @@ function parametersSection(problem) {
     markLocal(input, null);
     if (input.value.trim() !== oldName) edit((c) => (c.problem.parameters = next), "structure");
   };
-  return [
-    h("div", { class: "row", style: "margin-top:16px" }, h("h3", { style: "margin:0" }, "Parameters"), h("span", { class: "spacer" }), h("button", {
+  const add = h(
+    "button",
+    {
       type: "button",
       class: "small",
       onclick: () =>
@@ -93,7 +123,11 @@ function parametersSection(problem) {
           while (`p${n}` in c.problem.parameters) n++;
           c.problem.parameters[`p${n}`] = 1;
         }, "structure"),
-    }, "Add")),
+    },
+    "Add",
+  );
+  return foldable(
+    { id: "problem.parameters", title: "Parameters", kind: "section", extras: [h("span", { class: "spacer" }), add] },
     h("p", { class: "note" }, "Named constants used in the expressions, such as k = 0.1."),
     h(
       "div",
@@ -111,12 +145,13 @@ function parametersSection(problem) {
             "aria-label": `Value of ${name}`,
             style: "width:120px",
             oninput: numberHandler((v) => edit((c) => (c.problem.parameters[name] = v))),
+            onchange: checkOnCommit,
           }),
           h("button", { type: "button", class: "icon", "aria-label": `Remove ${name}`, onclick: () => edit((c) => delete c.problem.parameters[name], "structure") }, "✕"),
         ),
       ),
     ),
-  ];
+  );
 }
 
 function conditionsSection(catalog, problem) {
@@ -127,8 +162,8 @@ function conditionsSection(catalog, problem) {
     const i = order.indexOf(name);
     return i < 0 ? order.length + regions.indexOf(name) : i;
   };
-  return [
-    h("h3", {}, "Boundary conditions"),
+  return foldable(
+    { id: "problem.conditions", title: "Boundary conditions", kind: "section" },
     h("div", { class: "form-line" }, catalog.condition_form),
     h("p", { class: "note" }, catalog.condition_note),
     regions.length === 0 ? h("p", { class: "note" }, "The regions appear here once the geometry is read.") : null,
@@ -137,17 +172,14 @@ function conditionsSection(catalog, problem) {
       .map((region) => {
         const condition = conditions[region];
         const path = `problem.boundary_conditions.${region}`;
-        return h(
-          "details",
-          { class: "card field", open: regions.length <= 4, dataset: { path } },
-          h(
-            "summary",
-            { class: "card-head", style: "cursor:pointer" },
-            h("span", { class: "swatch", style: `background:var(${regionToken(index(region))})` }),
-            h("span", { class: "title" }, region),
-            h("span", { class: "chip", dataset: { kindOf: region } }, "…"),
-            h("span", { class: "spacer" }),
-          ),
+        return foldable(
+          {
+            id: `problem.condition.${region}`,
+            title: [h("span", { class: "swatch", style: `background:var(${regionToken(index(region))})` }), " ", region],
+            folded: regions.length > 4,
+            extras: [h("span", { class: "chip", dataset: { kindOf: region } }, "…"), h("span", { class: "spacer" })],
+            attributes: { class: "field", dataset: { path } },
+          },
           h(
             "div",
             { class: "row", style: "margin:8px 0" },
@@ -162,21 +194,22 @@ function conditionsSection(catalog, problem) {
                 (v) => edit(() => (condition.priority = v)),
                 () => edit(() => delete condition.priority),
               ),
+              onchange: checkOnCommit,
             })),
           ),
           h("div", { class: "coefficients" }, catalog.condition_fields.map((f) => coefficientRow(f, condition, path))),
         );
       }),
-  ];
+  );
 }
 
 function initialSection(catalog, problem) {
   problem.initial ??= {};
-  return [
-    h("h3", {}, "Initial conditions"),
+  return foldable(
+    { id: "problem.initial", title: "Initial conditions", kind: "section" },
     h("p", { class: "note" }, catalog.initial_note),
     h("div", { class: "coefficients" }, catalog.initial_fields.map((f) => coefficientRow({ ...f, term: "" }, problem.initial, "problem.initial", "not given"))),
-  ];
+  );
 }
 
 function factChips(facts) {
@@ -190,8 +223,8 @@ export const problemPanel = {
     const catalog = store.catalog.problem;
     const problem = (store.caseData.problem ??= {});
     fill(container,
-      h("h2", {}, "Problem"),
-      h("p", { class: "lead" }, "One linear scalar equation in u(x, y, t). Every field takes an expression; an empty field is zero."),
+      h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Problem"), h("span", { class: "spacer" }), catalog.presets?.length ? presetSelect(catalog.presets) : null),
+      h("p", { class: "lead" }, "One linear scalar equation in u(x, y, t). Every field takes an expression; an empty field is zero. A preset fills in a whole problem for the current geometry, with its solve settings."),
       h("details", { class: "report" }, h("summary", {}, "What an expression may contain"), h("div", { class: "body note" }, catalog.expression_help)),
       h("div", { id: "problem-summary", class: "result" }),
       equationSection(catalog, problem),
@@ -220,7 +253,10 @@ export const problemPanel = {
       const path = cell.dataset.path;
       cell.classList.toggle("invalid", errors.has(path));
       for (const old of cell.querySelectorAll(":scope > [data-error]")) old.remove();
-      if (errors.has(path)) cell.append(h("div", { class: "error-text", "data-error": "" }, errors.get(path)));
+      if (errors.has(path)) {
+        cell.append(h("div", { class: "error-text", "data-error": "" }, errors.get(path)));
+        if (fresh) revealFolded(cell);
+      }
       const facts = cell.querySelector(":scope > .facts");
       if (facts) fill(facts, ...(errors.has(path) ? [] : factChips(check?.facts?.[path])));
     }

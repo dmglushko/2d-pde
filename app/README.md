@@ -68,9 +68,14 @@ previous input". A number field whose text is not a number yet (`-`,
    marked at its field.
 3. **Problem.** Write the equation's coefficients, named parameters, one
    boundary condition per region and the initial conditions as expressions
-   in x, y and t. The **Start from…** and **Type…** menus fill in common
-   equations and conditions. Every edit is checked: errors appear under
-   their field, and each field shows what it depends on. Each condition
+   in x, y and t. **Preset…** fills in a whole problem for the current
+   geometry with matching solve settings: Poisson, Laplace with u = x,
+   heat (a bump, a heated boundary, cooling), the wave equation with and
+   without damping, steady convection-diffusion and reaction-diffusion;
+   the message that follows has **Undo**. The **Start from…** and
+   **Type…** menus fill in common equations and conditions. Every edit is
+   checked after a short pause in typing (see Settings): errors appear
+   under their field, and each field shows what it depends on. Each condition
    shows its kind (Dirichlet, natural, dynamic), and the summary shows
    the time order and which initial conditions are needed. While an edit
    waits for its check, the summary says "Checking…" and the old facts
@@ -97,13 +102,29 @@ previous input". A number field whose text is not a number yet (`-`,
    colours keep one scale for every time. **Export solution .csv** saves
    x, y and u at every kept time (full precision; the picture gets the
    values as 32-bit floats). Before a run, the panel says how large the
-   solution will be and warns above 50 MB. A long run keeps the app busy
-   until it ends.
+   solution will be and warns above 50 MB. A run in time shows its
+   snapshots while it goes on: a progress bar (t reached, steps,
+   snapshots) and the newest snapshot in the picture, unless you moved the
+   slider. **Stop** keeps what arrived; **Continue** goes on from there.
+   Changing the case stops a run.
 
 **Run all** runs geometry, mesh, assembly and the solve in turn, skipping
 the steps that are up to date, and ends with the picture coloured by the
 solution. When a step fails, it opens with a message. Exports are offered
 only for results that are up to date.
+
+Every card and section folds: click its title (or press Enter or Space
+on it). The browser remembers which ones you folded; rarely changed ones
+(the boundary discretizer, the initial triangulator, the linear solver,
+reports) start folded.
+
+**Settings** (the gear in the top bar; Escape closes it) are kept in this
+browser, not in the case: the problem check while typing (on or off, and
+its delay), the playback speed, whether a run's newest snapshot is
+followed, the significant digits shown, and the picture quality (lower is
+faster to pan and draw, higher is sharper). The Computation group
+(sequential or parallel assembly and linear solves) is shown disabled: the
+library runs sequentially for now.
 
 In the picture, drag to pan, use the wheel to zoom, and double-click (or
 press **Fit**) to fit. The toolbar turns layers on and off and chooses the
@@ -141,6 +162,7 @@ The exit code is 0 when every stage ran.
 
 `ctest --test-dir build -R app_` runs the app's tests: the stages and
 the catalog (`app_session`), the Solve step against exact solutions
-(`app_solve`), the HTTP API (`app_server`), every example
+(`app_solve`), runs in chunks and the presets (`app_runs`), the HTTP API
+(`app_server`), every example
 case on the command line (`app_run_*`) and the page's code in Node.js
 (`app_web`, `app_web_actions`; skipped without Node).

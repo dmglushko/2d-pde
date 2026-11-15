@@ -745,6 +745,24 @@ Json default_solve_section() {
   return out;
 }
 
+Json solve_component_choice(std::string_view slot, std::string_view type) {
+  const SolveCatalog &catalog = solve_catalog();
+  const auto find = [&](const auto &components) {
+    for (const auto &component : components)
+      if (component.type == type)
+        return default_choice(component);
+    throw std::logic_error("no " + std::string(slot) + " " + std::string(type) +
+                           " in the solve catalog");
+  };
+  if (slot == "linear_solver")
+    return find(catalog.linear_solvers);
+  if (slot == "method")
+    return find(catalog.time_methods);
+  if (slot == "step")
+    return find(catalog.step_controllers);
+  throw std::logic_error("no solve slot " + std::string(slot));
+}
+
 Json solve_catalog_json() {
   const SolveCatalog &catalog = solve_catalog();
   const auto settings = [](std::string_view key, std::string_view label,

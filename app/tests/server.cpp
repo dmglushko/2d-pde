@@ -91,13 +91,42 @@ int main() {
          check(solved["values"]["snapshots"] == 1 &&
                    solved["values"]["nodes"] == nodes,
                "the layout of the values");
-         const auto values = client.Post("/api/solve/values", case_json.dump(),
-                                         "application/json");
+         check(solved["state"] == "done", "a static solve is done at once");
+         const Json range = {
+             {"job", solved["job"]}, {"first", 0}, {"count", 1}};
+         const auto values =
+             client.Post("/api/solve/values", range.dump(), "application/json");
          check(values && values->status == 200 &&
                    values->get_header_value("Content-Type") ==
                        "application/octet-stream" &&
                    values->body.size() == 4 * nodes,
                "a float32 per node");
+         post(client, "/api/solve/values",
+              {{"job", solved["job"]}, {"first", 0}, {"count", 2}}, 422);
+         post(client, "/api/solve/values", {{"job", solved["job"]}, {"x", 1}},
+              422);
+         const Json progress =
+             post(client, "/api/solve/progress", {{"job", solved["job"]}}, 200);
+         check(progress["state"] == "done" && progress["job"] == solved["job"],
+               "progress");
+         post(client, "/api/solve/progress", {{"job", 999}}, 422);
+         // A time run goes on in the background until it is done or
+         // stopped.
+         Json timed = case_json;
+         timed["solve"]["mode"] = "time";
+         const Json run = post(client, "/api/solve", timed, 200);
+         check(run["mode"] == "time" && run["values"]["snapshots"] >= 1,
+               "a time run's first chunk");
+         const Json stopped =
+             post(client, "/api/solve/stop", {{"job", run["job"]}}, 200);
+         check(stopped["state"] == "stopped" || stopped["state"] == "done",
+               "stopped");
+         const Json preset =
+             post(client, "/api/preset",
+                  {{"case", case_json}, {"preset", "wave"}}, 200);
+         check(preset["problem"]["equation"]["m2"] == "1" &&
+                   preset["solve"]["mode"] == "time",
+               "a preset fills the problem and the solve section");
          const auto file = client.Post("/api/export/mesh.svg", case_json.dump(),
                                        "application/json");
          check(file && file->status == 200 &&

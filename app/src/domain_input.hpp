@@ -6,6 +6,8 @@
 #include "pde2d/mesh/mesh.hpp"
 
 #include <optional>
+#include <string>
+#include <vector>
 
 // The "geometry" section of a case: where the domain comes from.
 //
@@ -48,6 +50,19 @@ Domain build_domain(const Json &geometry_section);
 // regions with their lengths, the bounding box and the domain size; for a
 // mesh file its boundary edges by region.
 Json domain_json(const Domain &domain);
+
+// What a preset needs to know of a domain: its region names (in the
+// order of domain_json), its domain size, and a point well inside it with
+// its distance to the boundary (the inside candidate farthest from the
+// boundary: a grid over the bounding box for curves, measured on the
+// curves sampled as polylines; the triangle centroids for a mesh file).
+struct DomainFacts {
+  std::vector<std::string> regions;
+  double domain_size = 0.0;
+  geometry::Point inner{};
+  double clearance = 0.0;
+};
+DomainFacts domain_facts(const Domain &domain);
 
 // The shapes of geometry/shapes.hpp with their parameters.
 Json shape_catalog_json();

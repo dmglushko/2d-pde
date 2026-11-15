@@ -2,9 +2,21 @@
 // fetch: an answer to an older request must not change the state. Run by
 // CTest as app_web_actions when Node.js is installed.
 import assert from "node:assert/strict";
-import { runAll, runStage, runWithPrerequisites, scheduleProblemCheck, showField } from "../web/js/actions.js";
-import { applyRegionEdit, stageKey } from "../web/js/core.js";
-import { currentError, editCase, outdatedError, setCase, stageStatus, store } from "../web/js/state.js";
+// Storage that counts its writes (the page keeps the case there).
+const storage = new Map();
+let writes = 0;
+globalThis.localStorage = {
+  getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+  setItem: (key, value) => {
+    writes++;
+    storage.set(key, String(value));
+  },
+  removeItem: (key) => storage.delete(key),
+};
+const { applyPreset, caseChanged, followedRun, runAll, runStage, runWithPrerequisites, scheduleProblemCheck, showField, stopRun } = await import("../web/js/actions.js");
+const { applyRegionEdit, stageKey } = await import("../web/js/core.js");
+const { settings, setSetting } = await import("../web/js/settings.js");
+const { currentError, currentKey, editCase, flushPersist, outdatedError, setCase, stageStatus, store } = await import("../web/js/state.js");
 
 // Every fetch waits until the test answers it: answer(data) with JSON or
 // an ArrayBuffer, fail(error, status) with an error body.
@@ -76,7 +88,7 @@ test("an older field answer does not replace a newer one", async () => {
 test("an answer for an edited geometry does not touch the conditions", async () => {
   setCase(structuredClone(rectangle));
   const run = runStage("geometry");
-  store.caseData.geometry.shape = "circle"; // edited while the request runs
+  editCase((c) => (c.geometry.shape = "circle")); // edited while the request runs
   await flush();
   pending.splice(0, 1)[0].answer(geometryView("bottom", "right", "top", "left"));
   assert.equal(await run, true, "kept as a (stale) result");
@@ -95,7 +107,7 @@ test("an edit saved and reopened before its geometry ran keeps its conditions", 
   assert.equal(store.caseData.problem.boundary_conditions.top.g, "22");
 });
 
-const fullCase = () => ({ format: "pde2d-app-case", geometry: { source: "shape", shape: "rectangle" }, mesh: { m: 1 }, problem: { boundary_conditions: { left: { alpha: "1", g: "0" } } }, assembly: { t: 0 }, solve: { mode: "static" } });
+const fullCase = () => ({ format: "pde2d-app-case", version: 1, geometry: { source: "shape", shape: "rectangle" }, mesh: { m: 1 }, problem: { boundary_conditions: { left: { alpha: "1", g: "0" } } }, assembly: { t: 0 }, solve: { mode: "static" } });
 // A new case with no results (as main.js loads one).
 const start = () => {
   pending.length = 0;
@@ -162,10 +174,10 @@ test("a solve fetches its values in binary and colours the picture", async () =>
   start();
   store.view.colorBy = "quality";
   const run = runStage("solve");
-  const summary = { mode: "time", times: [0, 1], min: -1, max: 2, values: { path: "/api/solve/values", format: "float32le", snapshots: 2, nodes: 3 } };
+  const summary = { job: 7, state: "done", mode: "time", times: [0, 1], min: -1, max: 2, values: { path: "/api/solve/values", format: "float32le", snapshots: 2, nodes: 3 } };
   (await next("/api/solve")).answer(summary);
   const values = await next("/api/solve/values");
-  assert.deepEqual(values.body, store.caseData, "the same case");
+  assert.deepEqual(values.body, { job: 7, first: 0, count: 2 }, "the run's snapshots by range");
   values.answer(float32([0, 1, 2, -1, 0.5, 0]));
   assert.equal(await run, true);
   const data = store.results.solve.data;
@@ -177,6 +189,169 @@ test("a solve fetches its values in binary and colours the picture", async () =>
   assert.equal(store.solveFrame, 1, "the last snapshot");
 });
 
+const layout = (snapshots) => ({ path: "/api/solve/values", format: "float32le", snapshots, nodes: 2 });
+const timeRun = (state, snapshots, t, extra = {}) => ({ job: 3, state, mode: "time", t0: 0, t1: 1, t, snapshots_total: 5, times: [0, 0.25, 0.5, 0.75, 1].slice(0, snapshots), min: 0, max: snapshots, reports: [{ metrics: { steps: snapshots } }], values: layout(snapshots), ...extra });
+
+test("a time run streams its snapshots and follows the newest", async () => {
+  start();
+  const run = runStage("solve");
+  (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1]));
+  await flush();
+  assert.equal(followedRun()?.job, 3, "followed");
+  assert.equal(stageStatus("solve"), "busy");
+  assert.equal(store.solveFrame, 1);
+  // While it runs, a problem check is not held back (the server answers
+  // between chunks).
+  scheduleProblemCheck({ now: true });
+  (await next("/api/problem")).answer({ ok: true });
+  const progress = await next("/api/solve/progress");
+  assert.deepEqual(progress.body, { job: 3 });
+  progress.answer(timeRun("running", 4, 0.75));
+  const more = await next("/api/solve/values");
+  assert.deepEqual(more.body, { job: 3, first: 2, count: 2 }, "only the new snapshots");
+  more.answer(float32([2, 2, 3, 3]));
+  await sleep(10);
+  const data = store.results.solve.data;
+  assert.equal(data.values.length, 4);
+  assert.equal(store.solveFrame, 3, "the newest is shown");
+  assert.equal(data.scale.max, 4, "the scale follows the range so far");
+  // The slider was moved: the picture stays there.
+  store.solveFrameChosen = true;
+  store.solveFrame = 1;
+  (await next("/api/solve/progress")).answer(timeRun("done", 5, 1));
+  (await next("/api/solve/values")).answer(float32([4, 4]));
+  assert.equal(await run, true);
+  assert.equal(data.values.length, 5);
+  assert.equal(store.solveFrame, 1, "not moved");
+  assert.equal(data.state, "done");
+  assert.equal(stageStatus("solve"), "done");
+  assert.equal(followedRun(), null);
+});
+
+test("Stop stops the run and keeps what arrived", async () => {
+  start();
+  const run = runStage("solve");
+  (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1]));
+  await flush();
+  const stopping = stopRun();
+  const stop = await next("/api/solve/stop");
+  assert.deepEqual(stop.body, { job: 3 });
+  stop.answer(timeRun("stopped", 2, 0.25));
+  await stopping;
+  assert.equal(await run, null);
+  assert.equal(store.results.solve.data.values.length, 2);
+  assert.equal(stageStatus("solve"), "stopped");
+  assert.equal(store.busy.has("solve"), false);
+});
+
+test("a change of the solve's inputs stops its run", async () => {
+  start();
+  const run = runStage("solve");
+  (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1]));
+  await flush();
+  editCase((c) => (c.problem.boundary_conditions.left.g = "1"), "edit", { sections: ["problem"] });
+  caseChanged();
+  const stop = await next("/api/solve/stop");
+  assert.deepEqual(stop.body, { job: 3 });
+  stop.answer({});
+  assert.equal(await run, null);
+  assert.equal(store.busy.has("solve"), false);
+  assert.equal(followedRun(), null);
+});
+
+test("a failure during a run is the solve's error", async () => {
+  start();
+  const run = runStage("solve");
+  (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1]));
+  (await next("/api/solve/progress")).answer(timeRun("failed", 2, 0.25, { error: { stage: "solve", kind: "algorithm", message: "the linear solver failed" } }));
+  assert.equal(await run, false);
+  assert.equal(currentError("solve").message, "the linear solver failed");
+  assert.equal(store.results.solve.data.values.length, 2, "the snapshots before stay");
+});
+
+test("a request carries only the sections its stage reads", async () => {
+  start();
+  editCase((c) => (c.geometry.svg = "x".repeat(1000)));
+  const check = runStage("problem");
+  const request = await next("/api/problem");
+  assert.deepEqual(Object.keys(request.body).sort(), ["format", "problem", "version"]);
+  request.answer({ ok: true });
+  await check;
+  const mesh = runStage("mesh");
+  const meshRequest = await next("/api/mesh");
+  assert.deepEqual(Object.keys(meshRequest.body).sort(), ["format", "geometry", "mesh", "version"]);
+  meshRequest.answer({ mesh: {} });
+  await mesh;
+});
+
+test("a check of a problem edited since is dropped", async () => {
+  start();
+  const check = runStage("problem");
+  editCase((c) => (c.problem.parameters = { k: 1 }), "edit", { sections: ["problem"] });
+  (await next("/api/problem")).answer({ ok: true });
+  assert.equal(await check, null);
+  assert.equal(store.results.problem, null, "not kept");
+});
+
+test("the check while typing follows the settings", async () => {
+  start();
+  setSetting("checkWhileTyping", false);
+  scheduleProblemCheck();
+  await sleep(settings.checkDelayMs + 50);
+  assert.equal(pending.length, 0, "no check while typing");
+  scheduleProblemCheck({ now: true });
+  (await next("/api/problem")).answer({ ok: true });
+  setSetting("checkWhileTyping", true);
+  setSetting("checkDelayMs", 120);
+  scheduleProblemCheck();
+  await sleep(60);
+  assert.equal(pending.length, 0, "not before the delay");
+  (await next("/api/problem")).answer({ ok: true });
+  setSetting("checkDelayMs", 350);
+  assert.ok(JSON.parse(storage.get("pde2d-app-settings")).checkDelayMs === 350, "settings are kept");
+});
+
+test("edits write the case to storage after a pause, and at once when flushed", async () => {
+  start();
+  await sleep(700);
+  const before = writes;
+  for (let i = 0; i < 20; i++) editCase((c) => (c.problem.parameters = { k: i }), "edit", { sections: ["problem"] });
+  assert.equal(writes, before, "not on every edit");
+  flushPersist();
+  assert.ok(writes > before, "written when flushed");
+  assert.equal(JSON.parse(storage.get("pde2d-app-case")).problem.parameters.k, 19);
+  const flushed = writes;
+  await sleep(700);
+  assert.equal(writes, flushed, "nothing left to write");
+});
+
+test("stage keys are computed per section and match stageKey", () => {
+  start();
+  for (const stage of ["geometry", "mesh", "problem", "assemble", "solve", "field"]) assert.equal(currentKey(stage), stageKey(store.caseData, stage));
+  editCase((c) => (c.mesh.m = 5), "edit", { sections: ["mesh"] });
+  assert.equal(currentKey("mesh"), stageKey(store.caseData, "mesh"));
+  editCase((c) => (c.assembly.t = 2));
+  assert.equal(currentKey("assemble"), stageKey(store.caseData, "assemble"));
+});
+
+test("a preset replaces the problem and the solve settings", async () => {
+  start();
+  const done = applyPreset({ id: "wave", label: "Wave" });
+  const request = await next("/api/preset");
+  assert.equal(request.body.preset, "wave");
+  assert.deepEqual(Object.keys(request.body.case).sort(), ["format", "geometry", "problem", "solve", "version"]);
+  request.answer({ ...fullCase(), problem: { equation: { m2: "1" }, boundary_conditions: { left: { alpha: "1", g: "0" } } }, solve: { mode: "time" } });
+  assert.equal(await done, true);
+  assert.equal(store.caseData.problem.equation.m2, "1");
+  assert.equal(store.caseData.solve.mode, "time");
+  assert.equal(store.caseData.mesh.m, 1, "the rest is kept");
+  pending.length = 0;
+});
+
 test("run all skips fresh stages and ends colouring by the solution", async () => {
   start();
   store.view.colorBy = "none";
@@ -184,7 +359,7 @@ test("run all skips fresh stages and ends colouring by the solution", async () =
   fresh("mesh", { stats: { nodes: 1 } });
   const done = runAll();
   (await next("/api/assemble")).answer({ assembly: {} });
-  (await next("/api/solve")).answer({ mode: "static", times: [0], min: 0, max: 0, values: { path: "/api/solve/values", format: "float32le", snapshots: 1, nodes: 1 } });
+  (await next("/api/solve")).answer({ job: 1, state: "done", mode: "static", times: [0], min: 0, max: 0, values: { path: "/api/solve/values", format: "float32le", snapshots: 1, nodes: 1 } });
   (await next("/api/solve/values")).answer(float32([0]));
   assert.equal(await done, true);
   assert.equal(store.view.colorBy, "field");

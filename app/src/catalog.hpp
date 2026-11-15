@@ -129,6 +129,11 @@ SolveSetup build_solve_setup(const Json &solve_section);
 // The solve section a new case starts with.
 Json default_solve_section();
 
+// {"type", "options"} with the catalog's defaults, for the component
+// `type` of a solve slot: "linear_solver", "method" or "step". Throws
+// std::logic_error for a type the catalog does not have.
+Json solve_component_choice(std::string_view slot, std::string_view type);
+
 // The solve section as the page receives it: the linear solver slot, and
 // per mode its settings and slots. Linear solvers carry their declared
 // requirements and time methods their supported time orders ("traits").

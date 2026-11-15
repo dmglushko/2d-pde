@@ -25,27 +25,37 @@ app, for assembly and the solvers.
 - **Compiled expressions** may already be called from several threads
   (`compiled_expression.hpp`), so evaluating coefficients in parallel
   needs no change there.
-- **In the app:** a Settings section would show the options from the
-  catalog like any other component option; no app design is needed beyond
-  a catalog entry.
+- **In the app:** the Settings dialog already shows "Sequential /
+  Parallel" for assembly and for linear solves, disabled with a note
+  that points here (2026-11-15). Once the library has the option, the
+  setting becomes a catalog option like any other.
 
 ## 2. Progress and cancellation of long runs
 
 `Integrator::integrate` and `StaticSolver::solve` give no progress and
-cannot be stopped. The app runs every request under one mutex (see 3),
-so a long time integration blocks the whole app until it ends, and the
-page can only show elapsed time.
+cannot be stopped.
 
+- **What the app does now** (2026-11-15): it integrates in chunks that
+  end on snapshot times, each continuing from the previous chunk's final
+  state (`integrate(..., &previous.final)`), in a background thread that
+  holds the session mutex only during a chunk. The page shows the
+  snapshots while the run goes on, a progress bar and Stop (docs/app.md,
+  "Runs in chunks"). This needs no library change.
+- **What is still missing:** progress and cancellation inside a chunk. A
+  run with few snapshots and many steps per interval still answers only
+  at each snapshot, and Stop waits for the chunk. Newmark's chunks also
+  recompute the acceleration at each start (the `Solution` carries no
+  acceleration), so they match one call only up to rounding. A static
+  solve has no progress at all.
 - Possible shape: an optional callback in `IntegrationOutput` called after
   each step with the step record, returning whether to continue (or a
   cancellation token checked between steps).
-- **In the app:** a progress bar (t / t1, steps) and a Stop button.
 
 ## 3. Symbolic work from more than one thread
 
 SymEngine's reference counts are not thread-safe in this build, so the
 app serializes every request: a problem check (parsing expressions) waits
-for a running solve. Either a thread-safe SymEngine build, or a guarantee
+for a running solve (since runs go in chunks, for one chunk at most). Either a thread-safe SymEngine build, or a guarantee
 that a given operation (for example integrating an already-built
 `MeshedProblem`) never builds or drops `Expression`s, would let the app
 check the problem while a solve runs.
