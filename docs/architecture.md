@@ -1625,7 +1625,12 @@ improvers, compacts, runs the final passes (with a `MeshSpec` that has no
 effective length bound, since refinement has no length target),
 validates the result (a curve point bulging into another part of the mesh
 is a `std::runtime_error`), measures it, and decides the parents.
-Reports: pipeline, refiner, final passes.
+Reports: pipeline, refiner, final passes. With nothing marked the refiner
+changes nothing and the final passes do not run (the pipeline report says
+so), so the mesh comes back unchanged. `refined_by_closure` counts every
+unmarked input triangle that changed, including those a re-triangulating
+boundary split replaced. Dörfler marking with θ = 1 marks every positive
+indicator.
 
 ## Determinism
 

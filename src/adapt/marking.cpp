@@ -97,6 +97,16 @@ DorflerMarking::DorflerMarking(DorflerMarkingOptions options)
 std::vector<std::size_t>
 DorflerMarking::select(std::span<const double> indicators) const {
   const std::vector<std::size_t> order = largest_first(indicators);
+  // theta = 1 asks for the whole error: every positive indicator. The sums
+  // below cannot promise that, because a tiny square (1e-13 next to 1e-4)
+  // vanishes when added to the total, so the loop would stop early.
+  if (options_.theta == 1.0) {
+    std::vector<std::size_t> picked;
+    for (auto t : order)
+      if (indicators[t] > 0.0)
+        picked.push_back(t);
+    return picked;
+  }
   // Squares of the indicators divided by the largest one (positive here),
   // so that large finite indicators cannot overflow when squared.
   const double largest = indicators[order.front()];

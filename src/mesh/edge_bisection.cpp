@@ -338,7 +338,17 @@ private:
                           text +
                           " (its curve point could not be joined to "
                           "the opposite vertex)";
+        // Every input triangle the policy touched or removed counts as
+        // refined (for refined_by_closure), not only the one whose edge
+        // was split: re-triangulation can replace a neighbour too. A
+        // touched triangle that reuses an index still names its old
+        // parent here; a removed one is a tombstone.
         mark_changed(parent_t);
+        for (auto s : r.touched)
+          mark_changed(triangle_parent_[s]);
+        for (std::size_t s = 0; s < triangle_parent_.size(); ++s)
+          if (mesh_.is_triangle_deleted(s))
+            mark_changed(triangle_parent_[s]);
         for (auto s : r.touched)
           made_by_bisection_[s] = unmade;
         local_.after_change(mesh_, r.touched);

@@ -352,7 +352,16 @@ Remesher::refine(const Mesh &mesh,
   // Final passes have no length target in refinement.
   const MeshSpec no_target{
       .max_edge_length = {.absolute = std::numeric_limits<double>::max()}};
-  for (std::size_t k = 0; k < plan_.final_passes.size(); ++k) {
+  // Nothing marked: the refiner changed nothing, and the final passes do
+  // not run either. They would change a mesh nobody asked to change, and
+  // the plan's notes (such as "already Delaunay after the refiner") assume
+  // the refiner did its work.
+  if (marked_triangles.empty() && !plan_.final_passes.empty())
+    result.reports.front().messages.push_back(
+        "nothing was marked: the final passes did not run, the mesh is "
+        "returned unchanged");
+  for (std::size_t k = 0;
+       !marked_triangles.empty() && k < plan_.final_passes.size(); ++k) {
     StageReport pass;
     detail::timed_stage(
         pass, improvers_[plan_.final_passes[k]]->name(),
