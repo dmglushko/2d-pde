@@ -2,7 +2,8 @@
 
 C++23 library (compiled, not header-only) for 2D geometry, triangle
 meshing, their file formats, the problem description, its P1 finite
-element assembly and its static and time-dependent solution: a
+element assembly, its static and time-dependent solution, and marking and
+refinement for adaptive refinement: a
 from-scratch rewrite for one linear scalar PDE with P1 finite elements. Read
 [docs/decisions.md](docs/decisions.md) (the owner's decisions: your
 specification), then [docs/architecture.md](docs/architecture.md) (modules,
@@ -35,6 +36,8 @@ impossible or unclear, ask.
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
 | `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
 | `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors; Eigen is included only there and in `sparse_lu.cpp` and `bicgstab.cpp`) and `vectors.hpp` (norms, residual, operator products); `time_methods.cpp` holds the three time methods |
+| `include/pde2d/adapt/` | `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `refinement.hpp` (`RefinementMethod`, `RefinementResult`, `set_longest_edges_as_refinement_edges`, the refinement edge convention), `newest_vertex_bisection.hpp`, `red_green_blue_refinement.hpp` |
+| `src/adapt/` | `marking.cpp` (the shared checks and the four strategies), `refinement.cpp` (the two methods and the initial refinement edges), private `edge_refinement.hpp/.cpp` (the engine both methods share: edge marking, closure, division patterns) |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
@@ -77,10 +80,11 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - Names: snake_case for functions, variables and members; PascalCase for
   types; enumerators in snake_case.
 - One CMake library per module (`pde2d_geometry`, `pde2d_mesh`,
-  `pde2d_io`, `pde2d_fem`, `pde2d_solve`). Dependencies point one way:
-  mesh may include geometry, io and fem may include mesh and geometry,
-  solve may include fem (and below), never the reverse (and io and fem
-  not each other, nor io and solve). Heavy dependencies (Boost, Eigen,
+  `pde2d_io`, `pde2d_fem`, `pde2d_solve`, `pde2d_adapt`). Dependencies
+  point one way: mesh may include geometry, io and fem may include mesh
+  and geometry, solve may include fem (and below), adapt only mesh and
+  geometry, never the reverse (and io and fem not each other, nor io and
+  solve, nor adapt and io, fem or solve). Heavy dependencies (Boost, Eigen,
   SymEngine, libxml2) only in `.cpp` files, never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
   headers in `src/<module>/`. Tests use only public headers. Narrow
@@ -221,10 +225,29 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   snapshot times and t1, so a continued run (`integrate(meshed, t1, t2,
   output, &previous.final)`) matches one long run that lands on t1 (bit
   for bit for the first-order methods; `tests/solve/time_integration.cpp`).
+- **A triangle's refinement edge is the edge opposite its vertex 0**
+  (`include/pde2d/adapt/refinement.hpp`). `pde2d_adapt` reads it from
+  the vertex order and writes it into every triangle it makes (newest
+  vertex first), so it persists across refinement cycles without a field
+  in `Mesh`. Code that copies a `Mesh` must keep each triangle's vertex
+  order as it is (to_mesh/from_mesh, the `.pde2d` round trip and
+  refinement do); code that builds or edits triangles (flips, the
+  Remesher, Gmsh import) may choose vertex 0 freely, and the user then
+  calls `set_longest_edges_as_refinement_edges` again. Never reorder the
+  vertices of an untouched triangle.
+- **Adaptive refinement never falls back.** A curve point is placed only
+  by the plain split of its triangle (no re-triangulation); if a child
+  would invert or the result is not valid, `refine` throws
+  `std::runtime_error`, never splits at the chord midpoint instead.
+  Every new node lies on an input edge (`node_parents`), every output
+  triangle names its input parent (`triangle_parents`), and input nodes
+  keep their indices: keep these when changing the methods, the
+  solution transfer will rely on them.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   adaptive time stepping, conjugate gradients, explicit time methods,
   handling pure Neumann problems, well-posedness
-  checks, callables, anisotropic meshing, planners,
+  checks, error estimators, an adaptive loop driver, coarsening and
+  solution transfer, callables, anisotropic meshing, planners,
   the simple-options facade, Gmsh export, reading the old boundary
   context of `.pde2d` files as curve links. Do not add them unless a task
   asks.
