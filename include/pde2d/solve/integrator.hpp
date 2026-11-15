@@ -48,7 +48,8 @@ struct IntegrationResult {
   // and the metrics t0, t1, time_order, steps, rejected_steps, min_dt,
   // max_dt, linear_iterations (the sum), max_linear_iterations,
   // max_residual, assemblies, prepares (how often the linear solver was
-  // prepared for a step matrix) and snapshots.
+  // prepared for a step matrix; not counting start() or the solve at t0
+  // for time order 0) and snapshots.
   mesh::StageReport report{};
 };
 
@@ -66,12 +67,15 @@ public:
   //
   // 1. assembles the problem at t0 and checks its time order
   //    (AssembledProblem::time_order()) against the method's declared
-  //    capabilities; time order 0 has nothing to integrate;
+  //    capabilities (TimeMethodCapabilities::supports); when the assembled
+  //    order is lower than the order as written (time_order(meshed)), the
+  //    error says that time terms vanished in assembly;
   // 2. takes the starting state, in the free unknowns, from `initial` if
   //    given (the Dirichlet nodes are ignored; for time order 2 it must
   //    have velocities), else from MeshedProblem::initial_values(t0) and,
   //    for time order 2, initial_velocities(t0); calls the method's
-  //    start();
+  //    start(). Time order 0 has no initial state: the state at t0 is the
+  //    solution of A(t0) U = b(t0), and `initial` is only checked;
   // 3. repeats until t1: asks the step controller for dt, shortens the
   //    step to land on the next snapshot time or t1 (a step that ends
   //    within 1e-9 dt of one lands on it), assembles the problem at the
@@ -80,6 +84,11 @@ public:
   //    for the step matrix only when it changed (dt changed, or an
   //    operator in it depends on t), and advances the state.
   //
+  // Before the linear solver is prepared for a matrix, its requirements
+  // (LinearSolver::requirements) are checked against assembly's facts:
+  // the step matrix is symmetric when every operator with a non-zero
+  // weight is symmetric or zero (fem::Operator::symmetric).
+  //
   // Times on a stretch of equal steps are computed as start + k dt (not
   // summed), so a run that lands on a time and one that starts there take
   // the same steps. Continuing a run: integrate(meshed, t1, t2, output,
@@ -87,9 +96,10 @@ public:
   //
   // Throws std::invalid_argument for a null problem, times that are not
   // finite or t1 <= t0, bad output options, a time order the method does
-  // not support or time order 0, and an `initial` on another mesh object,
-  // of the wrong size, with values that are not finite or without the
-  // velocities time order 2 needs. Passes on the exceptions of assembly
+  // not support, a linear solver whose requirements a matrix does not
+  // meet, and an `initial` on another mesh object, of the wrong size, with
+  // values that are not finite or without the velocities time order 2
+  // needs. Passes on the exceptions of assembly, of the method's start()
   // and of the linear solver.
   [[nodiscard]] IntegrationResult
   integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem, double t0,

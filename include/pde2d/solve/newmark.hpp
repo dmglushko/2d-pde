@@ -16,12 +16,15 @@ namespace pde2d::solve {
 // Solved for U1, the step matrix is M2 / (beta dt^2) + gamma B / (beta dt)
 // + A. start() computes W0 from the equation at the start time:
 // M2(t0) W0 = b(t0) - B(t0) V0 - A(t0) U0, preparing the linear solver for
-// M2, which must therefore not be singular. No options.
+// M2, which must therefore not be singular. When that fails (M2 is
+// singular or zero at t0), start() throws std::runtime_error saying so
+// and naming ImplicitMidpoint and ImplicitEuler, which need no
+// acceleration; there is no fallback (docs/decisions.md). No options.
 class Newmark final : public TimeMethod {
 public:
   std::string name() const override { return "newmark"; }
   TimeMethodCapabilities capabilities() const override {
-    return {.supports_first_order = false, .supports_second_order = true};
+    return {.time_order_2 = true};
   }
   double evaluation_fraction() const override { return 1.0; }
   StepMatrixWeights step_matrix_weights(double dt) const override;
