@@ -28,17 +28,17 @@ impossible or unclear, ask.
 | --- | --- |
 | `include/pde2d/geometry/` | `point.hpp`, `predicates.hpp` (exact `orient`, `incircle`), `bounding_box.hpp` (`BoundingBox`), `curve.hpp` (the curve kinds with their core methods, the `CurveKind` concept, `Curve`, functions built on the core), `polygon.hpp`, `curve_geometry.hpp` (`Loop`, `CurveGeometry`), `shapes.hpp` |
 | `src/geometry/` | their implementation; `predicates.cpp` is Shewchuk's adaptive arithmetic, compiled with `-fno-fast-math -ffp-contract=off` |
-| `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`, with optional chains and links), `mesh_spec.hpp` (`LengthBound`, `MeshSpec`), `domain_size.hpp` (what relative lengths multiply), `curve_chain.hpp` (`CurveChain`, `CurveLink`, `default_corner_angle_degrees`), `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp`, `components.hpp` (interfaces, improver roles, capabilities, `ImproverUse`, `PipelinePlan`, `plan_pipeline`), `delaunay.hpp` (shared flip routines), one header per component, `remesher.hpp`, `mesher.hpp` |
-| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) |
+| `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`, with optional chains and links; the refinement edge convention and `set_longest_edges_as_refinement_edges`), `mesh_spec.hpp` (`LengthBound`, `MeshSpec`), `domain_size.hpp` (what relative lengths multiply), `mesh_properties.hpp` (`MeshProperties`, `measure`, `default_warning_angle_degrees`), `curve_chain.hpp` (`CurveChain`, `CurveLink`, `default_corner_angle_degrees`), `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp` (`StageReport`, `Parents`, `MeshResult`, `RefinementResult`), `components.hpp` (interfaces, improver roles, capabilities, `ImproverUse`, `PipelinePlan`, `plan_pipeline`), `delaunay.hpp` (shared flip routines), one header per component (the refiners `ruppert.hpp`, `longest_edge_bisection.hpp`, `newest_vertex_bisection.hpp`, `red_green_blue_refinement.hpp`), `remesher.hpp` (`RemesherOptions`, `Remesher` with `run` and `refine`), `mesher.hpp` (`MesherOptions`, `Mesher`) |
+| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) and `edge_bisection.hpp` (the bisection core shared by the three bisection refiners: marked edges, closure, division patterns, parents, the `run` loop; `detail::check_marked`); `bisection_refiners.cpp` holds the three bisection refiners (each a rule for the core) |
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
 | `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
 | `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `iterative_solve.hpp` and the solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`); `time_methods.cpp` holds the three time methods |
-| `include/pde2d/adapt/` | `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `refinement.hpp` (`RefinementMethod`, `RefinementResult`, `set_longest_edges_as_refinement_edges`, the refinement edge convention), `newest_vertex_bisection.hpp`, `red_green_blue_refinement.hpp` |
-| `src/adapt/` | `marking.cpp` (the shared checks and the four strategies), `refinement.cpp` (the two methods and the initial refinement edges), private `edge_refinement.hpp/.cpp` (the engine both methods share: edge marking, closure, division patterns) |
-| `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
+| `include/pde2d/adapt/` | `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`); refinement of marked triangles is `mesh::Remesher::refine` |
+| `src/adapt/` | `marking.cpp` (the shared checks and the four strategies) |
+| `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files; `tests/mesh/refinement_checks.hpp` holds the oracles of a refinement result (also used by `tests/adapt/cycles.cpp`) |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
 | `examples/` | `mesh_viewer/produce_mesh.cpp` (meshes a plate with a hole, writes `.pde2d`), the viewer's startup example files (from the old code) |
@@ -140,7 +140,7 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   code that loops over `triangles()` or `nodes()` during refinement must
   skip `is_triangle_deleted` / `is_node_deleted` entries, and queues must
   check before use. Boundary edges are never deleted. The `Remesher`
-  compacts after the refiner.
+  compacts after the refiner (in `run` and `refine`).
 - **Boundary edges carry region tags and optional curve links**
   `(chain, s0, s1)` in arc length; a refiner must update them when it
   splits (use `split_boundary_edge`, which applies the boundary split
@@ -157,9 +157,28 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `LocalImprover` from `as_local()` and its `FinalImprover` from
   `as_final()`, null for a role it lacks. Never test the type.
 - **Refiners never name improvers.** They receive the resolved local
-  improvers in `run`; improvers are configured only in the `Mesher` or
-  `Remesher`, and a mode that cannot be honoured is a warning in the
-  "pipeline" report, not an exception.
+  improvers in `run` and `refine`; improvers are configured only in the
+  `Mesher` or `Remesher`, and a mode that cannot be honoured is a warning
+  in the "pipeline" report, not an exception.
+- **One set of refiners for meshing and adaptivity.** Every `Refiner` has
+  `run(mesh, spec, ...)` and `refine(mesh, marked, ...)`. The three
+  bisection refiners are rules for one private core
+  (`src/mesh/edge_bisection.*`); write bisection logic there, not in a
+  refiner. Their `run` is the loop "refine the triangles with a long
+  edge" around `refine`.
+- **Parents survive only by declaration and by the run.** The Remesher
+  returns `Parents` only if the refiner declares `keeps_parents` and its
+  `refine` returned them, and every local improver and final pass of the
+  plan declares `ImproverEffects::keeps_parents`; otherwise the pipeline
+  report names who dropped them. A component that flips or moves nodes
+  must not declare `keeps_parents`. The core drops them itself when the
+  boundary split policy re-triangulates (only then can tombstones
+  appear).
+- **One measurement of the final mesh.** The Remesher measures its final
+  mesh once (`measure`, `MeshProperties`); `target_met` and the angle
+  warning in the pipeline report are read from it. Do not add a second
+  place that computes a property of the final mesh (longest edge, angles,
+  counts); read `properties`.
 - **The Mesher never sees FEM data.** Its only external input is the
   `MeshSpec`.
 - **Settings never know the domain.** A `LengthBound` (absolute and/or
@@ -167,7 +186,8 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   with `resolve` and `domain_size`; never write a resolved value back into
   a spec or options, and never pass the domain size between stages.
 - **`MeshResult::target_met` must be checked**: a mesh can miss its target
-  (for example after smoothing or without a refiner).
+  (for example after smoothing or without a refiner). It is
+  `properties.longest_edge <= max_edge_length`, from the one measurement.
 - **`.pde2d` keeps the old format exactly** (the viewer reads it
   unchanged). If the `Mesh` cannot fill something the format needs, ask
   the owner; never change the format on your own. Curve links have no
@@ -267,23 +287,26 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   output, &previous.final)`) matches one long run that lands on t1 (bit
   for bit for the first-order methods; `tests/solve/time_integration.cpp`).
 - **A triangle's refinement edge is the edge opposite its vertex 0**
-  (`include/pde2d/adapt/refinement.hpp`). `pde2d_adapt` reads it from
-  the vertex order and writes it into every triangle it makes (newest
-  vertex first), so it persists across refinement cycles without a field
-  in `Mesh`. Code that copies a `Mesh` must keep each triangle's vertex
-  order as it is (to_mesh/from_mesh, the `.pde2d` round trip and
-  refinement do); code that builds or edits triangles (flips, the
-  Remesher, Gmsh import) may choose vertex 0 freely, and the user then
-  calls `set_longest_edges_as_refinement_edges` again. Never reorder the
-  vertices of an untouched triangle.
-- **Adaptive refinement never falls back.** A curve point is placed only
-  by the plain split of its triangle (no re-triangulation); if a child
-  would invert or the result is not valid, `refine` throws
-  `std::runtime_error`, never splits at the chord midpoint instead.
-  Every new node lies on an input edge (`node_parents`), every output
-  triangle names its input parent (`triangle_parents`), and input nodes
-  keep their indices: keep these when changing the methods, the
-  solution transfer will rely on them.
+  (the convention in `include/pde2d/mesh/mesh.hpp`). The bisection
+  refiners read it from the vertex order and write it into every triangle
+  a split makes (newest vertex first, `WorkingMesh::set_refinement_edge`),
+  so it persists across refinement cycles without a field in `Mesh`. Code
+  that copies a `Mesh` must keep each triangle's vertex order as it is
+  (to_mesh/from_mesh, compact, the `.pde2d` round trip and refinement
+  do); code that builds or edits triangles (flips, Ruppert, triangulators,
+  the boundary split policy, Gmsh import) may choose vertex 0 freely, and
+  the user then calls `set_longest_edges_as_refinement_edges` again.
+  Never reorder the vertices of an untouched triangle.
+- **Refinement has one rule for boundary points.** A boundary edge is
+  split only by `split_boundary_edge` (the boundary split policy), also in
+  `refine`; if the policy re-triangulates, the parents are dropped and the
+  report says why; an unsplittable edge leaves the triangles waiting for
+  it unrefined. Never place a curve point another way or fall back to the
+  chord midpoint. `Remesher::refine` validates its result and throws
+  `std::runtime_error` if it overlaps itself. When parents are kept,
+  every new node lies on an input edge, every output triangle names its
+  input parent, and input nodes keep their indices: keep these when
+  changing the core, the solution transfer will rely on them.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   adaptive time stepping, explicit time methods,
   handling pure Neumann problems, well-posedness
