@@ -98,7 +98,7 @@ step_matrix(const fem::AssembledProblem &problem,
   matrix.pattern = problem.stiffness().free.pattern;
   matrix.values.assign(matrix.pattern->nonzeros(), 0.0);
   const auto add = [&](const fem::Operator &op, double weight) {
-    if (op.is_zero || weight == 0.0)
+    if (op.always_zero || weight == 0.0)
       return;
     for (std::size_t s = 0; s < matrix.values.size(); ++s)
       matrix.values[s] += weight * op.free.values[s];
@@ -111,11 +111,12 @@ step_matrix(const fem::AssembledProblem &problem,
 
 // Whether the step matrix built from `problem` differs from one built from
 // an earlier assembly with the same weights: an operator in it (a non-zero
-// weight, not a zero operator) depends on t.
+// weight, not always zero) depends on t. Formula facts only: an operator
+// that is zero now may not be zero at the next step.
 bool step_matrix_depends_on_t(const fem::AssembledProblem &problem,
                               const StepMatrixWeights &weights) {
   const auto changes = [](const fem::Operator &op, double weight) {
-    return weight != 0.0 && !op.is_zero && op.depends_on_t;
+    return weight != 0.0 && !op.always_zero && op.depends_on_t;
   };
   return changes(problem.mass(), weights.mass) ||
          changes(problem.damping(), weights.damping) ||
@@ -190,12 +191,11 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   const fem::MeshedProblem &meshed = *meshed_problem;
   const auto start = Clock::now();
 
-  // 1. The time order, from assembly's own facts, against the method's
+  // 1. The time order, from assembly's formula facts without evaluating
+  // anything (d/dt sqrt(t) may be infinite at t0), against the method's
   // declaration.
   const fem::Assembler assembler;
-  fem::AssembledProblem current = assembler.assemble(meshed_problem, t0);
-  std::size_t assemblies = 1;
-  const int time_order = current.time_order();
+  const int time_order = assembler.time_order(meshed);
   if (!method_->capabilities().supports(time_order)) {
     std::string message = method_->name() + " does not support time order " +
                           std::to_string(time_order);
@@ -210,18 +210,29 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   }
 
   // 2. The starting state. Time order 0 has no initial conditions: the
-  // state at t0 is the solution there.
+  // method's start computes the state at t0. The problem is assembled at
+  // t0 only as far as the start reads it (docs/decisions.md, "A time
+  // method declares what its start reads at t0"); the steps assemble at
+  // their own times, so U_D' and U_D'' are never evaluated at t0 for a
+  // method whose start reads nothing.
   TimeState state = starting_state(meshed, t0, time_order, initial);
-  if (time_order == 0) {
-    detail::check_requirements(*linear_solver_, current.stiffness().symmetric,
-                               "integrator", "A (the stiffness)");
-    state.values = linear_solver_
-                       ->prepare(std::make_shared<const fem::CsrMatrix>(
-                           current.stiffness().free))
-                       ->solve(current.right_hand_side())
-                       .values;
+  std::optional<fem::AssembledProblem> current;
+  std::size_t assemblies = 0;
+  const StartNeeds needs = method_->start_needs(time_order);
+  if (needs != StartNeeds::nothing) {
+    const int max_time_order = needs == StartNeeds::static_part ? 0 : 2;
+    current = assembler.assemble(meshed_problem, t0, nullptr, max_time_order);
+    ++assemblies;
+    method_->start(*current, *linear_solver_, state);
   }
-  method_->start(current, *linear_solver_, state);
+  // A method of time order 0 must compute the state at t0 in its start (it
+  // has no initial conditions); one that does not is a mistake in that
+  // method, found here rather than as a wrong-sized snapshot.
+  if (state.values.size() != meshed.free_nodes().size())
+    throw std::runtime_error(std::format(
+        "integrator: {} gave no state at t0 = {} for time order {} (its "
+        "start must compute it)",
+        method_->name(), t0, time_order));
 
   IntegrationResult result;
   std::size_t next_snapshot = 0; // into output.snapshot_times
@@ -283,20 +294,25 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
     // The problem at the method's evaluation point (for fraction 1 exactly
     // t_new), reusing the previous assembly.
     const double t_eval = (1.0 - fraction) * t + fraction * t_new;
-    current = assembler.assemble(meshed_problem, t_eval, &current);
+    // (Reuse gives the same values as a fresh assembly, so a first step
+    // without an assembly at t0 gets the same result.)
+    current = assembler.assemble(meshed_problem, t_eval,
+                                 current ? &*current : nullptr);
     ++assemblies;
 
     const StepMatrixWeights weights = method_->step_matrix_weights(h);
     if (!prepared || h != prepared_dt ||
-        step_matrix_depends_on_t(current, weights)) {
-      detail::check_requirements(
-          *linear_solver_, detail::step_matrix_is_symmetric(current, weights),
-          "integrator", "the step matrix of " + method_->name());
-      prepared = linear_solver_->prepare(step_matrix(current, weights));
+        step_matrix_depends_on_t(*current, weights)) {
+      auto matrix = step_matrix(*current, weights);
+      detail::check_step_matrix_requirements(
+          *linear_solver_, *current, weights, *matrix, "integrator",
+          "the step matrix of " + method_->name());
+      prepared = linear_solver_->prepare(std::move(matrix));
       prepared_dt = h;
       ++prepares;
     }
-    const StepSolveInfo solved = method_->advance(current, h, *prepared, state);
+    const StepSolveInfo solved =
+        method_->advance(*current, h, *prepared, state);
     t = t_new;
 
     const StepRecord record{.t = t,

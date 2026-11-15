@@ -39,6 +39,24 @@ StepMatrixWeights ImplicitEuler::step_matrix_weights(double dt) const {
   return {.mass = 1.0 / (dt * dt), .damping = 1.0 / dt, .stiffness = 1.0};
 }
 
+void ImplicitEuler::start(const fem::AssembledProblem &problem,
+                          const LinearSolver &linear_solver,
+                          TimeState &state) const {
+  // Only called for time order 0 (start_needs), with the static part at
+  // t0: there is no initial state, the state at t0 is the solution of
+  // A(t0) U0 = b(t0). This solve is not counted in the integrator's
+  // `prepares`.
+  const fem::Operator &stiffness = problem.stiffness();
+  detail::check_requirements(
+      linear_solver, stiffness.always_symmetric || stiffness.symmetric_now,
+      name(), "A (the stiffness)");
+  state.values =
+      linear_solver
+          .prepare(std::make_shared<const fem::CsrMatrix>(stiffness.free))
+          ->solve(problem.right_hand_side())
+          .values;
+}
+
 StepSolveInfo ImplicitEuler::advance(const fem::AssembledProblem &problem,
                                      double dt,
                                      const PreparedLinearSolver &solver,
@@ -46,7 +64,7 @@ StepSolveInfo ImplicitEuler::advance(const fem::AssembledProblem &problem,
   // (M2 / dt^2 + B / dt + A) U1 = b(t1) + M2 (U0 / dt^2 + V0 / dt)
   //                               + B U0 / dt
   // Time order 1 has no M2 (and no V), time order 0 neither M2 nor B.
-  const bool second_order = !problem.mass().is_zero;
+  const bool second_order = !problem.mass().always_zero;
   std::vector<double> rhs = detail::right_hand_side(problem);
   if (second_order) {
     std::vector<double> mass_part(state.values.size());
@@ -79,7 +97,7 @@ StepSolveInfo ImplicitMidpoint::advance(const fem::AssembledProblem &problem,
   // (2 M2 / dt^2 + B / dt + A / 2) U1
   //     = b(tm) + M2 (2 U0 / dt^2 + 2 V0 / dt) + (B / dt - A / 2) U0,
   // all at tm. Time order 1 has no M2 (and no V).
-  const bool second_order = !problem.mass().is_zero;
+  const bool second_order = !problem.mass().always_zero;
   std::vector<double> rhs = detail::right_hand_side(problem);
   if (second_order) {
     std::vector<double> mass_part(state.values.size());
@@ -117,13 +135,6 @@ StepMatrixWeights Newmark::step_matrix_weights(double dt) const {
 
 void Newmark::start(const fem::AssembledProblem &problem,
                     const LinearSolver &linear_solver, TimeState &state) const {
-  // M2(t0) W0 = b(t0) - B(t0) V0 - A(t0) U0
-  std::vector<double> rhs = detail::right_hand_side(problem);
-  detail::add_product(rhs, -1.0, problem.damping(), state.velocities);
-  detail::add_product(rhs, -1.0, problem.stiffness(), state.values);
-  const fem::CsrMatrix &mass = problem.mass().free;
-  detail::check_requirements(linear_solver, problem.mass().symmetric, name(),
-                             "M2");
   // No fallback to another method (docs/decisions.md): the error says why
   // and which methods need no acceleration.
   const auto cannot_start = [&](const std::string &cause) {
@@ -133,20 +144,28 @@ void Newmark::start(const fem::AssembledProblem &problem,
                     "ImplicitEuler (implicit_euler) need no acceleration",
                     cause));
   };
-  const bool all_zero = std::ranges::all_of(
-      mass.values, [](double value) { return value == 0.0; });
-  if (all_zero && !mass.values.empty())
+  const fem::Operator &mass = problem.mass();
+  // First the fact from the numbers: M2 with only zero entries at t0
+  // (m2 = sin(t) from t0 = 0) cannot be solved with, whatever the solver.
+  // A problem without free unknowns has nothing to solve for.
+  if (mass.zero_now && mass.free.rows() > 0)
     throw cannot_start(std::format("M2 is zero at t0 = {} (m2 vanishes there)",
                                    problem.time()));
+  detail::check_requirements(
+      linear_solver, mass.always_symmetric || mass.symmetric_now, name(), "M2");
+  // M2(t0) W0 = b(t0) - B(t0) V0 - A(t0) U0
+  std::vector<double> rhs = detail::right_hand_side(problem);
+  detail::add_product(rhs, -1.0, problem.damping(), state.velocities);
+  detail::add_product(rhs, -1.0, problem.stiffness(), state.values);
   try {
-    const auto prepared =
-        linear_solver.prepare(std::make_shared<const fem::CsrMatrix>(mass));
+    const auto prepared = linear_solver.prepare(
+        std::make_shared<const fem::CsrMatrix>(mass.free));
     state.accelerations = prepared->solve(rhs).values;
   } catch (const std::runtime_error &error) {
-    throw cannot_start(
-        std::format("solving with M2 at t0 = {} failed ({}): M2 is singular "
-                    "there, or the linear solver cannot handle it",
-                    problem.time(), error.what()));
+    throw cannot_start(std::format(
+        "M2 is singular at t0 = {} (solving with it failed: {}), or the "
+        "linear solver cannot handle it",
+        problem.time(), error.what()));
   }
 }
 

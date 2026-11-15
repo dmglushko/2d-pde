@@ -189,7 +189,7 @@ void sqrt_boundary_data() {
 void refuses_non_symmetric() {
   const auto meshed = std::make_shared<const MeshedProblem>(
       pde2d::test::unit_square(4), mixed_problem());
-  check(!Assembler().assemble(meshed, 0.0).stiffness().symmetric,
+  check(!Assembler().assemble(meshed, 0.0).stiffness().always_symmetric,
         "A has convection");
   for (const std::shared_ptr<const LinearSolver> &solver :
        std::vector<std::shared_ptr<const LinearSolver>>{
@@ -200,6 +200,63 @@ void refuses_non_symmetric() {
         "static_solver: the linear solver " + solver->name() +
             " requires a symmetric matrix, but A (the stiffness) is not "
             "symmetric");
+}
+
+// -(u_xx + 3 u_yy) + u = f with natural (Robin and Neumann) conditions on
+// the unit square: A is anisotropic and diagonal, so assembly's facts do
+// not prove T zero (not always symmetric), but n.A tau = 0 on the
+// axis-aligned edges and A is symmetric by its values (symmetric now). CG
+// is accepted and agrees with SparseLu; with a_xy or a convection it is
+// refused.
+Problem anisotropic_problem() {
+  const BoundaryCondition robin{
+      .alpha = e("1"), .beta_n = e("1"), .g = e("1 + x*y")};
+  return {.equation = {.a_xx = e("-1"),
+                       .a_yy = e("-3"),
+                       .c = e("1"),
+                       .f = e("1 + x + y^2")},
+          .boundary_conditions = {{"bottom", robin},
+                                  {"right", robin},
+                                  {"top", {.beta_n = e("1"), .g = e("x")}},
+                                  {"left", robin}}};
+}
+
+void symmetric_by_values() {
+  const auto meshed = std::make_shared<const MeshedProblem>(
+      pde2d::test::unit_square(8), anisotropic_problem());
+  const auto assembled = Assembler().assemble(meshed, 0.0, nullptr, 0);
+  check(!assembled.stiffness().always_symmetric &&
+            assembled.stiffness().symmetric_now,
+        "not always symmetric, symmetric now");
+  const auto lu = StaticSolver(std::make_shared<SparseLu>()).solve(meshed);
+  for (const std::shared_ptr<const LinearSolver> &solver :
+       std::vector<std::shared_ptr<const LinearSolver>>{
+           std::make_shared<ConjugateGradient>(
+               ConjugateGradientOptions{.tolerance = 1e-13}),
+           std::make_shared<SimplicialLdlt>()}) {
+    const auto other = StaticSolver(solver).solve(meshed);
+    for (std::size_t i = 0; i < lu.solution.values.size(); ++i)
+      near(other.solution.values[i], lu.solution.values[i], 1e-10,
+           solver->name() + " agrees with sparse_lu");
+  }
+  Problem cross = anisotropic_problem();
+  cross.equation.a_xy = e("-0.5");
+  Problem convected = anisotropic_problem();
+  convected.equation.b_x = e("1");
+  for (const auto &problem : {cross, convected}) {
+    const auto refused = std::make_shared<const MeshedProblem>(
+        pde2d::test::unit_square(8), problem);
+    check(!Assembler().assemble(refused, 0.0).stiffness().symmetric_now,
+          "not symmetric now");
+    expect_throws<std::invalid_argument>(
+        [&] {
+          (void)StaticSolver(std::make_shared<ConjugateGradient>())
+              .solve(refused);
+        },
+        "static_solver: the linear solver conjugate_gradient requires a "
+        "symmetric matrix, but A (the stiffness) is not symmetric, neither "
+        "by assembly's facts nor by its values");
+  }
 }
 
 // -(u_xx + u_yy) - 200 u = 1, u = 0 on the boundary: 200 lies between
@@ -250,6 +307,8 @@ void indefinite_static() {
 int main() {
   return pde2d::test::run({
       {"build_solution places free and Dirichlet values", builds_solution},
+      {"CG and LDLT where A is symmetric by its values only",
+       symmetric_by_values},
       {"static mixed problem converges at second order with SparseLu",
        [] { converges(std::make_shared<SparseLu>(), "sparse_lu"); }},
       {"static mixed problem converges at second order with BiCgStab",

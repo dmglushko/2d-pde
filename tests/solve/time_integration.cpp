@@ -257,7 +257,9 @@ void counts_prepares() {
     check(result.report.metrics.at("steps") == 10, "10 steps");
     check(result.report.metrics.at("prepares") == 1, "prepared once");
     check(solver->count() == 1, "the solver saw one prepare");
-    check(result.report.metrics.at("assemblies") == 11, "11 assemblies");
+    // One per step: their start reads nothing, so nothing is assembled at
+    // t0.
+    check(result.report.metrics.at("assemblies") == 10, "10 assemblies");
   }
   // Stiffness and damping depend on t: prepared every step.
   const auto solver = std::make_shared<pde2d::test::CountingSolver>();
@@ -271,6 +273,8 @@ void counts_prepares() {
                         .integrate(meshed(wave_problem()), 0.0, 1.0);
   check(wave.report.metrics.at("prepares") == 1, "one step matrix");
   check(wave_solver->count() == 2, "and one mass matrix");
+  check(wave.report.metrics.at("assemblies") == 11,
+        "Newmark's start reads the whole problem at t0: 11 assemblies");
 }
 
 void refuses_time_orders() {
@@ -386,8 +390,8 @@ void vanishing_mass() {
     std::cout << "newmark: " << what << '\n';
     check(what.find("starting acceleration cannot be computed") !=
                   std::string::npos &&
-              what.find("solving with M2 at t0 = 0 failed (sparse_lu") !=
-                  std::string::npos &&
+              what.find("M2 is singular at t0 = 0 (solving with it failed: "
+                        "sparse_lu") != std::string::npos &&
               what.find("ImplicitMidpoint") != std::string::npos,
           "names the cause, the solver's error and the other methods");
   }
@@ -444,7 +448,7 @@ void midpoint_without_mass() {
 void symmetric_solvers() {
   for (const auto &problem : {heat_problem(), constant_heat_problem()}) {
     const auto m = meshed(problem);
-    check(Assembler().assemble(m, 0.0).stiffness().symmetric,
+    check(Assembler().assemble(m, 0.0).stiffness().always_symmetric,
           "isotropic heat is symmetric");
     const auto lu = integrator(std::make_shared<ImplicitMidpoint>(), 0.1)
                         .integrate(m, 0.0, 1.0);
@@ -483,6 +487,165 @@ void symmetric_solvers() {
       },
       "integrator: the linear solver simplicial_ldlt requires a symmetric "
       "matrix, but the step matrix of implicit_euler is not symmetric");
+}
+
+// An anisotropic diagonal A (a_xx = -1, a_yy = -3) with natural conditions
+// on the unit square: A is not symmetric by the facts (T is not proven
+// zero), but T vanishes on the axis-aligned edges, so every step matrix is
+// symmetric by its values and CG is accepted. With a_xy or a convection it
+// is refused.
+Problem anisotropic_heat_problem(const std::string &a_xx = "-1") {
+  const BoundaryCondition robin{
+      .alpha = e("1"), .beta_n = e("1"), .g = e("1 + t")};
+  return {.equation = {.a_xx = e(a_xx),
+                       .a_yy = e("-3"),
+                       .c = e("1"),
+                       .m1 = e("1"),
+                       .f = e("1 + sin(3*t)*x")},
+          .boundary_conditions = {{"bottom", robin},
+                                  {"right", robin},
+                                  {"top", {.beta_n = e("1"), .g = e("y")}},
+                                  {"left", robin}},
+          .initial = {.u = e("x*y")}};
+}
+
+void symmetric_now_solvers() {
+  const auto cg = std::make_shared<ConjugateGradient>(
+      ConjugateGradientOptions{.tolerance = 1e-13});
+  // Constant A (prepared once) and A in t (prepared every step).
+  for (const char *a_xx : {"-1", "-(1 + t)"}) {
+    const auto m = meshed(anisotropic_heat_problem(a_xx));
+    const auto assembled = Assembler().assemble(m, 0.5);
+    check(!assembled.stiffness().always_symmetric &&
+              assembled.stiffness().symmetric_now,
+          "A: not always symmetric, symmetric now");
+    for (const auto &method : std::vector<std::shared_ptr<const TimeMethod>>{
+             std::make_shared<ImplicitEuler>(),
+             std::make_shared<ImplicitMidpoint>()}) {
+      const auto lu = integrator(method, 0.1).integrate(m, 0.0, 1.0);
+      const auto other = integrator(method, 0.1, cg).integrate(m, 0.0, 1.0);
+      for (std::size_t k = 0; k < lu.final.values.size(); ++k)
+        near(other.final.values[k], lu.final.values[k], 1e-10,
+             method->name() + " with CG gives the SparseLu result");
+    }
+  }
+  // a_xy or a convection: the step matrix is not symmetric by its values.
+  Problem cross = anisotropic_heat_problem();
+  cross.equation.a_xy = e("0.5");
+  Problem convected = anisotropic_heat_problem();
+  convected.equation.b_y = e("1");
+  for (const auto &problem : {cross, convected})
+    expect_throws<std::invalid_argument>(
+        [&] {
+          (void)integrator(std::make_shared<ImplicitEuler>(), 0.1, cg)
+              .integrate(meshed(problem), 0.0, 1.0);
+        },
+        "integrator: the linear solver conjugate_gradient requires a "
+        "symmetric matrix, but the step matrix of implicit_euler is not "
+        "symmetric, neither by assembly's facts nor by its values");
+}
+
+// u = sqrt(t) + x solves u_t - (u_xx + u_yy) = 1 / (2 sqrt(t)), with
+// Dirichlet data on the bottom and the left, from t0 = 0. d/dt sqrt(t) is
+// not finite at 0: the methods whose start reads nothing at t0 must never
+// assemble there.
+double root_exact(double x, double, double t) { return std::sqrt(t) + x; }
+
+Problem root_problem() {
+  const BoundaryCondition dirichlet{.alpha = e("1"), .g = e("sqrt(t) + x")};
+  return {.equation = {.a_xx = e("-1"),
+                       .a_yy = e("-1"),
+                       .m1 = e("1"),
+                       .f = e("1/(2*sqrt(t))")},
+          .boundary_conditions = {{"bottom", dirichlet},
+                                  {"left", dirichlet},
+                                  {"right", {.beta_n = e("1"), .g = e("1")}},
+                                  {"top", {.beta_n = e("1"), .g = e("0")}}},
+          .initial = {.u = e("sqrt(t) + x")}};
+}
+
+void starts_without_assembling() {
+  const auto m = meshed(root_problem());
+  // A full assembly at t0 would evaluate U_D'(0).
+  expect_throws<std::invalid_argument>(
+      [&] { (void)Assembler().assemble(m, 0.0); }, "not finite");
+  check(ImplicitEuler().start_needs(1) == StartNeeds::nothing &&
+            ImplicitEuler().start_needs(2) == StartNeeds::nothing &&
+            ImplicitEuler().start_needs(0) == StartNeeds::static_part &&
+            ImplicitMidpoint().start_needs(1) == StartNeeds::nothing &&
+            ImplicitMidpoint().start_needs(2) == StartNeeds::nothing &&
+            Newmark().start_needs(2) == StartNeeds::whole_problem,
+        "the declared start needs");
+  for (const auto &method : std::vector<std::shared_ptr<const TimeMethod>>{
+           std::make_shared<ImplicitEuler>(),
+           std::make_shared<ImplicitMidpoint>()}) {
+    std::vector<double> errors;
+    for (const double dt : {0.01, 0.005}) {
+      const auto result =
+          integrator(method, dt)
+              .integrate(m, 0.0, 1.0, {.snapshot_times = {0.0}});
+      check(result.report.metrics.at("assemblies") ==
+                result.report.metrics.at("steps"),
+            method->name() + ": one assembly per step, none at t0");
+      near(pde2d::test::max_nodal_error(
+               *m->mesh(), result.snapshots[0].values,
+               [](double x, double y) { return root_exact(x, y, 0.0); }),
+           0.0, 1e-15, method->name() + ": the state at t0 is u(0)");
+      errors.push_back(pde2d::test::max_nodal_error(
+          *m->mesh(), result.final.values,
+          [](double x, double y) { return root_exact(x, y, 1.0); }));
+    }
+    std::cout << method->name() << " from t0 = 0 with u = sqrt(t): error at "
+              << "t = 1 " << errors[0] << " -> " << errors[1] << '\n';
+    check(errors[0] < 5e-3, method->name() + ": close to sqrt(t) + x");
+    check(errors[1] < errors[0], method->name() + ": better with smaller dt");
+  }
+  // Newmark's start reads the whole problem at t0, so a second-order
+  // problem with the same data cannot start at 0 (U_D'' is not finite).
+  Problem wave = root_problem();
+  wave.equation.m2 = e("1");
+  wave.initial.u_t = e("0");
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)integrator(std::make_shared<Newmark>(), 0.1)
+            .integrate(meshed(wave), 0.0, 1.0);
+      },
+      "not finite");
+}
+
+// sin(t) u_tt + 0.1 u_t - (u_xx + u_yy) = f with the wave's u: M2 is zero at
+// t0 = 0, though not a zero operator (time order 2 also at t = 0). Newmark
+// refuses at its start; the midpoint method starts without reading M2.
+void mass_zero_at_start() {
+  Problem problem = wave_problem();
+  const std::string u_t = "-2*" + p + "*sin(2*t) + 3*" + q + "*cos(3*t)";
+  const std::string u_tt = "-4*" + p + "*cos(2*t) - 9*" + q + "*sin(3*t)";
+  problem.equation.m2 = e("sin(t)");
+  problem.equation.f = e("sin(t)*(" + u_tt + ") + 0.1*(" + u_t + ")");
+  const auto m = meshed(problem);
+  const auto at_zero = Assembler().assemble(m, 0.0);
+  check(Assembler().time_order(*m) == 2 && at_zero.time_order() == 2 &&
+            !at_zero.mass().always_zero && at_zero.mass().zero_now,
+        "time order 2, M2 zero now at t = 0");
+  try {
+    (void)integrator(std::make_shared<Newmark>(), 0.01).integrate(m, 0.0, 1.0);
+    check(false, "Newmark cannot start");
+  } catch (const std::runtime_error &error) {
+    const std::string what = error.what();
+    for (const char *part :
+         {"newmark: the starting acceleration cannot be computed",
+          "M2 is zero at t0 = 0", "implicit_midpoint", "implicit_euler"})
+      check(what.find(part) != std::string::npos,
+            std::string("the message says ") + part);
+  }
+  const auto result = integrator(std::make_shared<ImplicitMidpoint>(), 0.001)
+                          .integrate(m, 0.0, 1.0);
+  const double error = pde2d::test::max_nodal_error(
+      *m->mesh(), result.final.values,
+      [](double x, double y) { return wave_exact(x, y, 1.0); });
+  std::cout << "implicit_midpoint with m2 = sin(t) from t0 = 0: error at t = 1 "
+            << error << '\n';
+  check(error < 1e-3, "the midpoint method follows the solution");
 }
 
 void lands_on_snapshots() {
@@ -660,6 +823,12 @@ int main() {
        counts_prepares},
       {"methods are refused for time orders they do not support",
        refuses_time_orders},
+      {"CG where the step matrix is symmetric by its values only",
+       symmetric_now_solvers},
+      {"u = sqrt(t) from t0 = 0: Euler and midpoint never assemble at t0",
+       starts_without_assembling},
+      {"m2 = sin(t) from t0 = 0: Newmark refuses, midpoint runs",
+       mass_zero_at_start},
       {"snapshots land exactly on their times", lands_on_snapshots},
       {"a continued run equals one long run", continues_runs},
       {"the integrator checks its input", checks_input},

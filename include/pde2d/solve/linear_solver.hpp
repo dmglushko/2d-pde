@@ -16,9 +16,10 @@
 // many matrices.
 //
 // A solver declares what it needs of a matrix (requirements()); the
-// Integrator and the StaticSolver check that against the facts assembly
-// gives each operator (fem::Operator::symmetric) before they prepare it,
-// since prepare() sees only the values. What cannot be known from facts
+// Integrator and the StaticSolver check that before they prepare a matrix,
+// against the facts assembly gives each operator (fem::Operator::
+// always_symmetric, symmetric_now) or, for a step matrix the facts cannot
+// promise, against its values (fem::is_symmetric). What is not checked
 // (positive definiteness) is not declared: a solver that needs it detects
 // its failure and throws std::runtime_error.
 namespace pde2d::solve {

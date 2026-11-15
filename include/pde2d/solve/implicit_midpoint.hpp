@@ -31,6 +31,10 @@ namespace pde2d::solve {
 // Time order 0 is not supported: with B = 0 the step is
 // U1 = 2 A^-1 b - U0, which oscillates around the solution.
 //
+// The start reads nothing at t0 (StartNeeds::nothing): every assembly is
+// at a middle of a step, so U_D' and U_D'' are never evaluated at t0
+// (u = sqrt(t) from t0 = 0 works).
+//
 // One set of weights (2 / dt^2, 1 / dt, 1/2) serves both orders. (It is
 // not called Crank-Nicolson, which also names averaging A U and b over
 // the two ends.) No options.
@@ -42,6 +46,7 @@ public:
   }
   double evaluation_fraction() const override { return 0.5; }
   StepMatrixWeights step_matrix_weights(double dt) const override;
+  StartNeeds start_needs(int) const override { return StartNeeds::nothing; }
   StepSolveInfo advance(const fem::AssembledProblem &problem, double dt,
                         const PreparedLinearSolver &solver,
                         TimeState &state) const override;

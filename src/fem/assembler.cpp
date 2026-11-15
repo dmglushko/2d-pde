@@ -378,10 +378,29 @@ std::vector<double> total(const std::vector<double> &constant,
 
 } // namespace
 
-int AssembledProblem::time_order() const {
-  if (!mass_.is_zero)
+namespace {
+
+// The time order of operators with these formula facts: 2 if the mass is
+// not zero, else 1 if the damping is not zero, else 0. One rule for
+// AssembledProblem::time_order and Assembler::time_order, so they agree.
+int order_of(bool mass_zero, bool damping_zero) {
+  if (!mass_zero)
     return 2;
-  return damping_.is_zero ? 0 : 1;
+  return damping_zero ? 0 : 1;
+}
+
+} // namespace
+
+int AssembledProblem::time_order() const {
+  return order_of(mass_.always_zero, damping_.always_zero);
+}
+
+int Assembler::time_order(const MeshedProblem &meshed_problem) const {
+  // The plan of a full assembly (max_time_order 2) holds the facts each
+  // operator would get; making it reads only the coefficients' facts and
+  // evaluates nothing.
+  const Plan plan = make_plan(meshed_problem, /*max_time_order=*/2);
+  return order_of(plan.mass.zero, plan.damping.zero);
 }
 
 AssembledProblem
@@ -530,7 +549,7 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
         op.free.pattern = structure.free_pattern;
         op.dirichlet.pattern = structure.dirichlet_pattern;
         op.depends_on_t = facts.depends_on_t;
-        op.is_zero = facts.zero;
+        op.always_zero = facts.zero;
       };
   finish(result.mass_, plan.mass, reuse_mass, constant.mass, time.mass,
          &Internals::mass, &AssembledProblem::mass_);
@@ -540,9 +559,17 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
          time.stiffness, &Internals::stiffness, &AssembledProblem::stiffness_);
   // M2, M1 and D are symmetric (mass-like integrals of phi_i phi_j); a zero
   // operator is too.
-  result.mass_.symmetric = true;
-  result.damping_.symmetric = true;
-  result.stiffness_.symmetric = plan.stiffness.zero || plan.stiffness_symmetric;
+  result.mass_.always_symmetric = true;
+  result.damping_.always_symmetric = true;
+  result.stiffness_.always_symmetric =
+      plan.stiffness.zero || plan.stiffness_symmetric;
+  // The facts from the numbers, read from the values just built (or
+  // reused: the same values give the same answer, so reuse stays bit for
+  // bit equal to a fresh assembly). A formula fact implies its number fact.
+  for (Operator *op : {&result.mass_, &result.damping_, &result.stiffness_}) {
+    op->zero_now = op->always_zero || has_only_zero_entries(op->free);
+    op->symmetric_now = op->always_symmetric || is_symmetric(op->free);
+  }
   if (plan.load.depends_on_t) {
     internals->load = reuse_load ? before->load
                                  : std::make_shared<const std::vector<double>>(
@@ -573,7 +600,7 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
   result.right_hand_side_ = result.load_;
   const auto subtract = [&](const Operator &op,
                             const std::vector<double> &data) {
-    if (op.is_zero || n_dirichlet == 0)
+    if (op.always_zero || n_dirichlet == 0)
       return;
     const auto lifted = op.dirichlet.multiply(data);
     for (std::size_t i = 0; i < lifted.size(); ++i)

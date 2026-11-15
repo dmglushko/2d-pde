@@ -88,8 +88,8 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | Mesher | `Mesher::run(geometry, spec)` | `CurveGeometry`, `MeshSpec` | `MeshResult`: the `Mesh`, reports, `target_met` | `pde2d_mesh` |
 | Remesher | `Remesher::run(mesh, spec)` | `Mesh`, `MeshSpec` | `MeshResult` | `pde2d_mesh` |
 | Combining | `MeshedProblem(mesh, problem)` | `Mesh`, `Problem` | `MeshedProblem` | `pde2d_fem` |
-| Assembler | `Assembler::assemble(meshed, t, previous, max_time_order)` | `MeshedProblem`, a time, optionally the previous result, the highest time order to build (default 2) | `AssembledProblem` | `pde2d_fem` |
-| Linear solver | `requirements()` checked by the caller, then `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix` (its `symmetric` fact for the check), a right-hand side | `LinearSolveResult` | `pde2d_solve` |
+| Assembler | `Assembler::assemble(meshed, t, previous, max_time_order)`; `Assembler::time_order(meshed)` | `MeshedProblem`, a time, optionally the previous result, the highest time order to build (default 2) | `AssembledProblem`; the time order alone, from the formula facts | `pde2d_fem` |
+| Linear solver | `requirements()` checked by the caller, then `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix` (for the check: its `always_symmetric` or `symmetric_now` fact, or `is_symmetric` of its values), a right-hand side | `LinearSolveResult` | `pde2d_solve` |
 | Time method | `advance(assembled, dt, prepared, state)` | one `AssembledProblem` (at the method's evaluation point), the prepared solver, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
 | Building the solution | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
 | Marking | `MarkingStrategy::mark(mesh, indicators)` | `Mesh`, one error indicator per triangle (the owner's estimate) | the marked triangles | `pde2d_adapt` |
@@ -245,8 +245,10 @@ classDiagram
         CsrMatrix free
         CsrMatrix dirichlet
         bool depends_on_t
-        bool is_zero
-        bool symmetric
+        bool always_zero
+        bool always_symmetric
+        bool zero_now
+        bool symmetric_now
     }
     class CsrMatrix {
         shared_ptr to const SparsityPattern pattern
@@ -356,12 +358,13 @@ flowchart TD
     SCAT["scatter each block (see Nodes and unknowns)<br/>into the constant part or the part in t"]
     TOT["total of each operator = constant part + part in t"]
     RHS["U_D at t, U_D' and U_D'' only up to the time order;<br/>right-hand side = load − lifting"]
-    OUT(["AssembledProblem: operators, load, right-hand side, facts (symmetric among them), report"])
+    FACTS["facts from the numbers of each free part:<br/>zero_now, symmetric_now"]
+    OUT(["AssembledProblem: operators, load, right-hand side, facts from the formulas and from the numbers, report"])
 
     START --> PLAN --> HAVE
     HAVE -- no --> STRUCT --> TRI
     HAVE -- yes --> REUSE --> TRI
-    TRI --> EDGE --> SCAT --> TOT --> RHS --> OUT
+    TRI --> EDGE --> SCAT --> TOT --> FACTS --> RHS --> OUT
 ```
 
 - Without `previous`, constant terms and terms in t are all computed.
@@ -374,6 +377,14 @@ flowchart TD
   that `previous` did not build (it had a lower `max_time_order`) is built
   here in full, so the result stays bit for bit that of a fresh assembly
   at the same `max_time_order`.
+- Two kinds of facts: the formula facts (`depends_on_t`, `always_zero`,
+  `always_symmetric`) come from the plan and hold for every t; they alone
+  decide the time order, reuse and what is built. The number facts
+  (`zero_now`, `symmetric_now`) are read from each free part's values
+  after the totals (`has_only_zero_entries`, `is_symmetric`), hold at
+  this t only, and are implied by the formula facts. `Assembler::
+  time_order(meshed)` makes the same plan at `max_time_order` 2 without
+  assembling, so it equals `assemble(...).time_order()` at every t.
 - The code has three pieces: computing a block (`element_blocks.cpp`, no
   shared state), scattering it, and the driver that loops over colours
   (`assembler.cpp`). Only the driver would ever know about threads.
@@ -422,20 +433,23 @@ sequenceDiagram
     participant A as Assembler
     participant M as TimeMethod
     participant L as LinearSolver
-    I->>A: assemble(meshed, t0)
-    A-->>I: AssembledProblem (its time_order checked against capabilities().supports)
-    Note over I: state = initial, or initial_values(t0) (and initial_velocities), free part
-    Note over I: time order 0: state = solution of A(t0) U = b(t0)
-    I->>M: start(assembled, linear solver, state)
-    Note over M: Newmark: check requirements, prepare(M2), solve for U'' at t0
+    I->>A: time_order(meshed)
+    A-->>I: the time order, from the formula facts (checked against capabilities().supports)
+    Note over I: state = initial, or initial_values(t0) (and initial_velocities), free part, none for time order 0
+    I->>M: start_needs(time order)
+    M-->>I: nothing, static_part or whole_problem
+    I->>A: assemble(meshed, t0, max_time_order 0 or 2), only if not nothing
+    I->>M: start(assembled at t0, linear solver, state), only if not nothing
+    Note over M: Newmark: throws if M2 is zero now, else checks requirements, prepare(M2), solve for U'' at t0
+    Note over M: ImplicitEuler at order 0: state = solution of A(t0) U = b(t0)
     loop until t reaches t1
         I->>C: next_step(t)
         C-->>I: dt
         Note over I: shorten the step to land on a snapshot time or t1
-        I->>A: assemble(meshed, t + fraction * dt, previous)
+        I->>A: assemble(meshed, t + fraction * dt, previous if any)
         A-->>I: AssembledProblem
         I->>M: step_matrix_weights(dt)
-        Note over I: when dt changed or an operator in it depends on t: check the solver's requirements against the step matrix's symmetry
+        Note over I: when dt changed or an operator in it depends on t: build the step matrix, check the solver's requirements (always symmetric by the facts, else is_symmetric of its values)
         I->>L: prepare(weighted M2 + B + A), only in that case
         I->>M: advance(assembled, dt, prepared, state)
         M->>L: solve(right-hand side)
@@ -449,7 +463,7 @@ sequenceDiagram
 
 The `StaticSolver` is the same without the loop: assemble once with
 `max_time_order` 0, check the solver's requirements against A's
-`symmetric` fact, one linear solve of stiffness·U = `right_hand_side()`
+facts (`always_symmetric`, else `symmetric_now`), one linear solve of stiffness·U = `right_hand_side()`
 (= load − A_FD·U_D), then `build_solution`.
 
 ## Interfaces and their components
@@ -948,10 +962,10 @@ text ──► Expression ─┐
 | `DirichletNode` | `meshed_problem.hpp` | a node and the regions whose `g / alpha` is averaged there (one, or two at an equal-priority corner) |
 | `MeshedProblem` | `meshed_problem.hpp` | `Problem` + `std::shared_ptr<const Mesh>`, checked and compiled, up to assembly |
 | `CompiledDivergence` | `meshed_problem.hpp` | `x`, `y`: the compiled divergence of A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] (`MeshedProblem::divergence_of_a()`) |
-| `SparsityPattern`, `CsrMatrix` | `csr_matrix.hpp` | compressed sparse rows: `rows`, `columns`, `row_offsets`, `column_indices` (signed `Index`, sorted and unique per row), `find`; a matrix is a shared pattern plus `values`, with `entry(i, j)` and `multiply(x)` |
-| `Operator` | `assembled_problem.hpp` | one operator of the system: `free` (X_FF), `dirichlet` (X_FD), `depends_on_t`, `is_zero`, `symmetric` (of `free`, from the terms built) |
+| `SparsityPattern`, `CsrMatrix` | `csr_matrix.hpp` | compressed sparse rows: `rows`, `columns`, `row_offsets`, `column_indices` (signed `Index`, sorted and unique per row), `find`; a matrix is a shared pattern plus `values`, with `entry(i, j)` and `multiply(x)`; the plain functions `has_only_zero_entries(matrix)` and `is_symmetric(matrix, relative_tolerance = 1e-12)` (\|a_ij − a_ji\| ≤ tol · max \|a\|, a missing entry counts as 0) read facts from the values |
+| `Operator` | `assembled_problem.hpp` | one operator of the system: `free` (X_FF), `dirichlet` (X_FD); formula facts for every t: `depends_on_t`, `always_zero`, `always_symmetric` (of `free`, from the terms built); number facts at the assembled t: `zero_now`, `symmetric_now` (of `free`, from its values) |
 | `AssembledProblem` | `assembled_problem.hpp` | the system M2 U'' + B U' + A U = b in the free unknowns at one t |
-| `Assembler` | `assembler.hpp` | `assemble(meshed_problem, t, previous = nullptr, max_time_order = 2)` |
+| `Assembler` | `assembler.hpp` | `assemble(meshed_problem, t, previous = nullptr, max_time_order = 2)`; `time_order(meshed_problem)`, the assembled time order from the formula facts, evaluating nothing |
 
 ```cpp
 using namespace pde2d::fem;
@@ -1184,14 +1198,20 @@ is. T is zero when A is, or when A is isotropic
 zero, decided symbolically in the `MeshedProblem` constructor; then
 κ_τ = 0) and beta_tau, beta_x, beta_y are zero (then β̂_τ = 0). A term
 depends on t when one of its non-zero factors (including β̂_n, and β̂_τ
-for T) does. An operator `is_zero` when every
+for T) does. An operator is `always_zero` when every
 term of it is zero and `depends_on_t` when one of them depends on t;
-`time_order()` is 2 with a non-zero mass, else 1 with a non-zero damping,
-else 0 (lower than the problem's when a dynamic condition has A = 0).
-`symmetric`: M2 and B always (mass-like integrals), A when C and every T
-are zero (K, R and S are symmetric); a zero operator is symmetric. It is
-a fact from the terms, not a test of the values, and holds up to
-rounding (the blocks are computed in full). Wherever A is not zero the
+`time_order()` is 2 with a mass that is not always zero, else 1 with such
+a damping, else 0 (lower than the problem's when a dynamic condition has
+A = 0); `Assembler::time_order(meshed)` gives the same without
+assembling. `always_symmetric`: M2 and B always (mass-like integrals), A
+when C and every T are zero (K, R and S are symmetric); a zero operator
+is symmetric. It is a fact from the terms, not a test of the values, and
+holds up to rounding (the blocks are computed in full). The facts from
+the numbers hold at the assembled t only: `zero_now` when every value of
+`free` is zero (m2 = sin(t) at t = 0), `symmetric_now` when `free` is
+symmetric to the default tolerance of `is_symmetric` (an anisotropic
+diagonal A whose boundary edges are all axis-aligned, where T
+vanishes); each is true when its formula fact is. Wherever A is not zero the
 condition of a natural or dynamic edge is solved for u_n, so β̂_n ≠ 0 is
 checked there even when every term of the edge is zero.
 `load_depends_on_t()` reads F and G; `right_hand_side_depends_on_t()`
@@ -1261,9 +1281,12 @@ solves `solve(rhs) -> LinearSolveResult` (values, iterations, relative
 residual |b − Ax| / |b| computed after the solve) as often as needed.
 A solver declares `requirements()` (`LinearSolverRequirements{
 symmetric_matrix}`); `prepare` sees only values, so the callers (the
-`Integrator`, the `StaticSolver`, `Newmark::start`) check the
-requirements against assembly's `Operator::symmetric` first
-(`detail::check_requirements`, `src/solve/requirements.hpp`) and throw
+`Integrator`, the `StaticSolver`, `Newmark::start`, `ImplicitEuler::start`)
+check the requirements first (`detail::check_requirements`,
+`src/solve/requirements.hpp`): a symmetry requirement is met when the
+matrix is always symmetric by assembly's facts or symmetric now by its
+values (`Operator::symmetric_now`, or `is_symmetric` of a step matrix,
+`detail::check_step_matrix_requirements`). They throw
 `std::invalid_argument` naming the caller, the solver and the matrix.
 Definiteness is not a declared requirement: a solver that needs it
 detects its failure and throws `std::runtime_error`.
@@ -1292,7 +1315,7 @@ can be continued.
 
 **StaticSolver** (`static_solver.hpp`). Assembles at t with
 `max_time_order` 0, checks the solver's requirements against
-`stiffness().symmetric`, solves `stiffness().free · U =
+`stiffness().always_symmetric`, else `stiffness().symmetric_now`, solves `stiffness().free · U =
 right_hand_side()` (= load − A_FD U_D at that order), and returns
 `StaticResult{solution, reports}` with the reports "assembly" and
 "static_solver" (free_unknowns, linear_iterations, residual).
@@ -1303,17 +1326,20 @@ time_order_2}` with `supports(order)`), `evaluation_fraction()` (where in the st
 problem is assembled) and `step_matrix_weights(dt)` (`StepMatrixWeights{
 mass, damping, stiffness}`: the step matrix is mass·M₂ + damping·B +
 stiffness·A, so the integrator can build it and tell when it changes). It
-has `start(assembled at t0, linear_solver, state)` (default: nothing) and
-`advance(assembled, dt, prepared, state) -> StepSolveInfo`. The state is a
+declares `start_needs(time_order)` (`StartNeeds::nothing`, `static_part`
+or `whole_problem`: what its start reads at t0), has `start(assembled at
+t0, linear_solver, state)` (default: nothing; called only when the start
+needs something) and `advance(assembled, dt, prepared, state) ->
+StepSolveInfo`. The state is a
 `TimeState{values, velocities, accelerations}` in the free unknowns. The
 right-hand side the methods use is `right_hand_side()`, which already
 holds the whole lifting.
 
-| Method | Orders | Assembled at | Step matrix | Right-hand side |
-| --- | --- | --- | --- | --- |
-| `ImplicitEuler` | 0, 1, 2 | t + dt | M₂/dt² + B/dt + A | b + M₂(U₀/dt² + V₀/dt) + B U₀/dt; then V₁ = (U₁ − U₀)/dt |
-| `ImplicitMidpoint` | 1, 2 | t + dt/2 | 2M₂/dt² + B/dt + A/2 | b + M₂(2U₀/dt² + 2V₀/dt) + (B/dt − A/2) U₀; then V₁ = 2(U₁ − U₀)/dt − V₀ |
-| `Newmark` (β = 1/4, γ = 1/2) | 2 | t + dt | M₂/(β dt²) + γ B/(β dt) + A | b + M₂(U₀/(β dt²) + V₀/(β dt) + (1/(2β) − 1) W₀) + B(γ U₀/(β dt) + (γ/β − 1) V₀ + dt (γ/(2β) − 1) W₀) |
+| Method | Orders | Start needs | Assembled at | Step matrix | Right-hand side |
+| --- | --- | --- | --- | --- | --- |
+| `ImplicitEuler` | 0, 1, 2 | `static_part` at order 0 (start solves A(t0) U = b(t0)), else `nothing` | t + dt | M₂/dt² + B/dt + A | b + M₂(U₀/dt² + V₀/dt) + B U₀/dt; then V₁ = (U₁ − U₀)/dt |
+| `ImplicitMidpoint` | 1, 2 | `nothing` | t + dt/2 | 2M₂/dt² + B/dt + A/2 | b + M₂(2U₀/dt² + 2V₀/dt) + (B/dt − A/2) U₀; then V₁ = 2(U₁ − U₀)/dt − V₀ |
+| `Newmark` (β = 1/4, γ = 1/2) | 2 | `whole_problem` | t + dt | M₂/(β dt²) + γ B/(β dt) + A | b + M₂(U₀/(β dt²) + V₀/(β dt) + (1/(2β) − 1) W₀) + B(γ U₀/(β dt) + (γ/β − 1) V₀ + dt (γ/(2β) − 1) W₀) |
 
 A zero operator adds nothing, so one set of weights serves every order of
 a method: at time order 1 the M₂ terms are absent, at 0 (Euler only) also
@@ -1325,8 +1351,9 @@ they need no acceleration, so M₂ may be singular or zero at some time
 Midpoint refuses time order 0 (U₁ = 2A⁻¹b − U₀ oscillates). None inverts B
 or M₂ during the steps, so B may be singular (m1 = 0 with a dynamic
 condition). `Newmark::start` solves M₂(t0) W₀ = b − B V₀ − A U₀ for the
-starting acceleration, so M₂ must not be singular; when it is zero, or the
-solve fails, it throws `std::runtime_error` naming the cause and
+starting acceleration, so M₂ must not be singular; when it is zero at t0
+(`zero_now`, checked first) or the solve fails (M₂ singular at t0), it
+throws `std::runtime_error` naming the cause and
 `ImplicitMidpoint` and `ImplicitEuler`, which need no acceleration (no
 fallback).
 
@@ -1338,15 +1365,21 @@ linear_solver)`; `integrate(meshed, t0, t1, IntegrationOutput, const
 Solution *initial = nullptr) -> IntegrationResult{final, snapshots,
 history, report}`.
 
-- The time order is `AssembledProblem::time_order()` at t0, checked
-  against `capabilities().supports(order)`; when it is lower than
+- The time order is `Assembler::time_order(meshed)`, from the formula
+  facts without evaluating anything, checked against
+  `capabilities().supports(order)`; when it is lower than
   `time_order(meshed)` (the order as written), the refusal says that time
   terms vanished in assembly.
 - The state comes from `initial` (same mesh object; velocities required
   for time order 2) or from `initial_values(t0)` / `initial_velocities(t0)`,
-  free part only. At time order 0 there is no initial state: the state
-  at t0 is the solution of A(t0) U = b(t0), and `initial` is only checked
-  for its mesh and size.
+  free part only. At time order 0 there is no initial state (`initial` is
+  only checked for its mesh and size): the method's start computes it.
+- The problem is assembled at t0 only as far as `start_needs(order)`
+  says (`static_part`: `max_time_order` 0, `whole_problem`: 2), and
+  `start` is called only then; with `nothing` there is no assembly at t0,
+  so boundary data whose rate is not finite at t0 (u = √t from 0) works
+  with Euler and midpoint. After the start the state must have a value
+  per free unknown, or the integrator throws `std::runtime_error`.
 - Times: on a stretch of equal steps from an anchor, step k ends at
   anchor + k·dt; a step ending within 1e-9·dt of the next target (a
   snapshot time or t1) lands on it, and a step that would pass it is
@@ -1355,10 +1388,11 @@ history, report}`.
 - Each step assembles at `(1 − fraction)·t + fraction·t_new` with the
   previous result as `previous`, and prepares the linear solver only when
   there is none yet, dt changed, or an operator with a non-zero weight in
-  the step matrix (and not `is_zero`) `depends_on_t`. Before each
-  prepare it checks the solver's requirements: the step matrix is
-  symmetric when every operator with a non-zero weight is symmetric or
-  zero.
+  the step matrix (and not `always_zero`) `depends_on_t`; formula facts
+  only. Before each prepare it checks the solver's requirements: the
+  step matrix is symmetric when every operator with a non-zero weight is
+  always symmetric or always zero, else when `is_symmetric` holds for
+  the step matrix about to be prepared.
 - Each step's `StepRecord{t, dt, accepted, linear_iterations, residual,
   time}` updates a running summary and is kept only with
   `keep_step_history`; snapshots are taken at `snapshot_times` (strictly

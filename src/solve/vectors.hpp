@@ -94,7 +94,7 @@ inline void add_scaled(std::vector<double> &out, double scale,
 // out += scale * (free part of op) * v; nothing for a zero operator.
 inline void add_product(std::vector<double> &out, double scale,
                         const fem::Operator &op, std::span<const double> v) {
-  if (op.is_zero || scale == 0.0)
+  if (op.always_zero || scale == 0.0)
     return;
   add_scaled(out, scale, op.free.multiply(v));
 }

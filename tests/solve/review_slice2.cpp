@@ -160,8 +160,9 @@ void order_zero_non_finite_initial() {
 bool same(const Operator &a, const Operator &b) {
   return a.free.values == b.free.values &&
          a.dirichlet.values == b.dirichlet.values &&
-         a.depends_on_t == b.depends_on_t && a.is_zero == b.is_zero &&
-         a.symmetric == b.symmetric;
+         a.depends_on_t == b.depends_on_t && a.always_zero == b.always_zero &&
+         a.always_symmetric == b.always_symmetric && a.zero_now == b.zero_now &&
+         a.symmetric_now == b.symmetric_now;
 }
 bool same(const AssembledProblem &a, const AssembledProblem &b) {
   const auto eq = [](std::span<const double> x, std::span<const double> y) {
@@ -240,17 +241,18 @@ void isotropy_cases() {
   };
   const auto a1 = stiffness(
       {.a_xx = e("-(1 + k)^2"), .a_yy = e("-1 - 2*k - k^2")}, {{"k", 0.5}});
-  check(a1.stiffness().symmetric, "parameter, isotropic after expanding");
+  check(a1.stiffness().always_symmetric,
+        "parameter, isotropic after expanding");
   check(asymmetry(a1.stiffness().free) < 1e-14, "and A = A^T");
   // A non-constant isotropic A has div A: a convection, not symmetric.
   const auto a2 = stiffness({.a_xx = e("-(1 + x)"), .a_yy = e("-1 - x")}, {});
-  check(!a2.stiffness().symmetric, "div A not zero: not symmetric");
+  check(!a2.stiffness().always_symmetric, "div A not zero: not symmetric");
   check(asymmetry(a2.stiffness().free) > 1e-6, "and A != A^T");
   // k1 = k2 = 1 numerically: conservatively not isotropic.
   const auto a3 = stiffness({.a_xx = e("-k1"), .a_yy = e("-k2")},
                             {{"k1", 1.0}, {"k2", 1.0}});
   std::cout << "a_xx = k1, a_yy = k2 (both 1): symmetric = "
-            << a3.stiffness().symmetric << ", asymmetry "
+            << a3.stiffness().always_symmetric << ", asymmetry "
             << asymmetry(a3.stiffness().free) << '\n';
 }
 
