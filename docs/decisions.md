@@ -17,6 +17,15 @@ Started 2026-11-11. The previous header-only code is on the branch
 - **Design is done in discussion and implementation by subagents**, one
   agreed slice at a time.
 
+- **Reviews look for problems that can happen** (decided 2026-11-15):
+  wrong mathematics, silent wrong answers, crashes or broken invariants on
+  ordinary input, and numerical trouble that ordinary problems trigger
+  (small pivots, ill-conditioning, non-convergence). Cases with extreme
+  magnitudes or constructions no real problem produces (coordinates of
+  1e9 with tiny arcs, values near overflow or underflow, steps below the
+  spacing of doubles) are not findings; they are fixed only when the fix
+  is trivial. Reviews are run by GPT-6.1 Sol at high effort.
+
 ## Project
 
 - **Rewritten from scratch as a compiled C++ project, not header-only.**
@@ -732,6 +741,40 @@ Discussed in a side chat on 2026-11-12; the first slice was built on
   β_τ, β_x and β_y are zero. *Why:* otherwise every problem with
   diffusion would look non-symmetric and CG could never be used.
 
+- **Choices of solver slice 2 accepted 2026-11-15** (as reported by its
+  implementation): `Operator::symmetric` false unless assembly proves it;
+  `MeshedProblem::a_is_isotropic()` public, distinct parameters count as
+  unknown; time-order capabilities are three bools with `supports(order)`;
+  every linear solver must declare `requirements()`; the requirement check
+  is private and runs before every prepare; at order 0 Euler's starting
+  solve at t0 is not counted in `prepares`; Newmark's failure is a
+  `std::runtime_error`; the assembly report gains `max_time_order`;
+  `ConjugateGradientOptions` is its own struct; the β̂ₙ ≠ 0 check runs on
+  every natural or dynamic edge where A is not zero, even when all its
+  terms vanish. `SimplicialLdlt` checks its relative residual against
+  `SimplicialLdltOptions::residual_tolerance` (1e-8) and throws above it:
+  a wrong answer is an error, not a warning.
+- **Two kinds of facts per matrix** (decided 2026-11-15): facts from the
+  formulas hold for every t (`Operator::is_zero` is renamed
+  `always_zero`, `symmetric` becomes `always_symmetric`); facts from the
+  numbers hold at the assembled time only (`zero_now`, `symmetric_now`,
+  computed by assembly from the values; the same checks are plain
+  functions on `CsrMatrix` for a step matrix). The time order, reuse and
+  "build or skip" use only the formula facts: the time order must be one
+  answer for the whole run (m2 = sin(t) is order 2 even at t = 0). A
+  solver's symmetry requirement is met when the matrix is always
+  symmetric or symmetric now (anisotropic diagonal A on a mesh with only
+  axis-aligned boundary edges).
+- **A time method declares what its start reads at t0** (decided
+  2026-11-15): `enum class StartNeeds { nothing, static_part,
+  whole_problem }`, from `TimeMethod::start_needs(time_order)`. Newmark:
+  `whole_problem`; ImplicitEuler: `static_part` at order 0, otherwise
+  `nothing`; ImplicitMidpoint: `nothing`. The integrator gets the time
+  order from the formula facts without evaluating anything
+  (`Assembler::time_order(meshed_problem)`), and assembles at t0 only what
+  the start needs. Newmark stays as it is: it throws when M₂ at t0 is zero
+  now or singular, naming the methods that need no acceleration.
+
 ## Adaptivity: marking and refinement
 
 Asked for by the owner on 2026-11-15. Of the three parts of adaptive
@@ -753,6 +796,12 @@ coarsening, moving nodes or enrichment for now.
   vertex bisection, and regular (red) refinement with bisection closure.
   Both keep the mesh conforming. The details were left to the
   implementation, for the owner to accept.
+- **Red-green-blue warns at curved ears** (decided 2026-11-15): red
+  refinement of a triangle with two or more linked (curved) boundary edges
+  makes a near-flat middle child whose smallest angle halves every cycle
+  (from a plain CDT on a disc: 5.6°, 2.8°, 1.4°, …). The method keeps
+  doing it but adds a warning to its report naming how many such
+  triangles it red-refined; a quality initial mesh (Ruppert) avoids them.
 
 ## Deferred
 

@@ -253,6 +253,24 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   context of `.pde2d` files as curve links. Do not add them unless a task
   asks.
 
+## Reviewing
+
+A review looks for problems a user of this library can actually meet:
+wrong mathematics or signs, silent wrong answers, crashes, exceptions or
+broken invariants on ordinary input, and numerical trouble that ordinary
+problems trigger (small pivots, ill-conditioning, non-convergence,
+cancellation at normal scales). Ordinary input means sizes and
+coefficients of real engineering problems, meshes from our mesher or
+Gmsh, and problems that make physical sense.
+
+Do not report cases that need extreme magnitudes or constructions no real
+problem produces: coordinates or radii of 1e9 or 1e200 with tiny arcs,
+values near overflow or underflow, subnormals, time steps below the
+spacing of doubles, adversarial meshes no mesher makes. If you notice one
+whose fix is a line or two, mention it in one line at the end under
+"Unlikely"; otherwise leave it out. Rank findings by how likely a real
+user meets them, then by how bad the result is.
+
 ## Tests
 
 - Register a test with
