@@ -132,7 +132,7 @@ export class Viewer {
 
   fieldIsComplete() {
     const field = this.data.field;
-    return field && field.values.length * 2 === this.data.mesh?.nodes.length && field.values.every((v) => v !== null);
+    return field && field.values.length * 2 === this.data.mesh?.nodes.length && field.values.every((v) => Number.isFinite(v));
   }
 
   fillGeometry(geometry) {
@@ -339,7 +339,7 @@ export class Viewer {
     const table = this.fieldTable(scale);
     const ring = token("--surface");
     for (let i = 0; i < values.length; i++) {
-      if (values[i] === null) continue;
+      if (!Number.isFinite(values[i])) continue;
       const index = Math.max(0, Math.min(255, Math.round(255 * scale.position(values[i]))));
       ctx.beginPath();
       ctx.arc(...this.toScreen(mesh.nodes[2 * i], mesh.nodes[2 * i + 1]), 4.5, 0, 2 * Math.PI);

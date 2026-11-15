@@ -1,11 +1,28 @@
 // The server's JSON API (docs/app.md, "The API").
 
+import { splitSnapshots } from "./core.js";
+
 export class ApiError extends Error {
   constructor(error) {
     super(error?.message ?? "the request failed");
     this.stage = error?.stage ?? "request";
     this.kind = error?.kind ?? "internal";
   }
+}
+
+// A POST of `body` as JSON; the answer as an ArrayBuffer.
+async function requestBinary(path, body) {
+  let response;
+  try {
+    response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch {
+    throw new ApiError({ stage: "request", kind: "internal", message: "The app server does not answer. Is pde2d_app still running?" });
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new ApiError(data?.error ?? { message: `${response.status} ${response.statusText}` });
+  }
+  return response.arrayBuffer();
 }
 
 async function request(path, body) {
@@ -30,6 +47,12 @@ export const api = {
   assemble: (caseData) => request("/api/assemble", caseData),
   field: (caseData, field) => request("/api/field", { case: caseData, field }),
   solve: (caseData) => request("/api/solve", caseData),
+  // The solution's values as one Float32Array per kept time; `layout` is
+  // the summary's "values" ({path, format, snapshots, nodes}).
+  solveValues: async (caseData, layout) => {
+    if (layout?.format !== "float32le") throw new ApiError({ stage: "solve", message: `unknown values format ${layout?.format}` });
+    return splitSnapshots(await requestBinary(layout.path, caseData), layout.snapshots, layout.nodes);
+  },
 };
 
 // Asks the server for an export of the case and saves it as a file.

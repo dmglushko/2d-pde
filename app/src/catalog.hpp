@@ -22,7 +22,8 @@
 //
 // To add a component: write one entry in catalog.cpp. Its `type` must be
 // the component's name(), and every default must be read from the
-// library's options struct (tests/catalog.cpp checks both).
+// library's options struct (tests/session.cpp and tests/solve.cpp check
+// both).
 namespace pde2d::app {
 
 template <class Interface> struct Component {
@@ -67,7 +68,9 @@ struct MeshSetup {
 // Throws std::invalid_argument, naming the path in the case file
 // ("mesh.refiner.type: ..."), for a missing or unknown component, a wrong
 // value type or an unknown key, and whatever the library's constructors
-// throw for a value they refuse (with the path in front).
+// throw for a value they refuse (with the path in front: the option's own
+// path when the message names one of the component's options, as in
+// "mesh.refiner.options.min_angle_degrees: RuppertOptions::...").
 MeshSetup build_mesh_setup(const Json &mesh_section);
 
 // The mesh section a new case starts with.

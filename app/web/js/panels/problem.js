@@ -4,9 +4,9 @@
 // coefficient depends on are shown next to the fields.
 
 import { scheduleProblemCheck } from "../actions.js";
-import { regionToken } from "../core.js";
-import { errorBox, h, fill } from "../dom.js";
-import { editCase, freshResult, lastResult, store } from "../state.js";
+import { regionToken, renameParameter } from "../core.js";
+import { errorBox, h, fill, markLocal, numberHandler } from "../dom.js";
+import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 
 function edit(mutate, reason = "edit") {
   editCase(mutate, reason);
@@ -70,12 +70,19 @@ function equationSection(catalog, problem) {
 function parametersSection(problem) {
   problem.parameters ??= {};
   const entries = Object.entries(problem.parameters);
-  const rename = (oldName, newName) =>
-    edit((c) => {
-      const next = {};
-      for (const [k, v] of Object.entries(c.problem.parameters)) next[k === oldName ? newName : k] = v;
-      c.problem.parameters = next;
-    }, "structure");
+  // A name that is empty or taken is refused at the field; the case keeps
+  // the old name.
+  const rename = (input, oldName) => {
+    let next;
+    try {
+      next = renameParameter(store.caseData.problem.parameters, oldName, input.value);
+    } catch (error) {
+      markLocal(input, error.message);
+      return;
+    }
+    markLocal(input, null);
+    if (input.value.trim() !== oldName) edit((c) => (c.problem.parameters = next), "structure");
+  };
   return [
     h("div", { class: "row", style: "margin-top:16px" }, h("h3", { style: "margin:0" }, "Parameters"), h("span", { class: "spacer" }), h("button", {
       type: "button",
@@ -94,8 +101,8 @@ function parametersSection(problem) {
       entries.map(([name, value]) =>
         h(
           "div",
-          { class: "row", style: "margin:4px 0" },
-          h("input", { type: "text", class: "expr", value: name, "aria-label": "Parameter name", style: "width:120px", onchange: (event) => event.target.value.trim() && rename(name, event.target.value.trim()) }),
+          { class: "row param-row", style: "margin:4px 0;flex-wrap:wrap" },
+          h("input", { type: "text", class: "expr", value: name, "aria-label": "Parameter name", style: "width:120px", onchange: (event) => rename(event.target, name) }),
           "=",
           h("input", {
             type: "number",
@@ -103,7 +110,7 @@ function parametersSection(problem) {
             value: String(value),
             "aria-label": `Value of ${name}`,
             style: "width:120px",
-            oninput: (event) => event.target.value.trim() !== "" && edit((c) => (c.problem.parameters[name] = Number(event.target.value))),
+            oninput: numberHandler((v) => edit((c) => (c.problem.parameters[name] = v))),
           }),
           h("button", { type: "button", class: "icon", "aria-label": `Remove ${name}`, onclick: () => edit((c) => delete c.problem.parameters[name], "structure") }, "✕"),
         ),
@@ -151,7 +158,10 @@ function conditionsSection(catalog, problem) {
               value: String(condition.priority ?? 0),
               style: "width:70px",
               "aria-label": `Priority of ${region}`,
-              oninput: (event) => edit(() => (condition.priority = Number(event.target.value || 0))),
+              oninput: numberHandler(
+                (v) => edit(() => (condition.priority = v)),
+                () => edit(() => delete condition.priority),
+              ),
             })),
           ),
           h("div", { class: "coefficients" }, catalog.condition_fields.map((f) => coefficientRow(f, condition, path))),
@@ -195,10 +205,14 @@ export const problemPanel = {
   update(container, force = false) {
     const summary = container.querySelector("#problem-summary");
     if (!summary) return;
-    const check = freshResult("problem") ?? lastResult("problem");
-    const error = store.errors.problem;
-    if (!force && summary.shown && summary.shown.check === check && summary.shown.error === error) return;
-    summary.shown = { check, error };
+    const fresh = freshResult("problem");
+    const check = fresh ?? lastResult("problem");
+    const error = currentError("problem");
+    const old = outdatedError("problem");
+    if (!force && summary.shown && summary.shown.check === check && summary.shown.fresh === fresh && summary.shown.error === error && summary.shown.old === old) return;
+    summary.shown = { check, fresh, error, old };
+    // A check of an earlier problem is shown muted, never as current.
+    container.classList.toggle("checking", !fresh);
 
     // Per field: its facts and its error.
     const errors = new Map((check?.errors ?? []).map((e) => [e.path, e.message]));
@@ -219,7 +233,9 @@ export const problemPanel = {
 
     const children = [];
     if (error) children.push(errorBox(error));
-    if (check) {
+    if (old) children.push(errorBox(old, { outdated: true }));
+    if (!fresh && !error) children.push(h("div", { class: "row" }, h("span", { class: "chip" }, "Checking…")));
+    else if (check) {
       const required = check.required_initial;
       children.push(
         h(

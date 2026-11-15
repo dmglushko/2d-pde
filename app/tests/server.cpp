@@ -87,10 +87,17 @@ int main() {
                    false,
                "stiffness");
          const Json solved = post(client, "/api/solve", case_json, 200);
-         check(solved["values"].size() == 1 &&
-                   solved["values"][0].size() ==
-                       mesh["stats"]["nodes"].get<std::size_t>(),
-               "a value per node");
+         const std::size_t nodes = mesh["stats"]["nodes"].get<std::size_t>();
+         check(solved["values"]["snapshots"] == 1 &&
+                   solved["values"]["nodes"] == nodes,
+               "the layout of the values");
+         const auto values = client.Post("/api/solve/values", case_json.dump(),
+                                         "application/json");
+         check(values && values->status == 200 &&
+                   values->get_header_value("Content-Type") ==
+                       "application/octet-stream" &&
+                   values->body.size() == 4 * nodes,
+               "a float32 per node");
          const auto file = client.Post("/api/export/mesh.svg", case_json.dump(),
                                        "application/json");
          check(file && file->status == 200 &&

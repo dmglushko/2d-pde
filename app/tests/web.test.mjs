@@ -18,6 +18,15 @@ import {
   reconcileConditions,
   undoRegionEdit,
   triangleAngles,
+  STAGES,
+  STEPS,
+  RUN_ALL,
+  stagesToRun,
+  solutionBytes,
+  LARGE_SOLUTION_BYTES,
+  splitSnapshots,
+  parseNumberText,
+  renameParameter,
 } from "../web/js/core.js";
 
 const cases = [];
@@ -249,6 +258,67 @@ test("file kinds and numbers", () => {
   assert.equal(formatNumber(0.123456), "0.1235");
   assert.equal(formatNumber(1e-6), "1.000e-6");
   assert.equal(formatNumber(null), "–");
+});
+
+test("the stage registry: steps, keys and prerequisites", () => {
+  assert.deepEqual(STEPS, ["geometry", "mesh", "problem", "assemble", "solve"]);
+  assert.deepEqual(RUN_ALL, ["geometry", "mesh", "assemble", "solve"]);
+  for (const stage of STAGES) for (const id of stage.requires) assert.ok(STAGES.findIndex((s) => s.id === id) < STAGES.indexOf(stage), `${id} before ${stage.id}`);
+  const a = { geometry: { s: 1 }, mesh: { m: 1 }, problem: { p: 1 }, assembly: { t: 0 }, solve: { mode: "static" } };
+  assert.equal(stageKey(a, "field"), stageKey(a, "assemble"), "a field depends on what assembly depends on");
+  assert.notEqual(stageKey(a, "solve"), stageKey({ ...a, solve: { mode: "time" } }, "solve"));
+  assert.equal(stageKey(a, "solve"), stageKey({ ...a, assembly: { t: 3 } }, "solve"), "the solve does not depend on assembly.t");
+  assert.throws(() => stageKey(a, "nope"));
+  assert.deepEqual(stagesToRun("solve", () => false), ["geometry", "mesh", "solve"]);
+  assert.deepEqual(stagesToRun("solve", (id) => id === "geometry"), ["mesh", "solve"]);
+  assert.deepEqual(stagesToRun("assemble", () => true), ["assemble"], "the stage itself always runs");
+  assert.deepEqual(stagesToRun("problem", () => false), ["problem"]);
+});
+
+test("solution sizes and binary snapshots", () => {
+  assert.equal(solutionBytes({ mode: "static" }, 1000), 4000);
+  assert.equal(solutionBytes({ mode: "time", time: { snapshots: 9 } }, 1000), 40000);
+  assert.equal(solutionBytes({ mode: "time", time: {} }, 1000), null);
+  assert.equal(solutionBytes({ mode: "static" }, undefined), null);
+  assert.ok(solutionBytes({ mode: "time", time: { snapshots: 1000 } }, 2000) < LARGE_SOLUTION_BYTES, "8 MB is not large");
+  assert.ok(solutionBytes({ mode: "time", time: { snapshots: 1000 } }, 20000) > LARGE_SOLUTION_BYTES, "80 MB is");
+  const buffer = new ArrayBuffer(4 * 6);
+  const view = new DataView(buffer);
+  [0, 0.5, -1, 2, 3.25, NaN].forEach((v, i) => view.setFloat32(4 * i, v, true));
+  const snapshots = splitSnapshots(buffer, 2, 3);
+  assert.equal(snapshots.length, 2);
+  assert.ok(snapshots[0] instanceof Float32Array);
+  assert.deepEqual([...snapshots[0]], [0, 0.5, -1]);
+  assert.deepEqual([...snapshots[1]].slice(0, 2), [2, 3.25]);
+  assert.ok(Number.isNaN(snapshots[1][2]));
+  assert.throws(() => splitSnapshots(buffer, 3, 3), /expected 36/);
+});
+
+test("number texts and parameter names", () => {
+  assert.deepEqual(parseNumberText("2.5"), { kind: "number", value: 2.5 });
+  assert.deepEqual(parseNumberText(" -1e-3 "), { kind: "number", value: -0.001 });
+  assert.deepEqual(parseNumberText(""), { kind: "empty" });
+  assert.deepEqual(parseNumberText("-"), { kind: "invalid" });
+  assert.deepEqual(parseNumberText("1e"), { kind: "invalid" });
+  assert.deepEqual(parseNumberText("", true), { kind: "invalid" }, "a number input reports '' for '1e'");
+  assert.deepEqual(parseNumberText("Infinity"), { kind: "invalid" });
+  const parameters = { k: 1, c: 2 };
+  assert.deepEqual(Object.entries(renameParameter(parameters, "k", "kappa")), [["kappa", 1], ["c", 2]], "order kept");
+  assert.deepEqual(renameParameter(parameters, "k", " k "), parameters);
+  assert.throws(() => renameParameter(parameters, "k", "c"), /a parameter named c already exists/);
+  assert.throws(() => renameParameter(parameters, "k", "  "), /needs a name/);
+  assert.deepEqual(parameters, { k: 1, c: 2 }, "the input is not changed");
+});
+
+test("a mesh file keeps its region edits through normalization", () => {
+  const defaults = { geometry: { source: "shape", shape: "rectangle" }, mesh: { spec: {}, discretizer: { type: "a" }, triangulator: { type: "b" }, refiner: null, improvers: [] }, problem: {}, assembly: { t: 0 }, solve: { mode: "static", linear_solver: { type: "x" }, static: {}, time: { method: { type: "m" }, step: { type: "s" } } } };
+  const edits = [{ op: "rename", from: "a", to: "b" }];
+  const input = { ...structuredClone(defaults), format: "pde2d-app-case", geometry: { source: "mesh_file", format: "gmsh", text: "", region_edits: edits } };
+  const { caseData, replaced } = normalizeCase(input, defaults);
+  assert.deepEqual(caseData.geometry.region_edits, edits);
+  assert.deepEqual(replaced, []);
+  input.geometry.region_edits = "nope";
+  assert.deepEqual(normalizeCase(input, defaults).replaced, ["geometry.region_edits"]);
 });
 
 let failed = 0;

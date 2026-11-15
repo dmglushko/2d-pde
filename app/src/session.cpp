@@ -14,10 +14,12 @@
 #include "pde2d/solve/static_solver.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <format>
 #include <limits>
-#include <optional>
+#include <span>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -89,6 +91,64 @@ AssemblySettings assembly_settings(const Json &case_json) {
 
 double assembly_time(const Json &case_json) {
   return assembly_settings(case_json).t;
+}
+
+// The times a time run keeps the solution at: snapshots + 1 equal steps
+// from t0 to t1, the last exactly t1. Empty for an interval that is not
+// valid: the library names a bad one itself.
+std::vector<double> snapshot_times(const SolveSetup &setup) {
+  std::vector<double> times;
+  if (!std::isfinite(setup.t0) || !std::isfinite(setup.t1) ||
+      !(setup.t1 > setup.t0))
+    return times;
+  const double span = setup.t1 - setup.t0;
+  const auto count = static_cast<double>(setup.snapshots);
+  for (std::size_t k = 0; k < setup.snapshots; ++k)
+    times.push_back(setup.t0 + span * (static_cast<double>(k) / count));
+  times.push_back(setup.t1);
+  return times;
+}
+
+// A free part of an operator in Matrix Market coordinate form (real,
+// general, 1-based), `size` x `size`; a zero operator without a pattern
+// has no entries.
+std::string matrix_market(const fem::CsrMatrix &matrix, std::size_t size,
+                          std::string_view comment) {
+  std::string out = "%%MatrixMarket matrix coordinate real general\n";
+  out += std::format("% {}\n", comment);
+  const fem::SparsityPattern *pattern = matrix.pattern.get();
+  const std::size_t nonzeros = pattern ? pattern->nonzeros() : 0;
+  out += std::format("{} {} {}\n", size, size, nonzeros);
+  if (pattern)
+    for (std::size_t row = 0; row < pattern->rows; ++row)
+      for (auto slot = pattern->row_offsets[row];
+           slot < pattern->row_offsets[row + 1]; ++slot) {
+        const auto index = static_cast<std::size_t>(slot);
+        out += std::format("{} {} {}\n", row + 1,
+                           pattern->column_indices[index] + 1,
+                           matrix.values[index]);
+      }
+  return out;
+}
+
+// A vector in Matrix Market array form (one column).
+std::string matrix_market(std::span<const double> vector,
+                          std::string_view comment) {
+  std::string out = "%%MatrixMarket matrix array real general\n";
+  out += std::format("% {}\n", comment);
+  out += std::format("{} 1\n", vector.size());
+  for (const double value : vector)
+    out += std::format("{}\n", value);
+  return out;
+}
+
+// Values as float32, little-endian, one after the other.
+void append_float32(std::string &out, const std::vector<double> &values) {
+  for (const double value : values) {
+    const auto bits = std::bit_cast<std::uint32_t>(static_cast<float>(value));
+    for (int byte = 0; byte < 4; ++byte)
+      out.push_back(static_cast<char>((bits >> (8 * byte)) & 0xffU));
+  }
 }
 
 Json values_json(const std::vector<double> &values) {
@@ -221,13 +281,15 @@ struct Session::State {
     return meshed;
   }
 
-  // At `time`, or at the case's assembly time when it is not given.
-  const fem::AssembledProblem &
-  get_assembled(const Json &case_json,
-                std::optional<double> time = std::nullopt) {
-    const AssemblySettings settings =
-        staged("assembly", [&] { return assembly_settings(case_json); });
-    const double t = time ? *time : settings.t;
+  // The case's "assembly" section, read for the assembly stage.
+  static AssemblySettings read_assembly(const Json &case_json) {
+    return staged("assembly", [&] { return assembly_settings(case_json); });
+  }
+
+  // With `settings` (the case's, or another t for a field).
+  const fem::AssembledProblem &get_assembled(const Json &case_json,
+                                             const AssemblySettings &settings) {
+    const double t = settings.t;
     const auto &problem = get_meshed(case_json);
     std::string key =
         meshed_key + "\n" + std::format("{} {}", t, settings.max_time_order);
@@ -272,16 +334,7 @@ struct Session::State {
       outcome->solutions.push_back(std::move(result.solution));
     } else {
       solve::IntegrationOutput output;
-      // Only for a valid interval: the library names a bad one itself.
-      if (std::isfinite(setup.t0) && std::isfinite(setup.t1) &&
-          setup.t1 > setup.t0) {
-        const double span = setup.t1 - setup.t0;
-        const auto count = static_cast<double>(setup.snapshots);
-        for (std::size_t k = 0; k < setup.snapshots; ++k)
-          output.snapshot_times.push_back(
-              setup.t0 + span * (static_cast<double>(k) / count));
-        output.snapshot_times.push_back(setup.t1);
-      }
+      output.snapshot_times = snapshot_times(setup);
       solve::IntegrationResult result = staged("solve", [&] {
         return solve::Integrator(setup.method, setup.step_controller,
                                  setup.linear_solver)
@@ -308,6 +361,15 @@ struct Session::State {
     summary["times"] = std::move(times);
     summary["min"] = std::isfinite(low) ? Json(low) : Json(nullptr);
     summary["max"] = std::isfinite(high) ? Json(high) : Json(nullptr);
+    // Where the values are: POST the same case to /api/solve/values.
+    const std::size_t nodes = problem->mesh()->nodes.size();
+    Json layout = Json::object();
+    layout["path"] = "/api/solve/values";
+    layout["format"] = "float32le";
+    layout["snapshots"] = outcome->solutions.size();
+    layout["nodes"] = nodes;
+    layout["bytes"] = outcome->solutions.size() * nodes * 4;
+    summary["values"] = std::move(layout);
     outcome->summary = std::move(summary);
     solved = std::move(outcome);
     solved_key = std::move(key);
@@ -370,7 +432,10 @@ void check_case(const Json &case_json) {
       throw std::invalid_argument("format: this is not a pde2d app case");
   }
   if (const Json &version = member(case_json, "version"); !version.is_null()) {
-    if (require_number(version, "version") > case_version)
+    const double number = require_number(version, "version");
+    if (number != std::floor(number) || number < 1)
+      throw std::invalid_argument("version: expected a whole number from 1");
+    if (number > case_version)
       throw std::invalid_argument(
           "version: the case was written by a newer version of the app");
   }
@@ -411,7 +476,9 @@ Json Session::check_problem(const Json &case_json) {
 Json Session::assemble(const Json &case_json) {
   const std::scoped_lock lock(mutex_);
   staged("case", [&] { check_case(case_json); });
-  const fem::AssembledProblem &assembled = state_->get_assembled(case_json);
+  const AssemblySettings settings = State::read_assembly(case_json);
+  const fem::AssembledProblem &assembled =
+      state_->get_assembled(case_json, settings);
   const fem::MeshedProblem &meshed = *assembled.meshed_problem();
 
   Json dirichlet = Json::array();
@@ -437,9 +504,7 @@ Json Session::assemble(const Json &case_json) {
   Json assembly = Json::object();
   assembly["report"] = report_json(assembled.report());
   assembly["t"] = assembled.time();
-  assembly["max_time_order"] = staged("assembly", [&] {
-                                 return assembly_settings(case_json);
-                               }).max_time_order;
+  assembly["max_time_order"] = settings.max_time_order;
   assembly["time_order"] = assembled.time_order();
   // The order assembly gives at every t, from the formulas alone.
   assembly["time_order_any_t"] = fem::Assembler().time_order(meshed);
@@ -459,10 +524,18 @@ Json Session::assemble(const Json &case_json) {
 
 Json Session::field(const Json &request) {
   const std::scoped_lock lock(mutex_);
+  staged("field", [&] {
+    require_object(request, "request");
+    static constexpr std::string_view known[] = {"case", "field"};
+    reject_unknown_keys(request, "request", known);
+  });
   const Json &case_json = member(request, "case");
   staged("case", [&] { check_case(case_json); });
   const Json &spec = staged("field", [&]() -> const Json & {
-    return require_object(member(request, "field"), "field");
+    const Json &object = require_object(member(request, "field"), "field");
+    static constexpr std::string_view known[] = {"kind", "text", "t"};
+    reject_unknown_keys(object, "field", known);
+    return object;
   });
   const std::string kind = staged("field", [&] {
     return require_string(member(spec, "kind"), "field.kind");
@@ -524,8 +597,10 @@ Json Session::field(const Json &request) {
     return out;
   }
   if (kind == "right_hand_side") {
+    AssemblySettings settings = State::read_assembly(case_json);
+    settings.t = t;
     const fem::AssembledProblem &assembled =
-        state_->get_assembled(case_json, t);
+        state_->get_assembled(case_json, settings);
     const fem::MeshedProblem &meshed = *assembled.meshed_problem();
     std::vector<double> values(meshed.mesh()->nodes.size(), std::nan(""));
     const auto rhs = assembled.right_hand_side();
@@ -545,12 +620,30 @@ Json Session::field(const Json &request) {
 Json Session::solve(const Json &case_json) {
   const std::scoped_lock lock(mutex_);
   staged("case", [&] { check_case(case_json); });
-  const SolveOutcome &outcome = state_->get_solved(case_json);
-  Json out = outcome.summary;
-  Json values = Json::array();
-  for (const solve::Solution &solution : outcome.solutions)
-    values.push_back(values_json(solution.values));
-  out["values"] = std::move(values);
+  return state_->get_solved(case_json).summary;
+}
+
+std::vector<std::vector<double>>
+Session::solution_values(const Json &case_json) {
+  const std::scoped_lock lock(mutex_);
+  staged("case", [&] { check_case(case_json); });
+  std::vector<std::vector<double>> out;
+  for (const solve::Solution &solution :
+       state_->get_solved(case_json).solutions)
+    out.push_back(solution.values);
+  return out;
+}
+
+std::string Session::solution_values_float32(const Json &case_json) {
+  const std::scoped_lock lock(mutex_);
+  staged("case", [&] { check_case(case_json); });
+  const SolveOutcome &solved = state_->get_solved(case_json);
+  std::string out;
+  if (!solved.solutions.empty())
+    out.reserve(solved.solutions.size() *
+                solved.solutions.front().values.size() * 4);
+  for (const solve::Solution &solution : solved.solutions)
+    append_float32(out, solution.values);
   return out;
 }
 
@@ -576,6 +669,30 @@ ExportedFile Session::export_file(const Json &case_json,
             .content =
                 solution_csv(*solved.solutions.front().mesh, solved.solutions)};
   }
+  if (kind == "stiffness.mtx" || kind == "mass.mtx" || kind == "damping.mtx" ||
+      kind == "rhs.mtx") {
+    const fem::AssembledProblem &assembled =
+        state_->get_assembled(case_json, State::read_assembly(case_json));
+    const std::size_t size = assembled.meshed_problem()->free_nodes().size();
+    const std::string at = std::format("at t = {}", assembled.time());
+    std::string content;
+    if (kind == "rhs.mtx")
+      content = matrix_market(assembled.right_hand_side(),
+                              "pde2d: right-hand side b " + at);
+    else {
+      const fem::Operator &op = kind == "stiffness.mtx" ? assembled.stiffness()
+                                : kind == "mass.mtx"    ? assembled.mass()
+                                                        : assembled.damping();
+      const std::string_view what = kind == "stiffness.mtx" ? "stiffness A"
+                                    : kind == "mass.mtx"    ? "mass M2"
+                                                            : "damping B";
+      content = matrix_market(
+          op.free, size, std::format("pde2d: {}, free part, {}", what, at));
+    }
+    return {.name = std::string(kind),
+            .content_type = "text/plain",
+            .content = std::move(content)};
+  }
   const MeshOutcome &outcome = state_->get_mesh(case_json);
   if (kind == "mesh.pde2d") {
     staged("export", [&] { io::export_pde2d(*outcome.mesh, out); });
@@ -591,8 +708,9 @@ ExportedFile Session::export_file(const Json &case_json,
   }
   throw StageError("export", "input",
                    "unknown export '" + std::string(kind) +
-                       "' (mesh.pde2d, mesh.svg, geometry.svg or "
-                       "solution.csv)");
+                       "' (mesh.pde2d, mesh.svg, geometry.svg, "
+                       "solution.csv, stiffness.mtx, mass.mtx, damping.mtx "
+                       "or rhs.mtx)");
 }
 
 Json Session::run(const Json &case_json) {
@@ -627,7 +745,6 @@ Json Session::run(const Json &case_json) {
       out["assembly"] = std::move(result);
     }
     out["solve"] = solve(case_json);
-    out["solve"].erase("values");
     out["ok"] = true;
   } catch (const StageError &error) {
     Json item = Json::object();

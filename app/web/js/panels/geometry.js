@@ -4,8 +4,8 @@
 import { downloadExport } from "../api.js";
 import { runStage, toast } from "../actions.js";
 import { applyRegionEdit, fileKind, formatNumber, regionToken, undoRegionEdit } from "../core.js";
-import { actionButton, errorBox, h, markError, optionsForm, readFileText, stat, fill } from "../dom.js";
-import { editCase, freshResult, lastResult, store } from "../state.js";
+import { busyNote, errorBox, exportButton, h, markError, optionsForm, readFileText, stat, fill } from "../dom.js";
+import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 
 let geometryTimer = null;
 
@@ -31,7 +31,7 @@ export async function loadDomainFile(file) {
   }
   const text = await readFileText(file);
   if (kind === "svg") setGeometry({ source: "svg", name: file.name, svg: text, region_edits: [] });
-  else setGeometry({ source: "mesh_file", format: kind, name: file.name, text });
+  else setGeometry({ source: "mesh_file", format: kind, name: file.name, text, region_edits: [] });
 }
 
 function fileButton(label, accept) {
@@ -68,7 +68,7 @@ function sourceSwitch(geometry) {
           onchange: () => {
             if (value === "shape") setGeometry(structuredClone(store.catalog.default_case.geometry));
             else if (value === geometry.source) return;
-            else editCase((c) => (c.geometry = { source: value, ...(value === "svg" ? { svg: "", region_edits: [] } : { format: "gmsh", text: "" }) }), "structure");
+            else editCase((c) => (c.geometry = { source: value, ...(value === "svg" ? { svg: "", region_edits: [] } : { format: "gmsh", text: "", region_edits: [] }) }), "structure");
           },
         }),
         label,
@@ -130,7 +130,7 @@ function meshFileForm(geometry) {
       { class: "drop" },
       h("p", { style: "margin:0 0 8px" }, geometry.text ? `${geometry.name ?? "mesh"} · ${geometry.format === "gmsh" ? "Gmsh" : ".pde2d"}` : "No mesh file yet."),
       fileButton("Choose a mesh file…", ".msh,.pde2d"),
-      h("p", { class: "note" }, "Gmsh .msh (ASCII 4.1 or 2.2) or .pde2d. The Mesh step then refines it with the refiner and improvers; its discretizer and triangulator are not used."),
+      h("p", { class: "note" }, "Gmsh .msh (ASCII 4.1 or 2.2) or .pde2d. The Mesh step then refines it with the refiner and improvers; its discretizer and triangulator are not used. Its regions can be renamed and merged (not split: a mesh file has no curves)."),
     ),
     h("div", { class: "field", dataset: { path: "geometry.text" } }),
   ];
@@ -159,7 +159,8 @@ function addEdit(edit) {
   replaceCase(applyRegionEdit(store.caseData, edit));
 }
 
-function regionEditor(region, regions) {
+// `canSplit`: false for a mesh file, which has no curves to split.
+function regionEditor(region, regions, canSplit) {
   const others = regions.filter((r) => r !== region);
   const renameInput = h("input", { type: "text", value: region, "aria-label": "New name", style: "width:120px" });
   const mergeSelect = h(
@@ -175,7 +176,7 @@ function regionEditor(region, regions) {
     { class: "card" },
     h("div", { class: "row" }, "Rename to", renameInput, h("button", { type: "button", class: "small", onclick: () => addEdit({ op: "rename", from: region, to: renameInput.value.trim() }) }, "Apply")),
     others.length ? h("div", { class: "row", style: "margin-top:6px" }, "Merge into", mergeSelect, h("button", { type: "button", class: "small", onclick: () => addEdit({ op: "merge", source: region, target: mergeSelect.value }) }, "Apply")) : null,
-    h(
+    canSplit ? h(
       "div",
       { class: "row", style: "margin-top:6px" },
       "Split at",
@@ -184,12 +185,12 @@ function regionEditor(region, regions) {
       first,
       second,
       h("button", { type: "button", class: "small", onclick: () => addEdit({ op: "split", region, fraction: Number(fraction.value), first: first.value.trim(), second: second.value.trim() }) }, "Apply"),
-    ),
-    h("p", { class: "note" }, "A split is measured along the boundary (domain on the left) from the start of the region."),
+    ) : null,
+    canSplit ? h("p", { class: "note" }, "A split is measured along the boundary (domain on the left) from the start of the region.") : null,
   );
 }
 
-function regionsTable(view, canEdit) {
+function regionsTable(view, canEdit, canSplit) {
   const names = view.regions.map((r) => r.name);
   const rows = view.regions.map((region, i) => {
     const editorSlot = h("td", { colspan: 4, style: "padding:0" });
@@ -210,7 +211,7 @@ function regionsTable(view, canEdit) {
                 class: "small",
                 onclick: () => {
                   if (editorSlot.childElementCount) fill(editorSlot);
-                  else fill(editorSlot, regionEditor(region.name, names));
+                  else fill(editorSlot, regionEditor(region.name, names, canSplit));
                 },
               },
               "Edit",
@@ -234,7 +235,7 @@ export const geometryPanel = {
       h("p", { class: "lead" }, "The domain: a ready-made shape, an SVG drawing with named boundary regions, or an existing mesh."),
       sourceSwitch(geometry),
       h("div", { style: "margin-top:12px" }, geometry.source === "shape" ? shapeForm(geometry) : geometry.source === "svg" ? svgForm(geometry) : meshFileForm(geometry)),
-      geometry.source !== "mesh_file" && edits.length
+      edits.length
         ? h(
             "div",
             {},
@@ -263,17 +264,20 @@ export const geometryPanel = {
   update(container) {
     const slot = container.querySelector("#geometry-result");
     if (!slot) return;
-    const error = store.errors.geometry;
-    const view = freshResult("geometry") ?? (error ? null : lastResult("geometry"));
+    const error = currentError("geometry");
+    const old = outdatedError("geometry");
+    const fresh = freshResult("geometry");
+    const view = fresh ?? (error ? null : lastResult("geometry"));
     const busy = store.busy.has("geometry");
     // Rebuild only when something shown changed (an open region editor
     // would otherwise close on every notification).
-    if (slot.shown && slot.shown.view === view && slot.shown.error === error && slot.shown.busy === busy) return;
-    slot.shown = { view, error, busy };
+    if (slot.shown && slot.shown.view === view && slot.shown.error === error && slot.shown.old === old && slot.shown.busy === busy && slot.shown.fresh === fresh) return;
+    slot.shown = { view, error, old, busy, fresh };
     const placed = markError(container, error);
     const children = [];
     if (error && !placed) children.push(errorBox(error));
     else if (error) children.push(h("p", { class: "note" }, "The geometry was refused; see the marked field."));
+    if (old && !busy) children.push(errorBox(old, { outdated: true }));
     if (view) {
       const loops = view.kind === "curves" ? view.loops : [];
       const holes = loops.filter((l) => l.depth % 2 === 1).length;
@@ -287,23 +291,17 @@ export const geometryPanel = {
         ),
         h("p", { class: "note" }, "Relative lengths in the Mesh step multiply the domain size: the diagonal of the bounding box."),
         h("h3", {}, "Boundary regions"),
-        regionsTable(view, view.kind === "curves"),
+        regionsTable(view, true, view.kind === "curves"),
         view.kind === "curves"
           ? h(
               "div",
               { class: "row", style: "margin-top:12px" },
-              actionButton("Export geometry .svg", async () => {
-                try {
-                  await downloadExport("geometry.svg", store.caseData);
-                } catch (e) {
-                  toast(e.message);
-                }
-              }, { small: true }),
+              exportButton("Export geometry .svg", () => downloadExport("geometry.svg", store.caseData).catch((e) => toast(e.message)), { fresh: fresh !== null, staleReason: "The geometry shown is outdated: wait for it to be read again." }),
             )
           : null,
       );
     } else if (!error && busy) {
-      children.push(h("p", { class: "note" }, "Reading the geometry…"));
+      children.push(busyNote("geometry", "Reading the geometry"));
     }
     fill(slot, ...children);
   },

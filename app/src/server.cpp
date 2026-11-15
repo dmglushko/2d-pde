@@ -179,6 +179,14 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
         [&session](const Json &body) { return session.assemble(body); });
   route("/api/solve",
         [&session](const Json &body) { return session.solve(body); });
+  // The solution's values as float32 (Session::solution_values_float32).
+  http.Post("/api/solve/values", [&session](const httplib::Request &request,
+                                            httplib::Response &response) {
+    handle(request, response, [&](const Json &body, httplib::Response &out) {
+      out.set_content(session.solution_values_float32(body),
+                      "application/octet-stream");
+    });
+  });
   route("/api/field",
         [&session](const Json &body) { return session.field(body); });
 

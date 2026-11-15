@@ -43,14 +43,19 @@ nlohmann/json (`nlohmann-json3-dev`); cpp-httplib is included in
 
 The left side has five steps; the picture on the right shows the latest
 result. A dot on each step says whether its result is up to date (green),
-outdated because the case changed since (yellow), or failed (red).
+outdated because the case changed since (yellow), failed (red), or is
+running (a pulsing blue dot; the step's panel counts the seconds). An
+error shown after the case changed is greyed out and marked "for the
+previous input". A number field whose text is not a number yet (`-`,
+`1e`) is marked "not a number" and changes nothing until it parses.
 
 1. **Geometry.** Pick a ready-made shape, load an SVG drawing, or load a
    mesh file (Gmsh `.msh` or `.pde2d`). You can also drop a file onto the
    picture. The regions of the boundary are listed with their lengths;
    **Edit** renames a region, merges it into another, or splits it in two
    (the boundary conditions follow), and **Undo** takes back the last
-   edit.
+   edit. The regions of a mesh file can be renamed and merged, not
+   split.
    In an SVG, each `<path>` gives the region named by its `data-region`
    attribute or else its `id`; `app/examples/plate_with_hole.svg` is a
    small example.
@@ -59,20 +64,26 @@ outdated because the case changed since (yellow), or failed (red).
    triangulator, refiner, and a list of improvers, each with its options.
    **Mesh** runs the mesher and shows the counts, the smallest angle,
    whether the target was met, and every stage's report. Export the mesh as
-   `.pde2d` (it opens in `tools/mesh_viewer`) or as an SVG picture.
+   `.pde2d` (it opens in `tools/mesh_viewer`) or as an SVG picture. A component's option that the library refuses is
+   marked at its field.
 3. **Problem.** Write the equation's coefficients, named parameters, one
    boundary condition per region and the initial conditions as expressions
    in x, y and t. The **Start from…** and **Type…** menus fill in common
    equations and conditions. Every edit is checked: errors appear under
    their field, and each field shows what it depends on. Each condition
    shows its kind (Dirichlet, natural, dynamic), and the summary shows
-   the time order and which initial conditions are needed.
+   the time order and which initial conditions are needed. While an edit
+   waits for its check, the summary says "Checking…" and the old facts
+   are greyed out. Renaming a parameter to a name that exists is refused.
 4. **Assemble.** Builds the P1 system at a time t, meshing first if
    needed: the number of unknowns and Dirichlet nodes, which operators are
    zero, change with t or are symmetric (always, or only at this t), and a
    picture of where the stiffness matrix has entries. **Time terms to
    build** leaves out u_tt or every time term, as a static solve does. **Show a field on the mesh** draws an expression, the initial
    values, the Dirichlet values or the assembled right-hand side.
+   **Export A/B/M2/b .mtx** saves the assembled system at that t in
+   Matrix Market form (the free part: unknowns × unknowns). An error of
+   the problem shown here has a button that opens the Problem step.
 5. **Solve.** **Static** solves A U = b once at a time t (time terms are
    dropped; a note says so when the problem has them). **In time**
    integrates from t0 to t1 with a time method (implicit Euler, implicit
@@ -84,11 +95,15 @@ outdated because the case changed since (yellow), or failed (red).
    solver's iterations and residual, and draws the solution. For a run
    in time, the slider and **Play** walk through the snapshots; the
    colours keep one scale for every time. **Export solution .csv** saves
-   x, y and u at every kept time. A long run keeps the app busy until it
-   ends.
+   x, y and u at every kept time (full precision; the picture gets the
+   values as 32-bit floats). Before a run, the panel says how large the
+   solution will be and warns above 50 MB. A long run keeps the app busy
+   until it ends.
 
 **Run all** runs geometry, mesh, assembly and the solve in turn, skipping
-the steps that are up to date.
+the steps that are up to date, and ends with the picture coloured by the
+solution. When a step fails, it opens with a message. Exports are offered
+only for results that are up to date.
 
 In the picture, drag to pan, use the wheel to zoom, and double-click (or
 press **Fit**) to fit. The toolbar turns layers on and off and chooses the
@@ -100,9 +115,15 @@ and the field value there.
 
 Everything you set up is one **case**: a JSON file with the geometry
 (SVG and mesh texts included), the mesh settings, the problem and the
-assembly time. **Save case** downloads it and **Open case…** loads one;
-the browser also keeps the current case between visits. The
-**Examples** menu opens the cases in `app/examples/`.
+assembly time. **Save case** downloads it under the name of the file or
+example it was opened from (`case.json` for a new case), and **Open
+case…** loads one; "unsaved changes" next to Save shows that the case
+changed since it was opened or saved. The browser also keeps the current
+case between visits. The **Examples** menu opens the cases in
+`app/examples/`. After **New**, **Open case…** or **Examples**, the
+message offers **Restore the previous case** for a few seconds. When
+parts of an opened case had to be replaced by defaults, a notice above
+the steps lists them until you dismiss it.
 
 A case also runs without the browser:
 
@@ -111,7 +132,9 @@ build/app/pde2d_app --run app/examples/heat_annulus.json --output /tmp/heat
 ```
 
 This prints a JSON summary of every stage, the solve included, and, with
-`--output`, writes `mesh.pde2d`, `mesh.svg` and `solution.csv`. The exit code is 0 when every stage ran.
+`--output`, writes `mesh.pde2d`, `mesh.svg`, `solution.csv` and the
+assembled system (`stiffness.mtx`, `damping.mtx`, `mass.mtx`, `rhs.mtx`).
+The exit code is 0 when every stage ran.
 `pde2d_app --default-case` prints a case to start from.
 
 ## Tests

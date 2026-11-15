@@ -35,8 +35,9 @@ constexpr std::string_view usage = R"(Usage:
   pde2d_app --run CASE.json [--output DIR]
       Runs a saved case without the browser (geometry, mesh, problem,
       assembly, solve) and prints a JSON summary. Exit code 0 when every
-      stage ran. With --output, writes mesh.pde2d, mesh.svg and
-      solution.csv there.
+      stage ran. With --output, writes mesh.pde2d, mesh.svg,
+      solution.csv and the assembled system at assembly.t
+      (stiffness.mtx, mass.mtx, damping.mtx, rhs.mtx) there.
   pde2d_app --default-case
       Prints the case a new session starts with.
 )";
@@ -70,7 +71,8 @@ int run_case(const std::filesystem::path &case_path,
   if (summary["ok"].get<bool>() && output) {
     std::filesystem::create_directories(*output);
     for (const std::string_view kind :
-         {"mesh.pde2d", "mesh.svg", "solution.csv"}) {
+         {"mesh.pde2d", "mesh.svg", "solution.csv", "stiffness.mtx", "mass.mtx",
+          "damping.mtx", "rhs.mtx"}) {
       const auto file = session.export_file(case_json, kind);
       write_file(*output / file.name, file.content);
     }

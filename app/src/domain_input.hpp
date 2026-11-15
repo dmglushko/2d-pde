@@ -14,7 +14,7 @@
 //   {"source": "shape", "shape": "rectangle",
 //    "options": {"width": 2, "height": 1}, "region_edits": [...]}
 //   {"source": "mesh_file", "format": "gmsh" or "pde2d",
-//    "name": "plate.msh", "text": "..."}
+//    "name": "plate.msh", "text": "...", "region_edits": [...]}
 //
 // An SVG or a shape gives a CurveGeometry, which the Mesher meshes. A mesh
 // file gives a Mesh directly; the mesh section's refiner and improvers
@@ -28,6 +28,8 @@
 //   {"op": "merge", "source": "a", "target": "b"}
 //   {"op": "split", "region": "a", "fraction": 0.5,
 //    "first": "a1", "second": "a2"}
+// A mesh file takes rename and merge (not split: it has no curves); they
+// change its region names and the region tags of its boundary edges.
 namespace pde2d::app {
 
 // Exactly one of the two is set.

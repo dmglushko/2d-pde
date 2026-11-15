@@ -312,6 +312,23 @@ input.expr {
   background: var(--critical);
 }
 
+/* A running stage: a pulsing ring in the accent colour (a still ring
+   when motion is reduced). */
+.dot.busy {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent);
+  animation: pulse 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.35;
+  }
+}
+
 .panels {
   flex: 1;
   overflow-y: auto;
@@ -417,8 +434,20 @@ input.expr {
 
 .invalid,
 .invalid input,
-.invalid select {
+.invalid select,
+input.local-invalid {
   border-color: var(--critical) !important;
+}
+
+/* A check of an earlier problem: shown, but not as current. */
+.checking .facts,
+.checking [data-error],
+.checking [data-kind-of] {
+  opacity: 0.5;
+}
+.checking .invalid,
+.checking .invalid input {
+  border-color: var(--hairline) !important;
 }
 
 .error-text {
@@ -637,6 +666,28 @@ details.report ul {
   display: block;
 }
 
+/* An error produced for an earlier input. */
+.alert.outdated {
+  border-left-color: var(--axis);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.alert.outdated .chip {
+  margin-left: 6px;
+  font-weight: normal;
+}
+
+.case-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 16px;
+}
+.case-notice > span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
 .notice {
   border-left: 3px solid var(--accent);
   background: var(--surface-2);
@@ -801,6 +852,14 @@ canvas.spy {
   transform: none;
 }
 
+.toast.show.has-action {
+  pointer-events: auto;
+}
+
+.toast button {
+  margin-left: 8px;
+}
+
 .busy {
   display: inline-block;
   width: 12px;
@@ -818,7 +877,8 @@ canvas.spy {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .busy {
+  .busy,
+  .dot.busy {
     animation: none;
   }
   .toast {

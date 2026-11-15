@@ -1,21 +1,14 @@
 // Step 4: the problem combined with the mesh (MeshedProblem) and assembled
 // at one time t; fields evaluated on the mesh.
 
-import { runStage, showField, toast } from "../actions.js";
+import { downloadExport } from "../api.js";
+import { runWithPrerequisites, toast } from "../actions.js";
 import { formatNumber, rampTable, parseColor } from "../core.js";
-import { actionButton, errorBox, h, markError, reportsView, stat, fill } from "../dom.js";
-import { editCase, freshResult, lastResult, stageStatus, store } from "../state.js";
+import { actionButton, busyNote, errorBox, exportButton, h, markError, numberHandler, reportsView, stat, fill } from "../dom.js";
+import { currentError, editCase, freshResult, lastResult, openStep, outdatedError, store } from "../state.js";
 
-// Geometry and mesh first when they are not up to date, then assembly.
-async function assemble() {
-  for (const stage of ["geometry", "mesh", "assemble"]) {
-    if (stage !== "assemble" && stageStatus(stage) === "done") continue;
-    if (!(await runStage(stage))) {
-      if (stage !== "assemble") toast(`The ${stage} step failed; see that step.`);
-      return;
-    }
-  }
-}
+const assemble = () => runWithPrerequisites("assemble");
+const openProblem = () => openStep("problem");
 
 const fieldKinds = [
   ["expression", "an expression"],
@@ -54,18 +47,14 @@ function fieldSection() {
       "div",
       { class: "row", style: "margin-top:8px" },
       actionButton("Show", async () => {
-        if (stageStatus("mesh") !== "done") {
-          if (stageStatus("geometry") !== "done" && !(await runStage("geometry"))) return;
-          if (!(await runStage("mesh"))) return toast("The mesh step failed; see that step.");
-        }
         const field = { kind: fieldForm.kind };
         if (fieldForm.kind === "expression") field.text = fieldForm.text;
-        if (String(fieldForm.t).trim() !== "") field.t = Number(fieldForm.t);
-        if (await showField(field)) {
-          const colorBy = document.getElementById("color-by");
-          colorBy.value = "field";
-          colorBy.dispatchEvent(new Event("change"));
+        if (String(fieldForm.t).trim() !== "") {
+          field.t = Number(fieldForm.t);
+          if (!Number.isFinite(field.t)) return toast("t is not a number.");
         }
+        // The picture colours by the field once it arrives (actions.js).
+        await runWithPrerequisites("field", field);
       }),
     ),
     h("p", { class: "note" }, "Values at the mesh nodes, drawn with linear interpolation. Dirichlet values and b exist only at some nodes and are drawn as dots."),
@@ -135,7 +124,7 @@ export const assemblePanel = {
         "div",
         { class: "field", dataset: { path: "assembly.t" } },
         h("div", { class: "label" }, "Time t"),
-        h("div", { class: "inputs" }, h("input", { type: "number", step: "any", value: String(assembly.t ?? 0), "aria-label": "Time t", oninput: (e) => e.target.value.trim() !== "" && editCase((c) => (c.assembly.t = Number(e.target.value))) })),
+        h("div", { class: "inputs" }, h("input", { type: "number", step: "any", value: String(assembly.t ?? 0), "aria-label": "Time t", oninput: numberHandler((t) => editCase((c) => (c.assembly.t = t))) })),
       ),
       h(
         "div",
@@ -166,24 +155,25 @@ export const assemblePanel = {
   update(container) {
     const slot = container.querySelector("#assemble-result");
     if (!slot) return;
-    const error = store.errors.assemble;
+    const error = currentError("assemble");
+    const old = outdatedError("assemble");
     const fresh = freshResult("assemble");
     const result = fresh ?? lastResult("assemble");
     const busy = store.busy.has("assemble");
-    const fieldError = store.errors.field;
+    const fieldError = currentError("field");
     const fieldSlot = container.querySelector("#field-error");
     if (fieldSlot.shown !== fieldError) {
       fieldSlot.shown = fieldError;
       const form = container.querySelector("#field-form");
-      if (!markError(form, fieldError)) fill(fieldSlot, ...(fieldError ? [errorBox(fieldError)] : []));
+      if (!markError(form, fieldError)) fill(fieldSlot, ...(fieldError ? [errorBox(fieldError, { openProblem })] : []));
       else fill(fieldSlot);
     }
-    if (slot.shown && slot.shown.result === result && slot.shown.error === error && slot.shown.busy === busy && slot.shown.fresh === fresh) return;
-    slot.shown = { result, error, busy, fresh };
+    if (slot.shown && slot.shown.result === result && slot.shown.error === error && slot.shown.old === old && slot.shown.busy === busy && slot.shown.fresh === fresh) return;
+    slot.shown = { result, error, old, busy, fresh };
     const children = [];
-    if (error) children.push(errorBox(error));
-    if (error && ["problem", "meshed_problem"].includes(error.stage)) children.push(h("p", { class: "note" }, "Fix it in the Problem step."));
-    if (busy) children.push(h("p", { class: "note" }, "Assembling…"));
+    if (error) children.push(errorBox(error, { openProblem }));
+    if (old) children.push(errorBox(old, { outdated: true }));
+    if (busy) children.push(busyNote("assemble", "Assembling"));
     if (result) {
       const meshed = result.meshed_problem;
       const assembly = result.assembly;
@@ -204,6 +194,17 @@ export const assemblePanel = {
         assembly.sparsity ? h("div", { style: "margin-top:12px" }, h("div", { class: "label", style: "font-size:13px;font-weight:550" }, `Entries of A (unknowns × unknowns, ${formatNumber(assembly.sparsity.nonzeros)} entries)`), spy) : null,
         h("h3", {}, "Reports"),
         reportsView([meshed.report, assembly.report]),
+        h(
+          "div",
+          { class: "row", style: "margin-top:12px" },
+          [
+            ["stiffness.mtx", "Export A .mtx"],
+            ["damping.mtx", "Export B .mtx"],
+            ["mass.mtx", "Export M2 .mtx"],
+            ["rhs.mtx", "Export b .mtx"],
+          ].map(([kind, label]) => exportButton(label, () => downloadExport(kind, store.caseData).catch((e) => toast(e.message)), { fresh, staleReason: "The system shown is outdated: assemble again to export it." })),
+        ),
+        h("p", { class: "note" }, "Matrix Market files of the free part (unknowns × unknowns, 1-based) and of b, at this t."),
       );
     }
     fill(slot, ...children);

@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // The app's work, independent of HTTP: each call takes a case (the whole
 // setup as JSON, see docs/app.md) and returns JSON for the page. The
@@ -64,9 +65,18 @@ public:
   // request: {"case": ..., "field": {"kind": ..., ...}}; see docs/app.md.
   Json field(const Json &request);
   // A static solve or a time integration, as the case's "solve" section
-  // says; see docs/app.md.
+  // says; see docs/app.md. The summary only: "values" says how many
+  // snapshots and nodes the values have and where to get them.
   Json solve(const Json &case_json);
-  // kind: "mesh.pde2d", "mesh.svg", "geometry.svg" or "solution.csv".
+  // The kept solutions' values, one vector per time (one value per mesh
+  // node), as computed.
+  std::vector<std::vector<double>> solution_values(const Json &case_json);
+  // The same values as float32, little-endian, snapshot after snapshot
+  // (what POST /api/solve/values sends).
+  std::string solution_values_float32(const Json &case_json);
+  // kind: "mesh.pde2d", "mesh.svg", "geometry.svg", "solution.csv", or the
+  // assembled system at assembly.t in Matrix Market form:
+  // "stiffness.mtx", "mass.mtx", "damping.mtx" (free parts) and "rhs.mtx".
   ExportedFile export_file(const Json &case_json, std::string_view kind);
 
   // Runs every stage the case allows, for the command line: geometry,

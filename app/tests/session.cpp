@@ -23,6 +23,7 @@
 #include <iterator>
 #include <set>
 #include <string>
+#include <vector>
 
 #ifndef PDE2D_APP_EXAMPLES_DIR
 #error "PDE2D_APP_EXAMPLES_DIR must name app/examples"
@@ -159,12 +160,13 @@ int main() {
          section["refiner"]["options"]["min_angle_degrees"] = 50;
          expect_throws<std::invalid_argument>(
              [&] { (void)app::build_mesh_setup(section); },
-             "mesh.refiner.options: ");
+             "mesh.refiner.options.min_angle_degrees: ");
          section = app::default_mesh_section();
          section["spec"]["max_edge_length"] = {{"absolute", nullptr},
                                                {"relative", nullptr}};
          expect_throws<std::invalid_argument>(
-             [&] { (void)app::build_mesh_setup(section); }, "mesh.spec: ");
+             [&] { (void)app::build_mesh_setup(section); },
+             "mesh.spec.max_edge_length: ");
          section = app::default_mesh_section();
          section["improvers"] =
              Json::array({{{"type", "delaunay_flips"},
@@ -250,6 +252,185 @@ int main() {
          const app::Domain from_file = app::build_domain(imported);
          check(from_file.mesh.has_value() && !from_file.geometry, "a mesh");
          check(from_file.mesh->region_names.size() == 4, "regions kept");
+       }},
+      {"a refused option value names the option's path",
+       [] {
+         // The library's own messages, from each component's constructor.
+         const auto message = [](const Json &section) {
+           try {
+             (void)app::build_mesh_setup(section);
+           } catch (const std::invalid_argument &error) {
+             return std::string(error.what());
+           }
+           throw test::Failure("expected an error");
+         };
+         const auto starts = [](const std::string &text,
+                                const std::string &prefix) {
+           check(text.starts_with(prefix),
+                 "'" + text + "' should start with '" + prefix + "'");
+         };
+         Json section = app::default_mesh_section();
+         section["refiner"]["options"]["min_angle_degrees"] = 50;
+         starts(message(section),
+                "mesh.refiner.options.min_angle_degrees: "
+                "RuppertOptions::min_angle_degrees must be in (0, 34]");
+         section = app::default_mesh_section();
+         section["refiner"]["options"]["max_points"] = 0;
+         starts(message(section), "mesh.refiner.options.max_points: ");
+         section = app::default_mesh_section();
+         section["discretizer"]["options"]["corner_angle_degrees"] = 200;
+         starts(message(section),
+                "mesh.discretizer.options.corner_angle_degrees: ");
+         section = app::default_mesh_section();
+         section["discretizer"]["options"]["max_curve_deviation"] = {
+             {"absolute", -1.0}, {"relative", nullptr}};
+         starts(message(section),
+                "mesh.discretizer.options.max_curve_deviation.absolute: ");
+         section = app::default_mesh_section();
+         section["improvers"] =
+             Json::array({{{"type", "laplacian_smoothing"},
+                           {"options", {{"iterations", 0}}}}});
+         starts(message(section), "mesh.improvers[0].options.iterations: ");
+         section = app::default_mesh_section();
+         section["spec"]["max_edge_length"] = {{"absolute", -2.0},
+                                               {"relative", nullptr}};
+         starts(message(section), "mesh.spec.max_edge_length.absolute: ");
+
+         // The solve section: "fixed_step: dt must be ...",
+         // "bicgstab: tolerance must be ...".
+         const auto solve_message = [](const Json &solve_section) {
+           try {
+             (void)app::build_solve_setup(solve_section);
+           } catch (const std::invalid_argument &error) {
+             return std::string(error.what());
+           }
+           throw test::Failure("expected an error");
+         };
+         Json solve = app::default_solve_section();
+         solve["mode"] = "time";
+         solve["time"]["step"]["options"]["dt"] = 0.0;
+         starts(solve_message(solve), "solve.time.step.options.dt: ");
+         solve = app::default_solve_section();
+         solve["linear_solver"] = {{"type", "bicgstab"},
+                                   {"options", {{"tolerance", 2.0}}}};
+         starts(solve_message(solve),
+                "solve.linear_solver.options.tolerance: ");
+         solve["linear_solver"] = {{"type", "conjugate_gradient"},
+                                   {"options", {{"max_iterations", 0}}}};
+         starts(solve_message(solve),
+                "solve.linear_solver.options.max_iterations: ");
+         solve["linear_solver"] = {{"type", "simplicial_ldlt"},
+                                   {"options", {{"residual_tolerance", 0.0}}}};
+         starts(solve_message(solve),
+                "solve.linear_solver.options.residual_tolerance: ");
+       }},
+      {"an imported mesh takes rename and merge region edits",
+       [] {
+         app::Session session;
+         const Json case_json = app::Session::default_case();
+         const auto file = session.export_file(case_json, "mesh.pde2d");
+         Json section = {{"source", "mesh_file"},
+                         {"format", "pde2d"},
+                         {"text", file.content}};
+         const app::Domain plain = app::build_domain(section);
+         const std::vector<std::string> before = plain.mesh->region_names;
+         check(before ==
+                   std::vector<std::string>{"bottom", "right", "top", "left"},
+               "the rectangle's regions");
+         section["region_edits"] = Json::array(
+             {{{"op", "merge"}, {"source", "right"}, {"target", "left"}},
+              {{"op", "rename"}, {"from", "left"}, {"to", "sides"}}});
+         const app::Domain edited = app::build_domain(section);
+         const mesh::Mesh &m = *edited.mesh;
+         check(m.region_names ==
+                   std::vector<std::string>{"bottom", "top", "sides"},
+               "names after the edits");
+         // Every edge keeps its place, under its new tag.
+         check(m.boundary_edges.size() == plain.mesh->boundary_edges.size(),
+               "edges kept");
+         for (std::size_t i = 0; i < m.boundary_edges.size(); ++i) {
+           const std::string old_name =
+               before[plain.mesh->boundary_edges[i].region];
+           const std::string new_name =
+               m.region_names[m.boundary_edges[i].region];
+           const std::string expected =
+               old_name == "right" || old_name == "left" ? "sides" : old_name;
+           check(new_name == expected,
+                 "edge " + std::to_string(i) + ": " + new_name);
+         }
+         mesh::validate(m);
+         const Json view = app::domain_json(edited);
+         check(view["regions"].size() == 3, "three regions in the view");
+
+         // The whole case runs with the new names.
+         Json edited_case = case_json;
+         edited_case["geometry"] = section;
+         Json conditions = Json::object();
+         for (const std::string name : {"bottom", "top", "sides"})
+           conditions[name] = app::default_condition();
+         edited_case["problem"]["boundary_conditions"] = conditions;
+         check(session.run(edited_case)["ok"].get<bool>(), "runs");
+
+         // Errors name the edit.
+         section["region_edits"] = Json::array(
+             {{{"op", "rename"}, {"from", "bottom"}, {"to", "floor"}},
+              {{"op", "rename"}, {"from", "nowhere"}, {"to", "x"}}});
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_domain(section); },
+             "geometry.region_edits[1]: Unknown region 'nowhere'");
+         section["region_edits"] = Json::array(
+             {{{"op", "rename"}, {"from", "bottom"}, {"to", "top"}}});
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_domain(section); },
+             "geometry.region_edits[0]: rename: region 'top' already exists");
+         section["region_edits"] = Json::array(
+             {{{"op", "merge"}, {"source", "top"}, {"target", "top"}}});
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_domain(section); },
+             "geometry.region_edits[0]: merge: region 'top' cannot be merged");
+         section["region_edits"] = Json::array({{{"op", "split"},
+                                                 {"region", "top"},
+                                                 {"fraction", 0.5},
+                                                 {"first", "a"},
+                                                 {"second", "b"}}});
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_domain(section); },
+             "geometry.region_edits[0].op: an imported mesh has no curves");
+         section["region_edits"] =
+             Json::array({{{"op", "rename"}, {"from", "top"}, {"to", "a b"}}});
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_domain(section); },
+             "geometry.region_edits[0]: rename: region name 'a b' is invalid");
+       }},
+      {"the case version is a whole number up to the current one",
+       [] {
+         Json case_json = app::Session::default_case();
+         for (const Json &version : {Json(0), Json(-1), Json(0.5), Json(1.5)}) {
+           case_json["version"] = version;
+           expect_throws<std::invalid_argument>(
+               [&] { app::check_case(case_json); },
+               "version: expected a whole");
+         }
+         case_json["version"] = 2;
+         expect_throws<std::invalid_argument>(
+             [&] { app::check_case(case_json); }, "newer version");
+         case_json["version"] = 1.0;
+         app::check_case(case_json);
+       }},
+      {"a field request is read strictly",
+       [] {
+         app::Session session;
+         Json request = Json::object();
+         request["case"] = app::Session::default_case();
+         request["field"] = {{"kind", "expression"}, {"text", "x"}};
+         check(session.field(request)["values"].size() > 0, "a valid request");
+         request["extra"] = 1;
+         expect_stage_error([&] { (void)session.field(request); }, "field",
+                            "request: unknown key 'extra'");
+         request.erase("extra");
+         request["field"]["colour"] = "red";
+         expect_stage_error([&] { (void)session.field(request); }, "field",
+                            "field: unknown key 'colour'");
        }},
       {"problem errors are collected with their paths",
        [] {

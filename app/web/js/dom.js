@@ -1,6 +1,6 @@
 // Small DOM helpers and the forms built from catalog option specs.
 
-import { errorPath, formatNumber } from "./core.js";
+import { errorPath, formatNumber, parseNumberText } from "./core.js";
 
 // h("div", {class: "x", onclick: f}, child, "text", ...)
 export function h(tag, attributes = {}, ...children) {
@@ -33,6 +33,44 @@ export function fill(container, ...children) {
   container.replaceChildren(...nodes(children));
 }
 
+// Marks `input`'s field as locally invalid with `message` (null clears
+// it). Local marks are the page's own (text that is not a number yet),
+// apart from the server's errors.
+export function markLocal(input, message) {
+  const field = input.closest(".param-row, label, .field") ?? input.parentElement;
+  input.classList.toggle("local-invalid", Boolean(message));
+  input.setAttribute("aria-invalid", message ? "true" : "false");
+  let note = field?.querySelector(":scope > [data-local-error]");
+  if (!message) {
+    note?.remove();
+    if (field && !field.querySelector(".local-invalid")) field.classList.remove("local-field-invalid");
+    return;
+  }
+  field?.classList.add("local-field-invalid");
+  if (!note && field) {
+    note = h("div", { class: "error-text", "data-local-error": "" });
+    field.append(note);
+  }
+  if (note) note.textContent = message;
+}
+
+// The handler of a number input: onNumber(value) for a number, onEmpty()
+// for an empty field; text that is not a number (such as "-" or "1e")
+// changes nothing and marks the field "not a number" until it parses.
+export function numberHandler(onNumber, onEmpty = null) {
+  return (event) => {
+    const input = event.target;
+    const parsed = parseNumberText(input.value, input.validity?.badInput);
+    if (parsed.kind === "invalid" || (parsed.kind === "empty" && !onEmpty)) {
+      markLocal(input, parsed.kind === "invalid" ? "not a number" : "a value is needed");
+      return;
+    }
+    markLocal(input, null);
+    if (parsed.kind === "empty") onEmpty();
+    else onNumber(parsed.value);
+  };
+}
+
 // A number input whose empty value is null.
 function numberInput(value, { integer = false, placeholder = "", label, path, onChange }) {
   return h("input", {
@@ -42,10 +80,7 @@ function numberInput(value, { integer = false, placeholder = "", label, path, on
     placeholder,
     "aria-label": label,
     dataset: { path },
-    oninput: (event) => {
-      const text = event.target.value.trim();
-      onChange(text === "" ? null : Number(text));
-    },
+    oninput: numberHandler(onChange, () => onChange(null)),
   });
 }
 
@@ -123,11 +158,37 @@ export function clearErrors(container) {
   for (const element of container.querySelectorAll("[data-error]")) element.remove();
 }
 
-// An error box for a failed stage.
-export function errorBox(error) {
+// An error box for a failed stage. `outdated`: the error was produced for
+// an earlier input (muted, not an alert). `openProblem(step)`: a button
+// that opens the Problem step, for an error of the problem or the
+// MeshedProblem shown in another step.
+export function errorBox(error, { outdated = false, openProblem = null } = {}) {
   if (!error) return null;
   const kind = { input: "The input was refused", algorithm: "The algorithm could not finish", internal: "Something went wrong" }[error.kind] ?? "Error";
-  return h("div", { class: "alert", role: "alert" }, h("span", { class: "stage" }, `${kind} (${error.stage})`), error.message);
+  const aboutProblem = ["problem", "meshed_problem"].includes(error.stage);
+  return h(
+    "div",
+    { class: outdated ? "alert outdated" : "alert", role: outdated ? null : "alert" },
+    h("span", { class: "stage" }, `${kind} (${error.stage})`, outdated ? h("span", { class: "chip" }, "for the previous input") : null),
+    error.message,
+    aboutProblem && openProblem ? h("div", { style: "margin-top:6px" }, h("button", { type: "button", class: "small", onclick: openProblem }, "Open the Problem step")) : null,
+  );
+}
+
+// "Meshing… 3 s" while `stage` runs; main.js updates the seconds.
+export function busyNote(stage, text) {
+  return h("p", { class: "note busy-note", dataset: { elapsedStage: stage, label: text } }, `${text}…`);
+}
+
+// A small export button, disabled with a reason when the result it would
+// export is not the one shown as current.
+export function exportButton(label, action, { fresh, staleReason }) {
+  const button = actionButton(label, action, { small: true });
+  if (!fresh) {
+    button.disabled = true;
+    button.title = staleReason;
+  }
+  return button;
 }
 
 // The reports of a run, one collapsible block per stage.

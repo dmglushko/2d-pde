@@ -15,6 +15,9 @@
 #include "pde2d/solve/simplicial_ldlt.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <sstream>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -56,9 +59,8 @@ void expect_stage_error(F &&f, const std::string &stage,
   try {
     f();
   } catch (const app::StageError &error) {
-    check(error.stage() == stage,
-          "stage " + error.stage() + " should be " + stage + " (" +
-              error.what() + ")");
+    check(error.stage() == stage, "stage " + error.stage() + " should be " +
+                                      stage + " (" + error.what() + ")");
     check(std::string(error.what()).find(fragment) != std::string::npos,
           "message '" + std::string(error.what()) + "' should contain '" +
               fragment + "'");
@@ -86,13 +88,14 @@ Json dirichlet_case(const std::string &g) {
 
 // The largest |values[i] - exact(x_i, y_i)| over the mesh nodes.
 template <class Exact>
-double max_error(const Json &mesh_view, const Json &values, Exact exact) {
+double max_error(const Json &mesh_view, const std::vector<double> &values,
+                 Exact exact) {
   const Json &nodes = mesh_view["nodes"];
   double error = 0.0;
   for (std::size_t i = 0; i < values.size(); ++i) {
     const double x = nodes[2 * i].get<double>();
     const double y = nodes[2 * i + 1].get<double>();
-    error = std::max(error, std::abs(values[i].get<double>() - exact(x, y)));
+    error = std::max(error, std::abs(values[i] - exact(x, y)));
   }
   return error;
 }
@@ -140,8 +143,7 @@ int main() {
                        .default_value.get<std::size_t>() ==
                    solve::BiCgStabOptions{}.max_iterations,
                "bicgstab iterations");
-         check(option(catalog.linear_solvers, "conjugate_gradient",
-                      "tolerance")
+         check(option(catalog.linear_solvers, "conjugate_gradient", "tolerance")
                        .default_value.get<double>() ==
                    solve::ConjugateGradientOptions{}.tolerance,
                "cg tolerance");
@@ -205,10 +207,10 @@ int main() {
          const Json result = session.solve(case_json);
          check(result["mode"] == "static", "static");
          check(result["times"] == Json::array({0.0}), "one time");
-         check(result["values"].size() == 1, "one solution");
-         const double error =
-             max_error(mesh, result["values"][0],
-                       [](double x, double y) { return x + 2 * y; });
+         const auto values = session.solution_values(case_json);
+         check(values.size() == 1, "one solution");
+         const double error = max_error(
+             mesh, values[0], [](double x, double y) { return x + 2 * y; });
          check(error < 1e-8, "error " + std::to_string(error));
          check(result["reports"].back()["stage"] == "static_solver",
                "the solver's report");
@@ -231,14 +233,15 @@ int main() {
          check(result["time_order"] == 1, "time order 1");
          const std::vector<double> expected{0.0, 0.25, 0.5, 0.75, 1.0};
          check(result["times"].size() == expected.size(), "five times");
+         const auto values = session.solution_values(case_json);
          for (std::size_t k = 0; k < expected.size(); ++k) {
            const double t = result["times"][k].get<double>();
-           check(std::abs(t - expected[k]) < 1e-12, "time " + std::to_string(t));
-           const double error =
-               max_error(mesh, result["values"][k],
-                         [t](double x, double) { return t + x; });
-           check(error < 1e-8, "error " + std::to_string(error) + " at t = " +
-                                   std::to_string(t));
+           check(std::abs(t - expected[k]) < 1e-12,
+                 "time " + std::to_string(t));
+           const double error = max_error(
+               mesh, values[k], [t](double x, double) { return t + x; });
+           check(error < 1e-8, "error " + std::to_string(error) +
+                                   " at t = " + std::to_string(t));
          }
          const Json metrics = result["reports"][0]["metrics"];
          check(metrics["steps"] == 12.0, "steps of 0.1 shortened to land on "
@@ -301,8 +304,8 @@ int main() {
        [] {
          Json case_json = app::Session::default_case();
          case_json["solve"]["mode"] = "time";
-         case_json["solve"]["time"] = time_section(0.0, 1.0, 2, 0.5,
-                                                   "implicit_euler");
+         case_json["solve"]["time"] =
+             time_section(0.0, 1.0, 2, 0.5, "implicit_euler");
          app::Session session;
          const std::size_t nodes =
              session.mesh(case_json)["stats"]["nodes"].get<std::size_t>();
@@ -336,6 +339,96 @@ int main() {
          expect_stage_error([&] { (void)session.assemble(case_json); },
                             "assembly", "assembly.max_time_order");
        }},
+      {"the solution's values come as float32 after the summary",
+       [] {
+         Json case_json = app::Session::default_case();
+         case_json["solve"]["mode"] = "time";
+         case_json["solve"]["time"] =
+             time_section(0.0, 1.0, 3, 0.25, "implicit_euler");
+         app::Session session;
+         const std::size_t nodes =
+             session.mesh(case_json)["stats"]["nodes"].get<std::size_t>();
+         const Json summary = session.solve(case_json);
+         const Json &layout = summary["values"];
+         check(layout["format"] == "float32le" &&
+                   layout["path"] == "/api/solve/values",
+               "layout: " + layout.dump());
+         check(layout["snapshots"] == 4 && layout["nodes"] == nodes,
+               "four snapshots of every node");
+         check(layout["bytes"] == 4 * 4 * nodes, "bytes");
+         const auto exact = session.solution_values(case_json);
+         const std::string bytes = session.solution_values_float32(case_json);
+         check(bytes.size() == layout["bytes"].get<std::size_t>(), "size");
+         double low = exact[0][0];
+         double high = exact[0][0];
+         for (std::size_t k = 0; k < exact.size(); ++k)
+           for (std::size_t i = 0; i < nodes; ++i) {
+             std::uint32_t bits = 0;
+             for (std::size_t b = 0; b < 4; ++b)
+               bits |= static_cast<std::uint32_t>(static_cast<unsigned char>(
+                           bytes[4 * (k * nodes + i) + b]))
+                       << (8 * b);
+             const float value = std::bit_cast<float>(bits);
+             check(value == static_cast<float>(exact[k][i]),
+                   "value " + std::to_string(k) + ", " + std::to_string(i));
+             low = std::min(low, exact[k][i]);
+             high = std::max(high, exact[k][i]);
+           }
+         check(summary["min"].get<double>() == low &&
+                   summary["max"].get<double>() == high,
+               "min and max are the doubles' own");
+       }},
+      {"the assembled system exports in Matrix Market form",
+       [] {
+         const Json case_json = load_example("heat_annulus.json");
+         app::Session session;
+         const Json assembly = session.assemble(case_json);
+         const std::size_t size =
+             assembly["meshed_problem"]["free_nodes"].get<std::size_t>();
+         for (const std::string kind : {"stiffness", "damping", "mass"}) {
+           const app::ExportedFile file =
+               session.export_file(case_json, kind + ".mtx");
+           std::istringstream in(file.content);
+           std::string line;
+           std::getline(in, line);
+           check(line == "%%MatrixMarket matrix coordinate real general",
+                 kind + " header");
+           while (in.peek() == '%')
+             std::getline(in, line);
+           std::size_t rows = 0, columns = 0, entries = 0;
+           in >> rows >> columns >> entries;
+           check(rows == size && columns == size, kind + " size");
+           const Json &op = assembly["assembly"]["operators"][kind];
+           check(entries == op["free_nonzeros"].get<std::size_t>(),
+                 kind + " entries");
+           std::size_t read = 0;
+           std::size_t i = 0, j = 0;
+           double value = 0.0;
+           bool in_range = true;
+           while (in >> i >> j >> value) {
+             ++read;
+             in_range = in_range && i >= 1 && i <= size && j >= 1 && j <= size;
+           }
+           check(read == entries && in_range, kind + " entries read");
+         }
+         const app::ExportedFile rhs =
+             session.export_file(case_json, "rhs.mtx");
+         std::istringstream in(rhs.content);
+         std::string line;
+         std::getline(in, line);
+         check(line == "%%MatrixMarket matrix array real general",
+               "rhs header");
+         while (in.peek() == '%')
+           std::getline(in, line);
+         std::size_t rows = 0, columns = 0;
+         in >> rows >> columns;
+         check(rows == size && columns == 1, "rhs size");
+         std::size_t read = 0;
+         double value = 0.0;
+         while (in >> value)
+           ++read;
+         check(read == size, "one value per unknown");
+       }},
       {"the wave example follows its exact solution",
        [] {
          const Json case_json = load_example("wave_square.json");
@@ -343,18 +436,19 @@ int main() {
          const Json mesh = session.mesh(case_json)["mesh"];
          const Json result = session.solve(case_json);
          check(result["time_order"] == 2, "time order 2");
+         const auto values = session.solution_values(case_json);
          const double pi = std::numbers::pi;
          for (std::size_t k = 0; k < result["times"].size(); k += 25) {
            const double t = result["times"][k].get<double>();
-           const double error = max_error(
-               mesh, result["values"][k], [t, pi](double x, double y) {
+           const double error =
+               max_error(mesh, values[k], [t, pi](double x, double y) {
                  return std::cos(std::sqrt(2.0) * pi * t) *
                         std::sin(pi * (x + 0.5)) * std::sin(pi * (y + 0.5));
                });
            // The phase error of P1 elements and Newmark grows with t:
            // about 0.002 after one period, 0.01 after two.
-           check(error < 0.03, "error " + std::to_string(error) + " at t = " +
-                                   std::to_string(t));
+           check(error < 0.03, "error " + std::to_string(error) +
+                                   " at t = " + std::to_string(t));
          }
        }},
   });

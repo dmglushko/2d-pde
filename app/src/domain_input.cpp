@@ -6,6 +6,7 @@
 #include "pde2d/io/svg.hpp"
 #include "pde2d/mesh/domain_size.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <sstream>
 #include <stdexcept>
@@ -170,6 +171,91 @@ void apply_edit(geometry::CurveGeometry &geometry, const Json &edit,
   });
 }
 
+// Region edits of an imported mesh: rename and merge, applied to the
+// mesh's region names and the region tags of its boundary edges. (A split
+// needs the curves, which a mesh file does not have.) An imported mesh has
+// no curve links, so only the tags change.
+std::size_t mesh_region(const mesh::Mesh &mesh, const std::string &name) {
+  const auto found = std::ranges::find(mesh.region_names, name);
+  if (found == mesh.region_names.end())
+    throw std::invalid_argument("Unknown region '" + name + "'");
+  return static_cast<std::size_t>(found - mesh.region_names.begin());
+}
+
+void rename_mesh_region(mesh::Mesh &mesh, const std::string &from,
+                        const std::string &to) {
+  const std::size_t index = mesh_region(mesh, from);
+  if (!geometry::is_valid_region_name(to))
+    throw std::invalid_argument(
+        "rename: region name '" + to +
+        "' is invalid; use ASCII letters, digits, '_', '.' or '-' (a lone "
+        "'-' is reserved)");
+  if (from == to)
+    return;
+  if (std::ranges::find(mesh.region_names, to) != mesh.region_names.end())
+    throw std::invalid_argument("rename: region '" + to +
+                                "' already exists; use merge");
+  mesh.region_names[index] = to;
+}
+
+void merge_mesh_region(mesh::Mesh &mesh, const std::string &source,
+                       const std::string &target) {
+  const std::size_t from = mesh_region(mesh, source);
+  const std::size_t into = mesh_region(mesh, target);
+  if (from == into)
+    throw std::invalid_argument("merge: region '" + source +
+                                "' cannot be merged into itself");
+  // The source's edges go to the target; the tags above the source's
+  // move down by one, as its name is dropped.
+  for (mesh::BoundaryEdge &edge : mesh.boundary_edges) {
+    std::size_t region = edge.region == from ? into : edge.region;
+    if (region > from)
+      --region;
+    edge.region = region;
+  }
+  mesh.region_names.erase(mesh.region_names.begin() +
+                          static_cast<std::ptrdiff_t>(from));
+}
+
+void apply_mesh_edit(mesh::Mesh &mesh, const Json &edit,
+                     const std::string &where) {
+  require_object(edit, where);
+  const std::string op = require_string(member(edit, "op"), where + ".op");
+  const auto text = [&](std::string_view key) {
+    return require_string(member(edit, key), where + "." + std::string(key));
+  };
+  with_path(where, [&] {
+    if (op == "rename") {
+      static constexpr std::string_view known[] = {"op", "from", "to"};
+      reject_unknown_keys(edit, where, known);
+      rename_mesh_region(mesh, text("from"), text("to"));
+    } else if (op == "merge") {
+      static constexpr std::string_view known[] = {"op", "source", "target"};
+      reject_unknown_keys(edit, where, known);
+      merge_mesh_region(mesh, text("source"), text("target"));
+    } else if (op == "split") {
+      throw std::invalid_argument(
+          where + ".op: an imported mesh has no curves to split; only rename "
+                  "and merge apply to it");
+    } else {
+      throw std::invalid_argument(where + ".op: unknown edit '" + op +
+                                  "' (rename or merge for a mesh file)");
+    }
+  });
+}
+
+// Applies the "region_edits" list of a section with `apply` per edit.
+template <class Target, class Apply>
+void apply_edits(const Json &section, Target &target, Apply apply) {
+  const Json &edits = member(section, "region_edits");
+  if (edits.is_null())
+    return;
+  if (!edits.is_array())
+    throw std::invalid_argument("geometry.region_edits: expected a list");
+  for (std::size_t i = 0; i < edits.size(); ++i)
+    apply(target, edits[i], "geometry.region_edits[" + std::to_string(i) + "]");
+}
+
 // --- views ------------------------------------------------------------------
 
 std::string_view kind_name(const geometry::Curve &curve) {
@@ -295,18 +381,12 @@ Domain build_domain(const Json &section) {
                           return io::import_svg(in);
                         })
             : build_shape(section);
-    if (const Json &edits = member(section, "region_edits"); !edits.is_null()) {
-      if (!edits.is_array())
-        throw std::invalid_argument("geometry.region_edits: expected a list");
-      for (std::size_t i = 0; i < edits.size(); ++i)
-        apply_edit(geometry, edits[i],
-                   "geometry.region_edits[" + std::to_string(i) + "]");
-    }
+    apply_edits(section, geometry, apply_edit);
     return {.geometry = std::move(geometry), .mesh = std::nullopt};
   }
   if (source == "mesh_file") {
     static constexpr std::string_view known[] = {"source", "format", "name",
-                                                 "text"};
+                                                 "text", "region_edits"};
     reject_unknown_keys(section, "geometry", known);
     const std::string format =
         require_string(member(section, "format"), "geometry.format");
@@ -320,6 +400,11 @@ Domain build_domain(const Json &section) {
       throw std::invalid_argument("unknown mesh format '" + format +
                                   "' (gmsh or pde2d)");
     });
+    if (!member(section, "region_edits").is_null()) {
+      apply_edits(section, mesh, apply_mesh_edit);
+      // The edits keep the tags consistent; the library confirms it.
+      with_path("geometry.region_edits", [&] { mesh::validate(mesh); });
+    }
     return {.geometry = std::nullopt, .mesh = std::move(mesh)};
   }
   throw std::invalid_argument("geometry.source: unknown source '" + source +

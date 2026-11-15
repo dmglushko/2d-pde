@@ -59,7 +59,7 @@ flowchart LR
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`) and the command line |
 | `app/web/` | `index.html`, `style.css`, `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `dom.js` (forms from specs), `view.js` (the picture), `panels/*.js` (one per step, and `components.js`: the cards of component slots), `main.js` |
 | `app/examples/` | example cases and an example SVG |
-| `app/tests/` | `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `server.cpp`, `web.test.mjs` (pure helpers), `web_actions.test.mjs` (overlapping requests, with a mocked fetch) |
+| `app/tests/` | `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `server.cpp`, `web.test.mjs` (pure helpers, the stage registry), `web_actions.test.mjs` (overlapping requests, prerequisites, errors per input, the binary solve, with a mocked fetch) |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
 
 ## The case
@@ -105,7 +105,13 @@ must not be ignored silently), and a missing value means its default.
   `text`, `name`). Shapes and SVGs take `region_edits`: `{"op": "rename",
   "from", "to"}`, `{"op": "merge", "source", "target"}`, `{"op": "split",
   "region", "fraction", "first", "second"}`, applied in order with
-  `CurveGeometry`'s methods.
+  `CurveGeometry`'s methods. A mesh file takes `rename` and `merge` (not
+  `split`: it has no curves); the app applies them to the imported
+  `mesh::Mesh` (a renamed region keeps its tag; a merge moves the
+  source's boundary edges to the target's tag and drops the source's
+  name, renumbering the tags above it) and checks the result with
+  `mesh::validate`. Errors name the edit (`geometry.region_edits[1]:
+  ...`).
 - A mesh file is not meshed again: the `Remesher` runs the refiner and
   the improvers on it (the discretizer and triangulator are not used).
 - `mesh.refiner` may be `null` (no refiner). A length bound is
@@ -125,7 +131,8 @@ must not be ignored silently), and a missing value means its default.
   `notes` are free for the page and for people. The page keeps
   `view.region_edit_undo` (one undo record per region edit) and
   `view.condition_archive` (conditions of regions that are gone) there.
-- `version` is checked: a case from a newer app is refused, not misread.
+- `version` is checked: a whole number from 1 to the app's version; a
+  case from a newer app is refused, not misread.
 
 ## The API
 
@@ -142,9 +149,10 @@ All on `127.0.0.1:8765` by default. Every POST body is a case (or, for
 | `POST /api/mesh` | the mesh (flat arrays), stats, `target_met`, the resolved bound, every stage report |
 | `POST /api/problem` | the check: `ok`, `errors` (`path`, `message`), facts per path, each condition's kind, time order, needed initial conditions |
 | `POST /api/assemble` | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
-| `POST /api/solve` | `mode`, `times` and `values` (one array of node values per time), `min` and `max` over all of them, `time_order` (assembly's, `Assembler::time_order`) and `problem_time_order` (as written), `free_unknowns`, the reports (`assembly` and `static_solver`, or `integrator`) |
-| `POST /api/field` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`; the right-hand side is assembled at that t) |
-| `POST /api/export/<kind>` | a file: `mesh.pde2d`, `mesh.svg`, `geometry.svg` or `solution.csv` (x, y and u at every kept time, one row per node) |
+| `POST /api/solve` | the summary: `mode`, `times`, `min` and `max` over every value (exact doubles), `time_order` (assembly's, `Assembler::time_order`) and `problem_time_order` (as written), `free_unknowns`, the reports (`assembly` and `static_solver`, or `integrator`), and `values`: `{"path": "/api/solve/values", "format": "float32le", "snapshots", "nodes", "bytes"}` |
+| `POST /api/solve/values` | the same case's values as `application/octet-stream`: float32, little-endian, snapshot after snapshot, each one value per mesh node (NaN for a value that is not finite) |
+| `POST /api/field` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`; the right-hand side is assembled at that t). The request has only `case` and `field`, and `field` only `kind`, `text` and `t`: another key is an error |
+| `POST /api/export/<kind>` | a file: `mesh.pde2d`, `mesh.svg`, `geometry.svg`, `solution.csv` (x, y and u at every kept time, one row per node, full doubles), or the system assembled at `assembly.t` in Matrix Market form: `stiffness.mtx`, `damping.mtx`, `mass.mtx` (the free part, `coordinate real general`, 1-based; a zero operator has no entries) and `rhs.mtx` (`array`) |
 
 A failure is `{"error": {"stage", "kind", "message"}}`. The HTTP status
 is 400 for a body that is not JSON, 422 when the library refused the input
@@ -152,7 +160,10 @@ is 400 for a body that is not JSON, 422 when the library refused the input
 finish (`kind: "algorithm"`, from `std::runtime_error`), and 500 for
 anything else. A message that concerns a field starts with its path in the
 case (`mesh.refiner.options.min_angle_degrees: ...`); the page marks that
-field.
+field. When a component's constructor refuses its options and its message
+names one of them (`RuppertOptions::min_angle_degrees must be ...`,
+`fixed_step: dt must be ...`), the path is that option's, so the mark
+lands on the field itself.
 
 ## The catalog
 
@@ -292,9 +303,62 @@ is a reason; record the new choice here.
   progress or cancellation, and all work runs under the session mutex.
   If long runs become common, a progress and cancel callback in the
   library is the change to ask for.
-- **The solution is sent as node values per snapshot** (JSON numbers), not
-  compressed: simple, and fine for meshes of thousands of nodes. A binary
-  format is the change to make if the page gets slow on large runs.
+- **The solution travels in binary** (2026-11-15): `POST /api/solve`
+  answers the summary, `POST /api/solve/values` the values as float32
+  (snapshots × nodes), decoded into one `Float32Array` per snapshot. JSON
+  numbers took about 20 bytes a value and a parse; float32 takes 4, which
+  matters at 1000 snapshots. Float32 is plenty for colours and the
+  readout; `min` and `max` stay exact doubles in the summary (the colour
+  scale), and the CSV export keeps full doubles. The page sends the same
+  case to both calls; the server's cache answers the second without
+  solving again. The Solve step estimates the size from the fresh mesh
+  before a run and warns above 50 MB (the page keeps every snapshot in
+  memory).
+- **One stage registry** (`STAGES` in `web/js/core.js`): each stage's id,
+  label, the case sections its result depends on, the stages that must be
+  fresh first, its API call and its "running" text. `stageKey`, the
+  store, the step tabs and panels, `runWithPrerequisites` (the Mesh,
+  Assemble, Solve and Show buttons) and Run all all read it, so a new
+  stage is one entry. A failure anywhere gives the same toast and opens
+  the failing step.
+- **Run all ends on the solution**: after a solve (from Run all or the
+  Solve button) the picture colours by the solution. The colour choice
+  lives in the store (`store.view.colorBy`); the toolbar only shows and
+  sets it.
+- **A problem check never queues behind a long stage.** The server runs
+  everything under one mutex (the library's thread-safety rule), so a
+  check sent during a mesh, assembly or solve would wait for it anyway;
+  the page holds it and sends one check when the stage ends.
+- **Errors belong to their input.** A stage's error keeps the key of the
+  case it was produced for. Once the case changes, it is shown greyed out
+  "for the previous input", its field mark is cleared, and the step's dot
+  says outdated, not failed. Exports are offered only for results that
+  are up to date, and the Problem step greys out a check of an earlier
+  problem and says "Checking…" until the new one arrives.
+- **Option errors land on their field**: `build_component` puts the
+  option's name in the path when the library's message names one of the
+  component's options as a word. The library's messages are not changed;
+  a message that names no option keeps the path of the options object.
+- **Number fields never write a guess**: text that is not a number yet
+  marks the field "not a number" and leaves the case as it was; an empty
+  option field means the default (as before), an empty parameter value
+  is refused the same way.
+- **Imported meshes take rename and merge.** `mesh::Mesh` keeps region
+  names apart from the edges' tags, so both edits are a change of names
+  and tags, with no geometry; the library's `validate` confirms the
+  result. Split needs curves and stays refused, with a message saying
+  so. The page's region editor offers rename and merge for mesh files.
+- **The case remembers its file name** (the opened file's or example's,
+  `case.json` for a new case) and whether it changed since it was opened
+  or saved (an "unsaved changes" chip). New, Open and Examples keep the
+  replaced case while their toast offers to restore it (12 s; a toast
+  with a button stays longer than a plain one); afterwards it is dropped.
+  Sections replaced by defaults when a case is read are listed in a
+  notice that stays until dismissed: a toast was too easy to miss.
+- **The assembled system exports as Matrix Market**, the format every
+  sparse tool reads (SciPy, MATLAB, Julia): the free parts of A, B and M2
+  and b, at `assembly.t`, so the system can be checked or solved
+  elsewhere.
 - **Fields are one column wide in the grid** (`.field` uses
   `minmax(0, 1fr)`): a long option name in a select no longer widens the
   panel on narrow screens.

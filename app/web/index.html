@@ -23,26 +23,19 @@
           >Open case…<input id="open-case" type="file" accept=".json,application/json" hidden
         /></label>
         <button id="save-case" type="button">Save case</button>
+        <span id="unsaved" class="chip" hidden>unsaved changes</span>
         <button id="run-all" class="primary" type="button">Run all</button>
       </div>
     </header>
 
+    <div id="case-notice"></div>
+
     <main class="layout">
       <aside class="sidebar">
-        <nav class="steps" role="tablist" aria-label="Steps">
-          <button role="tab" data-step="geometry" type="button"><span class="dot"></span>Geometry</button>
-          <button role="tab" data-step="mesh" type="button"><span class="dot"></span>Mesh</button>
-          <button role="tab" data-step="problem" type="button"><span class="dot"></span>Problem</button>
-          <button role="tab" data-step="assemble" type="button"><span class="dot"></span>Assemble</button>
-          <button role="tab" data-step="solve" type="button"><span class="dot"></span>Solve</button>
-        </nav>
-        <div class="panels">
-          <section id="panel-geometry" class="panel" role="tabpanel"></section>
-          <section id="panel-mesh" class="panel" role="tabpanel" hidden></section>
-          <section id="panel-problem" class="panel" role="tabpanel" hidden></section>
-          <section id="panel-assemble" class="panel" role="tabpanel" hidden></section>
-          <section id="panel-solve" class="panel" role="tabpanel" hidden></section>
-        </div>
+        <!-- The steps and their panels come from the stage registry
+             (js/core.js, STAGES). -->
+        <nav class="steps" role="tablist" aria-label="Steps"></nav>
+        <div class="panels"></div>
       </aside>
 
       <section class="viewer" aria-label="Picture">

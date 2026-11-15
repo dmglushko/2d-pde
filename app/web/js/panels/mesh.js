@@ -3,11 +3,11 @@
 // improvers), each with its components and their options.
 
 import { downloadExport } from "../api.js";
-import { runStage, toast } from "../actions.js";
+import { runWithPrerequisites, toast } from "../actions.js";
 import { formatNumber } from "../core.js";
-import { actionButton, errorBox, h, markError, optionsForm, reportsView, stat, fill } from "../dom.js";
+import { actionButton, busyNote, errorBox, exportButton, h, markError, optionsForm, reportsView, stat, fill } from "../dom.js";
 import { choiceCard, componentBody, defaultChoice } from "./components.js";
-import { editCase, freshResult, lastResult, stageStatus, store } from "../state.js";
+import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 
 function singleSlot(slot, mesh) {
   return choiceCard(slot, mesh[slot.id], `mesh.${slot.id}`, (next) => editCase((c) => (c.mesh[slot.id] = next), "structure"));
@@ -60,6 +60,8 @@ function listSlot(slot, mesh) {
   );
 }
 
+const STALE = "The mesh shown is outdated: mesh again to export it.";
+
 export const meshPanel = {
   build(container) {
     const section = store.catalog.sections.find((s) => s.id === "mesh");
@@ -80,14 +82,7 @@ export const meshPanel = {
       h(
         "div",
         { class: "row", style: "margin-top:12px" },
-        actionButton(
-          "Mesh",
-          async () => {
-            if (stageStatus("geometry") !== "done") await runStage("geometry");
-            if (!store.errors.geometry) await runStage("mesh");
-          },
-          { primary: true },
-        ),
+        actionButton("Mesh", () => runWithPrerequisites("mesh"), { primary: true }),
       ),
       h("div", { class: "result", id: "mesh-result" }),
     );
@@ -97,16 +92,18 @@ export const meshPanel = {
   update(container) {
     const slot = container.querySelector("#mesh-result");
     if (!slot) return;
-    const error = store.errors.mesh;
+    const error = currentError("mesh");
+    const old = outdatedError("mesh");
     const fresh = freshResult("mesh");
     const result = fresh ?? lastResult("mesh");
     const busy = store.busy.has("mesh");
-    if (slot.shown && slot.shown.result === result && slot.shown.error === error && slot.shown.busy === busy && slot.shown.fresh === fresh) return;
-    slot.shown = { result, error, busy, fresh };
+    if (slot.shown && slot.shown.result === result && slot.shown.error === error && slot.shown.old === old && slot.shown.busy === busy && slot.shown.fresh === fresh) return;
+    slot.shown = { result, error, old, busy, fresh };
     const placed = markError(container, error);
     const children = [];
     if (error && !placed) children.push(errorBox(error));
-    if (busy) children.push(h("p", { class: "note" }, "Meshing…"));
+    if (old) children.push(errorBox(old, { outdated: true }));
+    if (busy) children.push(busyNote("mesh", "Meshing"));
     if (result) {
       const s = result.stats;
       children.push(
@@ -133,8 +130,8 @@ export const meshPanel = {
         h(
           "div",
           { class: "row", style: "margin-top:12px" },
-          actionButton("Export .pde2d", () => downloadExport("mesh.pde2d", store.caseData).catch((e) => toast(e.message)), { small: true }),
-          actionButton("Export mesh .svg", () => downloadExport("mesh.svg", store.caseData).catch((e) => toast(e.message)), { small: true }),
+          exportButton("Export .pde2d", () => downloadExport("mesh.pde2d", store.caseData).catch((e) => toast(e.message)), { fresh, staleReason: STALE }),
+          exportButton("Export mesh .svg", () => downloadExport("mesh.svg", store.caseData).catch((e) => toast(e.message)), { fresh, staleReason: STALE }),
         ),
         h("p", { class: "note" }, "A .pde2d file opens in the old mesh viewer (tools/mesh_viewer) and can be imported here as a mesh file."),
       );

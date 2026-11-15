@@ -3,17 +3,18 @@
 
 import { api, saveBlob } from "./api.js";
 import { runAll, runStage, scheduleProblemCheck, toast } from "./actions.js";
-import { fileKind, formatNumber, normalizeCase, stageKey } from "./core.js";
+import { STEPS, fileKind, formatNumber, normalizeCase, stageInfo, stageKey } from "./core.js";
 import { h, readFileText, fill } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
 import { geometryPanel, loadDomainFile } from "./panels/geometry.js";
 import { meshPanel } from "./panels/mesh.js";
 import { problemPanel } from "./panels/problem.js";
 import { solvePanel } from "./panels/solve.js";
-import { freshResult, lastResult, savedCase, setCase, stageStatus, store, subscribe } from "./state.js";
+import { currentError, freshResult, lastResult, markSaved, openStep, savedCase, setCase, setColorBy, stageStatus, store, subscribe } from "./state.js";
 import { Viewer } from "./view.js";
 
 const panels = { geometry: geometryPanel, mesh: meshPanel, problem: problemPanel, assemble: assemblePanel, solve: solvePanel };
+for (const step of STEPS) if (!panels[step]) throw new Error(`no panel for the step ${step}`);
 const STEP_KEY = "pde2d-app-step";
 let viewer;
 
@@ -21,9 +22,22 @@ function element(id) {
   return document.getElementById(id);
 }
 
-function showStep(step) {
+// One tab and one panel per step of the stage registry.
+function buildSteps() {
+  fill(
+    document.querySelector(".steps"),
+    STEPS.map((step) => h("button", { role: "tab", type: "button", dataset: { step }, onclick: () => openStep(step) }, h("span", { class: "dot" }), stageInfo(step).label)),
+  );
+  fill(
+    document.querySelector(".panels"),
+    STEPS.map((step) => h("section", { id: `panel-${step}`, class: "panel", role: "tabpanel", hidden: true })),
+  );
+}
+
+function applyStep() {
+  const step = store.step;
   for (const button of document.querySelectorAll(".steps button")) button.setAttribute("aria-selected", String(button.dataset.step === step));
-  for (const [name] of Object.entries(panels)) element(`panel-${name}`).hidden = name !== step;
+  for (const name of STEPS) element(`panel-${name}`).hidden = name !== step;
   try {
     localStorage.setItem(STEP_KEY, step);
   } catch {
@@ -44,26 +58,40 @@ function buildPanels() {
     recovering = true;
     try {
       toast(`This case cannot be shown (${error.message}); a new case was started.`);
-      loadCase(structuredClone(store.catalog.default_case));
+      loadCase(structuredClone(store.catalog.default_case), { offerRestore: false });
     } finally {
       recovering = false;
     }
   }
 }
 
+const DOT_TITLES = { done: "up to date", stale: "outdated: the case changed", failed: "failed", busy: "running", none: "not run" };
+
+function problemStatus() {
+  if (store.busy.has("problem")) return "busy";
+  if (currentError("problem")) return "failed";
+  const check = freshResult("problem");
+  if (check) return check.ok ? "done" : "failed";
+  return stageStatus("problem");
+}
+
 function updateDots() {
-  const status = {
-    geometry: stageStatus("geometry"),
-    mesh: stageStatus("mesh"),
-    problem: store.errors.problem ? "failed" : freshResult("problem") ? (freshResult("problem").ok ? "done" : "failed") : stageStatus("problem"),
-    assemble: stageStatus("assemble"),
-    solve: stageStatus("solve"),
-  };
   for (const button of document.querySelectorAll(".steps button")) {
+    const step = button.dataset.step;
+    const s = step === "problem" ? problemStatus() : stageStatus(step);
     const dot = button.querySelector(".dot");
-    const s = status[button.dataset.step];
-    dot.className = `dot ${s === "done" ? "done" : s === "stale" ? "stale" : s === "failed" ? "failed" : ""}`;
-    dot.title = { done: "up to date", stale: "outdated: the case changed", failed: "failed", busy: "running", none: "not run" }[s];
+    dot.className = `dot ${s === "none" ? "" : s}`.trim();
+    dot.title = DOT_TITLES[s];
+  }
+}
+
+// "Solving… 12 s" in the panel of every running stage.
+function tick() {
+  const now = performance.now();
+  for (const note of document.querySelectorAll("[data-elapsed-stage]")) {
+    const since = store.busySince[note.dataset.elapsedStage];
+    if (since === undefined) continue;
+    note.textContent = `${note.dataset.label}… ${Math.floor((now - since) / 1000)} s`;
   }
 }
 
@@ -76,7 +104,7 @@ function shownField() {
     return { label: `u at t = ${formatNumber(solved.times[i], 5)}`, values: solved.values[i], scale: solved.scale };
   }
   const field = store.results.field;
-  return field && field.key === stageKey(store.caseData, "assemble") ? field.data : null;
+  return field && field.key === stageKey(store.caseData, "field") ? field.data : null;
 }
 
 function updateViewer() {
@@ -85,21 +113,46 @@ function updateViewer() {
   const assembled = lastResult("assemble");
   const mesh = meshResult?.mesh ?? null;
   const meshFresh = freshResult("mesh") !== null;
+  element("color-by").value = store.view.colorBy;
   viewer.set({
     geometry,
     mesh,
     meshStale: mesh !== null && !meshFresh,
     dirichlet: assembled && freshResult("assemble") ? assembled.meshed_problem.dirichlet_nodes : null,
     field: shownField(),
-    colorBy: element("color-by").value,
+    colorBy: store.view.colorBy,
     layers: { geometry: element("layer-geometry").checked, mesh: element("layer-mesh").checked, dirichlet: element("layer-dirichlet").checked },
   });
   element("legend").replaceChildren(...viewer.legend());
   element("empty-view").hidden = Boolean(geometry || mesh);
 }
 
+// The case's file name, whether it changed since, and the notice.
+function updateCaseBar() {
+  element("unsaved").hidden = !store.dirty;
+  element("save-case").title = `Save as ${store.caseName}`;
+  const notice = element("case-notice");
+  if (notice.shown === store.notice) return;
+  notice.shown = store.notice;
+  fill(
+    notice,
+    store.notice
+      ? h(
+          "div",
+          { class: "notice case-notice", role: "status" },
+          h("span", {}, store.notice.text),
+          h("button", { type: "button", class: "icon", "aria-label": "Dismiss", onclick: () => ((store.notice = null), updateCaseBar()) }, "✕"),
+        )
+      : null,
+  );
+}
+
 function refresh(reason) {
   if (reason === "frame") return updateViewer();
+  if (reason === "step") {
+    applyStep();
+    return;
+  }
   // The problem check is cheap: keep it current whatever changed the case.
   const problem = stageStatus("problem");
   if (problem === "stale" || problem === "none") scheduleProblemCheck();
@@ -107,11 +160,17 @@ function refresh(reason) {
   else for (const [name, panel] of Object.entries(panels)) panel.update(element(`panel-${name}`));
   updateDots();
   updateViewer();
+  updateCaseBar();
+  tick();
 }
 
+// The case a New, Open or Examples replaced, while the toast offers it
+// back.
+let previousCase = null;
+
 // A case read from a file or an example replaces the current one; every
-// result is dropped.
-function loadCase(input) {
+// result is dropped. `name` is the file name it is saved under.
+function loadCase(input, { name = "case.json", dirty = false, offerRestore = true, message = null } = {}) {
   let normalized;
   try {
     normalized = normalizeCase(input, store.catalog.default_case);
@@ -119,29 +178,49 @@ function loadCase(input) {
     toast(error.message);
     return false;
   }
-  if (normalized.replaced.length) toast(`Replaced by defaults: ${normalized.replaced.join(", ")}`);
+  const replaced = store.caseData ? { caseData: store.caseData, name: store.caseName, dirty: store.dirty } : null;
+  store.notice = normalized.replaced.length ? { text: `Replaced by defaults when the case was read: ${normalized.replaced.join(", ")}.` } : null;
   for (const stage of Object.keys(store.results)) store.results[stage] = null;
-  setCase(normalized.caseData);
+  setCase(normalized.caseData, { name, dirty: dirty || normalized.replaced.length > 0 });
   runStage("geometry");
+  if (offerRestore && replaced) {
+    previousCase = replaced;
+    toast(message ?? `Opened ${name}.`, {
+      action: {
+        label: "Restore the previous case",
+        run: () => {
+          const back = previousCase;
+          if (back) loadCase(back.caseData, { name: back.name, dirty: back.dirty, message: `Restored ${back.name}.` });
+        },
+      },
+      onEnd: () => {
+        if (previousCase === replaced) previousCase = null;
+      },
+    });
+  } else if (message) toast(message);
   return true;
 }
 
 function saveCase() {
   const text = JSON.stringify(store.caseData, null, 2);
-  saveBlob(new Blob([text + "\n"], { type: "application/json" }), "case.json");
+  saveBlob(new Blob([text + "\n"], { type: "application/json" }), store.caseName);
+  markSaved();
 }
 
 async function openFile(file) {
   const kind = fileKind(file.name);
   if (kind === "case") {
+    let input;
     try {
-      loadCase(JSON.parse(await readFileText(file)));
+      input = JSON.parse(await readFileText(file));
     } catch {
       toast(`${file.name} is not valid JSON.`);
+      return;
     }
+    loadCase(input, { name: file.name });
   } else {
     await loadDomainFile(file);
-    showStep("geometry");
+    openStep("geometry");
   }
 }
 
@@ -161,6 +240,7 @@ function wireDrop() {
 }
 
 async function start() {
+  buildSteps();
   try {
     store.catalog = await api.catalog();
   } catch (error) {
@@ -170,18 +250,19 @@ async function start() {
   element("version").textContent = `library ${store.catalog.library_version}`;
   viewer = new Viewer(element("view"), element("tooltip"), element("view-status"));
 
-  for (const button of document.querySelectorAll(".steps button")) button.addEventListener("click", () => showStep(button.dataset.step));
   let step = "geometry";
   try {
     step = localStorage.getItem(STEP_KEY) ?? step;
   } catch {
     // Start on the first step.
   }
-  showStep(panels[step] ? step : "geometry");
+  store.step = STEPS.includes(step) ? step : "geometry";
+  applyStep();
 
-  for (const id of ["layer-geometry", "layer-mesh", "layer-dirichlet", "color-by"]) element(id).addEventListener("change", updateViewer);
+  for (const id of ["layer-geometry", "layer-mesh", "layer-dirichlet"]) element(id).addEventListener("change", updateViewer);
+  element("color-by").addEventListener("change", (event) => setColorBy(event.target.value));
   element("fit-view").addEventListener("click", () => viewer.fit());
-  element("new-case").addEventListener("click", () => loadCase(structuredClone(store.catalog.default_case)));
+  element("new-case").addEventListener("click", () => loadCase(structuredClone(store.catalog.default_case), { message: "Started a new case." }));
   element("save-case").addEventListener("click", saveCase);
   element("open-case").addEventListener("change", (event) => {
     const file = event.target.files[0];
@@ -191,7 +272,7 @@ async function start() {
   element("run-all").addEventListener("click", async (event) => {
     event.target.disabled = true;
     try {
-      if (await runAll()) toast("Geometry, mesh and assembly are up to date.");
+      if (await runAll()) toast("Geometry, mesh, assembly and solve are up to date.");
     } finally {
       event.target.disabled = false;
     }
@@ -208,16 +289,17 @@ async function start() {
     examples.value = "";
     if (!name) return;
     try {
-      loadCase(await api.example(name));
+      loadCase(await api.example(name), { name });
     } catch (error) {
       toast(error.message);
     }
   });
   wireDrop();
+  setInterval(tick, 1000);
 
   subscribe(refresh);
   const saved = savedCase();
-  if (!saved || !loadCase(saved)) loadCase(structuredClone(store.catalog.default_case));
+  if (!saved || !loadCase(saved.caseData, { name: saved.name, dirty: saved.dirty, offerRestore: false })) loadCase(structuredClone(store.catalog.default_case), { offerRestore: false });
 }
 
 start();

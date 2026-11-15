@@ -4,29 +4,32 @@
 // over its snapshots.
 
 import { downloadExport } from "../api.js";
-import { runStage, toast } from "../actions.js";
-import { formatNumber } from "../core.js";
-import { actionButton, errorBox, fill, h, markError, optionsForm, reportsView, stat } from "../dom.js";
-import { editCase, freshResult, lastResult, notify, stageStatus, store } from "../state.js";
+import { runWithPrerequisites, toast } from "../actions.js";
+import { LARGE_SOLUTION_BYTES, formatNumber, solutionBytes } from "../core.js";
+import { actionButton, busyNote, errorBox, exportButton, fill, h, markError, optionsForm, reportsView, stat } from "../dom.js";
+import { currentError, editCase, freshResult, lastResult, notify, openStep, outdatedError, store } from "../state.js";
 import { choiceCard } from "./components.js";
 
-// Geometry and mesh first when they are not up to date, then the solve.
+// The prerequisites that are not fresh, then the solve; the picture
+// colours by the solution once it arrives (actions.js).
 async function solve() {
-  for (const stage of ["geometry", "mesh"]) {
-    if (stageStatus(stage) === "done") continue;
-    if (!(await runStage(stage))) return toast(`The ${stage} step failed; see that step.`);
-  }
-  if (await runStage("solve")) colourByField();
+  await runWithPrerequisites("solve");
   // The form is long: bring the result (or the error) into view.
-  document.getElementById("solve-result")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  if (store.step === "solve") document.getElementById("solve-result")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
-// The picture colours by the field, which now is the solution.
-function colourByField() {
-  const colorBy = document.getElementById("color-by");
-  if (colorBy.value === "field") return;
-  colorBy.value = "field";
-  colorBy.dispatchEvent(new Event("change"));
+const openProblem = () => openStep("problem");
+
+// How much the values of a run take, from the fresh mesh; a notice when
+// it is large.
+function sizeEstimate() {
+  const nodes = freshResult("mesh")?.stats?.nodes;
+  const bytes = solutionBytes(store.caseData.solve, nodes);
+  if (bytes === null) return h("p", { class: "note" }, "Mesh first to see how large the solution will be.");
+  const megabytes = bytes / (1024 * 1024);
+  const text = `The values take about ${formatNumber(megabytes < 0.1 ? Math.round(megabytes * 1000) / 1000 : Math.round(megabytes * 10) / 10)} MB (${formatNumber(nodes)} nodes × ${formatNumber(bytes / 4 / nodes)} kept times × 4 bytes).`;
+  if (bytes <= LARGE_SOLUTION_BYTES) return h("p", { class: "note" }, text);
+  return h("div", { class: "notice" }, `${text} That is large: the page keeps every snapshot in memory. Fewer snapshots or a coarser mesh make it smaller.`);
 }
 
 // --- the player -------------------------------------------------------------
@@ -42,7 +45,7 @@ function stopPlaying() {
 function showFrame(index) {
   store.solveFrame = index;
   store.fieldSource = "solve";
-  colourByField();
+  store.view.colorBy = "field";
   notify("frame");
 }
 
@@ -164,6 +167,7 @@ export const solvePanel = {
       ),
       mode.slots.map((slot) => choiceCard(slot, settings[slot.id], `solve.${mode.settings.key}.${slot.id}`, (next) => editCase((c) => (c.solve[mode.settings.key][slot.id] = next), "structure"))),
       choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear),
+      h("div", { id: "solve-size" }),
       h("div", { class: "row", style: "margin-top:12px" }, actionButton("Solve", solve, { primary: true })),
       h("div", { class: "result", id: "solve-result" }),
     );
@@ -179,18 +183,25 @@ export const solvePanel = {
       hint.shown = check;
       fill(hint, orderHint(store.caseData.solve));
     }
-    const error = store.errors.solve;
+    const size = container.querySelector("#solve-size");
+    const sizeKey = JSON.stringify([freshResult("mesh")?.stats?.nodes ?? null, store.caseData.solve?.mode, store.caseData.solve?.time?.snapshots]);
+    if (size.shown !== sizeKey) {
+      size.shown = sizeKey;
+      fill(size, sizeEstimate());
+    }
+    const error = currentError("solve");
+    const old = outdatedError("solve");
     const fresh = freshResult("solve");
     const result = fresh ?? lastResult("solve");
     const busy = store.busy.has("solve");
-    if (slot.shown && slot.shown.result === result && slot.shown.error === error && slot.shown.busy === busy && slot.shown.fresh === fresh) return;
-    slot.shown = { result, error, busy, fresh };
+    if (slot.shown && slot.shown.result === result && slot.shown.error === error && slot.shown.old === old && slot.shown.busy === busy && slot.shown.fresh === fresh) return;
+    slot.shown = { result, error, old, busy, fresh };
     stopPlaying();
     const placed = markError(container, error);
     const children = [];
-    if (error && !placed) children.push(errorBox(error));
-    if (error && ["problem", "meshed_problem"].includes(error.stage)) children.push(h("p", { class: "note" }, "Fix it in the Problem step."));
-    if (busy) children.push(h("p", { class: "note" }, "Solving… (a long time run keeps the app busy until it ends)"));
+    if (error && !placed) children.push(errorBox(error, { openProblem }));
+    if (old) children.push(errorBox(old, { outdated: true }));
+    if (busy) children.push(busyNote("solve", "Solving"), h("p", { class: "note" }, "A long time run keeps the app busy until it ends."));
     if (result) {
       const report = (stage) => result.reports.find((r) => r.stage === stage)?.metrics ?? {};
       const integrator = report("integrator");
@@ -217,7 +228,7 @@ export const solvePanel = {
         fresh ? null : h("p", { class: "note" }, "The picture shows the solution only while it is up to date: solve again."),
         h("h3", {}, "Reports"),
         reportsView(result.reports),
-        h("div", { class: "row", style: "margin-top:12px" }, actionButton("Export solution .csv", () => downloadExport("solution.csv", store.caseData).catch((e) => toast(e.message)), { small: true })),
+        h("div", { class: "row", style: "margin-top:12px" }, exportButton("Export solution .csv", () => downloadExport("solution.csv", store.caseData).catch((e) => toast(e.message)), { fresh, staleReason: "The solution shown is outdated: solve again to export it." })),
         h("p", { class: "note" }, "One row per mesh node: x, y and u at every kept time."),
       );
     }

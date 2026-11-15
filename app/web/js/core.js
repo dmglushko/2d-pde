@@ -284,7 +284,7 @@ export function normalizeCase(input, defaults) {
   }
   if (geometry.source === "svg") ensure(geometry, "svg", optional(isString), "", "geometry.svg");
   if (geometry.source === "mesh_file") ensure(geometry, "text", optional(isString), "", "geometry.text");
-  if (geometry.source !== "mesh_file") ensure(geometry, "region_edits", optional(isList(isObject)), [], "geometry.region_edits");
+  ensure(geometry, "region_edits", optional(isList(isObject)), [], "geometry.region_edits");
 
   ensure(caseData, "mesh", isObject, defaults.mesh, "mesh");
   ensure(caseData.mesh, "spec", isObject, defaults.mesh.spec, "mesh.spec");
@@ -331,17 +331,94 @@ export function errorPath(message) {
   return match ? match[1] : null;
 }
 
+// The stages, in order: one place for their ids, labels, the case
+// sections each result depends on, the stages that must be fresh before
+// it runs, the API call (a key of api.js's `api`) and what a panel says
+// while it runs. `step: false` marks a result that has no step of its own
+// (a field shown from the Assemble step).
+export const STAGES = [
+  { id: "geometry", label: "Geometry", sections: ["geometry"], requires: [], call: "geometry", running: "Reading the geometry", long: true },
+  { id: "mesh", label: "Mesh", sections: ["geometry", "mesh"], requires: ["geometry"], call: "mesh", running: "Meshing", long: true },
+  { id: "problem", label: "Problem", sections: ["problem"], requires: [], call: "problem", running: "Checking", long: false },
+  { id: "assemble", label: "Assemble", sections: ["geometry", "mesh", "problem", "assembly"], requires: ["geometry", "mesh"], call: "assemble", running: "Assembling", long: true },
+  { id: "solve", label: "Solve", sections: ["geometry", "mesh", "problem", "solve"], requires: ["geometry", "mesh"], call: "solve", running: "Solving", long: true },
+  { id: "field", label: "Field", sections: ["geometry", "mesh", "problem", "assembly"], requires: ["geometry", "mesh"], call: "field", running: "Evaluating", long: true, step: false },
+];
+
+export function stageInfo(stage) {
+  const info = STAGES.find((s) => s.id === stage);
+  if (!info) throw new Error(`unknown stage ${stage}`);
+  return info;
+}
+
+// The stages shown as steps, in order.
+export const STEPS = STAGES.filter((s) => s.step !== false).map((s) => s.id);
+
+// What Run all brings up to date, in order.
+export const RUN_ALL = ["geometry", "mesh", "assemble", "solve"];
+
 // The keys a stage's result depends on: a result is stale when the case's
 // key differs from the one it was built from.
 export function stageKey(caseData, stage) {
-  const parts = {
-    geometry: ["geometry"],
-    mesh: ["geometry", "mesh"],
-    problem: ["problem"],
-    assemble: ["geometry", "mesh", "problem", "assembly"],
-    solve: ["geometry", "mesh", "problem", "solve"],
-  }[stage];
-  return JSON.stringify(parts.map((p) => caseData?.[p] ?? null));
+  return JSON.stringify(stageInfo(stage).sections.map((p) => caseData?.[p] ?? null));
+}
+
+// The stages to run, in order, to run `stage`: its prerequisites that are
+// not fresh (isFresh(id)), then the stage itself.
+export function stagesToRun(stage, isFresh) {
+  return [...stageInfo(stage).requires.filter((id) => !isFresh(id)), stage];
+}
+
+// The bytes the solution's values take on the way to the page (float32,
+// one per node and kept time), or null when the case's solve section
+// cannot tell (the server checks it).
+export function solutionBytes(solveSection, nodes) {
+  if (!Number.isFinite(nodes) || !solveSection) return null;
+  if (solveSection.mode === "static") return 4 * nodes;
+  const snapshots = solveSection.time?.snapshots ?? null;
+  if (!Number.isInteger(snapshots) || snapshots < 1) return null;
+  return 4 * nodes * (snapshots + 1);
+}
+
+// Above this the Solve step warns before a run (the values travel to the
+// page and stay in its memory).
+export const LARGE_SOLUTION_BYTES = 50 * 1024 * 1024;
+
+// Splits float32 little-endian values (snapshots x nodes, in order) into
+// one Float32Array per snapshot. Throws when the size does not fit.
+export function splitSnapshots(buffer, snapshots, nodes) {
+  if (buffer.byteLength !== 4 * snapshots * nodes) throw new Error(`the solution has ${buffer.byteLength} bytes, expected ${4 * snapshots * nodes}`);
+  const view = new DataView(buffer);
+  const out = [];
+  for (let k = 0; k < snapshots; k++) {
+    const values = new Float32Array(nodes);
+    for (let i = 0; i < nodes; i++) values[i] = view.getFloat32(4 * (k * nodes + i), true);
+    out.push(values);
+  }
+  return out;
+}
+
+// A number field's text as the case gets it: {kind: "empty"} (no value:
+// the default), {kind: "number", value} or {kind: "invalid"} for text
+// that is not (yet) a number, such as "-" or "1e". `badInput` is the
+// input's validity.badInput (a number input reports "" for such text).
+export function parseNumberText(text, badInput = false) {
+  if (badInput) return { kind: "invalid" };
+  const trimmed = String(text ?? "").trim();
+  if (trimmed === "") return { kind: "empty" };
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? { kind: "number", value } : { kind: "invalid" };
+}
+
+// The case's parameters with `from` renamed to `to`, in the same order.
+// Throws an Error naming the problem when `to` is empty or already taken.
+export function renameParameter(parameters, from, to) {
+  const name = String(to ?? "").trim();
+  if (name === "") throw new Error("a parameter needs a name");
+  if (name !== from && Object.hasOwn(parameters, name)) throw new Error(`a parameter named ${name} already exists`);
+  const next = {};
+  for (const [key, value] of Object.entries(parameters)) next[key === from ? name : key] = value;
+  return next;
 }
 
 // The mesh format of a file name: "gmsh", "pde2d", "svg" or null.
