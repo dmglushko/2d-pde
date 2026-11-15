@@ -161,7 +161,8 @@ bool same(const Operator &a, const Operator &b) {
   return a.free.values == b.free.values &&
          a.dirichlet.values == b.dirichlet.values &&
          a.depends_on_t == b.depends_on_t && a.always_zero == b.always_zero &&
-         a.always_symmetric == b.always_symmetric;
+         a.always_symmetric == b.always_symmetric && a.zero_now == b.zero_now &&
+         a.symmetric_now == b.symmetric_now;
 }
 bool same(const AssembledProblem &a, const AssembledProblem &b) {
   const auto eq = [](std::span<const double> x, std::span<const double> y) {
