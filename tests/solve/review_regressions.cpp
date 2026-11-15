@@ -31,45 +31,45 @@ namespace {
 void true_residual() {
   for (const double tolerance : {1e-10, 1e-14})
     for (const std::size_t n : {32, 64, 128, 256}) {
-    pde2d::test::Dense a(n, std::vector<double>(n, 0));
-    for (std::size_t i = 0; i < n; ++i) {
-      a[i][i] = 2;
-      if (i > 0)
-        a[i][i - 1] = -1;
-      if (i + 1 < n)
-        a[i][i + 1] = -1;
+      pde2d::test::Dense a(n, std::vector<double>(n, 0));
+      for (std::size_t i = 0; i < n; ++i) {
+        a[i][i] = 2;
+        if (i > 0)
+          a[i][i - 1] = -1;
+        if (i + 1 < n)
+          a[i][i + 1] = -1;
+      }
+      const auto matrix = sparse(a);
+      LinearSolveResult result;
+      try {
+        result = BiCgStab({.tolerance = tolerance, .max_iterations = 10000})
+                     .prepare(matrix)
+                     ->solve(std::vector<double>(n, 1));
+      } catch (const std::runtime_error &error) {
+        std::cout << "n=" << n << ", tolerance=" << tolerance
+                  << ": threw: " << error.what() << '\n';
+        check(tolerance < 1e-10, "a reachable tolerance is reached");
+        check(std::string(error.what()).find("did not converge") !=
+                  std::string::npos,
+              "an unreachable tolerance says it did not converge");
+        continue;
+      }
+      // Independently compute the tridiagonal residual, in extended precision.
+      long double squared = 0;
+      for (std::size_t i = 0; i < n; ++i) {
+        long double r = 1 - 2 * static_cast<long double>(result.values[i]);
+        if (i > 0)
+          r += result.values[i - 1];
+        if (i + 1 < n)
+          r += result.values[i + 1];
+        squared += r * r;
+      }
+      const long double residual = std::sqrt(squared / n);
+      std::cout << "n=" << n << ", reported residual=" << result.residual
+                << ", independent residual=" << residual
+                << ", tolerance=" << tolerance << '\n';
+      check(residual <= tolerance, "a returned result meets its tolerance");
     }
-    const auto matrix = sparse(a);
-    LinearSolveResult result;
-    try {
-      result = BiCgStab({.tolerance = tolerance, .max_iterations = 10000})
-                   .prepare(matrix)
-                   ->solve(std::vector<double>(n, 1));
-    } catch (const std::runtime_error &error) {
-      std::cout << "n=" << n << ", tolerance=" << tolerance
-                << ": threw: " << error.what() << '\n';
-      check(tolerance < 1e-10, "a reachable tolerance is reached");
-      check(std::string(error.what()).find("did not converge") !=
-                std::string::npos,
-            "an unreachable tolerance says it did not converge");
-      continue;
-    }
-    // Independently compute the tridiagonal residual, in extended precision.
-    long double squared = 0;
-    for (std::size_t i = 0; i < n; ++i) {
-      long double r = 1 - 2 * static_cast<long double>(result.values[i]);
-      if (i > 0)
-        r += result.values[i - 1];
-      if (i + 1 < n)
-        r += result.values[i + 1];
-      squared += r * r;
-    }
-    const long double residual = std::sqrt(squared / n);
-    std::cout << "n=" << n << ", reported residual=" << result.residual
-              << ", independent residual=" << residual
-              << ", tolerance=" << tolerance << '\n';
-    check(residual <= tolerance, "a returned result meets its tolerance");
-  }
 }
 
 void small_right_hand_side() {
