@@ -732,6 +732,28 @@ Discussed in a side chat on 2026-11-12; the first slice was built on
   β_τ, β_x and β_y are zero. *Why:* otherwise every problem with
   diffusion would look non-symmetric and CG could never be used.
 
+## Adaptivity: marking and refinement
+
+Asked for by the owner on 2026-11-15. Of the three parts of adaptive
+refinement (estimate, mark, refine), the error estimation stays the
+owner's; marking and refinement are built for it. Mesh refinement only: no
+coarsening, moving nodes or enrichment for now.
+
+- **Error indicators are one number per triangle** (decided 2026-11-15),
+  the same length as `mesh.triangles`. Marking and refinement act on
+  triangles.
+- **A separate library, `pde2d_adapt`**, depending on `pde2d_mesh` only.
+- **Marking strategies are components behind one interface**: maximum
+  (θ · the largest indicator), Dörfler or bulk (the smallest set holding a
+  fraction θ of the total squared error), fixed fraction (a fraction of
+  the triangles with the largest indicators) and equidistribution (above
+  tol/√N). The details were left to the implementation, for the owner to
+  accept.
+- **Refinement methods are components behind one interface**: newest
+  vertex bisection, and regular (red) refinement with bisection closure.
+  Both keep the mesh conforming. The details were left to the
+  implementation, for the owner to accept.
+
 ## Deferred
 
 - Handling pure Neumann problems: to be discussed (the owner would
