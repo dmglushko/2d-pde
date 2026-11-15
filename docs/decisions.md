@@ -589,6 +589,17 @@ marked "architecture" below are decided.
      2) and throw `std::invalid_argument` below that. *Why:* asking for
      them on a lower time order is a mistake in the caller, and a static
      problem must not be rejected because of a derivative it never uses.
+- **`assemble` takes a `max_time_order`** (decided 2026-11-15, GitHub
+  issue #35; not built yet): `assemble(meshed_problem, t, previous,
+  max_time_order = 2)`. 2 builds everything; 1 skips M₂ and U_D″; 0
+  builds only A (K, C, R, S, T) and the load, with the lifting load −
+  A_FD·U_D, and evaluates only U_D. Skipped terms are stored as zero
+  operators, so `time_order()` is at most `max_time_order`; terms that a
+  lower-order `previous` did not build are built fresh. Other values
+  throw `std::invalid_argument`. `StaticSolver` uses order 0 and
+  `right_hand_side()` as it is. *Why:* a static solve must not evaluate
+  boundary-data derivatives it drops (d/dt √t at t = 0), and it removes
+  the static solver's own right-hand side.
 
 ## Solvers and time integration
 
