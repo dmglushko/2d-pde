@@ -111,8 +111,7 @@ public:
   Step(WorkingMesh &mesh, const std::string &name, const BisectionRule &rule,
        std::size_t max_points, Counts &counts, StageReport &report)
       : mesh_(mesh), name_(name), rule_(rule), max_points_(max_points),
-        counts_(counts), report_(report),
-        input_nodes_(mesh.nodes().size()),
+        counts_(counts), report_(report), input_nodes_(mesh.nodes().size()),
         input_triangles_(mesh.triangles().size()),
         input_vertices_(mesh.triangles()),
         triangle_parent_(mesh.triangles().size()),
@@ -339,8 +338,9 @@ private:
         ++counts_.splits;
         if (parents_lost_.empty())
           parents_lost_ = "the boundary split policy re-triangulated around " +
-                          text + " (its curve point could not be joined to "
-                                 "the opposite vertex)";
+                          text +
+                          " (its curve point could not be joined to "
+                          "the opposite vertex)";
         mark_changed(parent_t);
         for (auto s : r.touched)
           bisected_[s] = false;
@@ -374,7 +374,7 @@ private:
   // The red division of input triangle p = (v0, v1, v2), whose edges were
   // split at m0, m1, m2 (m_i opposite v_i).
   Red try_red(const WorkingMesh::TriangleNodes &v, std::size_t m0,
-               std::size_t m1, std::size_t m2, std::size_t p) {
+              std::size_t m1, std::size_t m2, std::size_t p) {
     // The bisection pattern has the edge v0-m0 between (m2, m0, v0) and
     // (m1, v0, m0); red has m1-m2 in its place.
     auto [t, i] = find(v[0], m0);

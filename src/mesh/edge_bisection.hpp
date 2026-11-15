@@ -89,8 +89,7 @@ private:
 
 // Throws std::invalid_argument, naming the refiner, for a marked index out
 // of range or of a deleted triangle. Shared by every refiner's refine().
-void check_marked(const WorkingMesh &mesh,
-                  std::span<const std::size_t> marked,
+void check_marked(const WorkingMesh &mesh, std::span<const std::size_t> marked,
                   const std::string &refiner);
 
 } // namespace pde2d::mesh::detail

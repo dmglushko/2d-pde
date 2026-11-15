@@ -26,15 +26,15 @@ constexpr Rule longest_edge_rule{.marks = Rule::Marks::longest_edge,
                                  .first = Rule::FirstBisection::longest_edge,
                                  .red = false};
 // A marked triangle: its refinement edge; first bisection: there.
-constexpr Rule newest_vertex_rule{
-    .marks = Rule::Marks::refinement_edge,
-    .first = Rule::FirstBisection::refinement_edge,
-    .red = false};
+constexpr Rule newest_vertex_rule{.marks = Rule::Marks::refinement_edge,
+                                  .first =
+                                      Rule::FirstBisection::refinement_edge,
+                                  .red = false};
 // A marked triangle: all three edges, red where all three are split.
-constexpr Rule red_green_blue_rule{
-    .marks = Rule::Marks::all_edges,
-    .first = Rule::FirstBisection::refinement_edge,
-    .red = true};
+constexpr Rule red_green_blue_rule{.marks = Rule::Marks::all_edges,
+                                   .first =
+                                       Rule::FirstBisection::refinement_edge,
+                                   .red = true};
 
 } // namespace
 
@@ -105,8 +105,7 @@ std::optional<Parents> RedGreenBlueRefinement::refine(
     WorkingMesh &mesh, std::span<const std::size_t> marked_triangles,
     std::span<const LocalImprover *const> local_improvers,
     StageReport &report) const {
-  return detail::EdgeBisection(name(), red_green_blue_rule,
-                               options_.max_points)
+  return detail::EdgeBisection(name(), red_green_blue_rule, options_.max_points)
       .refine(mesh, marked_triangles, local_improvers, report);
 }
 

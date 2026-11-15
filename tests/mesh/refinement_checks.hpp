@@ -162,9 +162,8 @@ inline void check_refinement(const Mesh &in, const RefinementResult &r,
   }
   std::set<std::pair<std::size_t, std::size_t>> split_edges;
   for (std::size_t v = n; v < out.nodes.size(); ++v)
-    check(
-        split_edges.insert({parents.nodes[v][0], parents.nodes[v][1]}).second,
-        "one new node per split edge");
+    check(split_edges.insert({parents.nodes[v][0], parents.nodes[v][1]}).second,
+          "one new node per split edge");
 
   // Children grouped by parent.
   std::map<std::size_t, std::vector<std::size_t>> children;

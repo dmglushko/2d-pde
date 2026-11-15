@@ -100,7 +100,9 @@ void closure_counts() {
       near(report.metrics.at("refined_by_closure"), 1, 0, "one by closure");
       // (1, 2, 0) -> (4, 1, 2), (4, 0, 1); (3, 0, 2) -> (4, 3, 0),
       // (4, 2, 3): the newest vertex first.
-      for (auto t : {std::array<std::size_t, 3>{4, 1, 2}, {4, 0, 1}, {4, 3, 0},
+      for (auto t : {std::array<std::size_t, 3>{4, 1, 2},
+                     {4, 0, 1},
+                     {4, 3, 0},
                      {4, 2, 3}})
         check(triangle_with(r.mesh, t) < r.mesh.triangles.size(),
               refiner->name() + ": a bisection child, newest vertex first");
@@ -134,13 +136,12 @@ void four_bisection_children() {
   m.nodes = {{0, 0}, {2, 0}, {1, 2}, {1, -1}, {2.2, 1.4}, {-0.2, 1.4}};
   m.triangles = {{{2, 0, 1}}, {{3, 1, 0}}, {{4, 2, 1}}, {{5, 0, 2}}};
   m.region_names = {"r"};
-  m.boundary_edges = {
-      BoundaryEdge{{0, 3}, 0, std::nullopt},
-      BoundaryEdge{{3, 1}, 0, std::nullopt},
-      BoundaryEdge{{1, 4}, 0, std::nullopt},
-      BoundaryEdge{{4, 2}, 0, std::nullopt},
-      BoundaryEdge{{2, 5}, 0, std::nullopt},
-      BoundaryEdge{{5, 0}, 0, std::nullopt}};
+  m.boundary_edges = {BoundaryEdge{{0, 3}, 0, std::nullopt},
+                      BoundaryEdge{{3, 1}, 0, std::nullopt},
+                      BoundaryEdge{{1, 4}, 0, std::nullopt},
+                      BoundaryEdge{{4, 2}, 0, std::nullopt},
+                      BoundaryEdge{{2, 5}, 0, std::nullopt},
+                      BoundaryEdge{{5, 0}, 0, std::nullopt}};
   // The outer triangles' refinement edges are their edges with the inner
   // one; the inner one's is 0-1.
   const Marked marked{1, 2, 3};
@@ -185,9 +186,7 @@ void bad_input() {
         refiner->name() + ": marked triangle 5 is out of range");
   }
   expect_throws<std::invalid_argument>(
-      [] {
-        (void)Remesher(nullptr).refine(two_triangle_square(), Marked{0});
-      },
+      [] { (void)Remesher(nullptr).refine(two_triangle_square(), Marked{0}); },
       "Remesher::refine needs a refiner");
   expect_throws<std::invalid_argument>(
       [] { NewestVertexBisection({.max_points = 0}); },
@@ -371,8 +370,8 @@ void ruppert_shared_circumcenter() {
 // bisection refiners meet the spec, in the Mesher and in the Remesher.
 void run_meets_the_spec() {
   for (const auto &refiner : bisection_refiners())
-    for (const auto &g : {rectangle(2, 1), l_shape(), annulus(1, 0.4),
-                          holes_and_island()})
+    for (const auto &g :
+         {rectangle(2, 1), l_shape(), annulus(1, 0.4), holes_and_island()})
       for (double h : {0.3, 0.12}) {
         Mesher mesher(std::make_shared<ChordLengthDiscretizer>(),
                       std::make_shared<Cdt>(), refiner);

@@ -98,9 +98,9 @@ void refine_towards(const CurveGeometry &g, double h,
             marked.push_back(t);
       }
       auto r = refine_with(refiner, m, marked);
-      check_refinement(m, r, marked,
-                       {.straight = false,
-                        .marked_children = marked_children(*refiner)});
+      check_refinement(
+          m, r, marked,
+          {.straight = false, .marked_children = marked_children(*refiner)});
       check_new_nodes(m, r, circles);
       const double next = std::abs(mesh_area(r.mesh) - exact_area);
       // Up to rounding: a step that splits no boundary edge keeps the area,
@@ -111,7 +111,7 @@ void refine_towards(const CurveGeometry &g, double h,
       // edge (the bisection refiners split only one edge per triangle).
       if (uniform && refiner->name() == "red_green_blue")
         check(next < error, refiner->name() + ": strictly, when every "
-                                             "boundary edge is split");
+                                              "boundary edge is split");
       std::cout << "INFO " << refiner->name()
                 << (uniform ? " uniform" : " local") << " cycle " << cycle + 1
                 << ": " << r.mesh.triangles.size() << " triangles, area error "
@@ -149,9 +149,9 @@ void disc_quality_mesh() {
     for (int cycle = 0; cycle < 4; ++cycle) {
       auto marked = all_triangles(m);
       auto r = refine_with(refiner, m, marked);
-      check_refinement(m, r, marked,
-                       {.straight = false,
-                        .marked_children = marked_children(*refiner)});
+      check_refinement(
+          m, r, marked,
+          {.straight = false, .marked_children = marked_children(*refiner)});
       m = r.mesh;
       std::cout << "INFO " << refiner->name() << " Ruppert disc cycle "
                 << cycle + 1 << ": min angle " << min_angle_degrees(m)
@@ -208,7 +208,8 @@ void inward_bulge_past_the_mesh() {
     check(!report.messages.empty() &&
               report.messages[0].find(
                   "boundary edge (0, 1) of region 'r' cannot be split: the "
-                  "curve bulges in past another boundary node") != std::string::npos,
+                  "curve bulges in past another boundary node") !=
+                  std::string::npos,
           refiner->name() + ": the report says why");
   }
 }
@@ -226,8 +227,12 @@ void retriangulating_split_drops_parents() {
   m.region_names = {"r"};
   // The circle through (0, 0), (1, 0.8), (2, 0): centre (1, -0.225).
   const double k = 0.225, radius = std::hypot(1.0, k);
-  m.chains = {arc_chain(
-      {{1, -k}, radius, radius, 0, pi - std::atan(k), -(pi - 2 * std::atan(k))})};
+  m.chains = {arc_chain({{1, -k},
+                         radius,
+                         radius,
+                         0,
+                         pi - std::atan(k),
+                         -(pi - 2 * std::atan(k))})};
   m.boundary_edges = {
       BoundaryEdge{{0, 1}, 0, CurveLink{0, 0, m.chains[0].length()}},
       BoundaryEdge{{1, 2}, 0, std::nullopt},
@@ -235,7 +240,8 @@ void retriangulating_split_drops_parents() {
       BoundaryEdge{{3, 0}, 0, std::nullopt}};
   validate(m);
   for (const auto &refiner :
-       {std::shared_ptr<const Refiner>(std::make_shared<NewestVertexBisection>()),
+       {std::shared_ptr<const Refiner>(
+            std::make_shared<NewestVertexBisection>()),
         std::shared_ptr<const Refiner>(
             std::make_shared<RedGreenBlueRefinement>())}) {
     auto r = refine_with(refiner, m, Marked{0});
@@ -260,8 +266,8 @@ void retriangulating_split_drops_parents() {
     for (const auto &e : r.mesh.boundary_edges)
       for (auto v : e.nodes)
         if (v >= m.nodes.size())
-          on_arc = on_arc ||
-                   std::abs(distance(r.mesh.nodes[v], {1, -k}) - radius) < 1e-12;
+          on_arc = on_arc || std::abs(distance(r.mesh.nodes[v], {1, -k}) -
+                                      radius) < 1e-12;
     check(on_arc, "the new boundary node lies on the arc");
   }
 }
@@ -292,9 +298,9 @@ void outward_bulge_into_another_piece_throws() {
         "Remesher::refine: the refined mesh is not valid");
     // Refining only the lower piece is fine.
     auto r = refine_with(refiner, m, Marked{1});
-    check_refinement(m, r, Marked{1},
-                     {.straight = false,
-                      .marked_children = marked_children(*refiner)});
+    check_refinement(
+        m, r, Marked{1},
+        {.straight = false, .marked_children = marked_children(*refiner)});
   }
 }
 
@@ -318,10 +324,10 @@ void red_ears_warn() {
       for (int i = 0; i < 3; ++i) {
         Point a = c[i], b = c[(i + 1) % 3], d = c[(i + 2) % 3];
         double ux = b.x - a.x, uy = b.y - a.y, vx = d.x - a.x, vy = d.y - a.y;
-        small = small || std::atan2(std::abs(ux * vy - uy * vx),
-                                    ux * vx + uy * vy) *
-                                 180 / pi <
-                             10;
+        small = small ||
+                std::atan2(std::abs(ux * vy - uy * vx), ux * vx + uy * vy) *
+                        180 / pi <
+                    10;
       }
       below += small ? 1 : 0;
     }
@@ -350,7 +356,8 @@ void deterministic() {
     Marked marked;
     for (std::size_t t = 0; t < m.triangles.size(); t += 2)
       marked.push_back(t);
-    check(same_result(refine_with(refiner, m, marked), refine_with(refiner, m, marked)),
+    check(same_result(refine_with(refiner, m, marked),
+                      refine_with(refiner, m, marked)),
           "same input, same output");
   }
 }
