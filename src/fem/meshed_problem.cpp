@@ -595,6 +595,29 @@ double MeshedProblem::dirichlet_acceleration(std::size_t k, double t) const {
                              dirichlet_nodes_[k], t, acceleration_name);
 }
 
+std::optional<FreeInitialState>
+MeshedProblem::initial_free_state(double t0) const {
+  check_start_time(t0);
+  if (!initial_u_)
+    return std::nullopt;
+  // at_free_nodes fills a vector over all nodes (0 at Dirichlet nodes);
+  // keep the free entries, in the order of free_nodes_.
+  const auto free_part = [&](const std::vector<double> &all) {
+    std::vector<double> part;
+    part.reserve(free_nodes_.size());
+    for (const std::size_t node : free_nodes_)
+      part.push_back(all[node]);
+    return part;
+  };
+  FreeInitialState state;
+  state.values =
+      free_part(at_free_nodes(*mesh_, free_nodes_, *initial_u_, "u", t0));
+  if (initial_u_t_)
+    state.velocities =
+        free_part(at_free_nodes(*mesh_, free_nodes_, *initial_u_t_, "u_t", t0));
+  return state;
+}
+
 std::optional<std::vector<double>>
 MeshedProblem::initial_values(double t0) const {
   check_start_time(t0);
