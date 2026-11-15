@@ -46,4 +46,23 @@ struct CsrMatrix {
   std::vector<double> multiply(std::span<const double> vector) const;
 };
 
+// Facts read from a matrix's values (docs/decisions.md, "Two kinds of
+// facts per matrix"): they hold for these numbers only. A matrix without
+// a pattern counts as 0 x 0. Both throw std::invalid_argument when the
+// number of values is not the number of slots of the pattern.
+
+// Whether every stored value is zero (-0.0 counts as zero; a NaN does not).
+// A matrix with no slots has only zero entries.
+[[nodiscard]] bool has_only_zero_entries(const CsrMatrix &matrix);
+
+// Whether the matrix is square and |a_ij - a_ji| <= relative_tolerance *
+// max |a| for every entry, where an entry missing from the pattern counts
+// as 0. A matrix whose values are all zero is symmetric; one with a value
+// that is not finite is not. The default tolerance allows the rounding of
+// matrices computed in full, like the assembled ones, whose (i, j) and
+// (j, i) can differ in the last bits. Throws std::invalid_argument for a
+// tolerance that is negative or not finite.
+[[nodiscard]] bool is_symmetric(const CsrMatrix &matrix,
+                                double relative_tolerance = 1e-12);
+
 } // namespace pde2d::fem

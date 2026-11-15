@@ -34,7 +34,7 @@ namespace pde2d::fem {
 //   load - A_FD U_D: M2, M1 and D are left out and only U_D is evaluated
 //   (never U_D' or U_D''), so a static solve does not need derivatives
 //   of the boundary data that it drops.
-// An operator left out is a zero operator (is_zero), so time_order() is at
+// An operator left out is a zero operator (always_zero), so time_order() is at
 // most max_time_order.
 //
 // With `previous` (an earlier result for the same MeshedProblem object,
@@ -66,6 +66,15 @@ public:
   assemble(std::shared_ptr<const MeshedProblem> meshed_problem, double t,
            const AssembledProblem *previous = nullptr,
            int max_time_order = 2) const;
+
+  // The time order that assemble(meshed_problem, t) gives (with the
+  // default max_time_order 2) at any t, from the formula facts alone:
+  // no coefficient is evaluated, so it can be asked before anything is
+  // assembled (d/dt sqrt(t) is infinite at t = 0). Like
+  // AssembledProblem::time_order, it can be lower than the order as
+  // written (fem::time_order(MeshedProblem)), when a boundary u_t term
+  // vanishes because A is zero.
+  [[nodiscard]] int time_order(const MeshedProblem &meshed_problem) const;
 };
 
 } // namespace pde2d::fem

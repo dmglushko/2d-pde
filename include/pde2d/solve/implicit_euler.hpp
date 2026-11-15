@@ -27,6 +27,12 @@ namespace pde2d::solve {
 //
 // One set of weights (1 / dt^2, 1 / dt, 1) serves every order: a zero
 // operator adds nothing. No options.
+//
+// The start reads nothing at t0 for time orders 1 and 2: the steps are
+// assembled at their end times, so U_D' and U_D'' are never evaluated at
+// t0 (u = sqrt(t) from t0 = 0 works). For time order 0 there is no
+// initial state: start() solves A(t0) U0 = b(t0) from the static part
+// assembled at t0 (StartNeeds::static_part), for a snapshot at t0.
 class ImplicitEuler final : public TimeMethod {
 public:
   std::string name() const override { return "implicit_euler"; }
@@ -35,6 +41,13 @@ public:
   }
   double evaluation_fraction() const override { return 1.0; }
   StepMatrixWeights step_matrix_weights(double dt) const override;
+  StartNeeds start_needs(int time_order) const override {
+    return time_order == 0 ? StartNeeds::static_part : StartNeeds::nothing;
+  }
+  // Called only for time order 0: the state at t0 is the static solution.
+  void start(const fem::AssembledProblem &problem,
+             const LinearSolver &linear_solver,
+             TimeState &state) const override;
   StepSolveInfo advance(const fem::AssembledProblem &problem, double dt,
                         const PreparedLinearSolver &solver,
                         TimeState &state) const override;

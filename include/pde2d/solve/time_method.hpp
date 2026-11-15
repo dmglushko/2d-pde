@@ -36,6 +36,17 @@ struct TimeMethodCapabilities {
   }
 };
 
+// What a method's start() reads of the problem at the start time t0
+// (docs/decisions.md, "A time method declares what its start reads at
+// t0"). The Integrator assembles at t0 only that much, so a problem whose
+// time derivatives of the boundary data are not finite at t0 (u = sqrt(t)
+// from t0 = 0) can be integrated by a method that does not read them:
+// - nothing: start() is not called and nothing is assembled at t0;
+// - static_part: the problem assembled at t0 with max_time_order 0 (A and
+//   the load, with the lifting by U_D only);
+// - whole_problem: the problem assembled at t0 with max_time_order 2.
+enum class StartNeeds { nothing, static_part, whole_problem };
+
 // The matrix of one step's linear system, as weights of the three
 // operators' free parts: mass * M2 + damping * B + stiffness * A. It
 // depends only on dt, so the Integrator can tell when it changes.
@@ -72,12 +83,18 @@ public:
   // The weights of the step matrix for a step of length dt.
   virtual StepMatrixWeights step_matrix_weights(double dt) const = 0;
 
-  // Called once before the first step, with the problem assembled at the
-  // start time and the state at the start (values, and velocities for
-  // time order 2). A method that needs more state (Newmark's
-  // accelerations) computes it here; it may prepare `linear_solver` for
-  // its own matrix, after checking the solver's requirements against that
-  // matrix's facts. The default does nothing.
+  // What start() reads at t0 for a problem of this time order (one the
+  // method supports; see StartNeeds).
+  virtual StartNeeds start_needs(int time_order) const = 0;
+
+  // Called once before the first step, and only when start_needs(time
+  // order) is not StartNeeds::nothing, with the problem assembled at the
+  // start time as start_needs says and the state at the start (values,
+  // and velocities for time order 2; empty for time order 0). A method
+  // that needs more state (Newmark's accelerations, the solution at t0
+  // for time order 0) computes it here; it may prepare `linear_solver`
+  // for its own matrix, after checking the solver's requirements against
+  // that matrix's facts. The default does nothing.
   virtual void start(const fem::AssembledProblem &problem,
                      const LinearSolver &linear_solver, TimeState &state) const;
 

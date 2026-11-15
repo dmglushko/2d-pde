@@ -257,7 +257,9 @@ void counts_prepares() {
     check(result.report.metrics.at("steps") == 10, "10 steps");
     check(result.report.metrics.at("prepares") == 1, "prepared once");
     check(solver->count() == 1, "the solver saw one prepare");
-    check(result.report.metrics.at("assemblies") == 11, "11 assemblies");
+    // One per step: their start reads nothing, so nothing is assembled at
+    // t0.
+    check(result.report.metrics.at("assemblies") == 10, "10 assemblies");
   }
   // Stiffness and damping depend on t: prepared every step.
   const auto solver = std::make_shared<pde2d::test::CountingSolver>();
@@ -271,6 +273,8 @@ void counts_prepares() {
                         .integrate(meshed(wave_problem()), 0.0, 1.0);
   check(wave.report.metrics.at("prepares") == 1, "one step matrix");
   check(wave_solver->count() == 2, "and one mass matrix");
+  check(wave.report.metrics.at("assemblies") == 11,
+        "Newmark's start reads the whole problem at t0: 11 assemblies");
 }
 
 void refuses_time_orders() {
@@ -386,8 +390,8 @@ void vanishing_mass() {
     std::cout << "newmark: " << what << '\n';
     check(what.find("starting acceleration cannot be computed") !=
                   std::string::npos &&
-              what.find("solving with M2 at t0 = 0 failed (sparse_lu") !=
-                  std::string::npos &&
+              what.find("M2 is singular at t0 = 0 (solving with it failed: "
+                        "sparse_lu") != std::string::npos &&
               what.find("ImplicitMidpoint") != std::string::npos,
           "names the cause, the solver's error and the other methods");
   }
@@ -444,7 +448,7 @@ void midpoint_without_mass() {
 void symmetric_solvers() {
   for (const auto &problem : {heat_problem(), constant_heat_problem()}) {
     const auto m = meshed(problem);
-    check(Assembler().assemble(m, 0.0).stiffness().symmetric,
+    check(Assembler().assemble(m, 0.0).stiffness().always_symmetric,
           "isotropic heat is symmetric");
     const auto lu = integrator(std::make_shared<ImplicitMidpoint>(), 0.1)
                         .integrate(m, 0.0, 1.0);
