@@ -1,0 +1,104 @@
+{
+  "format": "pde2d-app-case",
+  "version": 1,
+  "notes": "A vibrating membrane: u_tt = u_xx + u_yy on the unit square, fixed edges, starting from the first mode at rest. The exact solution is cos(sqrt(2) pi t) sin(pi x) sin(pi y): one period every sqrt(2) = 1.41, so about two periods to t1 = 3. Solved with Newmark.",
+  "geometry": {
+    "source": "shape",
+    "shape": "rectangle",
+    "options": {
+      "width": 1.0,
+      "height": 1.0
+    },
+    "region_edits": []
+  },
+  "mesh": {
+    "spec": {
+      "max_edge_length": {
+        "absolute": null,
+        "relative": 0.04
+      }
+    },
+    "discretizer": {
+      "type": "chord_length",
+      "options": {
+        "max_curve_deviation": {
+          "absolute": null,
+          "relative": null
+        },
+        "corner_angle_degrees": 30
+      }
+    },
+    "triangulator": {
+      "type": "cdt",
+      "options": {}
+    },
+    "refiner": {
+      "type": "ruppert",
+      "options": {
+        "min_angle_degrees": 25,
+        "max_points": 10000000
+      }
+    },
+    "improvers": []
+  },
+  "problem": {
+    "equation": {
+      "m2": "1",
+      "a_xx": "-1",
+      "a_yy": "-1",
+      "f": "0"
+    },
+    "parameters": {},
+    "boundary_conditions": {
+      "bottom": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "right": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "top": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "left": {
+        "alpha": "1",
+        "g": "0"
+      }
+    },
+    "initial": {
+      "u": "sin(pi*(x + 0.5))*sin(pi*(y + 0.5))",
+      "u_t": "0"
+    }
+  },
+  "assembly": {
+    "t": 0.0,
+    "max_time_order": 2
+  },
+  "solve": {
+    "mode": "time",
+    "linear_solver": {
+      "type": "sparse_lu",
+      "options": {}
+    },
+    "static": {
+      "t": 0.0
+    },
+    "time": {
+      "t0": 0.0,
+      "t1": 3.0,
+      "snapshots": 100,
+      "method": {
+        "type": "newmark",
+        "options": {}
+      },
+      "step": {
+        "type": "fixed_step",
+        "options": {
+          "dt": 0.01
+        }
+      }
+    }
+  }
+}

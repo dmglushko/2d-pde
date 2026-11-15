@@ -177,6 +177,8 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
         [&session](const Json &body) { return session.check_problem(body); });
   route("/api/assemble",
         [&session](const Json &body) { return session.assemble(body); });
+  route("/api/solve",
+        [&session](const Json &body) { return session.solve(body); });
   route("/api/field",
         [&session](const Json &body) { return session.field(body); });
 

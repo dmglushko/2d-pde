@@ -11,6 +11,10 @@ pde2d_app_add_test(app_session session.cpp pde2d_app_core)
 target_compile_definitions(app_session
   PRIVATE PDE2D_APP_EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/app/examples")
 
+pde2d_app_add_test(app_solve solve.cpp pde2d_app_core)
+target_compile_definitions(app_solve
+  PRIVATE PDE2D_APP_EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/app/examples")
+
 pde2d_app_add_test(app_server server.cpp pde2d_app_server)
 target_include_directories(app_server SYSTEM
   PRIVATE ${PROJECT_SOURCE_DIR}/app/third_party/cpp-httplib)

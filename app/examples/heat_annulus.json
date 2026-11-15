@@ -1,7 +1,7 @@
 {
   "format": "pde2d-app-case",
   "version": 1,
-  "notes": "Heat flow u_t = k (u_xx + u_yy) in an annulus; the hole heats up from 0 towards 1.",
+  "notes": "Heat flow u_t = k (u_xx + u_yy) in an annulus; the hole heats up from 0 towards 1. Solved in time with the implicit midpoint rule and conjugate gradients.",
   "geometry": {
     "source": "shape",
     "shape": "annulus",
@@ -68,5 +68,32 @@
   "assembly": {
     "t": 0.0
   },
-  "solve": null
+  "solve": {
+    "mode": "time",
+    "linear_solver": {
+      "type": "conjugate_gradient",
+      "options": {
+        "tolerance": 1e-10,
+        "max_iterations": 1000
+      }
+    },
+    "static": {
+      "t": 0.0
+    },
+    "time": {
+      "t0": 0.0,
+      "t1": 5.0,
+      "snapshots": 50,
+      "method": {
+        "type": "implicit_midpoint",
+        "options": {}
+      },
+      "step": {
+        "type": "fixed_step",
+        "options": {
+          "dt": 0.05
+        }
+      }
+    }
+  }
 }

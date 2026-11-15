@@ -3,7 +3,7 @@
 
 import { api, saveBlob } from "./api.js";
 import { runAll, runStage, scheduleProblemCheck, toast } from "./actions.js";
-import { fileKind, normalizeCase, stageKey } from "./core.js";
+import { fileKind, formatNumber, normalizeCase, stageKey } from "./core.js";
 import { h, readFileText, fill } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
 import { geometryPanel, loadDomainFile } from "./panels/geometry.js";
@@ -57,7 +57,7 @@ function updateDots() {
     mesh: stageStatus("mesh"),
     problem: store.errors.problem ? "failed" : freshResult("problem") ? (freshResult("problem").ok ? "done" : "failed") : stageStatus("problem"),
     assemble: stageStatus("assemble"),
-    solve: "none",
+    solve: stageStatus("solve"),
   };
   for (const button of document.querySelectorAll(".steps button")) {
     const dot = button.querySelector(".dot");
@@ -67,19 +67,30 @@ function updateDots() {
   }
 }
 
+// The field the picture colours by: the solution snapshot or the last
+// field of the Assemble step, whichever came last, while it is up to date.
+function shownField() {
+  const solved = freshResult("solve");
+  if (store.fieldSource === "solve" && solved) {
+    const i = Math.min(store.solveFrame, solved.times.length - 1);
+    return { label: `u at t = ${formatNumber(solved.times[i], 5)}`, values: solved.values[i], scale: solved.scale };
+  }
+  const field = store.results.field;
+  return field && field.key === stageKey(store.caseData, "assemble") ? field.data : null;
+}
+
 function updateViewer() {
   const geometry = freshResult("geometry") ?? lastResult("geometry");
   const meshResult = lastResult("mesh");
   const assembled = lastResult("assemble");
   const mesh = meshResult?.mesh ?? null;
-  const field = store.results.field;
   const meshFresh = freshResult("mesh") !== null;
   viewer.set({
     geometry,
     mesh,
     meshStale: mesh !== null && !meshFresh,
     dirichlet: assembled && freshResult("assemble") ? assembled.meshed_problem.dirichlet_nodes : null,
-    field: field && field.key === stageKey(store.caseData, "assemble") ? field.data : null,
+    field: shownField(),
     colorBy: element("color-by").value,
     layers: { geometry: element("layer-geometry").checked, mesh: element("layer-mesh").checked, dirichlet: element("layer-dirichlet").checked },
   });
@@ -88,6 +99,7 @@ function updateViewer() {
 }
 
 function refresh(reason) {
+  if (reason === "frame") return updateViewer();
   // The problem check is cheap: keep it current whatever changed the case.
   const problem = stageStatus("problem");
   if (problem === "stale" || problem === "none") scheduleProblemCheck();

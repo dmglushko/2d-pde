@@ -6,44 +6,11 @@ import { downloadExport } from "../api.js";
 import { runStage, toast } from "../actions.js";
 import { formatNumber } from "../core.js";
 import { actionButton, errorBox, h, markError, optionsForm, reportsView, stat, fill } from "../dom.js";
+import { choiceCard, componentBody, defaultChoice } from "./components.js";
 import { editCase, freshResult, lastResult, stageStatus, store } from "../state.js";
 
-function defaultChoice(component) {
-  return { type: component.type, options: Object.fromEntries(component.options.map((o) => [o.name, o.default])) };
-}
-
-function componentSelect(slot, choice, path, onPick, allowNone) {
-  return h(
-    "select",
-    {
-      "aria-label": slot.label,
-      dataset: { path: `${path}.type` },
-      onchange: (event) => onPick(event.target.value === "" ? null : defaultChoice(slot.components.find((c) => c.type === event.target.value))),
-    },
-    allowNone ? h("option", { value: "", selected: !choice }, "none") : null,
-    slot.components.map((c) => h("option", { value: c.type, selected: choice?.type === c.type }, c.label)),
-  );
-}
-
-function componentBody(slot, choice, path) {
-  if (!choice) return [];
-  const component = slot.components.find((c) => c.type === choice.type);
-  if (!component) return [h("div", { class: "error-text" }, `Unknown component ${choice.type}`)];
-  choice.options ??= {};
-  return [h("div", { class: "help" }, component.description), h("div", { dataset: { path: `${path}.options` } }, optionsForm(component.options, choice.options, `${path}.options`, () => editCase(() => {})))];
-}
-
 function singleSlot(slot, mesh) {
-  const path = `mesh.${slot.id}`;
-  const choice = mesh[slot.id];
-  const pick = (next) => editCase((c) => (c.mesh[slot.id] = next), "structure");
-  return h(
-    "div",
-    { class: "card field", dataset: { path } },
-    h("div", { class: "card-head" }, h("span", { class: "title" }, slot.label), h("span", { class: "spacer" }), componentSelect(slot, choice, path, pick, slot.cardinality === "optional")),
-    h("div", { class: "help" }, slot.description),
-    componentBody(slot, choice, path),
-  );
+  return choiceCard(slot, mesh[slot.id], `mesh.${slot.id}`, (next) => editCase((c) => (c.mesh[slot.id] = next), "structure"));
 }
 
 function listSlot(slot, mesh) {

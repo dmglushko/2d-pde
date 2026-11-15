@@ -365,6 +365,9 @@ input.expr {
 
 .field {
   display: grid;
+  /* One column that never grows past the panel (a long option name in a
+     select would otherwise set its width). */
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
   margin: 10px 0;
 }
@@ -441,6 +444,13 @@ input.expr {
 
 .card-head .title {
   font-weight: 600;
+}
+
+/* A long component name must not push the select out of its card. */
+.card-head select {
+  min-width: 0;
+  max-width: 65%;
+  text-overflow: ellipsis;
 }
 
 .swatch {

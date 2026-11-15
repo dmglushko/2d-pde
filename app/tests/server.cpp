@@ -83,9 +83,14 @@ int main() {
          const Json problem = post(client, "/api/problem", case_json, 200);
          check(problem["ok"].get<bool>(), "problem ok");
          const Json assembly = post(client, "/api/assemble", case_json, 200);
-         check(assembly["assembly"]["operators"]["stiffness"]["is_zero"] ==
+         check(assembly["assembly"]["operators"]["stiffness"]["always_zero"] ==
                    false,
                "stiffness");
+         const Json solved = post(client, "/api/solve", case_json, 200);
+         check(solved["values"].size() == 1 &&
+                   solved["values"][0].size() ==
+                       mesh["stats"]["nodes"].get<std::size_t>(),
+               "a value per node");
          const auto file = client.Post("/api/export/mesh.svg", case_json.dump(),
                                        "application/json");
          check(file && file->status == 200 &&
@@ -98,7 +103,7 @@ int main() {
          const Running running;
          auto client = running.client();
          const Json list = Json::parse(client.Get("/api/examples")->body);
-         check(list.size() == 3, "three examples");
+         check(list.size() == 4, "four examples");
          const std::string name = list[0]["name"].get<std::string>();
          const auto example = client.Get("/api/examples/" + name);
          check(example && example->status == 200, "served");

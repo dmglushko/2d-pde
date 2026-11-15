@@ -1,7 +1,7 @@
 // Running the stages on the server and keeping their results.
 
 import { api, ApiError } from "./api.js";
-import { reconcileConditions, stageKey } from "./core.js";
+import { fieldScale, reconcileConditions, stageKey } from "./core.js";
 import { editCase, notify, store } from "./state.js";
 
 let toastTimer = null;
@@ -21,6 +21,7 @@ const calls = {
   problem: (caseData) => api.problem(caseData),
   assemble: (caseData) => api.assemble(caseData),
   field: (caseData, field) => api.field(caseData, field),
+  solve: (caseData) => api.solve(caseData),
 };
 
 // Requests overlap (a slow mesh, a quick edit, a new case). Each run of a
@@ -42,6 +43,14 @@ async function run(stage, field) {
   try {
     const data = await calls[stage](caseData, field);
     if (!current()) return null;
+    if (stage === "solve") {
+      // One colour scale for every snapshot, so the colours mean the same
+      // value at every time.
+      data.scale = fieldScale([data.min, data.max]);
+      store.solveFrame = data.times.length - 1;
+      store.fieldSource = "solve";
+    }
+    if (stage === "field") store.fieldSource = "field";
     store.results[stage] = { key, data };
     store.errors[stage] = null;
     if (stage === "geometry") syncConditions(data, key);
@@ -80,16 +89,16 @@ function syncConditions(geometryView, key) {
   }, "structure");
 }
 
-// Geometry, mesh and assembly in turn, skipping a stage whose result is
-// still fresh; stops at the first failure.
+// Geometry, mesh, assembly and solve in turn, skipping a stage whose
+// result is still fresh; stops at the first failure.
 export async function runAll() {
-  for (const stage of ["geometry", "mesh", "assemble"]) {
+  for (const stage of ["geometry", "mesh", "assemble", "solve"]) {
     const result = store.results[stage];
     if (result && result.key === stageKey(store.caseData, stage) && !store.errors[stage]) continue;
     const ok = await runStage(stage);
     if (ok === null) return false;
     if (!ok) {
-      toast(`${stage} failed: see the ${stage === "assemble" ? "Assemble" : stage[0].toUpperCase() + stage.slice(1)} step`);
+      toast(`${stage} failed: see the ${stage[0].toUpperCase() + stage.slice(1)} step`);
       return false;
     }
   }

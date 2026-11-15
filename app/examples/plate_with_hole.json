@@ -74,5 +74,29 @@
   "assembly": {
     "t": 0.0
   },
-  "solve": null
+  "solve": {
+    "mode": "static",
+    "linear_solver": {
+      "type": "sparse_lu",
+      "options": {}
+    },
+    "static": {
+      "t": 0.0
+    },
+    "time": {
+      "t0": 0.0,
+      "t1": 1.0,
+      "snapshots": 50,
+      "method": {
+        "type": "implicit_euler",
+        "options": {}
+      },
+      "step": {
+        "type": "fixed_step",
+        "options": {
+          "dt": 0.01
+        }
+      }
+    }
+  }
 }

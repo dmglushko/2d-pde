@@ -71,5 +71,31 @@
   "assembly": {
     "t": 0.0
   },
-  "solve": null
+  "solve": {
+    "mode": "static",
+    "linear_solver": {
+      "type": "simplicial_ldlt",
+      "options": {
+        "residual_tolerance": 1e-08
+      }
+    },
+    "static": {
+      "t": 0.0
+    },
+    "time": {
+      "t0": 0.0,
+      "t1": 1.0,
+      "snapshots": 50,
+      "method": {
+        "type": "implicit_euler",
+        "options": {}
+      },
+      "step": {
+        "type": "fixed_step",
+        "options": {
+          "dt": 0.01
+        }
+      }
+    }
+  }
 }

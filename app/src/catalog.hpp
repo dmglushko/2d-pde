@@ -6,6 +6,9 @@
 #include "pde2d/mesh/mesh_spec.hpp"
 #include "pde2d/mesh/mesher.hpp"
 #include "pde2d/mesh/remesher.hpp"
+#include "pde2d/solve/linear_solver.hpp"
+#include "pde2d/solve/step_controller.hpp"
+#include "pde2d/solve/time_method.hpp"
 
 #include <functional>
 #include <memory>
@@ -74,5 +77,58 @@ Json default_mesh_section();
 // and its slots (discretizer, triangulator, refiner, improvers), each
 // with the components that fit it. See docs/app.md, "The catalog".
 Json mesh_catalog_json();
+
+// The "solve" section of a case:
+//
+//   {"mode": "static" or "time",
+//    "linear_solver": {"type": "sparse_lu", "options": {}},
+//    "static": {"t": 0},
+//    "time": {"t0": 0, "t1": 1, "snapshots": 50,
+//             "method": {"type": "implicit_euler", "options": {}},
+//             "step": {"type": "fixed_step", "options": {"dt": 0.01}}}}
+//
+// Only the part of the chosen mode is read into the library's objects; the
+// other is kept as written (an object or null), so switching modes back
+// and forth keeps both.
+struct SolveCatalog {
+  std::vector<OptionSpec> static_settings; // t
+  std::vector<OptionSpec> time_settings;   // t0, t1, snapshots
+  std::vector<Component<solve::LinearSolver>> linear_solvers;
+  std::vector<Component<solve::TimeMethod>> time_methods;
+  std::vector<Component<solve::StepController>> step_controllers;
+};
+
+const SolveCatalog &solve_catalog();
+
+enum class SolveMode { static_solve, time_integration };
+
+struct SolveSetup {
+  SolveMode mode = SolveMode::static_solve;
+  std::shared_ptr<const solve::LinearSolver> linear_solver;
+  double t = 0.0; // static
+  // Time integration:
+  std::shared_ptr<const solve::TimeMethod> method;
+  std::shared_ptr<const solve::StepController> step_controller;
+  double t0 = 0.0;
+  double t1 = 0.0;
+  // Solutions are kept at t0 + k (t1 - t0) / snapshots, k = 0..snapshots.
+  std::size_t snapshots = 0;
+};
+
+// The most snapshots a run keeps (each one is a value per mesh node sent
+// to the page).
+inline constexpr std::size_t max_snapshots = 1000;
+
+// Throws std::invalid_argument, naming the path ("solve.time.step.options.
+// dt: ..."), like build_mesh_setup. A null section is the default one.
+SolveSetup build_solve_setup(const Json &solve_section);
+
+// The solve section a new case starts with.
+Json default_solve_section();
+
+// The solve section as the page receives it: the linear solver slot, and
+// per mode its settings and slots. Linear solvers carry their declared
+// requirements and time methods their supported time orders ("traits").
+Json solve_catalog_json();
 
 } // namespace pde2d::app

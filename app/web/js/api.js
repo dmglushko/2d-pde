@@ -29,6 +29,7 @@ export const api = {
   problem: (caseData) => request("/api/problem", caseData),
   assemble: (caseData) => request("/api/assemble", caseData),
   field: (caseData, field) => request("/api/field", { case: caseData, field }),
+  solve: (caseData) => request("/api/solve", caseData),
 };
 
 // Asks the server for an export of the case and saves it as a file.

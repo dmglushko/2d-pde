@@ -69,14 +69,26 @@ outdated because the case changed since (yellow), or failed (red).
    the time order and which initial conditions are needed.
 4. **Assemble.** Builds the P1 system at a time t, meshing first if
    needed: the number of unknowns and Dirichlet nodes, which operators are
-   zero or change with t, and a picture of where the stiffness matrix has
-   entries. **Show a field on the mesh** draws an expression, the initial
+   zero, change with t or are symmetric (always, or only at this t), and a
+   picture of where the stiffness matrix has entries. **Time terms to
+   build** leaves out u_tt or every time term, as a static solve does. **Show a field on the mesh** draws an expression, the initial
    values, the Dirichlet values or the assembled right-hand side.
-5. **Solve.** Not available yet: the library has no solvers. This step
-   fills in when they land.
+5. **Solve.** **Static** solves A U = b once at a time t (time terms are
+   dropped; a note says so when the problem has them). **In time**
+   integrates from t0 to t1 with a time method (implicit Euler, implicit
+   midpoint, Newmark), a step dt and a number of snapshots. Pick the linear
+   solver for either (sparse LU, simplicial LDLT, conjugate gradient,
+   BiCGSTAB); chips show what each needs or supports, and the library says
+   when a choice does not fit the problem. **Solve** meshes first if
+   needed, then shows the counts, the range of u, the steps and the
+   solver's iterations and residual, and draws the solution. For a run
+   in time, the slider and **Play** walk through the snapshots; the
+   colours keep one scale for every time. **Export solution .csv** saves
+   x, y and u at every kept time. A long run keeps the app busy until it
+   ends.
 
-**Run all** runs geometry, mesh and assembly in turn, skipping the steps
-that are up to date.
+**Run all** runs geometry, mesh, assembly and the solve in turn, skipping
+the steps that are up to date.
 
 In the picture, drag to pan, use the wheel to zoom, and double-click (or
 press **Fit**) to fit. The toolbar turns layers on and off and chooses the
@@ -98,13 +110,14 @@ A case also runs without the browser:
 build/app/pde2d_app --run app/examples/heat_annulus.json --output /tmp/heat
 ```
 
-This prints a JSON summary of every stage and, with `--output`, writes
-`mesh.pde2d` and `mesh.svg`. The exit code is 0 when every stage ran.
+This prints a JSON summary of every stage, the solve included, and, with
+`--output`, writes `mesh.pde2d`, `mesh.svg` and `solution.csv`. The exit code is 0 when every stage ran.
 `pde2d_app --default-case` prints a case to start from.
 
 ## Tests
 
 `ctest --test-dir build -R app_` runs the app's tests: the stages and
-the catalog (`app_session`), the HTTP API (`app_server`), every example
+the catalog (`app_session`), the Solve step against exact solutions
+(`app_solve`), the HTTP API (`app_server`), every example
 case on the command line (`app_run_*`) and the page's code in Node.js
 (`app_web`, `app_web_actions`; skipped without Node).

@@ -10,9 +10,13 @@
 #include "pde2d/fem/meshed_problem.hpp"
 #include "pde2d/io/pde2d_mesh.hpp"
 #include "pde2d/io/svg.hpp"
+#include "pde2d/solve/integrator.hpp"
+#include "pde2d/solve/static_solver.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <utility>
@@ -52,16 +56,39 @@ std::string key_of(const Json &case_json, std::string_view name) {
   return section(case_json, name).dump();
 }
 
-// The time the case assembles at ("assembly": {"t": ...}), 0 by default.
-double assembly_time(const Json &case_json) {
+// The "assembly" section: the time to assemble at (0 by default) and
+// which time terms to build (Assembler::assemble's max_time_order, 2 by
+// default).
+struct AssemblySettings {
+  double t = 0.0;
+  int max_time_order = 2;
+};
+
+AssemblySettings assembly_settings(const Json &case_json) {
+  AssemblySettings out;
   const Json &assembly = section(case_json, "assembly");
   if (assembly.is_null())
-    return 0.0;
+    return out;
   require_object(assembly, "assembly");
-  static constexpr std::string_view known[] = {"t"};
+  static constexpr std::string_view known[] = {"t", "max_time_order"};
   reject_unknown_keys(assembly, "assembly", known);
-  const Json &t = member(assembly, "t");
-  return t.is_null() ? 0.0 : require_number(t, "assembly.t");
+  if (const Json &t = member(assembly, "t"); !t.is_null())
+    out.t = require_number(t, "assembly.t");
+  if (const Json &order = member(assembly, "max_time_order");
+      !order.is_null()) {
+    const double value = require_number(order, "assembly.max_time_order");
+    // The library checks the value; the app only refuses what an int
+    // cannot hold.
+    if (value != std::floor(value) || std::abs(value) > 1e9)
+      throw std::invalid_argument(
+          "assembly.max_time_order: expected a whole number");
+    out.max_time_order = static_cast<int>(value);
+  }
+  return out;
+}
+
+double assembly_time(const Json &case_json) {
+  return assembly_settings(case_json).t;
 }
 
 Json values_json(const std::vector<double> &values) {
@@ -76,10 +103,29 @@ Json operator_json(const fem::Operator &op) {
     return matrix.pattern ? matrix.pattern->nonzeros() : 0;
   };
   Json out = Json::object();
-  out["is_zero"] = op.always_zero;
+  out["always_zero"] = op.always_zero;
+  out["always_symmetric"] = op.always_symmetric;
+  out["zero_now"] = op.zero_now;
+  out["symmetric_now"] = op.symmetric_now;
   out["depends_on_t"] = op.depends_on_t;
   out["free_nonzeros"] = nonzeros(op.free);
   out["dirichlet_nonzeros"] = nonzeros(op.dirichlet);
+  return out;
+}
+
+// "x,y,u(t=...),..." with one row per mesh node.
+std::string solution_csv(const mesh::Mesh &mesh,
+                         const std::vector<solve::Solution> &solutions) {
+  std::string out = "x,y";
+  for (const solve::Solution &solution : solutions)
+    out += std::format(",u(t={})", solution.time);
+  out += '\n';
+  for (std::size_t i = 0; i < mesh.nodes.size(); ++i) {
+    out += std::format("{},{}", mesh.nodes[i].x, mesh.nodes[i].y);
+    for (const solve::Solution &solution : solutions)
+      out += std::format(",{}", solution.values[i]);
+    out += '\n';
+  }
   return out;
 }
 
@@ -96,6 +142,13 @@ struct MeshOutcome {
   double domain_size = 0.0;
 };
 
+struct SolveOutcome {
+  // The kept solutions in time order: one for a static solve, the
+  // snapshots of a time integration.
+  std::vector<solve::Solution> solutions;
+  Json summary; // everything the page gets but the values
+};
+
 // The last result of each stage and the key (the case sections) it was
 // built from.
 struct Session::State {
@@ -107,6 +160,8 @@ struct Session::State {
   std::shared_ptr<const fem::MeshedProblem> meshed;
   std::string assembled_key;
   std::shared_ptr<const fem::AssembledProblem> assembled;
+  std::string solved_key;
+  std::shared_ptr<const SolveOutcome> solved;
 
   const Domain &get_domain(const Json &case_json) {
     std::string key = key_of(case_json, "geometry");
@@ -151,6 +206,7 @@ struct Session::State {
     const MeshOutcome &outcome = get_mesh(case_json);
     std::string key = mesh_key + "\n" + key_of(case_json, "problem");
     if (!meshed || key != meshed_key) {
+      solved.reset();
       assembled.reset();
       meshed.reset();
       const fem::Problem problem = staged("problem", [&] {
@@ -169,11 +225,12 @@ struct Session::State {
   const fem::AssembledProblem &
   get_assembled(const Json &case_json,
                 std::optional<double> time = std::nullopt) {
-    const double t =
-        time ? *time
-             : staged("assembly", [&] { return assembly_time(case_json); });
+    const AssemblySettings settings =
+        staged("assembly", [&] { return assembly_settings(case_json); });
+    const double t = time ? *time : settings.t;
     const auto &problem = get_meshed(case_json);
-    std::string key = meshed_key + "\n" + std::format("{}", t);
+    std::string key =
+        meshed_key + "\n" + std::format("{} {}", t, settings.max_time_order);
     if (!assembled || key != assembled_key) {
       // A previous result of the same MeshedProblem lets assembly reuse
       // its constant parts; the result is the same bit for bit.
@@ -182,12 +239,79 @@ struct Session::State {
                                                               : nullptr;
       auto next = staged("assembly", [&] {
         return std::make_shared<const fem::AssembledProblem>(
-            fem::Assembler().assemble(problem, t, previous));
+            fem::Assembler().assemble(problem, t, previous,
+                                      settings.max_time_order));
       });
       assembled = std::move(next);
       assembled_key = std::move(key);
     }
     return *assembled;
+  }
+
+  const SolveOutcome &get_solved(const Json &case_json) {
+    const auto &problem = get_meshed(case_json);
+    std::string key = meshed_key + "\n" + key_of(case_json, "solve");
+    if (solved && key == solved_key)
+      return *solved;
+    solved.reset();
+    const SolveSetup setup = staged("solve", [&] {
+      return build_solve_setup(section(case_json, "solve"));
+    });
+    auto outcome = std::make_shared<SolveOutcome>();
+    Json summary = Json::object();
+    summary["time_order"] =
+        staged("solve", [&] { return fem::Assembler().time_order(*problem); });
+    summary["problem_time_order"] = fem::time_order(*problem);
+    summary["free_unknowns"] = problem->free_nodes().size();
+    if (setup.mode == SolveMode::static_solve) {
+      solve::StaticResult result = staged("solve", [&] {
+        return solve::StaticSolver(setup.linear_solver).solve(problem, setup.t);
+      });
+      summary["mode"] = "static";
+      summary["reports"] = reports_json(result.reports);
+      outcome->solutions.push_back(std::move(result.solution));
+    } else {
+      solve::IntegrationOutput output;
+      // Only for a valid interval: the library names a bad one itself.
+      if (std::isfinite(setup.t0) && std::isfinite(setup.t1) &&
+          setup.t1 > setup.t0) {
+        const double span = setup.t1 - setup.t0;
+        const auto count = static_cast<double>(setup.snapshots);
+        for (std::size_t k = 0; k < setup.snapshots; ++k)
+          output.snapshot_times.push_back(
+              setup.t0 + span * (static_cast<double>(k) / count));
+        output.snapshot_times.push_back(setup.t1);
+      }
+      solve::IntegrationResult result = staged("solve", [&] {
+        return solve::Integrator(setup.method, setup.step_controller,
+                                 setup.linear_solver)
+            .integrate(problem, setup.t0, setup.t1, output);
+      });
+      summary["mode"] = "time";
+      summary["reports"] = Json::array({report_json(result.report)});
+      outcome->solutions = std::move(result.snapshots);
+      if (outcome->solutions.empty() ||
+          outcome->solutions.back().time != result.final.time)
+        outcome->solutions.push_back(std::move(result.final));
+    }
+    Json times = Json::array();
+    double low = std::numeric_limits<double>::infinity();
+    double high = -std::numeric_limits<double>::infinity();
+    for (const solve::Solution &solution : outcome->solutions) {
+      times.push_back(solution.time);
+      for (const double value : solution.values)
+        if (std::isfinite(value)) {
+          low = std::min(low, value);
+          high = std::max(high, value);
+        }
+    }
+    summary["times"] = std::move(times);
+    summary["min"] = std::isfinite(low) ? Json(low) : Json(nullptr);
+    summary["max"] = std::isfinite(high) ? Json(high) : Json(nullptr);
+    outcome->summary = std::move(summary);
+    solved = std::move(outcome);
+    solved_key = std::move(key);
+    return *solved;
   }
 };
 
@@ -197,18 +321,9 @@ Session::~Session() = default;
 // --- the catalog and the default case ---------------------------------------
 
 Json Session::catalog() {
-  Json solve = Json::object();
-  solve["id"] = "solve";
-  solve["label"] = "Solve";
-  solve["available"] = false;
-  solve["message"] =
-      "The library has no solvers yet. They are planned as pde2d_solve "
-      "(docs/decisions.md, \"Solvers and time integration\"); this step "
-      "fills in when they land.";
-
   Json sections = Json::array();
   sections.push_back(mesh_catalog_json());
-  sections.push_back(std::move(solve));
+  sections.push_back(solve_catalog_json());
 
   Json out = Json::object();
   out["format"] = case_format;
@@ -232,6 +347,7 @@ Json Session::default_case() {
 
   Json assembly = Json::object();
   assembly["t"] = 0.0;
+  assembly["max_time_order"] = 2;
   Json out = Json::object();
   out["format"] = case_format;
   out["version"] = case_version;
@@ -239,7 +355,7 @@ Json Session::default_case() {
   out["mesh"] = default_mesh_section();
   out["problem"] = std::move(problem);
   out["assembly"] = std::move(assembly);
-  out["solve"] = nullptr;
+  out["solve"] = default_solve_section();
   return out;
 }
 
@@ -321,7 +437,12 @@ Json Session::assemble(const Json &case_json) {
   Json assembly = Json::object();
   assembly["report"] = report_json(assembled.report());
   assembly["t"] = assembled.time();
+  assembly["max_time_order"] = staged("assembly", [&] {
+                                 return assembly_settings(case_json);
+                               }).max_time_order;
   assembly["time_order"] = assembled.time_order();
+  // The order assembly gives at every t, from the formulas alone.
+  assembly["time_order_any_t"] = fem::Assembler().time_order(meshed);
   assembly["operators"] = std::move(operators);
   assembly["load_depends_on_t"] = assembled.load_depends_on_t();
   assembly["right_hand_side_depends_on_t"] =
@@ -421,6 +542,18 @@ Json Session::field(const Json &request) {
                        "right_hand_side)");
 }
 
+Json Session::solve(const Json &case_json) {
+  const std::scoped_lock lock(mutex_);
+  staged("case", [&] { check_case(case_json); });
+  const SolveOutcome &outcome = state_->get_solved(case_json);
+  Json out = outcome.summary;
+  Json values = Json::array();
+  for (const solve::Solution &solution : outcome.solutions)
+    values.push_back(values_json(solution.values));
+  out["values"] = std::move(values);
+  return out;
+}
+
 ExportedFile Session::export_file(const Json &case_json,
                                   std::string_view kind) {
   const std::scoped_lock lock(mutex_);
@@ -435,6 +568,13 @@ ExportedFile Session::export_file(const Json &case_json,
     return {.name = "geometry.svg",
             .content_type = "image/svg+xml",
             .content = out.str()};
+  }
+  if (kind == "solution.csv") {
+    const SolveOutcome &solved = state_->get_solved(case_json);
+    return {.name = "solution.csv",
+            .content_type = "text/csv",
+            .content =
+                solution_csv(*solved.solutions.front().mesh, solved.solutions)};
   }
   const MeshOutcome &outcome = state_->get_mesh(case_json);
   if (kind == "mesh.pde2d") {
@@ -451,7 +591,8 @@ ExportedFile Session::export_file(const Json &case_json,
   }
   throw StageError("export", "input",
                    "unknown export '" + std::string(kind) +
-                       "' (mesh.pde2d, mesh.svg or geometry.svg)");
+                       "' (mesh.pde2d, mesh.svg, geometry.svg or "
+                       "solution.csv)");
 }
 
 Json Session::run(const Json &case_json) {
@@ -485,6 +626,8 @@ Json Session::run(const Json &case_json) {
       result["assembly"].erase("sparsity");
       out["assembly"] = std::move(result);
     }
+    out["solve"] = solve(case_json);
+    out["solve"].erase("values");
     out["ok"] = true;
   } catch (const StageError &error) {
     Json item = Json::object();

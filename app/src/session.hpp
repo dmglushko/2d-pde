@@ -63,11 +63,14 @@ public:
   Json assemble(const Json &case_json);
   // request: {"case": ..., "field": {"kind": ..., ...}}; see docs/app.md.
   Json field(const Json &request);
-  // kind: "mesh.pde2d", "mesh.svg" or "geometry.svg".
+  // A static solve or a time integration, as the case's "solve" section
+  // says; see docs/app.md.
+  Json solve(const Json &case_json);
+  // kind: "mesh.pde2d", "mesh.svg", "geometry.svg" or "solution.csv".
   ExportedFile export_file(const Json &case_json, std::string_view kind);
 
   // Runs every stage the case allows, for the command line: geometry,
-  // mesh, problem check, assembly. Stops at the first failing stage and
+  // mesh, problem check, assembly, solve. Stops at the first failing stage and
   // reports it under "error". "ok" is true when every stage ran.
   Json run(const Json &case_json);
 

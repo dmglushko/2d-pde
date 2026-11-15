@@ -23,7 +23,7 @@ flowchart LR
         INPUT["catalog / domain_input / problem_input"]
         VIEWS["views: library results as JSON"]
     end
-    LIB["pde2d::pde2d (geometry, mesh, io, fem)"]
+    LIB["pde2d::pde2d (geometry, mesh, io, fem, solve)"]
 
     PAGE -- "JSON over HTTP (127.0.0.1)" --> SERVER
     SERVER --> SESSION
@@ -51,15 +51,15 @@ flowchart LR
 | Path | Contents |
 | --- | --- |
 | `app/src/options.*` | `OptionSpec` (an option as the page sees it), `OptionReader` (reads a JSON object strictly against the specs), small JSON readers |
-| `app/src/catalog.*` | the mesh catalog: every component, its options with the library's defaults, a function that builds it; `build_mesh_setup` |
+| `app/src/catalog.*` | the mesh and solve catalogs: every component, its options with the library's defaults, a function that builds it; `build_mesh_setup`, `build_solve_setup` |
 | `app/src/domain_input.*` | the `geometry` section: shapes, SVG, mesh files, region edits; the geometry view |
 | `app/src/problem_input.*` | the `problem` section: `build_problem`, `check_problem` (every error at once, with paths), the problem catalog and templates |
 | `app/src/views.*` | meshes, reports and sparsity as JSON |
 | `app/src/session.*` | `Session`: the stages with their cache, `StageError`, the default case, exports, `run` for the command line |
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`) and the command line |
-| `app/web/` | `index.html`, `style.css`, `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `dom.js` (forms from specs), `view.js` (the picture), `panels/*.js` (one per step), `main.js` |
+| `app/web/` | `index.html`, `style.css`, `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `dom.js` (forms from specs), `view.js` (the picture), `panels/*.js` (one per step, and `components.js`: the cards of component slots), `main.js` |
 | `app/examples/` | example cases and an example SVG |
-| `app/tests/` | `session.cpp`, `server.cpp`, `web.test.mjs` (pure helpers), `web_actions.test.mjs` (overlapping requests, with a mocked fetch) |
+| `app/tests/` | `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `server.cpp`, `web.test.mjs` (pure helpers), `web_actions.test.mjs` (overlapping requests, with a mocked fetch) |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
 
 ## The case
@@ -88,8 +88,15 @@ must not be ignored silently), and a missing value means its default.
     "boundary_conditions": {"left": {"alpha": "1", "g": "0", "priority": 0}},
     "initial": {"u": "0"}
   },
-  "assembly": {"t": 0},
-  "solve": null
+  "assembly": {"t": 0, "max_time_order": 2},
+  "solve": {
+    "mode": "time",
+    "linear_solver": {"type": "sparse_lu", "options": {}},
+    "static": {"t": 0},
+    "time": {"t0": 0, "t1": 1, "snapshots": 50,
+             "method": {"type": "implicit_euler", "options": {}},
+             "step": {"type": "fixed_step", "options": {"dt": 0.01}}}
+  }
 }
 ```
 
@@ -105,7 +112,16 @@ must not be ignored silently), and a missing value means its default.
   `{"absolute": number or null, "relative": number or null}`.
 - Problem coefficients are expression texts; an empty or missing one is
   not set. `priority` is a whole number.
-- `solve` is reserved for the solvers and ignored for now; `view` and
+- `assembly.max_time_order` (0, 1 or 2) is `Assembler::assemble`'s: which
+  time terms are built.
+- `solve.mode` is `static` (`StaticSolver` at `static.t`) or `time`
+  (`Integrator` from `t0` to `t1` with `method` and `step`). The linear
+  solver serves both. Only the chosen mode's part is read into the
+  library's objects; the other is kept as written. A time run keeps the
+  solution at `snapshots` + 1 equal times from t0 to t1. A case written
+  before the solvers has `"solve": null`, which means the default
+  section (a static solve).
+- `view` and
   `notes` are free for the page and for people. The page keeps
   `view.region_edit_undo` (one undo record per region edit) and
   `view.condition_archive` (conditions of regions that are gone) there.
@@ -126,8 +142,9 @@ All on `127.0.0.1:8765` by default. Every POST body is a case (or, for
 | `POST /api/mesh` | the mesh (flat arrays), stats, `target_met`, the resolved bound, every stage report |
 | `POST /api/problem` | the check: `ok`, `errors` (`path`, `message`), facts per path, each condition's kind, time order, needed initial conditions |
 | `POST /api/assemble` | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
+| `POST /api/solve` | `mode`, `times` and `values` (one array of node values per time), `min` and `max` over all of them, `time_order` (assembly's, `Assembler::time_order`) and `problem_time_order` (as written), `free_unknowns`, the reports (`assembly` and `static_solver`, or `integrator`) |
 | `POST /api/field` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`; the right-hand side is assembled at that t) |
-| `POST /api/export/<kind>` | a file: `mesh.pde2d`, `mesh.svg` or `geometry.svg` |
+| `POST /api/export/<kind>` | a file: `mesh.pde2d`, `mesh.svg`, `geometry.svg` or `solution.csv` (x, y and u at every kept time, one row per node) |
 
 A failure is `{"error": {"stage", "kind", "message"}}`. The HTTP status
 is 400 for a body that is not JSON, 422 when the library refused the input
@@ -147,8 +164,12 @@ field.
   `list`) and its `components`, each with `type`, `label`, `description`
   and `options`. An option has `name`, `label`, `description`, `kind`
   (`number`, `integer`, `choice`, `length_bound`), `default`, and
-  `choices` or `unit` where they apply. The solve section has
-  `available: false` and a message until the library has solvers.
+  `choices` or `unit` where they apply. The solve section has the
+  `linear_solver` slot and `modes` (`static`, `time`), each with its
+  `settings` and `slots` (`method` and `step` for `time`). Components of
+  the solve section carry `traits`, read from the library's declarations
+  of a default-built instance: a linear solver's `symmetric_matrix`
+  requirement, a time method's supported `time_orders`.
 - `shapes`: the ready-made shapes with their options.
 - `problem`: the coefficients of the equation, of a condition and of the
   initial conditions in order, with the term each multiplies; help text;
@@ -157,29 +178,26 @@ field.
 
 ## Adding a component
 
-1. Add one entry to `make_mesh_catalog()` in `app/src/catalog.cpp`: its
+1. Add one entry to `make_mesh_catalog()` or `make_solve_catalog()` in
+   `app/src/catalog.cpp`: its
    `type` (the component's `name()`), label, description, its options with
    defaults read from the library's options struct, and `make`, which
    builds the component from an `OptionReader`.
-2. That is all for the page. `tests/session.cpp` checks that every type
-   equals `name()`; add its defaults to the defaults test.
+2. That is all for the page. `tests/session.cpp` and `tests/solve.cpp`
+   check that every type equals `name()`; add its defaults to the
+   defaults test.
 
 Ranges are never checked in the app: the component's constructor
 validates its options, and its message is shown at the field.
 
-## Adding the solvers
+## The Solve step
 
-When `pde2d_solve` exists:
-
-1. Add a solve catalog (linear solvers, time methods, step controllers as
-   slots, like the mesh catalog) and replace the placeholder in
-   `Session::catalog()` with it (`available: true`).
-2. Read the case's `solve` section into the library's objects, add
-   `Session::solve` (cached after the assembly stage) and `POST
-   /api/solve`.
-3. Return the solution as node values and the snapshot times. The
-   picture already draws node values (`view.js`, the field layer); the
-   solve panel needs a time slider over the snapshots.
+`Session::solve` is cached like the other stages, keyed by the mesh,
+problem and solve sections (not by `assembly`). The page shows the
+solution in the picture as a field with one colour scale for every
+snapshot (from `min` to `max`), so a colour means the same value at
+every time; a slider and a player walk through the snapshots, changing
+only the picture.
 
 ## Decisions
 
@@ -255,3 +273,28 @@ is a reason; record the new choice here.
   left behind unseen. A second start finds the running app and only opens
   the page. Pass the distribution name to `wsl.exe -d` unquoted: it takes
   quotes as part of the name.
+- **The Solve step offers what pde2d_solve offers** (2026-11-15): a static
+  solve or a time integration, every linear solver, time method and step
+  controller from the solve catalog. Nothing is pre-checked in the app:
+  a method that does not support the problem's time order, or a solver
+  whose symmetry requirement a matrix misses, is refused by the library
+  and its message is shown. The page only shows the declared traits as
+  chips, and a hint when a static solve would drop time terms.
+- **A new case's dt is 0.01**, not the library's default: `FixedStepOptions`
+  has `dt = 0`, which its constructor refuses. The catalog still shows the
+  library's default; only `default_solve_section` sets a usable step.
+- **Snapshots are equal intervals of [t0, t1]** (at most 1000, the app's
+  own limit, since each is a value per node sent to the page). A dt that
+  does not divide the interval shortens steps to land on them, which makes
+  the integrator prepare the linear solver again for each changed step:
+  pick snapshots and dt so that they fit.
+- **A long run blocks the app until it ends.** The Integrator offers no
+  progress or cancellation, and all work runs under the session mutex.
+  If long runs become common, a progress and cancel callback in the
+  library is the change to ask for.
+- **The solution is sent as node values per snapshot** (JSON numbers), not
+  compressed: simple, and fine for meshes of thousands of nodes. A binary
+  format is the change to make if the page gets slow on large runs.
+- **Fields are one column wide in the grid** (`.field` uses
+  `minmax(0, 1fr)`): a long option name in a select no longer widens the
+  panel on narrow screens.

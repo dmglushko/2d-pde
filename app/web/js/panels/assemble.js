@@ -93,19 +93,33 @@ function drawSpy(canvas, sparsity) {
   context.putImageData(image, 0, 0);
 }
 
+// Symmetry from the formulas (every t) or from the numbers (this t only).
+function symmetryText(op) {
+  if (op.always_symmetric) return "yes";
+  if (op.symmetric_now) return "at this t";
+  return "no";
+}
+
 function operatorsTable(operators) {
   const names = { mass: "M2 (u_tt)", damping: "B = M1 − D (u_t)", stiffness: "A (u)" };
   return h(
     "table",
     { class: "data" },
-    h("thead", {}, h("tr", {}, h("th", {}, "Operator"), h("th", {}, "Changes in t"), h("th", { class: "num" }, "Entries"))),
+    h("thead", {}, h("tr", {}, h("th", {}, "Operator"), h("th", {}, "Changes in t"), h("th", {}, "Symmetric"), h("th", { class: "num" }, "Entries"))),
     h(
       "tbody",
       {},
       Object.entries(operators).map(([name, op]) =>
-        op.is_zero
-          ? h("tr", {}, h("td", {}, names[name] ?? name), h("td", { colspan: 2, class: "note" }, "zero: no term contributes"))
-          : h("tr", {}, h("td", {}, names[name] ?? name), h("td", {}, op.depends_on_t ? "yes" : "no"), h("td", { class: "num" }, formatNumber(op.free_nonzeros + op.dirichlet_nonzeros))),
+        op.always_zero
+          ? h("tr", {}, h("td", {}, names[name] ?? name), h("td", { colspan: 3, class: "note" }, "zero: no term contributes, or not built"))
+          : h(
+              "tr",
+              {},
+              h("td", {}, names[name] ?? name, op.zero_now ? h("span", { class: "chip", style: "margin-left:6px" }, "zero at this t") : null),
+              h("td", {}, op.depends_on_t ? "yes" : "no"),
+              h("td", {}, symmetryText(op)),
+              h("td", { class: "num" }, formatNumber(op.free_nonzeros + op.dirichlet_nonzeros)),
+            ),
       ),
     ),
   );
@@ -122,6 +136,25 @@ export const assemblePanel = {
         { class: "field", dataset: { path: "assembly.t" } },
         h("div", { class: "label" }, "Time t"),
         h("div", { class: "inputs" }, h("input", { type: "number", step: "any", value: String(assembly.t ?? 0), "aria-label": "Time t", oninput: (e) => e.target.value.trim() !== "" && editCase((c) => (c.assembly.t = Number(e.target.value))) })),
+      ),
+      h(
+        "div",
+        { class: "field", dataset: { path: "assembly.max_time_order" } },
+        h("div", { class: "label" }, "Time terms to build"),
+        h(
+          "div",
+          { class: "inputs" },
+          h(
+            "select",
+            { "aria-label": "Time terms to build", onchange: (e) => editCase((c) => (c.assembly.max_time_order = Number(e.target.value))) },
+            [
+              [2, "all (M2, B and A)"],
+              [1, "up to u_t (B and A)"],
+              [0, "none: A and the load only"],
+            ].map(([value, label]) => h("option", { value: String(value), selected: (assembly.max_time_order ?? 2) === value }, label)),
+          ),
+        ),
+        h("div", { class: "help" }, "Left-out operators count as zero; with none, only the boundary values themselves are evaluated, not their time derivatives (a static solve assembles like this)."),
       ),
       h("div", { class: "row" }, actionButton("Assemble", assemble, { primary: true })),
       h("div", { class: "result", id: "assemble-result" }),
@@ -163,10 +196,10 @@ export const assemblePanel = {
           { class: "stats" },
           stat("Unknowns", formatNumber(meshed.free_nodes)),
           stat("Dirichlet nodes", formatNumber(meshed.dirichlet_nodes.length)),
-          stat("Time order", `${assembly.time_order} (problem ${meshed.time_order})`),
+          stat("Time order", `${assembly.time_order} (as written ${meshed.time_order})`),
           stat("|b|", formatNumber(assembly.right_hand_side_norm)),
         ),
-        h("p", { class: "note" }, `The system: M2 U'' + B U' + A U = b in the unknowns U. The load ${assembly.load_depends_on_t ? "changes" : "does not change"} with t; b ${assembly.right_hand_side_depends_on_t ? "changes" : "does not change"} with t.`),
+        h("p", { class: "note" }, `Symmetric "yes" holds at every t (from the formulas); "at this t" only for these numbers. The system: M2 U'' + B U' + A U = b in the unknowns U. The load ${assembly.load_depends_on_t ? "changes" : "does not change"} with t; b ${assembly.right_hand_side_depends_on_t ? "changes" : "does not change"} with t.`),
         operatorsTable(assembly.operators),
         assembly.sparsity ? h("div", { style: "margin-top:12px" }, h("div", { class: "label", style: "font-size:13px;font-weight:550" }, `Entries of A (unknowns × unknowns, ${formatNumber(assembly.sparsity.nonzeros)} entries)`), spy) : null,
         h("h3", {}, "Reports"),

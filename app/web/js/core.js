@@ -298,6 +298,13 @@ export function normalizeCase(input, defaults) {
   for (const region of Object.keys(conditions)) ensure(conditions, region, isObject, {}, `problem.boundary_conditions.${region}`);
 
   ensure(caseData, "assembly", (a) => isObject(a) && (a.t === undefined || Number.isFinite(a.t)), defaults.assembly, "assembly");
+  // Cases written before the solvers had "solve": null; they get the
+  // default section without a notice.
+  if (caseData.solve === null || caseData.solve === undefined) caseData.solve = structuredClone(defaults.solve);
+  ensure(caseData, "solve", (s) => isObject(s) && ["static", "time"].includes(s.mode) && isChoice(s.linear_solver), defaults.solve, "solve");
+  ensure(caseData.solve, "static", isObject, defaults.solve.static, "solve.static");
+  ensure(caseData.solve, "time", isObject, defaults.solve.time, "solve.time");
+  for (const key of ["method", "step"]) ensure(caseData.solve.time, key, isChoice, defaults.solve.time[key], `solve.time.${key}`);
   ensure(caseData, "view", optional(isObject), {}, "view");
   if (caseData.view !== undefined) {
     const edits = caseData.geometry.region_edits ?? [];
@@ -327,7 +334,13 @@ export function errorPath(message) {
 // The keys a stage's result depends on: a result is stale when the case's
 // key differs from the one it was built from.
 export function stageKey(caseData, stage) {
-  const parts = { geometry: ["geometry"], mesh: ["geometry", "mesh"], problem: ["problem"], assemble: ["geometry", "mesh", "problem", "assembly"] }[stage];
+  const parts = {
+    geometry: ["geometry"],
+    mesh: ["geometry", "mesh"],
+    problem: ["problem"],
+    assemble: ["geometry", "mesh", "problem", "assembly"],
+    solve: ["geometry", "mesh", "problem", "solve"],
+  }[stage];
   return JSON.stringify(parts.map((p) => caseData?.[p] ?? null));
 }
 

@@ -157,8 +157,38 @@ test("region names that are names of object properties", () => {
   assert.deepEqual(Object.keys(c.problem.boundary_conditions).sort(), ["left", "right"]);
 });
 
+const SOLVE_DEFAULTS = {
+  mode: "static",
+  linear_solver: { type: "sparse_lu", options: {} },
+  static: { t: 0 },
+  time: { t0: 0, t1: 1, snapshots: 50, method: { type: "implicit_euler" }, step: { type: "fixed_step", options: { dt: 0.01 } } },
+};
+
+test("the solve section is normalized", () => {
+  const defaults = { geometry: { source: "shape", shape: "rectangle" }, mesh: { spec: {}, discretizer: { type: "d" }, triangulator: { type: "t" }, refiner: null, improvers: [] }, problem: {}, assembly: { t: 0 }, solve: SOLVE_DEFAULTS };
+  const base = { format: "pde2d-app-case", geometry: defaults.geometry, mesh: defaults.mesh, problem: {}, assembly: { t: 0 } };
+  // A case from before the solvers: "solve": null, quietly given the defaults.
+  const old = normalizeCase({ ...base, solve: null }, defaults);
+  assert.deepEqual(old.replaced, []);
+  assert.deepEqual(old.caseData.solve, SOLVE_DEFAULTS);
+  assert.notEqual(old.caseData.solve, SOLVE_DEFAULTS, "a copy, not the catalog's object");
+  const wrongMode = normalizeCase({ ...base, solve: { ...SOLVE_DEFAULTS, mode: "dynamic" } }, defaults);
+  assert.deepEqual(wrongMode.replaced, ["solve"]);
+  const broken = normalizeCase({ ...base, solve: { mode: "time", linear_solver: { type: "bicgstab" }, static: 3, time: { t0: 0, method: "x" } } }, defaults);
+  assert.deepEqual(broken.replaced, ["solve.static", "solve.time.method", "solve.time.step"]);
+  assert.equal(broken.caseData.solve.time.t0, 0, "the rest of time is kept");
+  assert.equal(broken.caseData.solve.linear_solver.type, "bicgstab");
+  // The solution depends on the solve section, not on the assembly time.
+  const a = old.caseData;
+  const b = { ...a, assembly: { t: 5 } };
+  const c = { ...a, solve: { ...a.solve, mode: "time" } };
+  assert.equal(stageKey(a, "solve"), stageKey(b, "solve"));
+  assert.notEqual(stageKey(a, "solve"), stageKey(c, "solve"));
+  assert.notEqual(stageKey(a, "assemble"), stageKey(b, "assemble"));
+});
+
 test("cases are normalized before they are shown", () => {
-  const defaults = { geometry: { source: "shape", shape: "rectangle" }, mesh: { spec: {}, discretizer: { type: "d" }, triangulator: { type: "t" }, refiner: { type: "r" }, improvers: [] }, problem: { equation: {} }, assembly: { t: 0 } };
+  const defaults = { geometry: { source: "shape", shape: "rectangle" }, mesh: { spec: {}, discretizer: { type: "d" }, triangulator: { type: "t" }, refiner: { type: "r" }, improvers: [] }, problem: { equation: {} }, assembly: { t: 0 }, solve: SOLVE_DEFAULTS };
   assert.throws(() => normalizeCase({ geometry: {} }, defaults), /not a pde2d app case/);
   assert.throws(() => normalizeCase(null, defaults), /not a pde2d app case/);
   const bare = normalizeCase({ format: "pde2d-app-case" }, defaults);

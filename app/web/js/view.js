@@ -29,7 +29,8 @@ export class Viewer {
   }
 
   // data: {geometry (view), mesh (mesh view), meshStale, regions (names),
-  // dirichlet (node indices), field ({label, values}), colorBy, layers}.
+  // dirichlet (node indices), field ({label, values, scale?}), colorBy,
+  // layers}.
   set(data) {
     const meshChanged = data.mesh !== this.data.mesh;
     this.data = data;
@@ -265,6 +266,11 @@ export class Viewer {
     }
   }
 
+  // A field may bring its scale (a solution: one scale for every time).
+  scaleOf(values) {
+    return this.data.field?.scale ?? fieldScale(values);
+  }
+
   fieldTable(scale) {
     return scale.kind === "diverging" ? this.divergingTable() : this.sequentialTable();
   }
@@ -274,7 +280,7 @@ export class Viewer {
   rasterField(mesh, values) {
     const width = this.canvas.width;
     const height = this.canvas.height;
-    const scale = fieldScale(values);
+    const scale = this.scaleOf(values);
     const table = this.fieldTable(scale);
     this.offscreen.width = width;
     this.offscreen.height = height;
@@ -329,7 +335,7 @@ export class Viewer {
   // A field that has values at some nodes only: one dot per value.
   drawFieldDots(mesh, values) {
     const ctx = this.context;
-    const scale = fieldScale(values);
+    const scale = this.scaleOf(values);
     const table = this.fieldTable(scale);
     const ring = token("--surface");
     for (let i = 0; i < values.length; i++) {
@@ -365,7 +371,7 @@ export class Viewer {
     if (mesh && !meshStale && colorBy === "quality")
       items.push(colorbar("smallest angle", this.sequentialTable(), `${QUALITY_MAX_DEGREES}°+`, "0°", true));
     if (mesh && !meshStale && colorBy === "field" && field) {
-      const scale = fieldScale(field.values);
+      const scale = this.scaleOf(field.values);
       if (scale.kind === "diverging") items.push(colorbar(field.label, this.divergingTable(), formatNumber(-scale.bound), formatNumber(scale.bound)));
       else items.push(colorbar(field.label, this.sequentialTable(), formatNumber(scale.min), formatNumber(scale.max)));
     }

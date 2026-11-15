@@ -388,19 +388,22 @@ int main() {
       {"the examples run",
        [] {
          for (const char *name : {"poisson_rectangle.json", "heat_annulus.json",
-                                  "plate_with_hole.json"}) {
+                                  "plate_with_hole.json", "wave_square.json"}) {
            app::Session session;
            const Json summary = session.run(load_example(name));
            check(summary["ok"].get<bool>(),
                  std::string(name) + ": " + summary.dump());
+           check(summary["solve"]["times"].size() >= 1,
+                 std::string(name) + " solved");
          }
        }},
       {"the catalog lists every section",
        [] {
          const Json catalog = app::Session::catalog();
          check(catalog["sections"][0]["id"] == "mesh", "mesh section");
-         check(catalog["sections"][1]["available"] == false,
-               "solve is not available yet");
+         check(catalog["sections"][1]["id"] == "solve" &&
+                   catalog["sections"][1]["available"] == true,
+               "solve section");
          check(catalog["problem"]["equation_fields"].size() == 9, "fields");
          check(catalog["default_case"] == app::Session::default_case(),
                "default case");
