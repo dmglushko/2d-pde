@@ -775,6 +775,14 @@ Discussed in a side chat on 2026-11-12; the first slice was built on
   the start needs. Newmark stays as it is: it throws when M₂ at t0 is zero
   now or singular, naming the methods that need no acceleration.
 
+- **The integrator starts from `MeshedProblem::initial_free_state(t0)`**
+  (decided 2026-11-15, after a review finding): one function returning u
+  and, for time order 2, u_t at the free nodes only, evaluating no
+  boundary data. *Why:* reading the initial velocities at every node also
+  evaluated the Dirichlet rate at t0, so u = √t on the boundary stopped a
+  wave run whose method never uses it. The full-node `initial_values` and
+  `initial_velocities` stay for other uses.
+
 ## Adaptivity: marking and refinement
 
 Asked for by the owner on 2026-11-15. Of the three parts of adaptive
@@ -796,12 +804,38 @@ coarsening, moving nodes or enrichment for now.
   vertex bisection, and regular (red) refinement with bisection closure.
   Both keep the mesh conforming. The details were left to the
   implementation, for the owner to accept.
-- **Red-green-blue warns at curved ears** (decided 2026-11-15): red
-  refinement of a triangle with two or more linked (curved) boundary edges
-  makes a near-flat middle child whose smallest angle halves every cycle
-  (from a plain CDT on a disc: 5.6°, 2.8°, 1.4°, …). The method keeps
-  doing it but adds a warning to its report naming how many such
-  triangles it red-refined; a quality initial mesh (Ruppert) avoids them.
+- **Red-green-blue warns at curved ears** (decided 2026-11-15;
+  *replaced the same day* by the mesh properties below, which judge the
+  final mesh instead of one method's triangles).
+- **Mesh properties of the final mesh** (decided 2026-11-15): one plain
+  function measures a mesh (counts, smallest and largest angle, shortest
+  and longest edge, how many triangles have an angle below a warning
+  angle), the same way facts describe a problem. The Mesher and the
+  Remesher attach it to their result after the last improver, and the
+  pipeline report warns when triangles fall below the warning angle (an
+  option of the Mesher and Remesher, default 10°). Nothing is refused.
+  *Why:* a warning about one method's triangles is inflexible, since an
+  improver may fix them; only the final mesh tells. Reports, guarantees
+  (`target_met`) and warnings must stay consistent: one place computes
+  each property. This settles the open question on quality guarantees:
+  measure the final mesh and warn.
+- **Refinement and meshing share one set of refiners** (decided
+  2026-11-15). Every refiner refines marked triangles. Bisection methods
+  have two layers: a shared core that bisects marked edges and closes the
+  mesh so no node hangs, and a per-method rule turning a marked triangle
+  into edges (longest-edge bisection: its longest edge; newest vertex
+  bisection: its refinement edge; red-green-blue: all three). "Refine
+  until every edge is at most h" is a loop around it that marks the
+  triangles with a longer edge. Newest vertex bisection and red-green-blue
+  become refiners in the mesh module next to longest-edge bisection and
+  Ruppert; the marking strategies stay in `pde2d_adapt`.
+- **The Remesher drives adaptive refinement** (decided 2026-11-15):
+  `Remesher::refine(mesh, marked_triangles)` next to `run(mesh, spec)`,
+  with the same improvers and pipeline report. Its result carries parents
+  (old triangle of each new triangle; old node or old edge of each new
+  node) only when no component made them untrue; an improver that flips
+  or moves nodes drops them, and a solution is then transferred by point
+  location. Keeping the parents that stay valid is GitHub issue #36.
 
 ## Deferred
 
@@ -833,6 +867,4 @@ coarsening, moving nodes or enrichment for now.
 
 ## Open
 
-- Quality guarantees: an improver that runs after a refiner can break the
-  refiner's guarantee (smoothing after Ruppert can lower the minimum
-  angle). Whether to declare, warn and measure this is not decided yet.
+- Nothing open right now.
