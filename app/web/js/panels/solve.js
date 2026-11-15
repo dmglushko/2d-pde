@@ -71,8 +71,12 @@ function player(result, container) {
     if (Number(slider.value) >= last) slider.value = "0";
     showFrame(Number(slider.value));
     playTimer = setInterval(() => {
-      // Stop when the panel shows another result or was rebuilt.
-      if (!container.isConnected || store.results.solve?.data !== result) return stopPlaying();
+      // Stop when the panel shows another result, was rebuilt or left,
+      // or another field took the picture (the Assemble step's).
+      if (!container.isConnected || container.hidden || store.fieldSource !== "solve" || store.results.solve?.data !== result) {
+        stopPlaying();
+        return sync();
+      }
       const next = Number(slider.value) + 1;
       if (next > last) {
         stopPlaying();
