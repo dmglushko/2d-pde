@@ -246,3 +246,12 @@ is a reason; record the new choice here.
   light and a dark theme.
 - **The browser keeps the current case** in local storage as a
   convenience; saving a case file is the reliable way to keep it.
+- **One double-click starts it** (`app/Start pde2d app.cmd`, 2026-11-15).
+  The `.cmd` only finds its WSL distribution and folder from its own path
+  and runs `app/start-app.sh` there; the script holds all the logic
+  (incremental build of `pde2d_app`, start, wait until `/api/catalog`
+  answers, open the default browser), so it is the same in Linux. The app
+  lives as long as the window: closing it stops the app, so no server is
+  left behind unseen. A second start finds the running app and only opens
+  the page. Pass the distribution name to `wsl.exe -d` unquoted: it takes
+  quotes as part of the name.

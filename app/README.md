@@ -7,7 +7,18 @@ on it. How it is built is described in [docs/app.md](../docs/app.md).
 
 ## Start it
 
-From the project root, in Linux or WSL:
+**In Windows, double-click `app/Start pde2d app.cmd`** (in Explorer, the
+checkout is under `\\wsl.localhost\Ubuntu\...`; a desktop shortcut to the
+file works the same). A window opens, builds the app if something
+changed, starts it and opens it in your browser. Closing that window
+stops the app. Double-clicking again while it runs just opens the page.
+In Linux or WSL, `app/start-app.sh` does the same.
+
+The first start needs a configured build directory (`build/`; run
+`tools/test.sh` once, see the root README). After that, the launcher
+rebuilds only what changed.
+
+By hand, from the project root, in Linux or WSL:
 
 ```sh
 tools/test.sh                 # builds everything, the app included
