@@ -378,10 +378,10 @@ Remesher::refine(const Mesh &mesh,
   StageReport &pipeline = result.reports.front();
   std::vector<std::string> dropped;
   if (!refiner_->capabilities().keeps_parents)
-    dropped.push_back(refiner_->name() + " does not keep them");
+    dropped.push_back(refiner_->name() + ": it does not keep them");
   else if (!parents)
     dropped.push_back(refiner_->name() +
-                      " could not keep them in this run (see its report)");
+                      ": it could not keep them in this run (see its report)");
   for (auto i : plan_.local_improvers)
     if (!improvers_[i]->effects().keeps_parents)
       dropped.push_back(improvers_[i]->name() + " (local): " +
@@ -393,7 +393,7 @@ Remesher::refine(const Mesh &mesh,
   if (dropped.empty()) {
     result.parents = std::move(parents);
   } else {
-    std::string text = "parents dropped by ";
+    std::string text = "parents dropped: ";
     for (std::size_t k = 0; k < dropped.size(); ++k)
       text += (k == 0 ? "" : "; ") + dropped[k];
     pipeline.messages.push_back(text);
