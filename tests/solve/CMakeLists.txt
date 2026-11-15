@@ -8,3 +8,5 @@ pde2d_add_test(NAME solve_review_regressions SOURCE review_regressions.cpp
                LIBS pde2d_solve)
 pde2d_add_test(NAME solve_review_slice2 SOURCE review_slice2.cpp
                LIBS pde2d_solve)
+pde2d_add_test(NAME solve_review_start_needs SOURCE review_start_needs.cpp
+               LIBS pde2d_solve)

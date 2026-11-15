@@ -200,6 +200,7 @@ classDiagram
         free_nodes()
         free_index(node)
         initial_values(t0), initial_velocities(t0)
+        initial_free_state(t0)
         report()
     }
     class CompiledEquation {
@@ -435,7 +436,7 @@ sequenceDiagram
     participant L as LinearSolver
     I->>A: time_order(meshed)
     A-->>I: the time order, from the formula facts (checked against capabilities().supports)
-    Note over I: state = initial, or initial_values(t0) (and initial_velocities), free part, none for time order 0
+    Note over I: state = initial, or initial_free_state(t0), none for time order 0
     I->>M: start_needs(time order)
     M-->>I: nothing, static_part or whole_problem
     I->>A: assemble(meshed, t0, max_time_order 0 or 2), only if not nothing
@@ -1107,7 +1108,12 @@ a Dirichlet node they come from the boundary data (`dirichlet_value(k,
 t0)`, and the average of `d/dt (g / alpha)` for the velocity), elsewhere
 from the initial condition at `(x, y, t0)`. A t0 that is not finite (for
 any time order) or a value that is not finite throws
-`std::invalid_argument`:
+`std::invalid_argument`. `initial_free_state(t0)` returns the same
+initial conditions at the free nodes only (a `FreeInitialState` with
+`values` and, for time order 2, `velocities`, indexed like
+`free_nodes()`), evaluating no boundary data: the integrator starts from
+it, so Dirichlet data whose time derivative is not finite at t0 (u = √t
+from t0 = 0) stops only a method whose start reads the problem at t0:
 
 ```cpp
 if (const auto u0 = meshed->initial_values(0.0)) // empty for time order 0
@@ -1371,8 +1377,8 @@ history, report}`.
   `time_order(meshed)` (the order as written), the refusal says that time
   terms vanished in assembly.
 - The state comes from `initial` (same mesh object; velocities required
-  for time order 2) or from `initial_values(t0)` / `initial_velocities(t0)`,
-  free part only. At time order 0 there is no initial state (`initial` is
+  for time order 2) or from `initial_free_state(t0)` (the free nodes
+  only; no boundary data is evaluated). At time order 0 there is no initial state (`initial` is
   only checked for its mesh and size): the method's start computes it.
 - The problem is assembled at t0 only as far as `start_needs(order)`
   says (`static_part`: `max_time_order` 0, `whole_problem`: 2), and

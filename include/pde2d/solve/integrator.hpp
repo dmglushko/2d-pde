@@ -75,10 +75,10 @@ public:
   //    terms vanished in assembly;
   // 2. takes the starting state, in the free unknowns, from `initial` if
   //    given (the Dirichlet nodes are ignored; for time order 2 it must
-  //    have velocities), else from MeshedProblem::initial_values(t0) and,
-  //    for time order 2, initial_velocities(t0). Time order 0 has no
-  //    initial state (`initial` is only checked): the method's start
-  //    computes it. Then it assembles the problem at t0 only as far as
+  //    have velocities), else from MeshedProblem::initial_free_state(t0)
+  //    (the free nodes only, so no boundary data is evaluated at t0). Time
+  //    order 0 has no initial state (`initial` is only checked): the method's
+  //    start computes it. Then it assembles the problem at t0 only as far as
   //    the method's start reads it (TimeMethod::start_needs: nothing,
   //    max_time_order 0 or 2) and calls start() with it; for
   //    StartNeeds::nothing it neither assembles at t0 nor calls start(),

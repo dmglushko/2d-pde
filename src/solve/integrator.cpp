@@ -78,9 +78,13 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
   } else if (time_order >= 1) {
     // The problem's own time order is at least the assembled one, so the
     // values (and for time order 2 the velocities) exist.
-    state.values = free_part(meshed, *meshed.initial_values(t0));
+    // Only the free nodes: the boundary data at t0 (and its time
+    // derivative) is never read here, so a method whose start needs
+    // nothing at t0 never evaluates it.
+    auto initial_state = *meshed.initial_free_state(t0);
+    state.values = std::move(initial_state.values);
     if (time_order == 2)
-      state.velocities = free_part(meshed, *meshed.initial_velocities(t0));
+      state.velocities = std::move(initial_state.velocities);
   }
   if (!detail::all_finite(state.values) ||
       !detail::all_finite(state.velocities))
