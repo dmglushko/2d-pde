@@ -24,7 +24,10 @@ public:
 
   std::string name() const override { return "delaunay_flips"; }
   ImproverEffects effects() const override {
-    return {.flips_edges = true, .moves_nodes = false, .makes_delaunay = true};
+    return {.flips_edges = true,
+            .moves_nodes = false,
+            .makes_delaunay = true,
+            .keeps_parents = false};
   }
   ImproverUse use() const override { return options_.use; }
   const LocalImprover *as_local() const override { return this; }

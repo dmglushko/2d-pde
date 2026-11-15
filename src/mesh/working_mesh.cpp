@@ -443,6 +443,18 @@ BoundarySplitResult WorkingMesh::split_boundary_edge(std::size_t k) {
   return r;
 }
 
+void WorkingMesh::set_refinement_edge(std::size_t t, int edge) {
+  if (edge < 0 || edge > 2)
+    throw std::invalid_argument("set_refinement_edge: edge must be 0, 1 or 2");
+  auto i = static_cast<std::size_t>(edge);
+  // Vertex i comes first; edge j is opposite vertex j, so the neighbours
+  // rotate with the vertices.
+  auto v = triangles_.at(t);
+  auto n = neighbours_[t];
+  triangles_[t] = {v[i], v[next(i)], v[prev(i)]};
+  neighbours_[t] = {n[i], n[next(i)], n[prev(i)]};
+}
+
 bool WorkingMesh::try_move_node(std::size_t node, Point p) {
   if (is_node_deleted(node))
     throw std::invalid_argument("A deleted node cannot be moved");

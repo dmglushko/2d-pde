@@ -3,30 +3,45 @@
 #include "pde2d/geometry/curve_geometry.hpp"
 #include "pde2d/mesh/components.hpp"
 #include "pde2d/mesh/mesh.hpp"
+#include "pde2d/mesh/mesh_properties.hpp"
 #include "pde2d/mesh/mesh_spec.hpp"
 #include "pde2d/mesh/report.hpp"
 #include "pde2d/mesh/working_mesh.hpp"
 
+#include <cstddef>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace pde2d::mesh {
 
+struct RemesherOptions {
+  // The final mesh's properties count the triangles with an angle below
+  // this (degrees, in [0, 60]; 0 counts none), and the pipeline report
+  // warns when there are any. Nothing is refused.
+  double warning_angle_degrees = default_warning_angle_degrees;
+};
+
 // Refines and improves a mesh that already exists: the optional refiner
 // (calling the local improvers after each change), then the final passes
-// in order. Checks "target met" on the final mesh.
+// in order. Two ways: run() refines towards a MeshSpec and checks "target
+// met"; refine() refines marked triangles once (adaptive refinement). Both
+// measure the final mesh once (MeshProperties, after the last improver).
 //
 // The first report of every run is the "pipeline" report: the plan
-// resolved at construction and its warnings (see pipeline_report()).
+// resolved at construction and its warnings (see pipeline_report()), and
+// after the run the warnings about the final mesh: triangles below the
+// warning angle, and (refine) why the parents were dropped.
 class Remesher {
 public:
   // Resolves the improvers' use modes against the refiner (plan_pipeline).
   // A mode that cannot be honoured is a warning in the pipeline report.
-  // The refiner may be null; a null improver throws
-  // std::invalid_argument.
-  explicit Remesher(
-      std::shared_ptr<const Refiner> refiner,
-      std::vector<std::shared_ptr<const Improver>> improvers = {});
+  // The refiner may be null; a null improver or a warning angle outside
+  // [0, 60] throws std::invalid_argument.
+  explicit Remesher(std::shared_ptr<const Refiner> refiner,
+                    std::vector<std::shared_ptr<const Improver>> improvers = {},
+                    RemesherOptions options = {});
+  const RemesherOptions &options() const { return options_; }
 
   // Which improvers run locally inside the refiner and which as final
   // passes, and the warnings found when the plan was made.
@@ -60,6 +75,22 @@ public:
   // calls this after triangulation.
   [[nodiscard]] MeshResult run(WorkingMesh mesh, const MeshSpec &spec) const;
 
+  // Refines the marked triangles of the mesh once, with the refiner's
+  // refine() (indices into mesh.triangles, any order, repetitions
+  // allowed), then runs the final passes like run(); links are used as in
+  // run(mesh, spec). The result carries the parents only when no
+  // component made them untrue: the refiner declares keeps_parents and
+  // kept them in this run, and every local improver and final pass of the
+  // plan declares keeps_parents; otherwise the pipeline report names the
+  // components that dropped them. Final passes get a MeshSpec without an
+  // effective length bound (refinement has no length target). Reports:
+  // pipeline, refiner, final passes. Throws std::invalid_argument without
+  // a refiner, for an invalid mesh (validate) or a marked index out of
+  // range, and std::runtime_error if the refined mesh overlaps itself (a
+  // new curve point on a boundary edge reached another part of the mesh).
+  [[nodiscard]] RefinementResult
+  refine(const Mesh &mesh, std::span<const std::size_t> marked_triangles) const;
+
   // The "pipeline" report that starts every run's reports. Its first
   // message is the plan in words, for example "plan: refiner ruppert;
   // local: none; final: delaunay_flips, laplacian_smoothing" ("no refiner"
@@ -69,8 +100,13 @@ public:
   const StageReport &pipeline_report() const { return pipeline_report_; }
 
 private:
+  // Measures the final mesh and adds its warnings to the pipeline report
+  // (reports[0]).
+  MeshProperties finish(const Mesh &mesh, StageReport &pipeline) const;
+
   std::shared_ptr<const Refiner> refiner_;
   std::vector<std::shared_ptr<const Improver>> improvers_;
+  RemesherOptions options_;
   PipelinePlan plan_;
   std::vector<const LocalImprover *> local_improvers_;
   std::vector<const FinalImprover *> final_improvers_;

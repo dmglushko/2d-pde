@@ -23,7 +23,10 @@ public:
 
   std::string name() const override { return "laplacian_smoothing"; }
   ImproverEffects effects() const override {
-    return {.flips_edges = false, .moves_nodes = true, .makes_delaunay = false};
+    return {.flips_edges = false,
+            .moves_nodes = true,
+            .makes_delaunay = false,
+            .keeps_parents = false};
   }
   ImproverUse use() const override { return options_.use; }
   const FinalImprover *as_final() const override { return this; }

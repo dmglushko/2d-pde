@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -17,16 +19,6 @@ namespace pde2d::mesh {
 using geometry::Point;
 
 namespace {
-
-double longest_edge(const Mesh &mesh) {
-  double longest = 0;
-  for (const auto &t : mesh.triangles)
-    for (std::size_t i = 0; i < 3; ++i)
-      longest = std::max(longest,
-                         geometry::distance(mesh.nodes[t.nodes[i]],
-                                            mesh.nodes[t.nodes[(i + 1) % 3]]));
-  return longest;
-}
 
 // A curve with its bounding box, padded by the tolerance.
 struct CandidateCurve {
@@ -229,11 +221,32 @@ std::string describe(const PipelinePlan &plan, const Refiner *refiner,
          "; final: " + names(plan.final_passes);
 }
 
+// Why an improver does not keep parents, from its declared effects.
+std::string parents_reason(const ImproverEffects &fx) {
+  if (fx.flips_edges && fx.moves_nodes)
+    return "it flips edges and moves nodes";
+  if (fx.flips_edges)
+    return "it flips edges";
+  if (fx.moves_nodes)
+    return "it moves nodes";
+  return "it does not declare that it keeps them";
+}
+
+std::string format_degrees(double degrees) {
+  char text[32];
+  std::snprintf(text, sizeof text, "%.3g", degrees);
+  return text;
+}
+
 } // namespace
 
 Remesher::Remesher(std::shared_ptr<const Refiner> refiner,
-                   std::vector<std::shared_ptr<const Improver>> improvers)
-    : refiner_(std::move(refiner)), improvers_(std::move(improvers)) {
+                   std::vector<std::shared_ptr<const Improver>> improvers,
+                   RemesherOptions options)
+    : refiner_(std::move(refiner)), improvers_(std::move(improvers)),
+      options_(options) {
+  validate_warning_angle(options_.warning_angle_degrees,
+                         "RemesherOptions::warning_angle_degrees");
   detail::timed_stage(pipeline_report_, "pipeline", [&](StageReport &r) {
     plan_ = plan_pipeline(refiner_.get(), improvers_);
     for (auto i : plan_.local_improvers)
@@ -295,9 +308,110 @@ MeshResult Remesher::run(WorkingMesh mesh, const MeshSpec &spec) const {
     result.reports.push_back(std::move(report));
   }
   result.mesh = mesh.to_mesh();
-  result.longest_edge = longest_edge(result.mesh);
-  result.target_met = result.longest_edge <= result.max_edge_length;
+  result.properties = finish(result.mesh, result.reports.front());
+  // The target is read from the one measurement of the final mesh.
+  result.target_met = result.properties.longest_edge <= result.max_edge_length;
   return result;
+}
+
+RefinementResult
+Remesher::refine(const Mesh &mesh,
+                 std::span<const std::size_t> marked_triangles) const {
+  if (!refiner_)
+    throw std::invalid_argument("Remesher::refine needs a refiner");
+  WorkingMesh working = [&] {
+    try {
+      return WorkingMesh::from_mesh(mesh);
+    } catch (const std::invalid_argument &e) {
+      throw std::invalid_argument(
+          std::string("Remesher::refine: the input mesh is not valid: ") +
+          e.what());
+    }
+  }();
+  for (auto t : marked_triangles)
+    if (t >= mesh.triangles.size())
+      throw std::invalid_argument(
+          "Remesher::refine: marked triangle " + std::to_string(t) +
+          " is out of range (the mesh has " +
+          std::to_string(mesh.triangles.size()) + " triangles)");
+
+  RefinementResult result;
+  result.reports.push_back(pipeline_report_);
+  StageReport report;
+  std::optional<Parents> parents =
+      detail::timed_stage(report, refiner_->name(), [&](auto &r) {
+        return refiner_->refine(working, marked_triangles, local_improvers_, r);
+      });
+  result.reports.push_back(std::move(report));
+  // Parents are only ever kept without deletions (only a re-triangulating
+  // boundary split deletes, and that drops them), so compacting does not
+  // renumber anything they refer to.
+  if (working.has_deleted())
+    parents.reset();
+  working.compact();
+  // Final passes have no length target in refinement.
+  const MeshSpec no_target{
+      .max_edge_length = {.absolute = std::numeric_limits<double>::max()}};
+  for (std::size_t k = 0; k < plan_.final_passes.size(); ++k) {
+    StageReport pass;
+    detail::timed_stage(
+        pass, improvers_[plan_.final_passes[k]]->name(),
+        [&](auto &r) { final_improvers_[k]->run(working, no_target, r); });
+    result.reports.push_back(std::move(pass));
+  }
+  result.mesh = working.to_mesh();
+  // A curve point bulging out of the mesh can reach another part of it,
+  // which the boundary split policy does not check (a known gap); a
+  // refinement for adaptivity must not return such a mesh.
+  try {
+    validate(result.mesh);
+  } catch (const std::invalid_argument &e) {
+    throw std::runtime_error(
+        "Remesher::refine: the refined mesh is not valid (" +
+        std::string(e.what()) +
+        "): a new curve point on a split boundary edge reaches another part "
+        "of the mesh; refine or remesh that part of the boundary first");
+  }
+  result.properties = finish(result.mesh, result.reports.front());
+
+  // The parents survive only if no component made them untrue.
+  StageReport &pipeline = result.reports.front();
+  std::vector<std::string> dropped;
+  if (!refiner_->capabilities().keeps_parents)
+    dropped.push_back(refiner_->name() + " does not keep them");
+  else if (!parents)
+    dropped.push_back(refiner_->name() +
+                      " could not keep them in this run (see its report)");
+  for (auto i : plan_.local_improvers)
+    if (!improvers_[i]->effects().keeps_parents)
+      dropped.push_back(improvers_[i]->name() + " (local): " +
+                        parents_reason(improvers_[i]->effects()));
+  for (auto i : plan_.final_passes)
+    if (!improvers_[i]->effects().keeps_parents)
+      dropped.push_back(improvers_[i]->name() + " (final pass): " +
+                        parents_reason(improvers_[i]->effects()));
+  if (dropped.empty()) {
+    result.parents = std::move(parents);
+  } else {
+    std::string text = "parents dropped by ";
+    for (std::size_t k = 0; k < dropped.size(); ++k)
+      text += (k == 0 ? "" : "; ") + dropped[k];
+    pipeline.messages.push_back(text);
+  }
+  return result;
+}
+
+MeshProperties Remesher::finish(const Mesh &mesh, StageReport &pipeline) const {
+  MeshProperties properties = measure(mesh, options_.warning_angle_degrees);
+  if (properties.triangles_below_warning_angle > 0)
+    pipeline.messages.push_back(
+        std::to_string(properties.triangles_below_warning_angle) + " of " +
+        std::to_string(properties.triangles) +
+        " triangles have an angle below the warning angle of " +
+        format_degrees(options_.warning_angle_degrees) +
+        " degrees (the smallest angle is " +
+        format_degrees(properties.smallest_angle_degrees) + " degrees)");
+  return properties;
 }
 
 } // namespace pde2d::mesh

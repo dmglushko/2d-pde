@@ -1,4 +1,5 @@
 add_library(pde2d_mesh
+  bisection_refiners.cpp
   boundary_polygon.cpp
   boundary_split_policy.cpp
   boundary_split_steps.cpp
@@ -7,14 +8,15 @@ add_library(pde2d_mesh
   components.cpp
   curve_chain.cpp
   delaunay.cpp
-  domain_size.cpp
   delaunay_flips.cpp
-  edge_recovery.cpp
+  domain_size.cpp
   ear_clipping.cpp
+  edge_bisection.cpp
+  edge_recovery.cpp
   laplacian_smoothing.cpp
-  longest_edge_bisection.cpp
   loop_chains.cpp
   mesh.cpp
+  mesh_properties.cpp
   mesh_validity.cpp
   mesher.cpp
   remesher.cpp
