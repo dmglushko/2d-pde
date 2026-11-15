@@ -23,7 +23,9 @@ struct StaticResult {
 //   A U = load - A_FD U_D(t)
 // (stiffness().free and right_hand_side()). Any time order is accepted:
 // the time terms are dropped. The linear solver's requirements are
-// checked against the facts of A first.
+// checked first: A meets a symmetry requirement when it is always
+// symmetric by assembly's facts or symmetric at t by its values
+// (fem::Operator::always_symmetric, symmetric_now).
 class StaticSolver {
 public:
   // Throws std::invalid_argument for a null linear solver.
@@ -31,7 +33,7 @@ public:
 
   // Throws std::invalid_argument for a null problem, a t that is not
   // finite, or a linear solver that requires a symmetric matrix when A is
-  // not symmetric (fem::Operator::symmetric), and passes on the
+  // neither always symmetric nor symmetric at t, and passes on the
   // exceptions of assembly and of the linear solver (a singular matrix
   // throws std::runtime_error).
   [[nodiscard]] StaticResult

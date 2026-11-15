@@ -178,8 +178,8 @@ std::vector<std::size_t> dirichlet_node_list(const MeshedProblem &problem) {
 bool same(const Operator &a, const Operator &b) {
   return a.free.values == b.free.values &&
          a.dirichlet.values == b.dirichlet.values &&
-         a.depends_on_t == b.depends_on_t && a.is_zero == b.is_zero &&
-         a.symmetric == b.symmetric;
+         a.depends_on_t == b.depends_on_t && a.always_zero == b.always_zero &&
+         a.always_symmetric == b.always_symmetric;
 }
 
 bool same(const AssembledProblem &a, const AssembledProblem &b) {
@@ -276,7 +276,7 @@ AssembledProblem stiffness_of(const Equation &equation,
 void symmetric_case(const Equation &equation, BoundaryCondition bottom,
                     bool expected, const std::string &what) {
   const auto a = stiffness_of(equation, std::move(bottom));
-  check(a.stiffness().symmetric == expected, what + ": the fact");
+  check(a.stiffness().always_symmetric == expected, what + ": the fact");
   const double measured = asymmetry(a.stiffness().free);
   if (expected)
     check(measured < 1e-14, what + ": A = A^T to rounding");
@@ -298,7 +298,8 @@ int main() {
          near_matrix(dense(a.stiffness().free), scaled(k_identity, -1), tight,
                      "-K");
          check(a.stiffness().dirichlet.columns() == 0, "no Dirichlet columns");
-         check(a.mass().is_zero && a.damping().is_zero, "no time terms");
+         check(a.mass().always_zero && a.damping().always_zero,
+               "no time terms");
        }},
       {"K and T for an anisotropic A",
        [] {
@@ -383,7 +384,7 @@ int main() {
              {{"bottom", {.beta_n = e("1"), .gamma = e("4")}}}, {.u = e("0")}));
          near_matrix(dense(a.damping().free),
                      scaled(on_edge(0, 1, edge_mass), -4), tight, "-D");
-         check(!a.damping().is_zero && a.time_order() == 1,
+         check(!a.damping().always_zero && a.time_order() == 1,
                "damping only from D");
        }},
 
@@ -587,8 +588,8 @@ int main() {
        [] {
          const Equation laplace{.a_xx = e("1"), .a_yy = e("1")};
          const auto a = assemble(on_triangle(laplace));
-         check(a.time_order() == 0 && a.mass().is_zero && a.damping().is_zero &&
-                   !a.stiffness().is_zero,
+         check(a.time_order() == 0 && a.mass().always_zero &&
+                   a.damping().always_zero && !a.stiffness().always_zero,
                "static");
          Equation heat = laplace;
          heat.m1 = e("1");
@@ -598,7 +599,7 @@ int main() {
          wave.m2 = e("1");
          const auto w =
              assemble(on_triangle(wave, {}, {.u = e("0"), .u_t = e("0")}));
-         check(w.time_order() == 2 && w.damping().is_zero, "wave");
+         check(w.time_order() == 2 && w.damping().always_zero, "wave");
          check(w.dirichlet_rates().empty(), "no Dirichlet nodes");
          // A dynamic condition with A = 0 has no D: the problem's time order
          // is 1, the assembled one 0.
@@ -607,7 +608,7 @@ int main() {
              {.u = e("0")});
          check(time_order(*no_a) == 1, "problem: time order 1");
          const auto n = assemble(no_a);
-         check(n.time_order() == 0 && n.damping().is_zero, "assembled: 0");
+         check(n.time_order() == 0 && n.damping().always_zero, "assembled: 0");
          Equation in_t = laplace;
          in_t.a_xx = e("1 + t");
          in_t.m2 = e("x");
@@ -628,8 +629,8 @@ int main() {
          const auto problem = every_term_problem();
          const double t = 0.7;
          const auto full = assemble(problem, t);
-         check(full.time_order() == 2 && !full.mass().is_zero &&
-                   !full.damping().is_zero,
+         check(full.time_order() == 2 && !full.mass().always_zero &&
+                   !full.damping().always_zero,
                "the full assembly has every term");
          check(same(Assembler().assemble(problem, t, nullptr, 2), full),
                "level 2 is the full assembly");
@@ -637,7 +638,7 @@ int main() {
 
          const auto one = Assembler().assemble(problem, t, nullptr, 1);
          check(one.time_order() == 1, "level 1: time order 1");
-         check(one.mass().is_zero && all_zero(one.mass()) &&
+         check(one.mass().always_zero && all_zero(one.mass()) &&
                    !one.mass().depends_on_t,
                "level 1: M2 left out");
          check(same(one.damping(), full.damping()) &&
@@ -656,7 +657,7 @@ int main() {
 
          const auto zero = Assembler().assemble(problem, t, nullptr, 0);
          check(zero.time_order() == 0, "level 0: time order 0");
-         check(zero.mass().is_zero && zero.damping().is_zero &&
+         check(zero.mass().always_zero && zero.damping().always_zero &&
                    all_zero(zero.mass()) && all_zero(zero.damping()),
                "level 0: M2 and B left out");
          check(same(zero.stiffness(), full.stiffness()),
@@ -715,7 +716,7 @@ int main() {
                "B built fresh, A reused");
          check(same(high, Assembler().assemble(steady, 1.0, nullptr, 1)),
                "bit for bit");
-         check(!high.damping().is_zero, "B is there");
+         check(!high.damping().always_zero, "B is there");
        }},
       {"max_time_order: other values throw",
        [] {
@@ -786,13 +787,14 @@ int main() {
        [] {
          const auto problem = every_term_problem();
          const auto a = assemble(problem, 0.5);
-         check(a.mass().symmetric && a.damping().symmetric, "M2 and B");
+         check(a.mass().always_symmetric && a.damping().always_symmetric,
+               "M2 and B");
          check(asymmetry(a.mass().free) < 1e-14 &&
                    asymmetry(a.damping().free) < 1e-14,
                "measured");
          check(problem->a_is_isotropic(), "a_xx = a_yy = 2");
          const auto zero = Assembler().assemble(problem, 0.5, nullptr, 0);
-         check(zero.mass().symmetric && zero.damping().symmetric,
+         check(zero.mass().always_symmetric && zero.damping().always_symmetric,
                "a left-out operator is symmetric");
          check(on_triangle({.a_xx = e("1 + x"), .a_yy = e("x + 1")})
                    ->a_is_isotropic(),

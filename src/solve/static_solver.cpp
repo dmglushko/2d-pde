@@ -34,8 +34,11 @@ StaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   const auto start = std::chrono::steady_clock::now();
 
   const fem::Operator &stiffness = assembled.stiffness();
-  detail::check_requirements(*linear_solver_, stiffness.symmetric,
-                             "static_solver", "A (the stiffness)");
+  // Symmetric by the facts, or else by the values at t (symmetric_now
+  // already includes the facts; both are named to show the rule).
+  detail::check_requirements(
+      *linear_solver_, stiffness.always_symmetric || stiffness.symmetric_now,
+      "static_solver", "A (the stiffness)");
   const auto prepared = linear_solver_->prepare(
       std::make_shared<const fem::CsrMatrix>(stiffness.free));
   const LinearSolveResult solved = prepared->solve(assembled.right_hand_side());

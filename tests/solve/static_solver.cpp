@@ -189,7 +189,7 @@ void sqrt_boundary_data() {
 void refuses_non_symmetric() {
   const auto meshed = std::make_shared<const MeshedProblem>(
       pde2d::test::unit_square(4), mixed_problem());
-  check(!Assembler().assemble(meshed, 0.0).stiffness().symmetric,
+  check(!Assembler().assemble(meshed, 0.0).stiffness().always_symmetric,
         "A has convection");
   for (const std::shared_ptr<const LinearSolver> &solver :
        std::vector<std::shared_ptr<const LinearSolver>>{
