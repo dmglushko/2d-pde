@@ -76,7 +76,8 @@ struct DirichletNode {
 //    (the boundary data must then be finite there), and a difference is
 //    reported with the number of nodes and the first three; otherwise they
 //    are reported once as possibly different;
-// 6. compiles the divergence of A (divergence_of_a());
+// 6. compiles the divergence of A (divergence_of_a()) and decides whether
+//    A is isotropic (a_is_isotropic());
 // 7. keeps each expression's facts with its compiled function, so the
 //    summaries below are computed from the compiled problem.
 //
@@ -103,6 +104,12 @@ public:
 
   const CompiledEquation &equation() const { return equation_; }
   const CompiledDivergence &divergence_of_a() const { return divergence_; }
+  // A is a multiple of the identity (or zero): a_xy is zero as written and
+  // a_xx - a_yy simplifies to zero (SymEngine's expand; named parameters
+  // are unknown constants, so a_xx = k1, a_yy = k2 is not isotropic).
+  // Assembly uses it to recognise the tangential boundary matrix T as
+  // zero.
+  bool a_is_isotropic() const { return a_is_isotropic_; }
   // One per mesh region, indexed like Mesh::region_names.
   const std::vector<CompiledCondition> &conditions() const {
     return conditions_;
@@ -158,6 +165,7 @@ private:
   std::optional<CompiledExpression> initial_u_;
   std::optional<CompiledExpression> initial_u_t_;
   CompiledDivergence divergence_;
+  bool a_is_isotropic_ = false;
   // Per region, for time order 1 or 2: d/dt (g / alpha) of a Dirichlet
   // condition, zero otherwise. Empty for time order 0.
   std::vector<CompiledExpression> dirichlet_rates_;

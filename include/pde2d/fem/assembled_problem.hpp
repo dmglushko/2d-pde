@@ -27,9 +27,17 @@ struct Operator {
   CsrMatrix dirichlet{};
   // Some term of it has a coefficient that depends on t (as written).
   bool depends_on_t = false;
-  // No term contributes: every coefficient feeding it is zero as written.
-  // Its matrices then hold the pattern with zero values.
+  // No term contributes: every coefficient feeding it is zero as written,
+  // or assembly left it out (Assembler::assemble's max_time_order). Its
+  // matrices then hold the pattern with zero values.
   bool is_zero = false;
+  // The free part is symmetric, decided from the terms assembly builds,
+  // not from the values: M2, M1, D, K, R and S are symmetric, C and T only
+  // when they are zero (docs/decisions.md, "Linear solvers declare
+  // requirements; matrices carry properties"). A zero operator, or one
+  // with only Dirichlet columns, is symmetric. Up to rounding: the blocks
+  // are computed in full, so (i, j) and (j, i) can differ in the last bits.
+  bool symmetric = false;
 };
 
 // The system assembly builds from a MeshedProblem at one time t, in the
@@ -85,7 +93,8 @@ public:
   bool right_hand_side_depends_on_t() const { return rhs_depends_on_t_; }
   // 2 if mass() is not zero, else 1 if damping() is not zero, else 0. It
   // can be lower than the problem's time_order (a dynamic condition whose
-  // D is zero because A is).
+  // D is zero because A is), and it is at most the max_time_order it was
+  // assembled with.
   int time_order() const;
 
   // Stage "assembly": the time taken and metrics (see Assembler).
