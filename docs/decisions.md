@@ -583,7 +583,8 @@ marked "architecture" below are decided.
   6. With `previous`, what is rebuilt is decided per term and per boundary
      region from the facts, not per whole matrix.
   7. The tangential boundary matrix T counts as non-zero whenever A is: it
-     is not tested for cancelling to zero.
+     is not tested for cancelling to zero. *Replaced 2026-11-15* by the
+     zero test for T under "Solvers and time integration".
   8. `dirichlet_rate` and `dirichlet_acceleration` are compiled only when
      the time order needs them (the rate for 1 or 2, the acceleration for
      2) and throw `std::invalid_argument` below that. *Why:* asking for
@@ -603,8 +604,8 @@ marked "architecture" below are decided.
 
 ## Solvers and time integration
 
-Discussed in a side chat on 2026-11-12. Not implemented yet; assembly
-comes first.
+Discussed in a side chat on 2026-11-12; the first slice was built on
+2026-11-14.
 
 - **Configuration in the constructor, the job in the call**, as for the
   `Mesher`: `Integrator(method, step_controller, linear_solver)` with
@@ -660,8 +661,8 @@ comes first.
   integrated is M(t)·U′ + A(t)·U = b(t) as assembled (no M′ term).
 - **First linear solvers** (decided 2026-11-13): `SparseLu` (direct) and
   `BiCgStab` (iterative), both for any matrix, behind the `LinearSolver`
-  interface. Conjugate gradients comes later, together with a symmetry
-  fact from assembly: the matrix is not symmetric in general and −K is
+  interface. Conjugate gradients came with a symmetry fact from assembly
+  (see below): the matrix is not symmetric in general and −K is
   negative definite.
 - **A solve has an intermediate result and a separate building step**
   (decided 2026-11-13, as in the owner's Poisson project): the linear
@@ -675,6 +676,61 @@ comes first.
   `pde2d_fem`; Eigen is used only inside its `.cpp` files.
 - **Continuing a run:** `integrate(meshed, t1, t2, output, previous.final)`
   starts from an earlier result; no new problem object is made.
+- **Choices of the first solver implementation, accepted 2026-11-15:**
+  `prepare` takes `shared_ptr<const CsrMatrix>` and keeps it; `residual`
+  is the relative residual ‖b − A·x‖/‖b‖ measured after every solve;
+  `BiCgStab` defaults are tolerance 1e-10 and at most 1000 iterations,
+  with a fixed Jacobi preconditioner and x = 0 as start;
+  `FixedStep(FixedStepOptions{.dt})`; a method describes its step matrix
+  as weights (mass·M₂ + damping·B + stiffness·A) and an evaluation
+  fraction; `Solution` also carries `velocities` (filled for time order
+  2, so a wave run can be continued); `initial` is refused on another
+  mesh, with the wrong size, non-finite values or missing velocities;
+  step times are anchor + k·dt and land on snapshot times and t1;
+  `snapshot_times` strictly increasing inside [t0, t1], `snapshot_every =
+  0` means never, one snapshot per step at most; the integrator's report
+  is the stage `"integrator"` with step, dt, iteration, residual,
+  assembly, prepare and snapshot metrics.
+- **No fallbacks between methods** (decided 2026-11-15): a method or
+  linear solver that cannot handle a problem throws with the reason; it
+  never switches to another one. Choosing a method automatically belongs
+  to a planner, later.
+- **`Newmark` needs an invertible M₂ at t0** for its starting
+  acceleration and throws otherwise, naming the cause and the methods
+  that need no acceleration (decided 2026-11-15). The user never gives an
+  initial acceleration.
+- **`ImplicitEuler` and `ImplicitMidpoint` also integrate time order 2**
+  (decided 2026-11-15), stepping U′ = V, M₂·V′ + B·V + A·U = rhs as a
+  pair. Eliminating V₁ leaves one system of the usual size: weights
+  (1/dt², 1/dt, 1) for Euler and (2/dt², 1/dt, ½) for midpoint. They need
+  no acceleration, so they work when M₂ is singular or zero at some time
+  (m2 = sin(t)); with M₂ = 0 the midpoint step is the first-order
+  midpoint step. *Why:* Newmark cannot start then.
+- **A time method declares the set of time orders it supports** (0, 1
+  and/or 2; decided 2026-11-15), checked against the assembled
+  `time_order()`: `ImplicitEuler` {0, 1, 2} (order 0 is a static solve at
+  each step time), `ImplicitMidpoint` {1, 2} (at order 0 it would
+  oscillate: U₁ = 2A⁻¹r − U₀), `Newmark` {2}. A problem whose assembled
+  order is below what the user wrote (m1 = 0 and a boundary u_t term on a
+  problem with A = 0, where the boundary term vanishes) is therefore
+  refused only by methods that do not declare that order, with a message
+  saying why.
+- **Linear solvers declare requirements; matrices carry properties**
+  (decided 2026-11-15). Assembly gives each operator a `symmetric` fact
+  from its terms (M₁, M₂, D, K, R, S are symmetric; C and T are not unless
+  zero). The step matrix is symmetric when every operator with a non-zero
+  weight is. The integrator and the static solver check a solver's
+  requirements against these facts before preparing and throw
+  `std::invalid_argument` on a mismatch. Positive definiteness is not
+  known from facts: a solver that needs it detects its failure and throws
+  `std::runtime_error`. New solvers: `ConjugateGradient` and
+  `SimplicialLdlt`, both requiring a symmetric matrix.
+- **T is recognised as zero from the facts** (decided 2026-11-15,
+  replacing the assembly choice "T counts as non-zero whenever A is"): on
+  a natural or dynamic region, r = κ_τ − q·β̂_τ is zero when A is
+  isotropic or zero (a_xy is zero and a_xx − a_yy simplifies to zero) and
+  β_τ, β_x and β_y are zero. *Why:* otherwise every problem with
+  diffusion would look non-symmetric and CG could never be used.
 
 ## Deferred
 
