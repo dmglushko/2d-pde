@@ -591,7 +591,7 @@ marked "architecture" below are decided.
      them on a lower time order is a mistake in the caller, and a static
      problem must not be rejected because of a derivative it never uses.
 - **`assemble` takes a `max_time_order`** (decided 2026-11-15, GitHub
-  issue #35; not built yet): `assemble(meshed_problem, t, previous,
+  issue #35; built 2026-11-15): `assemble(meshed_problem, t, previous,
   max_time_order = 2)`. 2 builds everything; 1 skips M₂ and U_D″; 0
   builds only A (K, C, R, S, T) and the load, with the lifting load −
   A_FD·U_D, and evaluates only U_D. Skipped terms are stored as zero

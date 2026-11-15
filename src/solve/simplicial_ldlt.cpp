@@ -6,6 +6,7 @@
 #include <Eigen/OrderingMethods>
 #include <Eigen/SparseCholesky>
 
+#include <format>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -22,8 +23,9 @@ using Ldlt = Eigen::SimplicialLDLT<ColumnMajorMatrix, Eigen::Lower,
 
 class PreparedSimplicialLdlt final : public PreparedLinearSolver {
 public:
-  explicit PreparedSimplicialLdlt(std::shared_ptr<const fem::CsrMatrix> matrix)
-      : matrix_(std::move(matrix)) {
+  PreparedSimplicialLdlt(std::shared_ptr<const fem::CsrMatrix> matrix,
+                         const SimplicialLdltOptions &options)
+      : matrix_(std::move(matrix)), options_(options) {
     if (matrix_->rows() == 0)
       return; // nothing to factorize: every solve returns an empty vector
     const ColumnMajorMatrix a = detail::view(*matrix_);
@@ -51,20 +53,37 @@ public:
           "singular or nearly so)");
     result.residual =
         detail::relative_residual(*matrix_, right_hand_side, result.values);
+    // The check that makes LDL^T without pivoting safe: a tiny pivot of an
+    // indefinite matrix factorizes "successfully" and gives a wrong x.
+    if (!(result.residual <= options_.residual_tolerance))
+      throw std::runtime_error(std::format(
+          "simplicial_ldlt: the relative residual {} is above the tolerance "
+          "{} (the matrix is probably indefinite and needs pivoting; use "
+          "sparse_lu)",
+          result.residual, options_.residual_tolerance));
     return result;
   }
 
 private:
   std::shared_ptr<const fem::CsrMatrix> matrix_;
+  SimplicialLdltOptions options_;
   Ldlt ldlt_;
 };
 
 } // namespace
 
+SimplicialLdlt::SimplicialLdlt(SimplicialLdltOptions options)
+    : options_(options) {
+  if (!(options_.residual_tolerance > 0.0 && options_.residual_tolerance < 1.0))
+    throw std::invalid_argument(
+        "simplicial_ldlt: residual_tolerance must be in (0, 1)");
+}
+
 std::unique_ptr<const PreparedLinearSolver>
 SimplicialLdlt::prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const {
   detail::check_matrix(matrix, name());
-  return std::make_unique<const PreparedSimplicialLdlt>(std::move(matrix));
+  return std::make_unique<const PreparedSimplicialLdlt>(std::move(matrix),
+                                                        options_);
 }
 
 } // namespace pde2d::solve

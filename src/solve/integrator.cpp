@@ -62,6 +62,9 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
                                   std::to_string(initial->values.size()) +
                                   " values for " + std::to_string(nodes) +
                                   " nodes");
+    if (!detail::all_finite(initial->values))
+      throw std::invalid_argument(
+          "integrator: the initial solution has a value that is not finite");
     if (time_order == 0)
       return state; // checked only: the state at t0 is solved for
     state.values = free_part(meshed, initial->values);
