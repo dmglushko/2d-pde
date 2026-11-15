@@ -32,9 +32,9 @@ impossible or unclear, ask.
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) |
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
-| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`) |
+| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
-| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
+| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
 | `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `iterative_solve.hpp` and the solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`); `time_methods.cpp` holds the three time methods |
 | `include/pde2d/adapt/` | `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `refinement.hpp` (`RefinementMethod`, `RefinementResult`, `set_longest_edges_as_refinement_edges`, the refinement edge convention), `newest_vertex_bisection.hpp`, `red_green_blue_refinement.hpp` |
 | `src/adapt/` | `marking.cpp` (the shared checks and the four strategies), `refinement.cpp` (the two methods and the initial refinement edges), private `edge_refinement.hpp/.cpp` (the engine both methods share: edge marking, closure, division patterns) |
@@ -195,12 +195,22 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `coefficients_depend_on_t` and `data_depends_on_t` are computed from them each
   time (`src/fem/fact_summaries.hpp`).
 - **Assembly computes its own facts.** `AssembledProblem`'s
-  `is_zero`, `depends_on_t`, `symmetric`, `time_order` and the right-hand
-  side facts come from the terms assembly builds, never from
+  `always_zero`, `depends_on_t`, `always_symmetric`, `time_order` and the
+  right-hand side facts come from the terms assembly builds, never from
   `MeshedProblem`'s summaries. A term that depends on t goes to the time
   part, any other to the constant part; `assemble` with `previous` must
   stay bit for bit equal to a fresh assembly at the same `max_time_order`,
-  also when `previous` had another one (`tests/fem/assembly.cpp`).
+  also when `previous` had another one (`tests/fem/assembly.cpp`),
+  including the number facts.
+- **Two kinds of facts per matrix.** Formula facts (`depends_on_t`,
+  `always_zero`, `always_symmetric`) hold for every t; number facts
+  (`zero_now`, `symmetric_now`, read from the values of `free` with
+  `has_only_zero_entries` / `is_symmetric`) hold at the assembled t only,
+  and each is implied by its formula fact. The time order, reuse, "build
+  or skip" and "prepare again" use only the formula facts (m2 = sin(t)
+  is time order 2 also at t = 0); number facts only say whether a linear
+  solver may take a matrix now, or that Newmark cannot start.
+  `Assembler::time_order` must stay equal to `assemble(...).time_order()`.
 - **`max_time_order` leaves terms out, it does not change them.** 1 drops
   M2 and U_D'', 0 also M1, D and U_D'; a dropped operator is a zero
   operator. Never evaluate `dirichlet_rate` or `dirichlet_acceleration`
@@ -209,7 +219,8 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   C and T make A non-symmetric unless they are zero. T is zero when A is
   zero, or isotropic (`MeshedProblem::a_is_isotropic()`, decided
   symbolically in its constructor) with beta_tau, beta_x and beta_y zero.
-  Never decide symmetry by comparing matrix values.
+  Never decide `always_symmetric` by comparing matrix values; values give
+  only `symmetric_now`.
 - **Element block functions are pure** (`src/fem/element_blocks.hpp`):
   no shared state, so only the driver in `assembler.cpp` would ever know
   about threads. Elements are processed colour by colour, in index order
@@ -222,15 +233,20 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `fem::CsrMatrix` and `std::vector`/`std::span`.
 - **The integrator decides from declarations.** A method's supported time
   orders come from `capabilities().supports(order)`, checked against
-  `AssembledProblem::time_order()`; whether to prepare the linear solver
-  again comes from dt and the operators' `depends_on_t` / `is_zero` for
-  the non-zero weights of `step_matrix_weights(dt)`. Never test a
-  method's type or name.
-- **Linear solvers declare requirements; callers check them** against
-  `Operator::symmetric` before every `prepare` (`detail::check_requirements`;
-  the step matrix is symmetric when every operator with a non-zero weight
-  is symmetric or zero). A new caller that prepares a matrix must check
-  too. Definiteness is not declared: a solver that needs it throws
+  `Assembler::time_order(meshed)` (formula facts, nothing evaluated);
+  what is assembled at t0 comes from `start_needs(order)` (`nothing`: no
+  assembly at t0 and no `start` call, `static_part`: `max_time_order` 0,
+  `whole_problem`: 2); whether to prepare the linear solver again comes
+  from dt and the operators' `depends_on_t` / `always_zero` for the
+  non-zero weights of `step_matrix_weights(dt)`. Never test a method's
+  type or name.
+- **Linear solvers declare requirements; callers check them** before
+  every `prepare` (`detail::check_requirements`): a symmetry requirement
+  is met when the matrix is always symmetric by the facts or symmetric
+  now by its values (`Operator::symmetric_now`; for a step matrix, every
+  operator with a non-zero weight always symmetric or always zero, else
+  `is_symmetric` of the step matrix, `detail::check_step_matrix_requirements`).
+  A new caller that prepares a matrix must check too. Definiteness is not declared: a solver that needs it throws
   `std::runtime_error` when it fails, never returns an unchecked answer.
 - **No fallbacks between methods or solvers**: one that cannot handle a
   problem throws with the reason (and may name alternatives); it never
@@ -240,11 +256,12 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   solver assembles with `max_time_order` 0, where it is load − A_FD U_D.
 - **One set of step weights per method serves all its orders**: a zero
   operator adds nothing (`detail::add_product` skips it), so a method
-  tells the orders apart only by `is_zero` of M2 and B.
+  tells the orders apart only by `always_zero` of M2 and B.
 - **Never invert B or M2 in a step**: B can be singular (m1 = 0 with a
   dynamic condition) and either can be a zero operator. Only `Newmark`'s
   `start` solves with M2, and fails with a message naming the methods that
-  need no acceleration.
+  need no acceleration (first when M2 is `zero_now` at t0, then when the
+  solve fails).
 - **Step times are anchor + k·dt**, not sums, and steps land exactly on
   snapshot times and t1, so a continued run (`integrate(meshed, t1, t2,
   output, &previous.final)`) matches one long run that lands on t1 (bit
