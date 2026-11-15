@@ -41,8 +41,8 @@ struct NewestVertexBisectionOptions {
 // (resolved against domain_size(mesh)), refine() all such triangles.
 //
 // Local improvers (it tolerates flips and node moves, though flips change
-// refinement edges) run after each refine() step on the triangles it
-// touched. Metrics as LongestEdgeBisection.
+// refinement edges) run after every split on the triangles it made.
+// Metrics as LongestEdgeBisection.
 class NewestVertexBisection final : public Refiner {
 public:
   explicit NewestVertexBisection(NewestVertexBisectionOptions options = {});

@@ -53,7 +53,9 @@ struct RedGreenBlueRefinementOptions {
 // run(): while a triangle has an edge longer than max_edge_length
 // (resolved against domain_size(mesh)), refine() all such triangles.
 //
-// Local improvers run after each refine() step, after the red flips.
+// Local improvers run after every split and after each red division; a
+// triangle whose bisection pattern a local flip has changed keeps it
+// (no red).
 // Metrics as LongestEdgeBisection, plus "red_triangles" and
 // "red_not_possible".
 class RedGreenBlueRefinement final : public Refiner {

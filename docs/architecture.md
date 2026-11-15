@@ -1556,7 +1556,11 @@ One step (`EdgeBisection::refine`):
    has the bisection pattern (bisected, both children bisected); one flip
    of the edge v0-m0 makes it red, and the four children are given the
    vertex order of the images of v0, v1, v2;
-4. the local improvers run once on every triangle the step touched.
+4. the local improvers run after every split (and every red division) on
+   the triangles it made, as in every refiner; once an improver has
+   changed the mesh, every triangle is bisected by the method's first rule
+   (longest edges for `LongestEdgeBisection`, as in Rivara's propagation
+   path), and an edge a flip removed before its split is not split.
 
 Bisecting (v0, v1, v2) at the midpoint m of v1-v2 gives (m, v0, v1) and
 (m, v2, v0). Red gives (v0, m2, m1), (m2, v1, m0), (m1, m0, v2),

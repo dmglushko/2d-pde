@@ -30,8 +30,10 @@ struct LongestEdgeBisectionOptions {
 // run(): while a triangle has an edge longer than max_edge_length
 // (resolved against domain_size(mesh)), refine() all such triangles.
 //
-// Local improvers (it tolerates flips and node moves) run after each
-// refine() step on the triangles it touched.
+// Local improvers (it tolerates flips and node moves) run after every
+// split on the triangles it made. A flip changes which triangles wait for
+// which, so with flipping local improvers a marked triangle may end up
+// refined differently (the parents are then dropped anyway).
 // Metrics of both: "splits", "boundary_splits", "retriangulated_splits",
 // "deleted_nodes", "unsplittable_edges", "incompatible_splits" (always 0
 // here: longest edges never wait in a cycle), "local_improver_changes"

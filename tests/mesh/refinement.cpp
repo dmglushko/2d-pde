@@ -11,7 +11,9 @@
 #include "pde2d/mesh/laplacian_smoothing.hpp"
 #include "pde2d/mesh/ruppert.hpp"
 
+#include <cmath>
 #include <map>
+#include <numbers>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -313,9 +315,10 @@ void improvers_and_parents() {
     check(!flipped.parents, "flips drop the parents");
     check(flipped.reports.size() == 3, "pipeline, refiner, final pass");
     check(flipped.reports[2].stage == "delaunay_flips", "final pass report");
-    check(has_message(flipped.reports[0],
-                      "parents dropped: delaunay_flips (local): it flips "
-                      "edges; delaunay_flips (final pass): it flips edges"),
+    check(has_message(flipped.reports[0], "parents dropped: ") &&
+              has_message(flipped.reports[0],
+                          "delaunay_flips (local): it flips edges; "
+                          "delaunay_flips (final pass): it flips edges"),
           "the pipeline report names the improver");
     check(refiner_report(flipped).metrics.at("local_improver_changes") >= 0,
           "local improver counted");
@@ -417,6 +420,61 @@ void refine_after_run() {
   }
 }
 
+// Refinement edges that wait for each other in a cycle: a hexagon around
+// a centre node, each triangle's refinement edge the spoke it shares with
+// the next one. Newest vertex bisection cannot split any spoke as the
+// refinement edge of both its triangles, so it splits one out of order:
+// the mesh stays conforming and the parents true, and the report says so.
+void incompatible_refinement_edges() {
+  Mesh m;
+  m.nodes.push_back({0, 0});
+  for (int k = 0; k < 6; ++k)
+    m.nodes.push_back({std::cos(k * std::numbers::pi / 3),
+                       std::sin(k * std::numbers::pi / 3)});
+  m.region_names = {"r"};
+  for (std::size_t k = 0; k < 6; ++k) {
+    const std::size_t p = 1 + k, q = 1 + (k + 1) % 6;
+    // (p, q, centre): the refinement edge, opposite p, is the spoke q-0.
+    m.triangles.push_back({{p, q, 0}});
+    m.boundary_edges.push_back(BoundaryEdge{{p, q}, 0, std::nullopt});
+  }
+  validate(m);
+  Marked all{0, 1, 2, 3, 4, 5};
+  auto r = refine_with(std::make_shared<NewestVertexBisection>(), m, all);
+  check_refinement(m, r, all);
+  const auto &report = refiner_report(r);
+  check(report.metrics.at("incompatible_splits") >= 1, "a split out of order");
+  bool said = false;
+  for (const auto &text : report.messages)
+    said = said ||
+           text.find("waited for each other in a cycle") != std::string::npos;
+  check(said, "the report says so");
+  // With longest refinement edges (all spokes are equally long: ties by
+  // node index) there is no cycle.
+  set_longest_edges_as_refinement_edges(m);
+  auto again = refine_with(std::make_shared<NewestVertexBisection>(), m, all);
+  check_refinement(m, again, all);
+  near(refiner_report(again).metrics.at("incompatible_splits"), 0, 0,
+       "no cycle with longest edges");
+}
+
+// Local flips change refinement edges as they go; the bisection refiners
+// still meet the spec, and the flips keep the mesh Delaunay.
+void run_with_local_flips() {
+  for (const auto &refiner : bisection_refiners()) {
+    auto flips = std::make_shared<DelaunayFlips>(
+        DelaunayFlipsOptions{.use = ImproverUse::local_only});
+    Mesher mesher(std::make_shared<ChordLengthDiscretizer>(),
+                  std::make_shared<Cdt>(), refiner, {flips});
+    auto r = mesher.run(l_shape(), {.max_edge_length = {.absolute = 0.15}});
+    check_valid_mesh(r.mesh);
+    check(r.target_met, refiner->name() + ": target met");
+    check(is_delaunay(r.mesh), refiner->name() + ": Delaunay");
+    check(r.reports[3].metrics.at("local_improver_changes") > 0,
+          "the local improver flipped");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -430,5 +488,7 @@ int main() {
               {"improvers_and_parents", improvers_and_parents},
               {"ruppert_shared_circumcenter", ruppert_shared_circumcenter},
               {"run_meets_the_spec", run_meets_the_spec},
-              {"refine_after_run", refine_after_run}});
+              {"refine_after_run", refine_after_run},
+              {"incompatible_refinement_edges", incompatible_refinement_edges},
+              {"run_with_local_flips", run_with_local_flips}});
 }

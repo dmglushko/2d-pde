@@ -109,13 +109,15 @@ struct Counts {
 class Step {
 public:
   Step(WorkingMesh &mesh, const std::string &name, const BisectionRule &rule,
-       std::size_t max_points, Counts &counts, StageReport &report)
+       std::size_t max_points, LocalImproverCalls &local, Counts &counts,
+       StageReport &report)
       : mesh_(mesh), name_(name), rule_(rule), max_points_(max_points),
-        counts_(counts), report_(report), input_nodes_(mesh.nodes().size()),
+        local_(local), local_changes_at_start_(local.total()), counts_(counts),
+        report_(report), input_nodes_(mesh.nodes().size()),
         input_triangles_(mesh.triangles().size()),
         input_vertices_(mesh.triangles()),
         triangle_parent_(mesh.triangles().size()),
-        bisected_(mesh.triangles().size(), false),
+        made_by_bisection_(mesh.triangles().size(), unmade),
         changed_(mesh.triangles().size(), false) {
     std::iota(triangle_parent_.begin(), triangle_parent_.end(), 0);
     node_parent_.reserve(input_nodes_);
@@ -184,17 +186,6 @@ public:
     }
   }
 
-  // The live triangles this step created or changed, sorted.
-  std::vector<std::size_t> touched() const {
-    std::vector<std::size_t> result;
-    for (auto t : touched_)
-      if (!mesh_.is_triangle_deleted(t))
-        result.push_back(t);
-    std::sort(result.begin(), result.end());
-    result.erase(std::unique(result.begin(), result.end()), result.end());
-    return result;
-  }
-
   // Input triangles that were refined although not marked.
   std::size_t refined_by_closure(std::span<const std::size_t> marked) const {
     std::size_t count = 0;
@@ -213,9 +204,15 @@ public:
   const std::string &parents_lost() const { return parents_lost_; }
 
 private:
-  // Where triangle t is bisected.
+  // Where triangle t is bisected. A triangle a bisection of this step
+  // made is bisected at its edge 0, an edge of its parent, as long as the
+  // mesh holds only this step's bisections: once a local improver has
+  // changed it, every triangle is bisected by the method's own rule
+  // (longest-edge bisection then follows the longest edges, as Rivara's
+  // propagation path does, instead of edges a flip may have made short).
   int bisection_edge(std::size_t t) const {
-    if (bisected_[t])
+    if (local_.total() == local_changes_at_start_ &&
+        made_by_bisection_[t] == mesh_.triangles()[t])
       return 0;
     return rule_.first == BisectionRule::FirstBisection::longest_edge
                ? longest_local_edge(mesh_, t)
@@ -343,8 +340,8 @@ private:
                           "the opposite vertex)";
         mark_changed(parent_t);
         for (auto s : r.touched)
-          bisected_[s] = false;
-        touched_.insert(touched_.end(), r.touched.begin(), r.touched.end());
+          made_by_bisection_[s] = unmade;
+        local_.after_change(mesh_, r.touched);
         return true;
       }
       // A direct split: {t, its other half}.
@@ -357,15 +354,21 @@ private:
     const std::size_t q = mesh_.nodes().size() - 1;
     for (auto s : children) {
       mesh_.set_refinement_edge(s, local_vertex(mesh_, s, q));
-      bisected_[s] = true;
+      made_by_bisection_[s] = mesh_.triangles()[s];
     }
     if (a < input_nodes_ && b < input_nodes_)
       node_parent_[q] = undirected(a, b);
     else if (parents_lost_.empty())
-      parents_lost_ = "an edge that was not in the input was split";
+      parents_lost_ =
+          local_.total() > 0
+              ? "a local improver changed the mesh, and then an edge that "
+                "was not in the input was split"
+              : "an edge that was not in the input was split";
     split_node_[undirected(a, b)] = q;
-    touched_.insert(touched_.end(), children.begin(), children.end());
     ++counts_.splits;
+    // After each change, the local improvers (they may flip edges, which
+    // can remove an edge that is still waiting; it is then not split).
+    local_.after_change(mesh_, children);
     return true;
   }
 
@@ -403,8 +406,6 @@ private:
     if (!mesh_.is_flippable(t, i))
       return Red::would_invert;
     mesh_.flip(t, i);
-    touched_.push_back(t);
-    touched_.push_back(u);
     // Each red child lists the images of v0, v1, v2 in that order, so its
     // refinement edge is the image of the parent's:
     //   (v0, m2, m1), (m2, v1, m0), (m1, m0, v2), (m0, m1, m2).
@@ -417,6 +418,7 @@ private:
         throw std::logic_error("edge bisection: a red child is missing");
       mesh_.set_refinement_edge(s, local_vertex(mesh_, s, c[0]));
     }
+    local_.after_change(mesh_, std::array{t, u});
     return Red::made;
   }
 
@@ -424,7 +426,7 @@ private:
   // entries have no parent until the split sets one.
   void grow() {
     triangle_parent_.resize(mesh_.triangles().size(), no_index);
-    bisected_.resize(mesh_.triangles().size(), false);
+    made_by_bisection_.resize(mesh_.triangles().size(), unmade);
     node_parent_.resize(mesh_.nodes().size(), {no_index, no_index});
   }
 
@@ -437,17 +439,22 @@ private:
   const std::string &name_;
   const BisectionRule &rule_;
   const std::size_t max_points_;
+  LocalImproverCalls &local_;
+  const std::size_t local_changes_at_start_;
   Counts &counts_;
   StageReport &report_;
   const std::size_t input_nodes_, input_triangles_;
   const std::vector<WorkingMesh::TriangleNodes> input_vertices_;
   std::vector<std::size_t> triangle_parent_;
   std::vector<std::array<std::size_t, 2>> node_parent_;
-  std::vector<bool> bisected_;
+  // Per triangle, the vertices a bisection of this step gave it, or
+  // `unmade`.
+  static constexpr WorkingMesh::TriangleNodes unmade{no_index, no_index,
+                                                     no_index};
+  std::vector<WorkingMesh::TriangleNodes> made_by_bisection_;
   std::vector<bool> changed_; // per input triangle
   std::vector<NodePair> pending_;
   std::map<NodePair, std::size_t> split_node_; // split edge -> its node
-  std::vector<std::size_t> touched_;
   std::string parents_lost_;
 };
 
@@ -492,14 +499,11 @@ StepResult step(WorkingMesh &mesh, std::span<const std::size_t> marked,
                 const std::string &name, const BisectionRule &rule,
                 std::size_t max_points, LocalImproverCalls &local,
                 Counts &counts, StageReport &report) {
-  Step s(mesh, name, rule, max_points, counts, report);
+  Step s(mesh, name, rule, max_points, local, counts, report);
   s.mark(marked);
   s.split_marked_edges();
   if (rule.red)
     s.make_red();
-  auto touched = s.touched();
-  if (!touched.empty())
-    local.after_change(mesh, touched);
   return {s.parents(), s.parents_lost(), s.refined_by_closure(marked)};
 }
 

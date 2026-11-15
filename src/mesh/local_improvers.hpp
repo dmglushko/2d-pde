@@ -23,6 +23,14 @@ public:
       counts_[i] += improvers_[i]->improve_around(mesh, touched);
   }
 
+  // The changes made so far, by all of them.
+  std::size_t total() const {
+    std::size_t sum = 0;
+    for (auto c : counts_)
+      sum += c;
+    return sum;
+  }
+
   // "local_improver_changes" (the sum) and one
   // "local_improver_changes.<name>" per local improver.
   void record(StageReport &report) const {

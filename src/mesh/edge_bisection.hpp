@@ -57,10 +57,13 @@ public:
   //     split policy: the curve point of a linked edge, the chord midpoint
   //     otherwise). The new node becomes vertex 0 of every triangle the
   //     split makes, so each child's refinement edge is an edge of its
-  //     parent;
+  //     parent. After each split the local improvers run on the triangles
+  //     it made (a flip may remove an edge still waiting; it is then not
+  //     split; and once an improver has changed the mesh, every triangle
+  //     is bisected by rule.first, like an input triangle);
   //  3. with rule.red, the triangles whose three edges were all split get
-  //     the red division (one flip of the bisection pattern);
-  //  4. the local improvers run once on every triangle the step touched.
+  //     the red division (one flip of the bisection pattern), followed by
+  //     the local improvers.
   // If the triangles waiting on an edge form a cycle (refinement edges
   // that are not compatible, which bisection itself never makes from
   // longest-edge refinement edges), the edge is split anyway: the mesh
