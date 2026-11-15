@@ -22,6 +22,12 @@ namespace pde2d::solve {
 // With M2 = 0 this is the first-order step. No acceleration is needed, so
 // M2 may be singular or zero at some times (m2 = sin(t)^2).
 //
+// The method does not damp. While M2 is zero (at some nodes or for a while),
+// V there comes only from V1 = 2 (U1 - U0) / dt - V0, so an error in V0
+// stays as an oscillation of sign (+, -, +, ...) and enters U again when M2
+// becomes non-zero. Near such times, and on coarse steps, the rate can drop
+// below 2; ImplicitEuler damps it but is first order.
+//
 // Time order 0 is not supported: with B = 0 the step is
 // U1 = 2 A^-1 b - U0, which oscillates around the solution.
 //
