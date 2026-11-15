@@ -38,8 +38,7 @@ inline void check_options(const IterativeOptions &options,
   if (!(options.tolerance > 0.0 && options.tolerance < 1.0))
     throw std::invalid_argument(solver + ": tolerance must be in (0, 1)");
   if (options.max_iterations < 1)
-    throw std::invalid_argument(solver +
-                                ": max_iterations must be at least 1");
+    throw std::invalid_argument(solver + ": max_iterations must be at least 1");
 }
 
 // `EigenSolver` is an Eigen iterative solver for RowMajorMatrix with a

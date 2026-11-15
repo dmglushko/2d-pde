@@ -12,9 +12,9 @@ namespace {
 // Lower | Upper: the product uses the whole matrix as stored, so the
 // matrix need not be exactly symmetric to the last bit (assembly computes
 // both triangles in full).
-using Solver =
-    Eigen::ConjugateGradient<detail::RowMajorMatrix, Eigen::Lower | Eigen::Upper,
-                             Eigen::DiagonalPreconditioner<double>>;
+using Solver = Eigen::ConjugateGradient<detail::RowMajorMatrix,
+                                        Eigen::Lower | Eigen::Upper,
+                                        Eigen::DiagonalPreconditioner<double>>;
 
 detail::IterativeOptions iterative(const ConjugateGradientOptions &options) {
   return {.tolerance = options.tolerance,
