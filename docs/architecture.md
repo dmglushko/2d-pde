@@ -20,6 +20,7 @@ of the file is the detailed text.
 | What are the stages of meshing? | [Meshing pipeline](#meshing-pipeline) |
 | In what order does a time step run? | [One time step](#one-time-step) |
 | Which interfaces exist and what implements them? | [Interfaces and their components](#interfaces-and-their-components) |
+| How does adaptive refinement go round (estimate, mark, refine)? | [Adaptive refinement](#adaptive-refinement-pde2d_adapt) |
 
 ## Data flow
 
@@ -91,6 +92,8 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | Linear solver | `requirements()` checked by the caller, then `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix` (its `symmetric` fact for the check), a right-hand side | `LinearSolveResult` | `pde2d_solve` |
 | Time method | `advance(assembled, dt, prepared, state)` | one `AssembledProblem` (at the method's evaluation point), the prepared solver, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
 | Building the solution | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
+| Marking | `MarkingStrategy::mark(mesh, indicators)` | `Mesh`, one error indicator per triangle (the owner's estimate) | the marked triangles | `pde2d_adapt` |
+| Refinement | `RefinementMethod::refine(mesh, marked)` | `Mesh`, marked triangles | `RefinementResult`: the finer `Mesh`, parents, report | `pde2d_adapt` |
 
 ### Data
 
@@ -121,14 +124,18 @@ flowchart BT
     IO["pde2d_io · libxml2"]
     FEM["pde2d_fem · SymEngine"]
     SOLVE["pde2d_solve · Eigen"]
+    ADAPT[pde2d_adapt]
 
     MESH --> GEO
     IO --> MESH
     FEM --> MESH
     SOLVE --> FEM
+    ADAPT --> MESH
 ```
 
-`pde2d_io` and `pde2d_fem` do not use each other.
+`pde2d_io` and `pde2d_fem` do not use each other. `pde2d_adapt` uses only
+`pde2d_mesh` (and `pde2d_geometry` through it); fem and solve do not use
+it, nor it them.
 
 ## What each object contains
 
@@ -472,6 +479,14 @@ flowchart LR
         LSI --- LDLT[SimplicialLdlt]
         SCI([StepController]) --- FS[FixedStep]
     end
+    subgraph adapt [pde2d_adapt]
+        MKS([MarkingStrategy]) --- MXM[MaximumMarking]
+        MKS --- DRM[DorflerMarking]
+        MKS --- FFM[FixedFractionMarking]
+        MKS --- EQM[EquidistributionMarking]
+        RFM([RefinementMethod]) --- NVB[NewestVertexBisection]
+        RFM --- RGB[RedGreenBlueRefinement]
+    end
 ```
 
 Rounded boxes are interfaces, rectangles implement them. An `Improver`
@@ -487,15 +502,17 @@ include/pde2d/mesh/       src/mesh/       ->  library pde2d_mesh
 include/pde2d/io/         src/io/         ->  library pde2d_io
 include/pde2d/fem/        src/fem/        ->  library pde2d_fem
 include/pde2d/solve/      src/solve/      ->  library pde2d_solve
+include/pde2d/adapt/      src/adapt/      ->  library pde2d_adapt
 ```
 
 `pde2d_mesh` depends on `pde2d_geometry`, and `pde2d_io` and `pde2d_fem`
-each on `pde2d_mesh` (so on both), and `pde2d_solve` on `pde2d_fem`, never
-the reverse. Public headers are in
+each on `pde2d_mesh` (so on both), `pde2d_solve` on `pde2d_fem`, and
+`pde2d_adapt` on `pde2d_mesh` only, never the reverse. Public headers are in
 `include/pde2d/<module>/`; everything in `src/` is private, including the
 private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`, `src/fem/*.hpp`,
-`src/solve/*.hpp`).
-`pde2d_geometry` and `pde2d_mesh` have no external dependencies;
+`src/solve/*.hpp`, `src/adapt/*.hpp`).
+`pde2d_geometry`, `pde2d_mesh` and `pde2d_adapt` have no external
+dependencies;
 `pde2d_io` links libxml2 privately (only `src/io/svg_import.cpp` includes
 it), and `pde2d_fem` links SymEngine 0.14 privately (only through the
 private header `src/fem/symengine_expression.hpp`), and `pde2d_solve` uses
@@ -506,8 +523,8 @@ Boost.Multiprecision (header-only) in one place:
 arbitrary-precision evaluation. The viewer tests need Node.js and are
 skipped without it.
 
-Namespaces: `pde2d::geometry`, `pde2d::mesh`, `pde2d::io`, `pde2d::fem`
-and `pde2d::solve`.
+Namespaces: `pde2d::geometry`, `pde2d::mesh`, `pde2d::io`, `pde2d::fem`,
+`pde2d::solve` and `pde2d::adapt`.
 
 ## Geometry
 
@@ -1355,6 +1372,133 @@ history, report}`.
   time; for `Newmark` the acceleration is computed again at the split
   time, so equal to rounding.
 
+## Adaptive refinement (`pde2d_adapt`)
+
+Adaptive refinement goes round three steps. The first, the error
+estimate, is the owner's and not in the library (dashed); marking and
+refinement are components behind one interface each.
+
+```mermaid
+flowchart LR
+    EST["estimate (the owner's)"]
+    MK["MarkingStrategy::mark"]
+    RF["RefinementMethod::refine"]
+    SOL([Solution])
+    ETA([one indicator per triangle])
+    MKD([marked triangles])
+    M([Mesh])
+    RR(["RefinementResult: Mesh, parents, report"])
+
+    SOL -.-> EST
+    M -.-> EST
+    EST -.-> ETA
+    ETA --> MK
+    M --> MK
+    MK --> MKD
+    MKD --> RF
+    M --> RF
+    RF --> RR
+    RR -. next cycle .-> M
+
+    classDef owner stroke-dasharray: 5 5
+    class EST owner
+```
+
+```cpp
+Mesh mesh = Mesher(...).run(geometry, spec).mesh;
+set_longest_edges_as_refinement_edges(mesh); // once, before the first cycle
+const DorflerMarking marking({.theta = 0.5});
+const NewestVertexBisection refinement;
+for (int cycle = 0; cycle < 10; ++cycle) {
+  std::vector<double> eta = /* the owner's estimate on mesh */;
+  RefinementResult r = refinement.refine(mesh, marking.mark(mesh, eta));
+  mesh = std::move(r.mesh); // r.triangle_parents, r.node_parents: transfer
+}
+```
+
+### Marking
+
+`MarkingStrategy::mark(mesh, indicators)` takes one finite, non-negative
+indicator per triangle (`std::span<const double>`, length
+`mesh.triangles.size()`, else `std::invalid_argument`) and returns the
+marked triangle indices in increasing order. It is not virtual: it checks
+the input and applies the rules every strategy shares (a zero indicator
+is never marked, so all zeros mark nothing; sorted, no repetitions), then
+calls the strategy's private virtual `select`. Strategies, each with its
+options struct validated in the constructor:
+
+| Strategy | Options | Marks |
+| --- | --- | --- |
+| `MaximumMarking` | `theta` in [0, 1], default 0.5 | η_T ≥ θ · max η |
+| `DorflerMarking` | `theta` in [0, 1], default 0.5 | the smallest set, largest first (ties by index), with Σ_M η² ≥ θ Σ η² (squares scaled by the largest indicator; both sums in the same order) |
+| `FixedFractionMarking` | `fraction` in [0, 1], default 0.3 | the round(fraction · N) largest (nearest integer, halves up; ties by index) |
+| `EquidistributionMarking` | `tolerance`, required, finite and > 0 | η_T ≥ tol / √N |
+
+### Refinement edges
+
+Every triangle's **refinement edge is the edge opposite its vertex 0**.
+Both methods read it from the vertex order and write it into the
+triangles they make (the newest vertex first), so it persists across
+cycles without a field in `Mesh`. The vertex order stays
+counterclockwise. `set_longest_edges_as_refinement_edges(mesh)` rotates
+every triangle so that its longest edge is the refinement edge (ties:
+the opposite vertex with the smaller node index); call it once on a mesh
+from the Mesher, the Remesher or a file. Code that edits triangles (flips,
+the Remesher, Gmsh import) chooses vertex 0 freely: the mesh can still be
+refined, but the shape guarantee needs the call again.
+
+### One refinement
+
+Both methods share one engine (`src/adapt/edge_refinement.cpp`) that marks
+edges, not triangles:
+
+1. the three edges of every marked triangle are marked;
+2. closure: a triangle with a marked edge gets its refinement edge
+   marked, until nothing changes (edges are only added, so it ends; the
+   result does not depend on the order);
+3. every marked edge gets one new node, numbered after the input nodes in
+   edge order (edges sorted by their node pair): the midpoint, or for a
+   boundary edge `WorkingMesh::boundary_split_point` (the curve point at
+   the middle of a linked edge's arc-length interval, as in the boundary
+   split policy);
+4. each triangle is divided by its marked edges: none, kept as it is; one
+   (the refinement edge), bisected (green); two, bisected twice (blue);
+   three, bisected and both children bisected (`NewestVertexBisection`) or
+   red, four children similar to it (`RedGreenBlueRefinement`).
+
+Bisecting (v0, v1, v2) at the midpoint m of v1-v2 gives (m, v0, v1) and
+(m, v2, v0). Red gives (v0, m2, m1), (m2, v1, m0), (m1, m0, v2),
+(m0, m1, m2), m_i on the edge opposite v_i: each lists the images of
+v0, v1, v2 under the similarity that maps the parent onto it, so its
+refinement edge corresponds to the parent's. Green and blue are NVB
+bisections and a red child is refined later like a copy of its parent,
+so every triangle is similar to one that NVB alone makes from an initial
+triangle: at most four similarity classes per initial triangle, and green
+triangles need not be removed between cycles. Near curved boundaries this
+does not hold (the curve points change the shapes); there red refinement
+flattens triangles with two boundary edges on a smooth curve ("ears") by
+half each cycle, NVB does not (see `red_green_blue_refinement.hpp`).
+
+`RefinementResult`: the new `Mesh` (input nodes keep their indices; new
+nodes follow; triangles grouped by parent in input order; a split
+boundary edge replaced in place by its two halves, same region, link
+interval halved; chains and region names copied), `triangle_parents`
+(the input triangle of each output triangle, even when a child of a
+curved boundary triangle sticks out of it), `node_parents` (`{v, v}` for
+input node v, `{a, b}` for a node on input edge a-b, a < b) and a
+`StageReport` with the metrics `marked`, `refined_by_closure`,
+`new_nodes` and `new_triangles` (output minus input count). Nothing
+marked returns the mesh unchanged, with a message.
+
+Errors: `std::invalid_argument` for an invalid input mesh (checked by
+`WorkingMesh::from_mesh`) or a marked index out of range;
+`std::runtime_error` when a curve point cannot be placed by the plain
+split: a child would be inverted (the boundary split policy would have to
+re-triangulate, which refinement does not do), the refined mesh fails
+`mesh::validate` (a point bulging into another part of the mesh), or a
+link interval is too short to halve. There is no fallback to the chord
+midpoint. The output is always validated, so a returned mesh is valid.
+
 ## Determinism
 
 Results never depend on addresses or hash order (SymEngine's sets of
@@ -1362,4 +1506,6 @@ symbols are sorted by name before use): loops, curves, nodes,
 triangles and boundary edges are processed in index order, queues are FIFO
 or ordered by explicit keys with index tie-breaks, maps are ordered, and
 `compact()` keeps the index order of what remains.
-The same input gives the same mesh, bit for bit.
+The same input gives the same mesh, bit for bit. Marking orders equal
+indicators by triangle index; refinement numbers edges by their node
+pair and processes triangles in index order.
