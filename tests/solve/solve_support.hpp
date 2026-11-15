@@ -119,6 +119,7 @@ inline double l2_error(const mesh::Mesh &m, const std::vector<double> &values,
 class CountingSolver final : public solve::LinearSolver {
 public:
   std::string name() const override { return "counting"; }
+  solve::LinearSolverRequirements requirements() const override { return {}; }
   std::unique_ptr<const solve::PreparedLinearSolver>
   prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const override {
     ++*count_;

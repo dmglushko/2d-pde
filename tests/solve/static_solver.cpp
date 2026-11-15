@@ -1,6 +1,9 @@
 #include "solve_support.hpp"
 
+#include "pde2d/fem/assembler.hpp"
 #include "pde2d/solve/bicgstab.hpp"
+#include "pde2d/solve/conjugate_gradient.hpp"
+#include "pde2d/solve/simplicial_ldlt.hpp"
 #include "pde2d/solve/solution.hpp"
 #include "pde2d/solve/sparse_lu.hpp"
 #include "pde2d/solve/static_solver.hpp"
@@ -84,13 +87,32 @@ Problem mixed_problem() {
                 .g = e("2.5*exp(x)*cos(y) - exp(x)*sin(y)")}}}};
 }
 
+// A symmetric problem for the solvers that need one: -(u_xx + u_yy) +
+// (1 + x^2) u = f with u = exp(x) cos(y) again (harmonic, so f = c u).
+// A is isotropic and constant, so there is no convection and no T; R and
+// the Robin S are symmetric. Dirichlet on the bottom and the left, Robin
+// u + u_n on the right, Neumann u_n = u_y on the top.
+Problem symmetric_problem() {
+  const BoundaryCondition dirichlet{.alpha = e("1"), .g = e("exp(x)*cos(y)")};
+  return {.equation = {.a_xx = e("-1"),
+                       .a_yy = e("-1"),
+                       .c = e("1 + x^2"),
+                       .f = e("(1 + x^2)*exp(x)*cos(y)")},
+          .boundary_conditions = {
+              {"bottom", dirichlet},
+              {"left", dirichlet},
+              {"right",
+               {.alpha = e("1"), .beta_n = e("1"), .g = e("2*exp(x)*cos(y)")}},
+              {"top", {.beta_n = e("1"), .g = e("-exp(x)*sin(y)")}}}};
+}
+
 void converges(std::shared_ptr<const LinearSolver> linear_solver,
-               const char *name) {
+               const char *name, const Problem &problem = mixed_problem()) {
   const StaticSolver solver(std::move(linear_solver));
   std::vector<double> errors;
   for (const std::size_t n : {8, 16, 32}) {
     const auto meshed = std::make_shared<const MeshedProblem>(
-        pde2d::test::unit_square(n), mixed_problem());
+        pde2d::test::unit_square(n), problem);
     const StaticResult result = solver.solve(meshed);
     errors.push_back(
         pde2d::test::l2_error(*meshed->mesh(), result.solution.values, exact));
@@ -133,6 +155,96 @@ void drops_time_terms() {
   check(result.reports[1].metrics.at("residual") < 1e-12, "residual");
 }
 
+// GitHub issue #35: u = sqrt(t) on the whole boundary of
+// -(u_xx + u_yy) + u_t = 0. d/dt sqrt(t) is not finite at t = 0, which the
+// static solve must not evaluate: it assembles with max_time_order 0.
+void sqrt_boundary_data() {
+  const BoundaryCondition dirichlet{.alpha = e("1"), .g = e("sqrt(t)")};
+  const auto meshed = std::make_shared<const MeshedProblem>(
+      pde2d::test::unit_square(4),
+      Problem{.equation = {.a_xx = e("-1"), .a_yy = e("-1"), .m1 = e("1")},
+              .boundary_conditions = {{"bottom", dirichlet},
+                                      {"right", dirichlet},
+                                      {"top", dirichlet},
+                                      {"left", dirichlet}},
+              .initial = {.u = e("0")}});
+  // The full assembly needs U_D' at t = 0, which is not finite.
+  expect_throws<std::invalid_argument>(
+      [&] { (void)Assembler().assemble(meshed, 0.0); }, "not finite");
+  const StaticResult at_zero =
+      StaticSolver(std::make_shared<SparseLu>()).solve(meshed, 0.0);
+  for (const double value : at_zero.solution.values)
+    check(value == 0.0, "u = 0 at t = 0");
+  check(at_zero.reports[0].metrics.at("max_time_order") == 0,
+        "assembled at time order 0");
+  // At t = 4 the solution is the constant 2.
+  const StaticResult at_four =
+      StaticSolver(std::make_shared<SparseLu>()).solve(meshed, 4.0);
+  for (const double value : at_four.solution.values)
+    near(value, 2.0, 1e-13, "u = 2 at t = 4");
+}
+
+// The solvers that need a symmetric matrix are refused, before preparing,
+// on a problem whose A is not symmetric by the facts.
+void refuses_non_symmetric() {
+  const auto meshed = std::make_shared<const MeshedProblem>(
+      pde2d::test::unit_square(4), mixed_problem());
+  check(!Assembler().assemble(meshed, 0.0).stiffness().symmetric,
+        "A has convection");
+  for (const std::shared_ptr<const LinearSolver> &solver :
+       std::vector<std::shared_ptr<const LinearSolver>>{
+           std::make_shared<ConjugateGradient>(),
+           std::make_shared<SimplicialLdlt>()})
+    expect_throws<std::invalid_argument>(
+        [&] { (void)StaticSolver(solver).solve(meshed); },
+        "static_solver: the linear solver " + solver->name() +
+            " requires a symmetric matrix, but A (the stiffness) is not "
+            "symmetric");
+}
+
+// -(u_xx + u_yy) - 200 u = 1, u = 0 on the boundary: 200 lies between
+// eigenvalues of the discrete -Laplacian (the first is about 2 pi^2), so A
+// is symmetric and indefinite. CG is not made for it: it either throws or
+// returns an answer that meets its tolerance (the measured residual
+// decides), never a wrong one. LDL^T handles it (no zero pivot here).
+void indefinite_static() {
+  const BoundaryCondition zero{.alpha = e("1")};
+  const auto meshed = std::make_shared<const MeshedProblem>(
+      pde2d::test::unit_square(16),
+      Problem{.equation = {.a_xx = e("-1"),
+                           .a_yy = e("-1"),
+                           .c = e("-200"),
+                           .f = e("1")},
+              .boundary_conditions = {{"bottom", zero},
+                                      {"right", zero},
+                                      {"top", zero},
+                                      {"left", zero}}});
+  const auto lu = StaticSolver(std::make_shared<SparseLu>()).solve(meshed);
+  const auto ldlt =
+      StaticSolver(std::make_shared<SimplicialLdlt>()).solve(meshed);
+  for (std::size_t i = 0; i < lu.solution.values.size(); ++i)
+    near(ldlt.solution.values[i], lu.solution.values[i], 1e-10,
+         "LDL^T on an indefinite matrix");
+  try {
+    const auto cg =
+        StaticSolver(std::make_shared<ConjugateGradient>(
+                         ConjugateGradientOptions{.tolerance = 1e-12}))
+            .solve(meshed);
+    std::cout << "conjugate_gradient on the indefinite problem: converged, "
+                 "residual "
+              << cg.reports[1].metrics.at("residual") << '\n';
+    for (std::size_t i = 0; i < lu.solution.values.size(); ++i)
+      near(cg.solution.values[i], lu.solution.values[i], 1e-8,
+           "a returned CG answer is right");
+  } catch (const std::runtime_error &error) {
+    std::cout << "conjugate_gradient on the indefinite problem: threw: "
+              << error.what() << '\n';
+    check(std::string(error.what()).find("did not converge") !=
+              std::string::npos,
+          "CG says it did not converge");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -146,7 +258,22 @@ int main() {
                        .tolerance = 1e-12, .max_iterations = 5000}),
                    "bicgstab");
        }},
+      {"symmetric static problem converges at second order with CG and LDLT",
+       [] {
+         converges(std::make_shared<SparseLu>(), "sparse_lu (symmetric)",
+                   symmetric_problem());
+         converges(std::make_shared<ConjugateGradient>(
+                       ConjugateGradientOptions{.tolerance = 1e-12}),
+                   "conjugate_gradient", symmetric_problem());
+         converges(std::make_shared<SimplicialLdlt>(), "simplicial_ldlt",
+                   symmetric_problem());
+       }},
       {"the static solver drops the time terms", drops_time_terms},
+      {"a static solve never evaluates U_D' (sqrt(t) at t = 0, issue #35)",
+       sqrt_boundary_data},
+      {"CG and LDLT are refused for a non-symmetric A", refuses_non_symmetric},
+      {"an indefinite symmetric A: LDLT solves, CG never answers wrongly",
+       indefinite_static},
       {"the static solver rejects bad input",
        [] {
          expect_throws<std::invalid_argument>([] { StaticSolver(nullptr); },

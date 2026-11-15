@@ -26,6 +26,7 @@ public:
   const BiCgStabOptions &options() const { return options_; }
 
   std::string name() const override { return "bicgstab"; }
+  LinearSolverRequirements requirements() const override { return {}; }
   std::unique_ptr<const PreparedLinearSolver>
   prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const override;
 
