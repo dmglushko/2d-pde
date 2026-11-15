@@ -32,18 +32,29 @@ struct OperatorValues {
   std::vector<double> free, dirichlet;
 };
 
-// What a later assemble() reuses through `previous`. Immutable once built
-// and shared between the results of one MeshedProblem.
-struct AssemblyInternals {
+// What never changes for one MeshedProblem: the numbering, the patterns
+// and the colours. Built by the first assemble() and shared by every later
+// result through `previous`.
+struct AssemblyStructure {
   std::shared_ptr<const SparsityPattern> free_pattern, dirichlet_pattern;
   // Per mesh node: its free unknown or its Dirichlet column, else none.
   std::vector<std::size_t> free_index, dirichlet_index;
   // Element indices by colour, in index order inside a colour.
   std::vector<std::vector<std::size_t>> triangle_colours, edge_colours;
+};
+
+// What a later assemble() reuses through `previous`. Each result has its
+// own (small) object; the arrays inside are immutable and shared.
+struct AssemblyInternals {
+  std::shared_ptr<const AssemblyStructure> structure;
+  // The max_time_order this result was assembled with: an operator above
+  // it was not built, so a later call cannot reuse it.
+  int max_time_order = 2;
   // The constant parts of the operators and the load that have terms
-  // depending on t (empty otherwise: then the total is the constant part).
-  OperatorValues mass, damping, stiffness;
-  std::vector<double> load;
+  // depending on t (null otherwise: then the total is the constant part,
+  // and the result's operator itself is reused).
+  std::shared_ptr<const OperatorValues> mass, damping, stiffness;
+  std::shared_ptr<const std::vector<double>> load;
 };
 
 } // namespace detail
@@ -52,6 +63,7 @@ namespace {
 
 using detail::OperatorValues;
 using Internals = detail::AssemblyInternals;
+using Structure = detail::AssemblyStructure;
 
 // ---------------------------------------------------------------------
 // Facts: which terms are zero and which depend on t, as written.
@@ -93,7 +105,17 @@ struct Plan {
   TermFacts k, c, r, m1, m2, f;
   std::vector<RegionFacts> regions;
   TermFacts mass, damping, stiffness, load; // per operator
+  // The stiffness's free part is symmetric: K, R and S are, so it is when
+  // C and every T are zero (M1, M2 and D are always symmetric).
+  bool stiffness_symmetric = true;
 };
+
+// The lowest max_time_order at which each operator is built: A and the
+// load always, B = M1 - D from 1, M2 from 2.
+constexpr int stiffness_level = 0;
+constexpr int load_level = 0;
+constexpr int damping_level = 1;
+constexpr int mass_level = 2;
 
 TermFacts merged(std::initializer_list<TermFacts> terms) {
   TermFacts result;
@@ -104,19 +126,24 @@ TermFacts merged(std::initializer_list<TermFacts> terms) {
   return result;
 }
 
-Plan make_plan(const MeshedProblem &problem) {
+// The facts of every term that assembly builds up to `max_time_order`; a
+// term above it is zero here (not built).
+Plan make_plan(const MeshedProblem &problem, int max_time_order) {
   const auto &e = problem.equation();
   const auto &divergence = problem.divergence_of_a();
   Plan plan;
   plan.k = facts_of({&e.a_xx, &e.a_xy, &e.a_yy});
   plan.c = facts_of({&e.b_x, &e.b_y, &divergence.x, &divergence.y});
   plan.r = facts_of({&e.c});
-  plan.m1 = facts_of({&e.m1});
-  plan.m2 = facts_of({&e.m2});
+  if (max_time_order >= damping_level)
+    plan.m1 = facts_of({&e.m1});
+  if (max_time_order >= mass_level)
+    plan.m2 = facts_of({&e.m2});
   plan.f = facts_of({&e.f});
   plan.mass = plan.m2;
   plan.damping = plan.m1;
   plan.stiffness = merged({plan.k, plan.c, plan.r});
+  plan.stiffness_symmetric = plan.c.zero;
   plan.load = plan.f;
   for (const auto &condition : problem.conditions()) {
     RegionFacts region;
@@ -132,13 +159,20 @@ Plan make_plan(const MeshedProblem &problem) {
                        beta_n_hat.depends_on_t);
       };
       region.s = with(condition.alpha);
-      region.d = with(condition.gamma);
+      if (max_time_order >= damping_level)
+        region.d = with(condition.gamma);
       region.g = with(condition.g);
-      // kappa_tau - kappa_n beta_tau_hat / beta_n_hat.
-      region.t =
-          product({kappa}, !beta_tau_hat.zero && (beta_tau_hat.depends_on_t ||
-                                                  beta_n_hat.depends_on_t));
+      // kappa_tau - kappa_n beta_tau_hat / beta_n_hat. For an isotropic A
+      // (a multiple of the identity) kappa_tau = n.A tau is a multiple of
+      // n.tau = 0, so with beta_tau, beta_x and beta_y zero nothing is left
+      // (docs/decisions.md, "T is recognised as zero from the facts").
+      const bool t_vanishes = problem.a_is_isotropic() && beta_tau_hat.zero;
+      if (!t_vanishes)
+        region.t =
+            product({kappa}, !beta_tau_hat.zero && (beta_tau_hat.depends_on_t ||
+                                                    beta_n_hat.depends_on_t));
     }
+    plan.stiffness_symmetric = plan.stiffness_symmetric && region.t.zero;
     plan.damping = merged({plan.damping, region.d});
     plan.stiffness = merged({plan.stiffness, region.s, region.t});
     plan.load = merged({plan.load, region.g});
@@ -210,15 +244,15 @@ colour(std::size_t node_count,
   return colours;
 }
 
-std::shared_ptr<Internals> make_structure(const MeshedProblem &problem) {
+std::shared_ptr<const Structure> make_structure(const MeshedProblem &problem) {
   const auto &mesh = *problem.mesh();
-  auto internals = std::make_shared<Internals>();
-  internals->free_index.assign(mesh.nodes.size(), none);
-  internals->dirichlet_index.assign(mesh.nodes.size(), none);
+  auto structure = std::make_shared<Structure>();
+  structure->free_index.assign(mesh.nodes.size(), none);
+  structure->dirichlet_index.assign(mesh.nodes.size(), none);
   for (std::size_t i = 0; i < problem.free_nodes().size(); ++i)
-    internals->free_index[problem.free_nodes()[i]] = i;
+    structure->free_index[problem.free_nodes()[i]] = i;
   for (std::size_t k = 0; k < problem.dirichlet_nodes().size(); ++k)
-    internals->dirichlet_index[problem.dirichlet_nodes()[k].node] = k;
+    structure->dirichlet_index[problem.dirichlet_nodes()[k].node] = k;
 
   // One loop over the triangles: every node pair (p, q), p free.
   const std::size_t n_free = problem.free_nodes().size();
@@ -226,20 +260,20 @@ std::shared_ptr<Internals> make_structure(const MeshedProblem &problem) {
   std::vector<std::vector<Index>> free_rows(n_free), dirichlet_rows(n_free);
   for (const auto &triangle : mesh.triangles)
     for (const std::size_t p : triangle.nodes) {
-      const std::size_t row = internals->free_index[p];
+      const std::size_t row = structure->free_index[p];
       if (row == none)
         continue;
       for (const std::size_t q : triangle.nodes) {
-        if (internals->free_index[q] != none)
+        if (structure->free_index[q] != none)
           free_rows[row].push_back(
-              static_cast<Index>(internals->free_index[q]));
+              static_cast<Index>(structure->free_index[q]));
         else
           dirichlet_rows[row].push_back(
-              static_cast<Index>(internals->dirichlet_index[q]));
+              static_cast<Index>(structure->dirichlet_index[q]));
       }
     }
-  internals->free_pattern = make_pattern(n_free, n_free, free_rows);
-  internals->dirichlet_pattern =
+  structure->free_pattern = make_pattern(n_free, n_free, free_rows);
+  structure->dirichlet_pattern =
       make_pattern(n_free, n_dirichlet, dirichlet_rows);
 
   std::vector<std::array<std::size_t, 3>> triangles;
@@ -248,9 +282,9 @@ std::shared_ptr<Internals> make_structure(const MeshedProblem &problem) {
   std::vector<std::array<std::size_t, 2>> edges;
   for (const auto &edge : mesh.boundary_edges)
     edges.push_back(edge.nodes);
-  internals->triangle_colours = colour(mesh.nodes.size(), triangles);
-  internals->edge_colours = colour(mesh.nodes.size(), edges);
-  return internals;
+  structure->triangle_colours = colour(mesh.nodes.size(), triangles);
+  structure->edge_colours = colour(mesh.nodes.size(), edges);
+  return structure;
 }
 
 // ---------------------------------------------------------------------
@@ -268,23 +302,23 @@ template <std::size_t N> struct Destinations {
 };
 
 template <std::size_t N>
-Destinations<N> destinations(const Internals &internals,
+Destinations<N> destinations(const Structure &structure,
                              const std::array<std::size_t, N> &nodes) {
   Destinations<N> result;
   for (std::size_t i = 0; i < N; ++i) {
-    const std::size_t row = internals.free_index[nodes[i]];
+    const std::size_t row = structure.free_index[nodes[i]];
     result.rows[i] = row;
     if (row == none)
       continue; // a Dirichlet row is skipped
     for (std::size_t j = 0; j < N; ++j) {
-      const std::size_t column = internals.free_index[nodes[j]];
+      const std::size_t column = structure.free_index[nodes[j]];
       if (column != none)
         result.entries[i][j] = {Slot::Kind::free,
-                                *internals.free_pattern->find(row, column)};
+                                *structure.free_pattern->find(row, column)};
       else
         result.entries[i][j] = {Slot::Kind::dirichlet,
-                                *internals.dirichlet_pattern->find(
-                                    row, internals.dirichlet_index[nodes[j]])};
+                                *structure.dirichlet_pattern->find(
+                                    row, structure.dirichlet_index[nodes[j]])};
     }
   }
   return result;
@@ -326,11 +360,11 @@ void scatter(const detail::OperatorBlocks<N> &blocks,
         target.load[where.rows[i]] += blocks.load[i];
 }
 
-OperatorValues zeros(const Internals &internals, bool needed) {
+OperatorValues zeros(const Structure &structure, bool needed) {
   if (!needed)
     return {};
-  return {std::vector<double>(internals.free_pattern->nonzeros(), 0.0),
-          std::vector<double>(internals.dirichlet_pattern->nonzeros(), 0.0)};
+  return {std::vector<double>(structure.free_pattern->nonzeros(), 0.0),
+          std::vector<double>(structure.dirichlet_pattern->nonzeros(), 0.0)};
 }
 
 // Elementwise constant + time.
@@ -344,101 +378,134 @@ std::vector<double> total(const std::vector<double> &constant,
 
 } // namespace
 
-int AssembledProblem::time_order() const {
-  if (!mass_.is_zero)
+namespace {
+
+// The time order of operators with these formula facts: 2 if the mass is
+// not zero, else 1 if the damping is not zero, else 0. One rule for
+// AssembledProblem::time_order and Assembler::time_order, so they agree.
+int order_of(bool mass_zero, bool damping_zero) {
+  if (!mass_zero)
     return 2;
-  return damping_.is_zero ? 0 : 1;
+  return damping_zero ? 0 : 1;
+}
+
+} // namespace
+
+int AssembledProblem::time_order() const {
+  return order_of(mass_.always_zero, damping_.always_zero);
+}
+
+int Assembler::time_order(const MeshedProblem &meshed_problem) const {
+  // The plan of a full assembly (max_time_order 2) holds the facts each
+  // operator would get; making it reads only the coefficients' facts and
+  // evaluates nothing.
+  const Plan plan = make_plan(meshed_problem, /*max_time_order=*/2);
+  return order_of(plan.mass.zero, plan.damping.zero);
 }
 
 AssembledProblem
 Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
-                    double t, const AssembledProblem *previous) const {
+                    double t, const AssembledProblem *previous,
+                    int max_time_order) const {
   const auto start = std::chrono::steady_clock::now();
   if (!meshed_problem)
     throw std::invalid_argument("assemble needs a MeshedProblem, not null");
   if (!std::isfinite(t))
     throw std::invalid_argument(
         std::format("The time t = {} to assemble at is not finite", t));
+  if (max_time_order < 0 || max_time_order > 2)
+    throw std::invalid_argument(std::format(
+        "assemble: max_time_order must be 0, 1 or 2, not {}", max_time_order));
   if (previous && previous->meshed_problem_.get() != meshed_problem.get())
     throw std::invalid_argument(
         "The previous assembled problem was built from another MeshedProblem "
         "object; it can be reused only for the same object");
   const MeshedProblem &problem = *meshed_problem;
   const auto &mesh = *problem.mesh();
-  const Plan plan = make_plan(problem);
-  const bool reuse = previous != nullptr;
+  const Plan plan = make_plan(problem, max_time_order);
+  const Internals *before = previous ? previous->internals_.get() : nullptr;
+
+  // An operator's constant part (and, when nothing of it depends on t, the
+  // operator itself) is reused when `previous` built it: it was assembled
+  // at a max_time_order that includes the operator. An operator above this
+  // call's max_time_order is not built at all (its facts are zero).
+  const auto reusable = [&](int level) {
+    return before && level <= max_time_order && before->max_time_order >= level;
+  };
+  const bool reuse_mass = reusable(mass_level);
+  const bool reuse_damping = reusable(damping_level);
+  const bool reuse_stiffness = reusable(stiffness_level);
+  const bool reuse_load = reusable(load_level);
 
   // The structure: built once, then shared through `previous`.
-  std::shared_ptr<Internals> fresh;
-  const Internals *internals = nullptr;
-  if (reuse) {
-    internals = previous->internals_.get();
-  } else {
-    fresh = make_structure(problem);
-    internals = fresh.get();
-  }
+  auto internals = std::make_shared<Internals>();
+  internals->structure = before ? before->structure : make_structure(problem);
+  internals->max_time_order = max_time_order;
+  const Structure &structure = *internals->structure;
 
-  // The arrays this call fills. Constant parts only without `previous`.
+  // The arrays this call fills. A constant part only for an operator that
+  // is not reused.
   const auto active = [](const TermFacts &f) { return !f.zero; };
   const auto timed = [](const TermFacts &f) { return f.depends_on_t; };
   Accumulator constant, time;
-  if (!reuse) {
-    constant.mass = zeros(*internals, active(plan.mass));
-    constant.damping = zeros(*internals, active(plan.damping));
-    constant.stiffness = zeros(*internals, active(plan.stiffness));
-    if (active(plan.load))
-      constant.load.assign(problem.free_nodes().size(), 0.0);
-  }
-  time.mass = zeros(*internals, timed(plan.mass));
-  time.damping = zeros(*internals, timed(plan.damping));
-  time.stiffness = zeros(*internals, timed(plan.stiffness));
+  constant.mass = zeros(structure, !reuse_mass && active(plan.mass));
+  constant.damping = zeros(structure, !reuse_damping && active(plan.damping));
+  constant.stiffness =
+      zeros(structure, !reuse_stiffness && active(plan.stiffness));
+  if (!reuse_load && active(plan.load))
+    constant.load.assign(problem.free_nodes().size(), 0.0);
+  time.mass = zeros(structure, timed(plan.mass));
+  time.damping = zeros(structure, timed(plan.damping));
+  time.stiffness = zeros(structure, timed(plan.stiffness));
   if (timed(plan.load))
     time.load.assign(problem.free_nodes().size(), 0.0);
 
   // Triangles, colour by colour. Only this driver would know about
   // threads: the elements of one colour share no node.
-  const TriangleTerms triangle_terms{.k = target(plan.k, reuse),
-                                     .c = target(plan.c, reuse),
-                                     .r = target(plan.r, reuse),
-                                     .m1 = target(plan.m1, reuse),
-                                     .m2 = target(plan.m2, reuse),
-                                     .f = target(plan.f, reuse)};
+  const TriangleTerms triangle_terms{.k = target(plan.k, reuse_stiffness),
+                                     .c = target(plan.c, reuse_stiffness),
+                                     .r = target(plan.r, reuse_stiffness),
+                                     .m1 = target(plan.m1, reuse_damping),
+                                     .m2 = target(plan.m2, reuse_mass),
+                                     .f = target(plan.f, reuse_load)};
   const bool any_triangle_term =
       triangle_terms.k != Target::skip || triangle_terms.c != Target::skip ||
       triangle_terms.r != Target::skip || triangle_terms.m1 != Target::skip ||
       triangle_terms.m2 != Target::skip || triangle_terms.f != Target::skip;
   if (any_triangle_term)
-    for (const auto &colour_class : internals->triangle_colours)
+    for (const auto &colour_class : structure.triangle_colours)
       for (const std::size_t index : colour_class) {
         const auto &nodes = mesh.triangles[index].nodes;
         const auto blocks = detail::triangle_blocks(
             problem,
             {mesh.nodes[nodes[0]], mesh.nodes[nodes[1]], mesh.nodes[nodes[2]]},
             t, triangle_terms);
-        const auto where = destinations(*internals, nodes);
+        const auto where = destinations(structure, nodes);
         scatter(blocks.constant, where, constant);
         scatter(blocks.time, where, time);
       }
   // Boundary edges of natural and dynamic conditions, colour by colour.
-  for (const auto &colour_class : internals->edge_colours)
+  for (const auto &colour_class : structure.edge_colours)
     for (const std::size_t index : colour_class) {
       const auto &edge = mesh.boundary_edges[index];
       const auto &region = plan.regions[edge.region];
-      const EdgeTerms edge_terms{.s = target(region.s, reuse),
-                                 .t = target(region.t, reuse),
-                                 .d = target(region.d, reuse),
-                                 .g = target(region.g, reuse)};
+      const EdgeTerms edge_terms{.s = target(region.s, reuse_stiffness),
+                                 .t = target(region.t, reuse_stiffness),
+                                 .d = target(region.d, reuse_damping),
+                                 .g = target(region.g, reuse_load)};
       if (edge_terms.s == Target::skip && edge_terms.t == Target::skip &&
           edge_terms.d == Target::skip && edge_terms.g == Target::skip) {
-        // Nothing to compute. A fresh assembly would still have computed
-        // this edge's constant terms and, with them, checked that the
-        // condition can be solved for u_n at this t; keep that check when
-        // the normal coefficient depends on t.
+        // Nothing to compute. The condition is still solved for u_n
+        // wherever A is not zero, so check that it can be at this t: always
+        // in a fresh assembly (every term can be zero, for example u_n = 0
+        // with an isotropic A, whose T is zero), and with `previous` when
+        // the normal coefficient depends on t (it was checked before
+        // otherwise). A Dirichlet region has no terms and no check.
         const auto &condition = problem.conditions()[edge.region];
-        const bool computed_when_fresh =
-            !(region.s.zero && region.t.zero && region.d.zero && region.g.zero);
-        if (reuse && computed_when_fresh &&
-            (condition.beta_n.facts().depends_on_t ||
+        const bool solved_for_u_n =
+            condition.kind != ConditionKind::dirichlet && !plan.k.zero;
+        if (solved_for_u_n &&
+            (!before || condition.beta_n.facts().depends_on_t ||
              condition.beta_x.facts().depends_on_t ||
              condition.beta_y.facts().depends_on_t))
           detail::edge_blocks(problem, edge.region, edge.nodes, t, edge_terms);
@@ -446,7 +513,7 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
       }
       const auto blocks =
           detail::edge_blocks(problem, edge.region, edge.nodes, t, edge_terms);
-      const auto where = destinations(*internals, edge.nodes);
+      const auto where = destinations(structure, edge.nodes);
       scatter(blocks.constant, where, constant);
       scatter(blocks.time, where, time);
     }
@@ -456,42 +523,59 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
   AssembledProblem result;
   result.meshed_problem_ = std::move(meshed_problem);
   result.time_ = t;
-  const auto finish = [&](Operator &op, const TermFacts &facts,
-                          OperatorValues &constant_values,
-                          OperatorValues &time_values,
-                          OperatorValues Internals::*kept,
-                          const Operator AssembledProblem::*previous_op) {
-    op.free.pattern = internals->free_pattern;
-    op.dirichlet.pattern = internals->dirichlet_pattern;
-    op.depends_on_t = facts.depends_on_t;
-    op.is_zero = facts.zero;
-    if (facts.depends_on_t) {
-      if (fresh)
-        (*fresh).*kept = std::move(constant_values);
-      const OperatorValues &base = internals->*kept;
-      op.free.values = total(base.free, time_values.free);
-      op.dirichlet.values = total(base.dirichlet, time_values.dirichlet);
-    } else if (reuse) {
-      op = (*previous).*previous_op;
-    } else if (facts.zero) {
-      op.free.values.assign(internals->free_pattern->nonzeros(), 0.0);
-      op.dirichlet.values.assign(internals->dirichlet_pattern->nonzeros(), 0.0);
-    } else {
-      op.free.values = std::move(constant_values.free);
-      op.dirichlet.values = std::move(constant_values.dirichlet);
-    }
-  };
-  finish(result.mass_, plan.mass, constant.mass, time.mass, &Internals::mass,
-         &AssembledProblem::mass_);
-  finish(result.damping_, plan.damping, constant.damping, time.damping,
-         &Internals::damping, &AssembledProblem::damping_);
-  finish(result.stiffness_, plan.stiffness, constant.stiffness, time.stiffness,
-         &Internals::stiffness, &AssembledProblem::stiffness_);
+  const auto finish =
+      [&](Operator &op, const TermFacts &facts, bool reused,
+          OperatorValues &constant_values, const OperatorValues &time_values,
+          std::shared_ptr<const OperatorValues> Internals::*kept,
+          const Operator AssembledProblem::*previous_op) {
+        if (facts.depends_on_t) {
+          internals.get()->*kept = reused
+                                       ? before->*kept
+                                       : std::make_shared<const OperatorValues>(
+                                             std::move(constant_values));
+          const OperatorValues &base = *(internals.get()->*kept);
+          op.free.values = total(base.free, time_values.free);
+          op.dirichlet.values = total(base.dirichlet, time_values.dirichlet);
+        } else if (reused) {
+          op = (*previous).*previous_op;
+        } else if (facts.zero) {
+          op.free.values.assign(structure.free_pattern->nonzeros(), 0.0);
+          op.dirichlet.values.assign(structure.dirichlet_pattern->nonzeros(),
+                                     0.0);
+        } else {
+          op.free.values = std::move(constant_values.free);
+          op.dirichlet.values = std::move(constant_values.dirichlet);
+        }
+        op.free.pattern = structure.free_pattern;
+        op.dirichlet.pattern = structure.dirichlet_pattern;
+        op.depends_on_t = facts.depends_on_t;
+        op.always_zero = facts.zero;
+      };
+  finish(result.mass_, plan.mass, reuse_mass, constant.mass, time.mass,
+         &Internals::mass, &AssembledProblem::mass_);
+  finish(result.damping_, plan.damping, reuse_damping, constant.damping,
+         time.damping, &Internals::damping, &AssembledProblem::damping_);
+  finish(result.stiffness_, plan.stiffness, reuse_stiffness, constant.stiffness,
+         time.stiffness, &Internals::stiffness, &AssembledProblem::stiffness_);
+  // M2, M1 and D are symmetric (mass-like integrals of phi_i phi_j); a zero
+  // operator is too.
+  result.mass_.always_symmetric = true;
+  result.damping_.always_symmetric = true;
+  result.stiffness_.always_symmetric =
+      plan.stiffness.zero || plan.stiffness_symmetric;
+  // The facts from the numbers, read from the values just built (or
+  // reused: the same values give the same answer, so reuse stays bit for
+  // bit equal to a fresh assembly). A formula fact implies its number fact.
+  for (Operator *op : {&result.mass_, &result.damping_, &result.stiffness_}) {
+    op->zero_now = op->always_zero || has_only_zero_entries(op->free);
+    op->symmetric_now = op->always_symmetric || is_symmetric(op->free);
+  }
   if (plan.load.depends_on_t) {
-    if (fresh)
-      fresh->load = std::move(constant.load);
-    result.load_ = total(internals->load, time.load);
-  } else if (reuse) {
+    internals->load = reuse_load ? before->load
+                                 : std::make_shared<const std::vector<double>>(
+                                       std::move(constant.load));
+    result.load_ = total(*internals->load, time.load);
+  } else if (reuse_load) {
     result.load_ = previous->load_;
   } else if (plan.load.zero) {
     result.load_.assign(problem.free_nodes().size(), 0.0);
@@ -499,9 +583,10 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
     result.load_ = std::move(constant.load);
   }
   result.load_depends_on_t_ = plan.load.depends_on_t;
-  result.internals_ = reuse ? previous->internals_ : std::move(fresh);
+  result.internals_ = internals;
 
-  // The Dirichlet data and the lifting.
+  // The Dirichlet data and the lifting. The time order is at most
+  // max_time_order, so U_D' and U_D'' are evaluated only when asked for.
   const std::size_t n_dirichlet = problem.dirichlet_nodes().size();
   const int order = result.time_order();
   for (std::size_t k = 0; k < n_dirichlet; ++k)
@@ -515,7 +600,7 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
   result.right_hand_side_ = result.load_;
   const auto subtract = [&](const Operator &op,
                             const std::vector<double> &data) {
-    if (op.is_zero || n_dirichlet == 0)
+    if (op.always_zero || n_dirichlet == 0)
       return;
     const auto lifted = op.dirichlet.multiply(data);
     for (std::size_t i = 0; i < lifted.size(); ++i)
@@ -544,9 +629,11 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
        (!plan.mass.zero && data_depends_on_t));
   result.rhs_depends_on_t_ = plan.load.depends_on_t || lifting_depends_on_t;
 
-  // The report.
-  const auto rebuilt = [&](const TermFacts &facts) {
-    return !reuse || facts.depends_on_t ? 1.0 : 0.0;
+  // The report. An operator above max_time_order is not built: 0.
+  const auto rebuilt = [&](const TermFacts &facts, bool reused, int level) {
+    if (level > max_time_order)
+      return 0.0;
+    return !reused || facts.depends_on_t ? 1.0 : 0.0;
   };
   auto &report = result.report_;
   report.stage = "assembly";
@@ -554,17 +641,19 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
       {"free_nodes", static_cast<double>(problem.free_nodes().size())},
       {"dirichlet_nodes", static_cast<double>(n_dirichlet)},
       {"free_nonzeros",
-       static_cast<double>(internals->free_pattern->nonzeros())},
+       static_cast<double>(structure.free_pattern->nonzeros())},
       {"dirichlet_nonzeros",
-       static_cast<double>(internals->dirichlet_pattern->nonzeros())},
+       static_cast<double>(structure.dirichlet_pattern->nonzeros())},
       {"triangle_colours",
-       static_cast<double>(internals->triangle_colours.size())},
-      {"edge_colours", static_cast<double>(internals->edge_colours.size())},
-      {"used_previous", reuse ? 1.0 : 0.0},
-      {"mass_rebuilt", rebuilt(plan.mass)},
-      {"damping_rebuilt", rebuilt(plan.damping)},
-      {"stiffness_rebuilt", rebuilt(plan.stiffness)},
-      {"load_rebuilt", rebuilt(plan.load)}};
+       static_cast<double>(structure.triangle_colours.size())},
+      {"edge_colours", static_cast<double>(structure.edge_colours.size())},
+      {"used_previous", before ? 1.0 : 0.0},
+      {"max_time_order", static_cast<double>(max_time_order)},
+      {"mass_rebuilt", rebuilt(plan.mass, reuse_mass, mass_level)},
+      {"damping_rebuilt", rebuilt(plan.damping, reuse_damping, damping_level)},
+      {"stiffness_rebuilt",
+       rebuilt(plan.stiffness, reuse_stiffness, stiffness_level)},
+      {"load_rebuilt", rebuilt(plan.load, reuse_load, load_level)}};
   report.time = std::chrono::steady_clock::now() - start;
   return result;
 }

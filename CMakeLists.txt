@@ -38,13 +38,18 @@ endif()
 find_package(SymEngine 0.14 CONFIG REQUIRED)
 add_subdirectory(src/fem)
 
+# Eigen 3 (header-only) solves the linear systems in pde2d_solve, only in its
+# .cpp files.
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+add_subdirectory(src/solve)
+
 # The whole library as one target: link pde2d::pde2d to use every module.
 # The modules stay separate libraries (one per module, dependencies one
 # way); this target only bundles them.
 add_library(pde2d INTERFACE)
 add_library(pde2d::pde2d ALIAS pde2d)
 target_link_libraries(pde2d INTERFACE pde2d_geometry pde2d_mesh pde2d_io
-                                      pde2d_fem)
+                                      pde2d_fem pde2d_solve)
 
 if(PDE2D_BUILD_EXAMPLES)
   add_subdirectory(examples)

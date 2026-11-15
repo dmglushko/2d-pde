@@ -112,5 +112,10 @@ substitute_powers(const SymEngine::RCP<const SymEngine::Basic> &form,
 // True when both expressions have the same form as written (expression.hpp).
 bool same_as_written(const Expression &a, const Expression &b);
 
+// True when a - b simplifies to zero: SymEngine's sub, then expand. More
+// than "as written" (x*(1 + y) and x + x*y are equal here), but nothing
+// beyond expanding is tried (sin(x)^2 + cos(x)^2 and 1 are not).
+bool difference_is_zero(const Expression &a, const Expression &b);
+
 } // namespace detail
 } // namespace pde2d::fem

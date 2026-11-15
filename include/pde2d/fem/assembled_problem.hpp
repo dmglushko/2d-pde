@@ -25,11 +25,39 @@ struct Operator {
   CsrMatrix free{};
   // Free rows x Dirichlet columns; column k is dirichlet_nodes()[k].
   CsrMatrix dirichlet{};
-  // Some term of it has a coefficient that depends on t (as written).
+  // Two kinds of facts (docs/decisions.md, "Two kinds of facts per
+  // matrix"). The facts from the formulas hold for every t: they come
+  // from the terms assembly builds, never from the values, and decide the
+  // time order, reuse and what is built. The facts from the numbers hold
+  // at the assembled time only: they come from the values of `free`, and
+  // only say whether a linear solver may take the matrix now.
+
+  // From the formulas: some term of it has a coefficient that depends on
+  // t (as written).
   bool depends_on_t = false;
-  // No term contributes: every coefficient feeding it is zero as written.
-  // Its matrices then hold the pattern with zero values.
-  bool is_zero = false;
+  // From the formulas: no term contributes, at any t. Every coefficient
+  // feeding it is zero as written, or assembly left it out
+  // (Assembler::assemble's max_time_order). Its matrices then hold the
+  // pattern with zero values.
+  bool always_zero = false;
+  // From the formulas: the free part is symmetric at every t. M2, M1, D,
+  // K, R and S are symmetric, C and T only when they are zero
+  // (docs/decisions.md, "Linear solvers declare requirements; matrices
+  // carry properties"). A zero operator, or one with only Dirichlet
+  // columns, is symmetric. Up to rounding: the blocks are computed in full,
+  // so (i, j) and (j, i) can differ in the last bits.
+  bool always_symmetric = false;
+
+  // From the numbers: every value of `free` is zero at the assembled time
+  // (has_only_zero_entries). True when always_zero is; it can also be true
+  // for one t only (m2 = sin(t) at t = 0).
+  bool zero_now = false;
+  // From the numbers: `free` is symmetric at the assembled time, up to
+  // rounding (is_symmetric with its default tolerance). True when
+  // always_symmetric is; it can also be true when the formulas cannot
+  // promise it (an anisotropic diagonal A, whose tangential term T
+  // vanishes on axis-aligned boundary edges).
+  bool symmetric_now = false;
 };
 
 // The system assembly builds from a MeshedProblem at one time t, in the
@@ -85,7 +113,10 @@ public:
   bool right_hand_side_depends_on_t() const { return rhs_depends_on_t_; }
   // 2 if mass() is not zero, else 1 if damping() is not zero, else 0. It
   // can be lower than the problem's time_order (a dynamic condition whose
-  // D is zero because A is).
+  // D is zero because A is), and it is at most the max_time_order it was
+  // assembled with. Decided from the formula facts (always_zero), so it is
+  // one answer for every t: m2 = sin(t) gives 2 also at t = 0.
+  // Assembler::time_order gives the same without assembling.
   int time_order() const;
 
   // Stage "assembly": the time taken and metrics (see Assembler).

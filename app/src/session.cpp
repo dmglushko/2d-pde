@@ -76,7 +76,7 @@ Json operator_json(const fem::Operator &op) {
     return matrix.pattern ? matrix.pattern->nonzeros() : 0;
   };
   Json out = Json::object();
-  out["is_zero"] = op.is_zero;
+  out["is_zero"] = op.always_zero;
   out["depends_on_t"] = op.depends_on_t;
   out["free_nonzeros"] = nonzeros(op.free);
   out["dirichlet_nonzeros"] = nonzeros(op.dirichlet);

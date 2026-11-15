@@ -76,7 +76,8 @@ struct DirichletNode {
 //    (the boundary data must then be finite there), and a difference is
 //    reported with the number of nodes and the first three; otherwise they
 //    are reported once as possibly different;
-// 6. compiles the divergence of A (divergence_of_a());
+// 6. compiles the divergence of A (divergence_of_a()) and decides whether
+//    A is isotropic (a_is_isotropic());
 // 7. keeps each expression's facts with its compiled function, so the
 //    summaries below are computed from the compiled problem.
 //
@@ -94,6 +95,13 @@ struct DirichletNode {
 // the same as written), one for every initial condition that is not needed
 // or depends on t, and one for every initial condition that differs or may
 // differ from the boundary data.
+// The initial state over the unknowns only, indexed like
+// MeshedProblem::free_nodes(): what a time integrator starts from.
+struct FreeInitialState {
+  std::vector<double> values;     // u
+  std::vector<double> velocities; // u_t; empty below time order 2
+};
+
 class MeshedProblem {
 public:
   MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh, const Problem &problem);
@@ -103,6 +111,12 @@ public:
 
   const CompiledEquation &equation() const { return equation_; }
   const CompiledDivergence &divergence_of_a() const { return divergence_; }
+  // A is a multiple of the identity (or zero): a_xy is zero as written and
+  // a_xx - a_yy simplifies to zero (SymEngine's expand; named parameters
+  // are unknown constants, so a_xx = k1, a_yy = k2 is not isotropic).
+  // Assembly uses it to recognise the tangential boundary matrix T as
+  // zero.
+  bool a_is_isotropic() const { return a_is_isotropic_; }
   // One per mesh region, indexed like Mesh::region_names.
   const std::vector<CompiledCondition> &conditions() const {
     return conditions_;
@@ -142,6 +156,12 @@ public:
   // regions like dirichlet_value; elsewhere the initial condition u_t at
   // (x, y, t0). Throws like initial_values.
   std::optional<std::vector<double>> initial_velocities(double t0) const;
+  // The initial conditions u and (for time order 2) u_t at the free nodes
+  // only, at t0; nothing for time order 0. Unlike initial_values and
+  // initial_velocities it evaluates no boundary data, so Dirichlet data
+  // whose time derivative is not finite at t0 (u = sqrt(t) from t0 = 0)
+  // does not stop a run that never uses it. Throws like initial_values.
+  std::optional<FreeInitialState> initial_free_state(double t0) const;
 
   const mesh::StageReport &report() const { return report_; }
 
@@ -158,6 +178,7 @@ private:
   std::optional<CompiledExpression> initial_u_;
   std::optional<CompiledExpression> initial_u_t_;
   CompiledDivergence divergence_;
+  bool a_is_isotropic_ = false;
   // Per region, for time order 1 or 2: d/dt (g / alpha) of a Dirichlet
   // condition, zero otherwise. Empty for time order 0.
   std::vector<CompiledExpression> dirichlet_rates_;

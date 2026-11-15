@@ -370,6 +370,15 @@ bool same_as_written(const Expression &a, const Expression &b) {
                        *ExpressionAccess::impl(b).form);
 }
 
+bool difference_is_zero(const Expression &a, const Expression &b) {
+  const auto difference = SymEngine::sub(ExpressionAccess::impl(a).form,
+                                         ExpressionAccess::impl(b).form);
+  // sub already combines like terms; expand only when that was not enough.
+  if (SymEngine::eq(*difference, *SymEngine::zero))
+    return true;
+  return SymEngine::eq(*SymEngine::expand(difference), *SymEngine::zero);
+}
+
 } // namespace detail
 
 Expression::Expression() : impl_(make_impl("0", SymEngine::integer(0))) {}
