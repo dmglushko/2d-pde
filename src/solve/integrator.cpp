@@ -2,11 +2,13 @@
 
 #include "pde2d/fem/assembler.hpp"
 
+#include "requirements.hpp"
 #include "vectors.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -60,6 +62,8 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
                                   std::to_string(initial->values.size()) +
                                   " values for " + std::to_string(nodes) +
                                   " nodes");
+    if (time_order == 0)
+      return state; // checked only: the state at t0 is solved for
     state.values = free_part(meshed, initial->values);
     if (time_order == 2) {
       if (initial->velocities.size() != nodes)
@@ -68,7 +72,7 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
             "velocities, one per node");
       state.velocities = free_part(meshed, initial->velocities);
     }
-  } else {
+  } else if (time_order >= 1) {
     // The problem's own time order is at least the assembled one, so the
     // values (and for time order 2 the velocities) exist.
     state.values = free_part(meshed, *meshed.initial_values(t0));
@@ -189,19 +193,31 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   fem::AssembledProblem current = assembler.assemble(meshed_problem, t0);
   std::size_t assemblies = 1;
   const int time_order = current.time_order();
-  if (time_order == 0)
-    throw std::invalid_argument(
-        "integrator: the assembled problem has time order 0 (no time "
-        "derivative); use StaticSolver");
-  const TimeMethodCapabilities capabilities = method_->capabilities();
-  if ((time_order == 1 && !capabilities.supports_first_order) ||
-      (time_order == 2 && !capabilities.supports_second_order))
-    throw std::invalid_argument(method_->name() +
-                                " does not support time order " +
-                                std::to_string(time_order));
+  if (!method_->capabilities().supports(time_order)) {
+    std::string message = method_->name() + " does not support time order " +
+                          std::to_string(time_order);
+    const int written = fem::time_order(meshed);
+    if (written > time_order)
+      message += std::format(
+          "; the problem is written with time order {}, but its time terms "
+          "vanished in assembly (for example a boundary u_t term on a "
+          "problem with A = 0, whose boundary terms are all zero)",
+          written);
+    throw std::invalid_argument("integrator: " + message);
+  }
 
-  // 2. The starting state.
+  // 2. The starting state. Time order 0 has no initial conditions: the
+  // state at t0 is the solution there.
   TimeState state = starting_state(meshed, t0, time_order, initial);
+  if (time_order == 0) {
+    detail::check_requirements(*linear_solver_, current.stiffness().symmetric,
+                               "integrator", "A (the stiffness)");
+    state.values = linear_solver_
+                       ->prepare(std::make_shared<const fem::CsrMatrix>(
+                           current.stiffness().free))
+                       ->solve(current.right_hand_side())
+                       .values;
+  }
   method_->start(current, *linear_solver_, state);
 
   IntegrationResult result;
@@ -270,6 +286,9 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
     const StepMatrixWeights weights = method_->step_matrix_weights(h);
     if (!prepared || h != prepared_dt ||
         step_matrix_depends_on_t(current, weights)) {
+      detail::check_requirements(
+          *linear_solver_, detail::step_matrix_is_symmetric(current, weights),
+          "integrator", "the step matrix of " + method_->name());
       prepared = linear_solver_->prepare(step_matrix(current, weights));
       prepared_dt = h;
       ++prepares;

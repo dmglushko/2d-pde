@@ -2,6 +2,7 @@
 
 #include "pde2d/fem/assembler.hpp"
 
+#include "requirements.hpp"
 #include "vectors.hpp"
 
 #include <chrono>
@@ -25,22 +26,19 @@ StaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   if (!std::isfinite(t))
     throw std::invalid_argument("static_solver: t is not finite");
 
-  const fem::AssembledProblem assembled =
-      fem::Assembler().assemble(meshed_problem, t);
+  // Time order 0: only A and the load are built, and only U_D is
+  // evaluated, so right_hand_side() is load - A_FD U_D and no derivative of
+  // the boundary data is needed (d/dt sqrt(t) at t = 0, issue #35).
+  const fem::AssembledProblem assembled = fem::Assembler().assemble(
+      meshed_problem, t, nullptr, /*max_time_order=*/0);
   const auto start = std::chrono::steady_clock::now();
 
-  // b = load - A_FD U_D. Not right_hand_side(): for a problem of time
-  // order 1 or 2 that also holds the lifting of U_D' and U_D'', which
-  // belong to the time terms that a static solve drops.
-  std::vector<double> rhs(assembled.load().begin(), assembled.load().end());
   const fem::Operator &stiffness = assembled.stiffness();
-  if (!stiffness.is_zero && !assembled.dirichlet_values().empty())
-    detail::add_scaled(
-        rhs, -1.0, stiffness.dirichlet.multiply(assembled.dirichlet_values()));
-
+  detail::check_requirements(*linear_solver_, stiffness.symmetric,
+                             "static_solver", "A (the stiffness)");
   const auto prepared = linear_solver_->prepare(
       std::make_shared<const fem::CsrMatrix>(stiffness.free));
-  const LinearSolveResult solved = prepared->solve(rhs);
+  const LinearSolveResult solved = prepared->solve(assembled.right_hand_side());
 
   StaticResult result;
   result.solution = build_solution(*meshed_problem, solved.values, t);

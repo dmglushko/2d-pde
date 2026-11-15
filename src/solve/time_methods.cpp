@@ -8,9 +8,14 @@
 #include "pde2d/solve/implicit_midpoint.hpp"
 #include "pde2d/solve/newmark.hpp"
 
+#include "requirements.hpp"
 #include "vectors.hpp"
 
+#include <algorithm>
+#include <format>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace pde2d::solve {
@@ -29,17 +34,33 @@ StepSolveInfo info(const LinearSolveResult &solved) {
 // --- ImplicitEuler ----------------------------------------------------------
 
 StepMatrixWeights ImplicitEuler::step_matrix_weights(double dt) const {
-  return {.mass = 0.0, .damping = 1.0 / dt, .stiffness = 1.0};
+  // M2 / dt^2 + B / dt + A; a zero operator adds nothing, so these are the
+  // weights of every time order.
+  return {.mass = 1.0 / (dt * dt), .damping = 1.0 / dt, .stiffness = 1.0};
 }
 
 StepSolveInfo ImplicitEuler::advance(const fem::AssembledProblem &problem,
                                      double dt,
                                      const PreparedLinearSolver &solver,
                                      TimeState &state) const {
-  // (B / dt + A) U1 = b(t1) + B U0 / dt
+  // (M2 / dt^2 + B / dt + A) U1 = b(t1) + M2 (U0 / dt^2 + V0 / dt)
+  //                               + B U0 / dt
+  // Time order 1 has no M2 (and no V), time order 0 neither M2 nor B.
+  const bool second_order = !problem.mass().is_zero;
   std::vector<double> rhs = detail::right_hand_side(problem);
+  if (second_order) {
+    std::vector<double> mass_part(state.values.size());
+    for (std::size_t i = 0; i < mass_part.size(); ++i)
+      mass_part[i] = state.values[i] / (dt * dt) + state.velocities[i] / dt;
+    detail::add_product(rhs, 1.0, problem.mass(), mass_part);
+  }
   detail::add_product(rhs, 1.0 / dt, problem.damping(), state.values);
   LinearSolveResult solved = solver.solve(rhs);
+  if (second_order) {
+    // V1 = (U1 - U0) / dt.
+    for (std::size_t i = 0; i < state.velocities.size(); ++i)
+      state.velocities[i] = (solved.values[i] - state.values[i]) / dt;
+  }
   state.values = std::move(solved.values);
   return info(solved);
 }
@@ -47,18 +68,35 @@ StepSolveInfo ImplicitEuler::advance(const fem::AssembledProblem &problem,
 // --- ImplicitMidpoint -------------------------------------------------------
 
 StepMatrixWeights ImplicitMidpoint::step_matrix_weights(double dt) const {
-  return {.mass = 0.0, .damping = 1.0 / dt, .stiffness = 0.5};
+  // 2 M2 / dt^2 + B / dt + A / 2, for both time orders.
+  return {.mass = 2.0 / (dt * dt), .damping = 1.0 / dt, .stiffness = 0.5};
 }
 
 StepSolveInfo ImplicitMidpoint::advance(const fem::AssembledProblem &problem,
                                         double dt,
                                         const PreparedLinearSolver &solver,
                                         TimeState &state) const {
-  // (B / dt + A / 2) U1 = b(tm) + (B / dt - A / 2) U0, all at tm.
+  // (2 M2 / dt^2 + B / dt + A / 2) U1
+  //     = b(tm) + M2 (2 U0 / dt^2 + 2 V0 / dt) + (B / dt - A / 2) U0,
+  // all at tm. Time order 1 has no M2 (and no V).
+  const bool second_order = !problem.mass().is_zero;
   std::vector<double> rhs = detail::right_hand_side(problem);
+  if (second_order) {
+    std::vector<double> mass_part(state.values.size());
+    for (std::size_t i = 0; i < mass_part.size(); ++i)
+      mass_part[i] =
+          2.0 * state.values[i] / (dt * dt) + 2.0 * state.velocities[i] / dt;
+    detail::add_product(rhs, 1.0, problem.mass(), mass_part);
+  }
   detail::add_product(rhs, 1.0 / dt, problem.damping(), state.values);
   detail::add_product(rhs, -0.5, problem.stiffness(), state.values);
   LinearSolveResult solved = solver.solve(rhs);
+  if (second_order) {
+    // (U1 - U0) / dt = (V1 + V0) / 2, so V1 = 2 (U1 - U0) / dt - V0.
+    for (std::size_t i = 0; i < state.velocities.size(); ++i)
+      state.velocities[i] =
+          2.0 * (solved.values[i] - state.values[i]) / dt - state.velocities[i];
+  }
   state.values = std::move(solved.values);
   return info(solved);
 }
@@ -83,9 +121,33 @@ void Newmark::start(const fem::AssembledProblem &problem,
   std::vector<double> rhs = detail::right_hand_side(problem);
   detail::add_product(rhs, -1.0, problem.damping(), state.velocities);
   detail::add_product(rhs, -1.0, problem.stiffness(), state.values);
-  const auto prepared = linear_solver.prepare(
-      std::make_shared<const fem::CsrMatrix>(problem.mass().free));
-  state.accelerations = prepared->solve(rhs).values;
+  const fem::CsrMatrix &mass = problem.mass().free;
+  detail::check_requirements(linear_solver, problem.mass().symmetric, name(),
+                             "M2");
+  // No fallback to another method (docs/decisions.md): the error says why
+  // and which methods need no acceleration.
+  const auto cannot_start = [&](const std::string &cause) {
+    return std::runtime_error(
+        std::format("newmark: the starting acceleration cannot be computed, "
+                    "since {}; ImplicitMidpoint (implicit_midpoint) and "
+                    "ImplicitEuler (implicit_euler) need no acceleration",
+                    cause));
+  };
+  const bool all_zero = std::ranges::all_of(
+      mass.values, [](double value) { return value == 0.0; });
+  if (all_zero && !mass.values.empty())
+    throw cannot_start(std::format("M2 is zero at t0 = {} (m2 vanishes there)",
+                                   problem.time()));
+  try {
+    const auto prepared =
+        linear_solver.prepare(std::make_shared<const fem::CsrMatrix>(mass));
+    state.accelerations = prepared->solve(rhs).values;
+  } catch (const std::runtime_error &error) {
+    throw cannot_start(
+        std::format("solving with M2 at t0 = {} failed ({}): M2 is singular "
+                    "there, or the linear solver cannot handle it",
+                    problem.time(), error.what()));
+  }
 }
 
 StepSolveInfo Newmark::advance(const fem::AssembledProblem &problem, double dt,

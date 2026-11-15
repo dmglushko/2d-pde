@@ -33,8 +33,8 @@ impossible or unclear, ask.
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
-| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
-| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors; Eigen is included only there and in `sparse_lu.cpp` and `bicgstab.cpp`) and `vectors.hpp` (norms, residual, operator products); `time_methods.cpp` holds the three time methods |
+| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
+| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `iterative_solve.hpp` and the solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`); `time_methods.cpp` holds the three time methods |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
@@ -191,38 +191,62 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `coefficients_depend_on_t` and `data_depends_on_t` are computed from them each
   time (`src/fem/fact_summaries.hpp`).
 - **Assembly computes its own facts.** `AssembledProblem`'s
-  `is_zero`, `depends_on_t`, `time_order` and the right-hand side facts
-  come from the terms assembly builds, never from `MeshedProblem`'s
-  summaries. A term that depends on t goes to the time part, any other
-  to the constant part; `assemble` with `previous` must stay bit for bit
-  equal to a fresh assembly (`tests/fem/assembly.cpp`).
+  `is_zero`, `depends_on_t`, `symmetric`, `time_order` and the right-hand
+  side facts come from the terms assembly builds, never from
+  `MeshedProblem`'s summaries. A term that depends on t goes to the time
+  part, any other to the constant part; `assemble` with `previous` must
+  stay bit for bit equal to a fresh assembly at the same `max_time_order`,
+  also when `previous` had another one (`tests/fem/assembly.cpp`).
+- **`max_time_order` leaves terms out, it does not change them.** 1 drops
+  M2 and U_D'', 0 also M1, D and U_D'; a dropped operator is a zero
+  operator. Never evaluate `dirichlet_rate` or `dirichlet_acceleration`
+  above the assembled time order. The `StaticSolver` assembles at 0.
+- **Symmetry is a fact of the terms.** M1, M2, D, K, R, S are symmetric;
+  C and T make A non-symmetric unless they are zero. T is zero when A is
+  zero, or isotropic (`MeshedProblem::a_is_isotropic()`, decided
+  symbolically in its constructor) with beta_tau, beta_x and beta_y zero.
+  Never decide symmetry by comparing matrix values.
 - **Element block functions are pure** (`src/fem/element_blocks.hpp`):
   no shared state, so only the driver in `assembler.cpp` would ever know
   about threads. Elements are processed colour by colour, in index order
   inside a colour; never sum into a slot in another order.
 - **Assembly does no symbolic work.** Derivatives it needs (div A, U_D',
-  U_D'') are compiled in the `MeshedProblem` constructor.
-- **Eigen stays in `src/solve/`** (`eigen_view.hpp` and the solver
-  `.cpp` files); public headers use `fem::CsrMatrix` and
-  `std::vector`/`std::span`.
+  U_D'') are compiled, and the isotropy of A decided, in the
+  `MeshedProblem` constructor.
+- **Eigen stays in `src/solve/`** (`eigen_view.hpp`,
+  `iterative_solve.hpp` and the solver `.cpp` files); public headers use
+  `fem::CsrMatrix` and `std::vector`/`std::span`.
 - **The integrator decides from declarations.** A method's supported time
-  orders come from `capabilities()`, checked against
+  orders come from `capabilities().supports(order)`, checked against
   `AssembledProblem::time_order()`; whether to prepare the linear solver
   again comes from dt and the operators' `depends_on_t` / `is_zero` for
   the non-zero weights of `step_matrix_weights(dt)`. Never test a
   method's type or name.
+- **Linear solvers declare requirements; callers check them** against
+  `Operator::symmetric` before every `prepare` (`detail::check_requirements`;
+  the step matrix is symmetric when every operator with a non-zero weight
+  is symmetric or zero). A new caller that prepares a matrix must check
+  too. Definiteness is not declared: a solver that needs it throws
+  `std::runtime_error` when it fails, never returns an unchecked answer.
+- **No fallbacks between methods or solvers**: one that cannot handle a
+  problem throws with the reason (and may name alternatives); it never
+  switches to another.
 - **Time methods use `right_hand_side()` as it is**: it already holds the
   whole lifting (load − A_FD U_D − B_FD U_D' − M2_FD U_D''). The static
-  solver must not use it for time order 1 or 2; it builds load − A_FD U_D.
+  solver assembles with `max_time_order` 0, where it is load − A_FD U_D.
+- **One set of step weights per method serves all its orders**: a zero
+  operator adds nothing (`detail::add_product` skips it), so a method
+  tells the orders apart only by `is_zero` of M2 and B.
 - **Never invert B or M2 in a step**: B can be singular (m1 = 0 with a
   dynamic condition) and either can be a zero operator. Only `Newmark`'s
-  `start` solves with M2.
+  `start` solves with M2, and fails with a message naming the methods that
+  need no acceleration.
 - **Step times are anchor + k·dt**, not sums, and steps land exactly on
   snapshot times and t1, so a continued run (`integrate(meshed, t1, t2,
   output, &previous.final)`) matches one long run that lands on t1 (bit
   for bit for the first-order methods; `tests/solve/time_integration.cpp`).
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
-  adaptive time stepping, conjugate gradients, explicit time methods,
+  adaptive time stepping, explicit time methods,
   handling pure Neumann problems, well-posedness
   checks, callables, anisotropic meshing, planners,
   the simple-options facade, Gmsh export, reading the old boundary

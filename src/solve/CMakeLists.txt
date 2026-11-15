@@ -1,7 +1,9 @@
 add_library(pde2d_solve
   bicgstab.cpp
+  conjugate_gradient.cpp
   fixed_step.cpp
   integrator.cpp
+  simplicial_ldlt.cpp
   solution.cpp
   sparse_lu.cpp
   static_solver.cpp

@@ -16,6 +16,7 @@ public:
   SparseLu() = default;
 
   std::string name() const override { return "sparse_lu"; }
+  LinearSolverRequirements requirements() const override { return {}; }
   std::unique_ptr<const PreparedLinearSolver>
   prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const override;
 };

@@ -19,10 +19,21 @@
 namespace pde2d::solve {
 
 // The time orders a method can integrate. The Integrator checks them
-// against AssembledProblem::time_order() before the first step.
+// against AssembledProblem::time_order() before the first step. That is
+// the order assembly gives, which can be lower than the order as written
+// (time_order(MeshedProblem)): a dynamic condition's u_t term vanishes
+// where A is zero.
 struct TimeMethodCapabilities {
-  bool supports_first_order = false;  // B U' + A U = b
-  bool supports_second_order = false; // M2 U'' + B U' + A U = b
+  bool time_order_0 = false; // A U = b at each step time
+  bool time_order_1 = false; // B U' + A U = b
+  bool time_order_2 = false; // M2 U'' + B U' + A U = b
+
+  // Whether `time_order` (0, 1 or 2) is supported; false for any other.
+  bool supports(int time_order) const {
+    return (time_order == 0 && time_order_0) ||
+           (time_order == 1 && time_order_1) ||
+           (time_order == 2 && time_order_2);
+  }
 };
 
 // The matrix of one step's linear system, as weights of the three
@@ -65,7 +76,8 @@ public:
   // start time and the state at the start (values, and velocities for
   // time order 2). A method that needs more state (Newmark's
   // accelerations) computes it here; it may prepare `linear_solver` for
-  // its own matrix. The default does nothing.
+  // its own matrix, after checking the solver's requirements against that
+  // matrix's facts. The default does nothing.
   virtual void start(const fem::AssembledProblem &problem,
                      const LinearSolver &linear_solver, TimeState &state) const;
 

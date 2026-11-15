@@ -87,8 +87,8 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | Mesher | `Mesher::run(geometry, spec)` | `CurveGeometry`, `MeshSpec` | `MeshResult`: the `Mesh`, reports, `target_met` | `pde2d_mesh` |
 | Remesher | `Remesher::run(mesh, spec)` | `Mesh`, `MeshSpec` | `MeshResult` | `pde2d_mesh` |
 | Combining | `MeshedProblem(mesh, problem)` | `Mesh`, `Problem` | `MeshedProblem` | `pde2d_fem` |
-| Assembler | `Assembler::assemble(meshed, t, previous)` | `MeshedProblem`, a time, optionally the previous result | `AssembledProblem` | `pde2d_fem` |
-| Linear solver | `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix`, a right-hand side | `LinearSolveResult` | `pde2d_solve` |
+| Assembler | `Assembler::assemble(meshed, t, previous, max_time_order)` | `MeshedProblem`, a time, optionally the previous result, the highest time order to build (default 2) | `AssembledProblem` | `pde2d_fem` |
+| Linear solver | `requirements()` checked by the caller, then `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix` (its `symmetric` fact for the check), a right-hand side | `LinearSolveResult` | `pde2d_solve` |
 | Time method | `advance(assembled, dt, prepared, state)` | one `AssembledProblem` (at the method's evaluation point), the prepared solver, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
 | Building the solution | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
 
@@ -239,6 +239,7 @@ classDiagram
         CsrMatrix dirichlet
         bool depends_on_t
         bool is_zero
+        bool symmetric
     }
     class CsrMatrix {
         shared_ptr to const SparsityPattern pattern
@@ -334,21 +335,21 @@ Who uses the tables:
 
 ## Inside assemble
 
-`Assembler::assemble(meshed_problem, t, previous)`.
+`Assembler::assemble(meshed_problem, t, previous, max_time_order)`.
 
 ```mermaid
 flowchart TD
-    START(["meshed_problem, t, previous or nothing"])
-    PLAN["classify every term from the facts:<br/>zero, constant, or depends on t"]
+    START(["meshed_problem, t, previous or nothing, max_time_order"])
+    PLAN["classify every term from the facts:<br/>zero, constant, or depends on t;<br/>a term above max_time_order is zero"]
     HAVE{"previous given?"}
     STRUCT["build once: the two sparsity patterns,<br/>triangle colours, edge colours"]
-    REUSE["take from previous: patterns, colours,<br/>the constant part of every operator"]
+    REUSE["take from previous: patterns, colours,<br/>the constant part of every operator it built"]
     TRI["triangles, colour by colour:<br/>blocks K, C, R, M1, M2, F (3-point rule)"]
     EDGE["boundary edges of natural conditions, colour by colour:<br/>blocks S, T, D, G (2-point rule)"]
     SCAT["scatter each block (see Nodes and unknowns)<br/>into the constant part or the part in t"]
     TOT["total of each operator = constant part + part in t"]
-    RHS["U_D, U_D', U_D'' at t;<br/>right-hand side = load − lifting"]
-    OUT(["AssembledProblem: operators, load, right-hand side, facts, report"])
+    RHS["U_D at t, U_D' and U_D'' only up to the time order;<br/>right-hand side = load − lifting"]
+    OUT(["AssembledProblem: operators, load, right-hand side, facts (symmetric among them), report"])
 
     START --> PLAN --> HAVE
     HAVE -- no --> STRUCT --> TRI
@@ -360,6 +361,12 @@ flowchart TD
   With it, only the terms in t are; the result is bit-for-bit the same.
 - A zero term is never computed. An operator with no term in t is copied
   whole from `previous`.
+- `max_time_order` 2 builds everything, 1 leaves out M2 (and U_D''), 0
+  also M1 and D (and U_D'): A and the load only, the lifting
+  load − A_FD·U_D. A left-out operator is a zero operator. An operator
+  that `previous` did not build (it had a lower `max_time_order`) is built
+  here in full, so the result stays bit for bit that of a fresh assembly
+  at the same `max_time_order`.
 - The code has three pieces: computing a block (`element_blocks.cpp`, no
   shared state), scattering it, and the driver that loops over colours
   (`assembler.cpp`). Only the driver would ever know about threads.
@@ -409,10 +416,11 @@ sequenceDiagram
     participant M as TimeMethod
     participant L as LinearSolver
     I->>A: assemble(meshed, t0)
-    A-->>I: AssembledProblem (its time_order checked against the method)
+    A-->>I: AssembledProblem (its time_order checked against capabilities().supports)
     Note over I: state = initial, or initial_values(t0) (and initial_velocities), free part
+    Note over I: time order 0: state = solution of A(t0) U = b(t0)
     I->>M: start(assembled, linear solver, state)
-    Note over M: Newmark: prepare(M2), solve for U'' at t0
+    Note over M: Newmark: check requirements, prepare(M2), solve for U'' at t0
     loop until t reaches t1
         I->>C: next_step(t)
         C-->>I: dt
@@ -420,7 +428,8 @@ sequenceDiagram
         I->>A: assemble(meshed, t + fraction * dt, previous)
         A-->>I: AssembledProblem
         I->>M: step_matrix_weights(dt)
-        I->>L: prepare(weighted M2 + B + A), only when dt changed or an operator in it depends on t
+        Note over I: when dt changed or an operator in it depends on t: check the solver's requirements against the step matrix's symmetry
+        I->>L: prepare(weighted M2 + B + A), only in that case
         I->>M: advance(assembled, dt, prepared, state)
         M->>L: solve(right-hand side)
         L-->>M: LinearSolveResult
@@ -431,8 +440,10 @@ sequenceDiagram
     Note over I: return build_solution(meshed, U, t1), snapshots, history, report
 ```
 
-The `StaticSolver` is the same without the loop: assemble once, one
-linear solve of stiffness·U = load − A_FD·U_D, then `build_solution`.
+The `StaticSolver` is the same without the loop: assemble once with
+`max_time_order` 0, check the solver's requirements against A's
+`symmetric` fact, one linear solve of stiffness·U = `right_hand_side()`
+(= load − A_FD·U_D), then `build_solution`.
 
 ## Interfaces and their components
 
@@ -457,6 +468,8 @@ flowchart LR
         TMI --- NM[Newmark]
         LSI([LinearSolver]) --- SLU[SparseLu]
         LSI --- BCG[BiCgStab]
+        LSI --- CG[ConjugateGradient]
+        LSI --- LDLT[SimplicialLdlt]
         SCI([StepController]) --- FS[FixedStep]
     end
 ```
@@ -919,9 +932,9 @@ text ──► Expression ─┐
 | `MeshedProblem` | `meshed_problem.hpp` | `Problem` + `std::shared_ptr<const Mesh>`, checked and compiled, up to assembly |
 | `CompiledDivergence` | `meshed_problem.hpp` | `x`, `y`: the compiled divergence of A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] (`MeshedProblem::divergence_of_a()`) |
 | `SparsityPattern`, `CsrMatrix` | `csr_matrix.hpp` | compressed sparse rows: `rows`, `columns`, `row_offsets`, `column_indices` (signed `Index`, sorted and unique per row), `find`; a matrix is a shared pattern plus `values`, with `entry(i, j)` and `multiply(x)` |
-| `Operator` | `assembled_problem.hpp` | one operator of the system: `free` (X_FF), `dirichlet` (X_FD), `depends_on_t`, `is_zero` |
+| `Operator` | `assembled_problem.hpp` | one operator of the system: `free` (X_FF), `dirichlet` (X_FD), `depends_on_t`, `is_zero`, `symmetric` (of `free`, from the terms built) |
 | `AssembledProblem` | `assembled_problem.hpp` | the system M2 U'' + B U' + A U = b in the free unknowns at one t |
-| `Assembler` | `assembler.hpp` | `assemble(meshed_problem, t, previous = nullptr)` |
+| `Assembler` | `assembler.hpp` | `assemble(meshed_problem, t, previous = nullptr, max_time_order = 2)` |
 
 ```cpp
 using namespace pde2d::fem;
@@ -1097,6 +1110,8 @@ const Assembler assembler;
 AssembledProblem a = assembler.assemble(meshed, 0.0);
 // static: a.stiffness().free * U = a.right_hand_side()
 AssembledProblem b = assembler.assemble(meshed, 0.1, &a); // reuses a
+// Only A and the load, and only U_D (no U_D', U_D''): time order 0.
+AssembledProblem c = assembler.assemble(meshed, 0.0, nullptr, 0);
 ```
 
 The system in the free unknowns (`MeshedProblem::free_nodes()`, the
@@ -1117,6 +1132,14 @@ F - G, `dirichlet_values()`, `dirichlet_rates()` and
 `time_order() >= 1`, accelerations only for 2, otherwise empty), and
 `right_hand_side()` is b (a lifting product is left out when its operator
 is zero).
+
+**max_time_order** (0, 1 or 2, default 2; anything else throws
+`std::invalid_argument`). 1 leaves out M2 and U_D''; 0 also M1 and D and
+U_D': only A (K, C, R, S, T) and the load are built and only U_D is
+evaluated, so b = load − A_FD U_D. A left-out operator is a zero operator,
+so `time_order()` is at most `max_time_order`. The `StaticSolver` uses 0,
+so it never evaluates a derivative of the boundary data it drops (d/dt
+√t at t = 0, GitHub issue #35).
 
 **Terms.** Interior, per triangle: K (a_xx, a_xy, a_yy), C (b and
 `divergence_of_a()`), R (c), M1 (m1), M2 (m2), F (f). Boundary, per edge
@@ -1139,25 +1162,38 @@ term. Quadrature: barycentric (2/3, 1/6, 1/6) and rotations on triangles
 **Facts.** Per term, from the facts of the coefficients feeding it
 (zero as written, depends on t): K from A; C from b and div A; a boundary
 term is zero when A is (κ = 0) or its own coefficient (alpha, gamma, g)
-is, T only when A is; it depends on t when one of its non-zero factors
-(including β̂_n, and β̂_τ for T) does. An operator `is_zero` when every
+is. T is zero when A is, or when A is isotropic
+(`MeshedProblem::a_is_isotropic()`: a_xy zero and a_xx − a_yy expands to
+zero, decided symbolically in the `MeshedProblem` constructor; then
+κ_τ = 0) and beta_tau, beta_x, beta_y are zero (then β̂_τ = 0). A term
+depends on t when one of its non-zero factors (including β̂_n, and β̂_τ
+for T) does. An operator `is_zero` when every
 term of it is zero and `depends_on_t` when one of them depends on t;
 `time_order()` is 2 with a non-zero mass, else 1 with a non-zero damping,
 else 0 (lower than the problem's when a dynamic condition has A = 0).
+`symmetric`: M2 and B always (mass-like integrals), A when C and every T
+are zero (K, R and S are symmetric); a zero operator is symmetric. It is
+a fact from the terms, not a test of the values, and holds up to
+rounding (the blocks are computed in full). Wherever A is not zero the
+condition of a natural or dynamic edge is solved for u_n, so β̂_n ≠ 0 is
+checked there even when every term of the edge is zero.
 `load_depends_on_t()` reads F and G; `right_hand_side_depends_on_t()`
 adds the lifting products: a non-zero operator with Dirichlet nodes whose
 values (g / alpha of a used region) or, for the stiffness, whose own terms
 depend on t.
 
-**Structure** (private, `detail::AssemblyInternals` in `assembler.cpp`,
-shared through `previous`): the free index and the Dirichlet column of
+**Structure** (private, in `assembler.cpp`). Each result has a small
+`detail::AssemblyInternals`: the `max_time_order` it was built with, the
+constant parts of the operators and load that have terms depending on t
+(shared pointers, null otherwise), and a shared
+`detail::AssemblyStructure`, built once and carried through `previous`:
+the free index and the Dirichlet column of
 every node; the two patterns, from one loop over the triangles (every node
 pair (p, q) with p free adds column q to row p in the free or the
 Dirichlet pattern; rows sorted, duplicates removed; boundary edges add
 nothing); a greedy colouring of the triangles in index order (the smallest
 colour not used by an earlier triangle sharing a node) and, in a separate
-pass, of the boundary edges; the constant parts of the operators and load
-that have terms depending on t.
+pass, of the boundary edges.
 
 **Building.** The driver loops over the colours, inside a colour in index
 order. For each element it calls a pure block function
@@ -1173,13 +1209,15 @@ operator has terms in t (the constant part is then kept for reuse). With
 `previous` (same `MeshedProblem` object, else `std::invalid_argument`),
 the structure and the constant parts are taken over and only the terms in
 t are computed; an operator without such terms is copied from `previous`.
-The result is the same bit for bit as a fresh assembly at that t.
+An operator above `previous`'s `max_time_order` was not built there and is
+built here in full. The result is the same bit for bit as a fresh
+assembly at that t and `max_time_order`.
 
 **Report** ("assembly"): time; metrics `free_nodes`, `dirichlet_nodes`,
 `free_nonzeros`, `dirichlet_nonzeros`, `triangle_colours`, `edge_colours`,
-`used_previous`, and `mass_rebuilt`, `damping_rebuilt`,
+`used_previous`, `max_time_order`, and `mass_rebuilt`, `damping_rebuilt`,
 `stiffness_rebuilt`, `load_rebuilt` (1 when something of it was computed,
-0 when reused whole).
+0 when reused whole or left out by `max_time_order`).
 
 ## Solvers and time integration (`pde2d_solve`)
 
@@ -1204,14 +1242,29 @@ std::shared_ptr<const CsrMatrix>)` returns a
 `std::unique_ptr<const PreparedLinearSolver>`, which holds the matrix and
 solves `solve(rhs) -> LinearSolveResult` (values, iterations, relative
 residual |b − Ax| / |b| computed after the solve) as often as needed.
-`SparseLu` (Eigen's SparseLU with COLAMD; the matrix is copied once into
-Eigen's column-major format; a zero pivot throws `std::runtime_error` in
-`prepare`, a result that is not finite throws in `solve`) and `BiCgStab`
-(`BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000}`; Jacobi
-preconditioner; views our arrays through `Eigen::Map` without copying;
-starts from zero; non-convergence throws `std::runtime_error`). An empty
-(0 × 0) system has an empty solution. Eigen appears only in
-`src/solve/eigen_view.hpp` and the two solver `.cpp` files.
+A solver declares `requirements()` (`LinearSolverRequirements{
+symmetric_matrix}`); `prepare` sees only values, so the callers (the
+`Integrator`, the `StaticSolver`, `Newmark::start`) check the
+requirements against assembly's `Operator::symmetric` first
+(`detail::check_requirements`, `src/solve/requirements.hpp`) and throw
+`std::invalid_argument` naming the caller, the solver and the matrix.
+Definiteness is not a declared requirement: a solver that needs it
+detects its failure and throws `std::runtime_error`.
+
+| Solver | Requires | What it is |
+| --- | --- | --- |
+| `SparseLu` | nothing | Eigen's SparseLU with COLAMD; the matrix is copied once into Eigen's column-major format; a zero pivot throws `std::runtime_error` in `prepare`, a result that is not finite throws in `solve` |
+| `BiCgStab` | nothing | `BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000}`; Jacobi preconditioner; views our arrays through `Eigen::Map` without copying; starts from zero; non-convergence throws `std::runtime_error` |
+| `ConjugateGradient` | symmetric | Eigen's ConjugateGradient with Lower \| Upper and Jacobi; `ConjugateGradientOptions` as for `BiCgStab`; converges only for a positive definite matrix, otherwise it does not reach its tolerance and throws |
+| `SimplicialLdlt` | symmetric | Eigen's SimplicialLDLT with AMD (lower triangle, copied to column-major); no pivoting, so a zero pivot (singular, or indefinite needing pivots) throws `std::runtime_error` in `prepare` |
+
+The two iterative solvers share one prepared solver
+(`detail::PreparedIterative<EigenSolver>`, `src/solve/iterative_solve.hpp`):
+the right-hand side is scaled so that a tiny one still converges, a zero
+one gives x = 0 with no iterations, and the measured residual decides
+convergence (restarts while they halve it). An empty (0 × 0) system has an
+empty solution. Eigen appears only in `src/solve/eigen_view.hpp`,
+`src/solve/iterative_solve.hpp` and the solver `.cpp` files.
 
 **Solution** (`solution.hpp`). `Solution{mesh, time, values, velocities}`;
 `build_solution(meshed, free_values, t)` places the free values at
@@ -1220,16 +1273,16 @@ starts from zero; non-convergence throws `std::runtime_error`). An empty
 part from the state, Dirichlet nodes from `dirichlet_rate`), so that a run
 can be continued.
 
-**StaticSolver** (`static_solver.hpp`). Assembles at t, solves
-`stiffness().free · U = load() − stiffness().dirichlet · U_D` (not
-`right_hand_side()`, which for time order 1 or 2 also holds the lifting of
-U_D' and U_D''), and returns `StaticResult{solution, reports}` with the
-reports "assembly" and "static_solver" (free_unknowns, linear_iterations,
-residual).
+**StaticSolver** (`static_solver.hpp`). Assembles at t with
+`max_time_order` 0, checks the solver's requirements against
+`stiffness().symmetric`, solves `stiffness().free · U =
+right_hand_side()` (= load − A_FD U_D at that order), and returns
+`StaticResult{solution, reports}` with the reports "assembly" and
+"static_solver" (free_unknowns, linear_iterations, residual).
 
 **Time methods** (`time_method.hpp`). A `TimeMethod` declares
-`capabilities()` (`TimeMethodCapabilities{supports_first_order,
-supports_second_order}`), `evaluation_fraction()` (where in the step the
+`capabilities()` (`TimeMethodCapabilities{time_order_0, time_order_1,
+time_order_2}` with `supports(order)`), `evaluation_fraction()` (where in the step the
 problem is assembled) and `step_matrix_weights(dt)` (`StepMatrixWeights{
 mass, damping, stiffness}`: the step matrix is mass·M₂ + damping·B +
 stiffness·A, so the integrator can build it and tell when it changes). It
@@ -1241,13 +1294,24 @@ holds the whole lifting.
 
 | Method | Orders | Assembled at | Step matrix | Right-hand side |
 | --- | --- | --- | --- | --- |
-| `ImplicitEuler` | 1 | t + dt | B/dt + A | b + B U₀/dt |
-| `ImplicitMidpoint` | 1 | t + dt/2 | B/dt + A/2 | b + (B/dt − A/2) U₀ |
+| `ImplicitEuler` | 0, 1, 2 | t + dt | M₂/dt² + B/dt + A | b + M₂(U₀/dt² + V₀/dt) + B U₀/dt; then V₁ = (U₁ − U₀)/dt |
+| `ImplicitMidpoint` | 1, 2 | t + dt/2 | 2M₂/dt² + B/dt + A/2 | b + M₂(2U₀/dt² + 2V₀/dt) + (B/dt − A/2) U₀; then V₁ = 2(U₁ − U₀)/dt − V₀ |
 | `Newmark` (β = 1/4, γ = 1/2) | 2 | t + dt | M₂/(β dt²) + γ B/(β dt) + A | b + M₂(U₀/(β dt²) + V₀/(β dt) + (1/(2β) − 1) W₀) + B(γ U₀/(β dt) + (γ/β − 1) V₀ + dt (γ/(2β) − 1) W₀) |
 
-None inverts B or M₂ during the steps, so B may be singular (m1 = 0 with
-a dynamic condition). `Newmark::start` solves M₂(t0) W₀ = b − B V₀ − A U₀
-for the starting acceleration, so M₂ must not be singular.
+A zero operator adds nothing, so one set of weights serves every order of
+a method: at time order 1 the M₂ terms are absent, at 0 (Euler only) also
+the B terms, leaving A U₁ = b(t₁). At time order 2 Euler and midpoint step
+the pair U′ = V, M₂ V′ + B V + A U = b (Euler: (U₁ − U₀)/dt = V₁; midpoint:
+(U₁ − U₀)/dt = (V₁ + V₀)/2 with everything at the middle), V₁ eliminated;
+they need no acceleration, so M₂ may be singular or zero at some time
+(m2 = sin(t)²), and the midpoint step with M₂ = 0 is the first-order step.
+Midpoint refuses time order 0 (U₁ = 2A⁻¹b − U₀ oscillates). None inverts B
+or M₂ during the steps, so B may be singular (m1 = 0 with a dynamic
+condition). `Newmark::start` solves M₂(t0) W₀ = b − B V₀ − A U₀ for the
+starting acceleration, so M₂ must not be singular; when it is zero, or the
+solve fails, it throws `std::runtime_error` naming the cause and
+`ImplicitMidpoint` and `ImplicitEuler`, which need no acceleration (no
+fallback).
 
 **Step control** (`step_controller.hpp`, `fixed_step.hpp`).
 `StepController::next_step(t)`; `FixedStep({.dt = ...})`.
@@ -1258,11 +1322,14 @@ Solution *initial = nullptr) -> IntegrationResult{final, snapshots,
 history, report}`.
 
 - The time order is `AssembledProblem::time_order()` at t0, checked
-  against the method's capabilities (0 is refused: use the static
-  solver).
+  against `capabilities().supports(order)`; when it is lower than
+  `time_order(meshed)` (the order as written), the refusal says that time
+  terms vanished in assembly.
 - The state comes from `initial` (same mesh object; velocities required
   for time order 2) or from `initial_values(t0)` / `initial_velocities(t0)`,
-  free part only.
+  free part only. At time order 0 there is no initial state: the state
+  at t0 is the solution of A(t0) U = b(t0), and `initial` is only checked
+  for its mesh and size.
 - Times: on a stretch of equal steps from an anchor, step k ends at
   anchor + k·dt; a step ending within 1e-9·dt of the next target (a
   snapshot time or t1) lands on it, and a step that would pass it is
@@ -1271,7 +1338,10 @@ history, report}`.
 - Each step assembles at `(1 − fraction)·t + fraction·t_new` with the
   previous result as `previous`, and prepares the linear solver only when
   there is none yet, dt changed, or an operator with a non-zero weight in
-  the step matrix (and not `is_zero`) `depends_on_t`.
+  the step matrix (and not `is_zero`) `depends_on_t`. Before each
+  prepare it checks the solver's requirements: the step matrix is
+  symmetric when every operator with a non-zero weight is symmetric or
+  zero.
 - Each step's `StepRecord{t, dt, accepted, linear_iterations, residual,
   time}` updates a running summary and is kept only with
   `keep_step_history`; snapshots are taken at `snapshot_times` (strictly

@@ -528,6 +528,9 @@ MeshedProblem::MeshedProblem(std::shared_ptr<const mesh::Mesh> mesh,
         .y = compile(divergence[1], parameters,
                      "Equation: the y component of the divergence of A")};
   }
+  // Whether A is isotropic, for assembly's zero test of T.
+  a_is_isotropic_ =
+      e.a_xy.facts().zero && detail::difference_is_zero(e.a_xx, e.a_yy);
 
   // 7. Facts: each CompiledExpression carries the facts of the expression
   // it was compiled from, so the summaries below read the compiled problem.

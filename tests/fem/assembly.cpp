@@ -178,7 +178,8 @@ std::vector<std::size_t> dirichlet_node_list(const MeshedProblem &problem) {
 bool same(const Operator &a, const Operator &b) {
   return a.free.values == b.free.values &&
          a.dirichlet.values == b.dirichlet.values &&
-         a.depends_on_t == b.depends_on_t && a.is_zero == b.is_zero;
+         a.depends_on_t == b.depends_on_t && a.is_zero == b.is_zero &&
+         a.symmetric == b.symmetric;
 }
 
 bool same(const AssembledProblem &a, const AssembledProblem &b) {
@@ -198,6 +199,89 @@ bool same(const AssembledProblem &a, const AssembledProblem &b) {
 
 double metric(const AssembledProblem &a, const std::string &name) {
   return a.report().metrics.at(name);
+}
+
+// --- max_time_order -----------------------------------------------------
+
+// Every operator has a constant term and one in t (the mass only one in
+// t), the load too, and the Dirichlet data moves, so each level and each
+// reuse path has something to build. Time order 2.
+std::shared_ptr<const MeshedProblem> every_term_problem() {
+  return meshed(pde2d::test::rectangle_mesh(2, 1, 0.4),
+                {.equation = {.a_xx = e("2"),
+                              .a_yy = e("2"),
+                              .c = e("sin(t)"),
+                              .m1 = e("1"),
+                              .m2 = e("1 + t^2"),
+                              .f = e("x")},
+                 .boundary_conditions = {{"left", dirichlet("exp(t)*(1 + y)")},
+                                         {"bottom",
+                                          {.alpha = e("1"),
+                                           .beta_n = e("1"),
+                                           .gamma = e("1 + t"),
+                                           .g = e("t*x")}},
+                                         {"right", neumann("1")},
+                                         {"top", neumann("0")}},
+                 .initial = {.u = e("0"), .u_t = e("0")}});
+}
+
+bool all_zero(const Operator &op) {
+  return std::ranges::all_of(op.free.values, [](double v) { return v == 0; }) &&
+         std::ranges::all_of(op.dirichlet.values,
+                             [](double v) { return v == 0; });
+}
+
+// load - A_FD U_D [- B_FD U_D'] [- M2_FD U_D''], from the full assembly's
+// operators and data, up to `order`.
+std::vector<double> lifted(const AssembledProblem &full, int order) {
+  std::vector<double> b(full.load().begin(), full.load().end());
+  const auto subtract = [&](const Operator &op, std::span<const double> data) {
+    const auto product = op.dirichlet.multiply(data);
+    for (std::size_t i = 0; i < b.size(); ++i)
+      b[i] -= product[i];
+  };
+  subtract(full.stiffness(), full.dirichlet_values());
+  if (order >= 1)
+    subtract(full.damping(), full.dirichlet_rates());
+  if (order >= 2)
+    subtract(full.mass(), full.dirichlet_accelerations());
+  return b;
+}
+
+// --- symmetry -----------------------------------------------------------
+
+// max |a_ij - a_ji| / max |a_ij| over the free part, read entry by entry:
+// an independent check of the `symmetric` fact.
+double asymmetry(const CsrMatrix &matrix) {
+  const Dense a = dense(matrix);
+  double largest = 0.0, difference = 0.0;
+  for (std::size_t i = 0; i < a.size(); ++i)
+    for (std::size_t j = 0; j < a.size(); ++j) {
+      largest = std::max(largest, std::abs(a[i][j]));
+      difference = std::max(difference, std::abs(a[i][j] - a[j][i]));
+    }
+  return largest > 0.0 ? difference / largest : 0.0;
+}
+
+// The assembly of `equation` on the reference triangle with the given
+// condition on the bottom and Neumann conditions on the others. The
+// diagonal edge is not axis-aligned: on axis-aligned edges T vanishes
+// for any diagonal A (n.A tau = 0), which would hide an anisotropic A.
+AssembledProblem stiffness_of(const Equation &equation,
+                              BoundaryCondition bottom) {
+  return assemble(on_triangle(
+      equation, {{"bottom", std::move(bottom)}, {"diagonal", neumann("1")}}));
+}
+
+void symmetric_case(const Equation &equation, BoundaryCondition bottom,
+                    bool expected, const std::string &what) {
+  const auto a = stiffness_of(equation, std::move(bottom));
+  check(a.stiffness().symmetric == expected, what + ": the fact");
+  const double measured = asymmetry(a.stiffness().free);
+  if (expected)
+    check(measured < 1e-14, what + ": A = A^T to rounding");
+  else
+    check(measured > 1e-6, what + ": A differs from A^T");
 }
 
 } // namespace
@@ -535,6 +619,191 @@ int main() {
          const auto g =
              assemble(on_triangle(laplace, {{"bottom", neumann("t")}}));
          check(g.load_depends_on_t() && !g.stiffness().depends_on_t, "G in t");
+       }},
+
+      // ---------------------------------------------------------------
+      // max_time_order.
+      {"max_time_order builds exactly the terms of its level",
+       [] {
+         const auto problem = every_term_problem();
+         const double t = 0.7;
+         const auto full = assemble(problem, t);
+         check(full.time_order() == 2 && !full.mass().is_zero &&
+                   !full.damping().is_zero,
+               "the full assembly has every term");
+         check(same(Assembler().assemble(problem, t, nullptr, 2), full),
+               "level 2 is the full assembly");
+         check(metric(full, "max_time_order") == 2, "reported");
+
+         const auto one = Assembler().assemble(problem, t, nullptr, 1);
+         check(one.time_order() == 1, "level 1: time order 1");
+         check(one.mass().is_zero && all_zero(one.mass()) &&
+                   !one.mass().depends_on_t,
+               "level 1: M2 left out");
+         check(same(one.damping(), full.damping()) &&
+                   same(one.stiffness(), full.stiffness()),
+               "level 1: B and A as in the full assembly");
+         check(std::ranges::equal(one.load(), full.load()) &&
+                   std::ranges::equal(one.dirichlet_values(),
+                                      full.dirichlet_values()) &&
+                   std::ranges::equal(one.dirichlet_rates(),
+                                      full.dirichlet_rates()) &&
+                   one.dirichlet_accelerations().empty(),
+               "level 1: load, U_D and U_D', no U_D''");
+         near_vector(one.right_hand_side(), lifted(full, 1), tight,
+                     "level 1: b = load - A_FD U_D - B_FD U_D'");
+         check(metric(one, "mass_rebuilt") == 0, "M2 not built");
+
+         const auto zero = Assembler().assemble(problem, t, nullptr, 0);
+         check(zero.time_order() == 0, "level 0: time order 0");
+         check(zero.mass().is_zero && zero.damping().is_zero &&
+                   all_zero(zero.mass()) && all_zero(zero.damping()),
+               "level 0: M2 and B left out");
+         check(same(zero.stiffness(), full.stiffness()),
+               "level 0: A as in the full assembly");
+         check(std::ranges::equal(zero.load(), full.load()) &&
+                   std::ranges::equal(zero.dirichlet_values(),
+                                      full.dirichlet_values()) &&
+                   zero.dirichlet_rates().empty() &&
+                   zero.dirichlet_accelerations().empty(),
+               "level 0: load and U_D only");
+         near_vector(zero.right_hand_side(), lifted(full, 0), tight,
+                     "level 0: b = load - A_FD U_D");
+         check(zero.right_hand_side_depends_on_t(),
+               "U_D and the reaction depend on t");
+         check(metric(zero, "damping_rebuilt") == 0 &&
+                   metric(zero, "stiffness_rebuilt") == 1,
+               "B not built, A built");
+       }},
+      {"max_time_order: reuse across levels is bit for bit",
+       [] {
+         const auto problem = every_term_problem();
+         for (int before = 0; before <= 2; ++before)
+           for (int now = 0; now <= 2; ++now) {
+             const std::string what = "from level " + std::to_string(before) +
+                                      " to " + std::to_string(now);
+             const auto first =
+                 Assembler().assemble(problem, 0.3, nullptr, before);
+             const auto again = Assembler().assemble(problem, 1.1, &first, now);
+             check(
+                 same(again, Assembler().assemble(problem, 1.1, nullptr, now)),
+                 what + ": previous equals fresh");
+             check(metric(again, "used_previous") == 1, what + ": reused");
+             // A built operator is reused only when `first` built it.
+             const double expected = now >= 2 ? 1.0 : 0.0; // M2 is in t
+             check(metric(again, "mass_rebuilt") == expected,
+                   what + ": mass_rebuilt");
+             // And on again, one level further.
+             for (int next = 0; next <= 2; ++next)
+               check(same(Assembler().assemble(problem, -0.4, &again, next),
+                          Assembler().assemble(problem, -0.4, nullptr, next)),
+                     what + ", then " + std::to_string(next) + ": chained");
+           }
+         // A constant operator is copied only when `previous` built it.
+         const auto steady =
+             meshed(pde2d::test::rectangle_mesh(2, 1, 0.4),
+                    {.equation = {.a_xx = e("1"), .a_yy = e("1"), .m1 = e("2")},
+                     .boundary_conditions = {{"left", dirichlet("t*y")},
+                                             {"bottom", neumann()},
+                                             {"right", neumann("1")},
+                                             {"top", neumann()}},
+                     .initial = {.u = e("0")}});
+         const auto low = Assembler().assemble(steady, 0.0, nullptr, 0);
+         const auto high = Assembler().assemble(steady, 1.0, &low, 1);
+         check(metric(high, "damping_rebuilt") == 1 &&
+                   metric(high, "stiffness_rebuilt") == 0,
+               "B built fresh, A reused");
+         check(same(high, Assembler().assemble(steady, 1.0, nullptr, 1)),
+               "bit for bit");
+         check(!high.damping().is_zero, "B is there");
+       }},
+      {"max_time_order: other values throw",
+       [] {
+         const auto problem = every_term_problem();
+         for (const int level : {-1, 3, 100})
+           expect_throws<std::invalid_argument>(
+               [&] {
+                 (void)Assembler().assemble(problem, 0.0, nullptr, level);
+               },
+               "max_time_order must be 0, 1 or 2, not " +
+                   std::to_string(level));
+       }},
+      {"max_time_order 0 never evaluates U_D' (issue #35)",
+       [] {
+         // u = sqrt(t) on the boundary: d/dt sqrt(t) is not finite at 0.
+         const auto problem = meshed(
+             pde2d::test::rectangle_mesh(1, 1, 0.5),
+             {.equation = {.a_xx = e("-1"), .a_yy = e("-1"), .m1 = e("1")},
+              .boundary_conditions = {{"left", dirichlet("sqrt(t)")},
+                                      {"bottom", dirichlet("sqrt(t)")},
+                                      {"right", dirichlet("sqrt(t)")},
+                                      {"top", dirichlet("sqrt(t)")}},
+              .initial = {.u = e("0")}});
+         expect_throws<std::invalid_argument>(
+             [&] { (void)assemble(problem, 0.0); }, "not finite");
+         const auto a = Assembler().assemble(problem, 0.0, nullptr, 0);
+         check(a.dirichlet_rates().empty(), "no rates");
+         check(std::ranges::all_of(a.dirichlet_values(),
+                                   [](double v) { return v == 0.0; }),
+               "U_D = 0 at t = 0");
+       }},
+
+      // ---------------------------------------------------------------
+      // Symmetry facts, each checked against the matrix itself.
+      {"symmetry: isotropic diffusion with natural conditions",
+       [] {
+         const Equation laplace{.a_xx = e("-1"), .a_yy = e("-1")};
+         symmetric_case(laplace, neumann("2"), true, "isotropic");
+         symmetric_case(laplace, {.alpha = e("3"), .beta_n = e("1")}, true,
+                        "Robin");
+         // Isotropic only after expanding; constant in x and y, so div A
+         // (a convection) is zero.
+         symmetric_case({.a_xx = e("-(t + 2)*(1 + t)"),
+                         .a_yy = e("-2 - 3*t - t^2"),
+                         .c = e("1 + x")},
+                        neumann(), true, "isotropic after expanding, with R");
+         symmetric_case({.a_xx = e("0"), .c = e("2")}, neumann(), true,
+                        "A = 0");
+       }},
+      {"symmetry: what makes A non-symmetric",
+       [] {
+         symmetric_case({.a_xx = e("-1"), .a_xy = e("0.5"), .a_yy = e("-1")},
+                        neumann(), false, "a_xy");
+         symmetric_case({.a_xx = e("-1"), .a_yy = e("-2")}, neumann(), false,
+                        "a_xx != a_yy");
+         symmetric_case({.a_xx = e("-1"), .a_yy = e("-1")},
+                        {.beta_n = e("1"), .beta_tau = e("0.5")}, false,
+                        "beta_tau");
+         symmetric_case({.a_xx = e("-1"), .a_yy = e("-1")},
+                        {.beta_n = e("1"), .beta_x = e("0.5")}, false,
+                        "beta_x");
+         symmetric_case({.a_xx = e("-1"), .a_yy = e("-1"), .b_x = e("1")},
+                        neumann(), false, "convection");
+         symmetric_case({.a_xx = e("-x"), .a_yy = e("-x")}, neumann(), false,
+                        "div A (convection from a varying A)");
+       }},
+      {"symmetry: masses and the isotropy of A",
+       [] {
+         const auto problem = every_term_problem();
+         const auto a = assemble(problem, 0.5);
+         check(a.mass().symmetric && a.damping().symmetric, "M2 and B");
+         check(asymmetry(a.mass().free) < 1e-14 &&
+                   asymmetry(a.damping().free) < 1e-14,
+               "measured");
+         check(problem->a_is_isotropic(), "a_xx = a_yy = 2");
+         const auto zero = Assembler().assemble(problem, 0.5, nullptr, 0);
+         check(zero.mass().symmetric && zero.damping().symmetric,
+               "a left-out operator is symmetric");
+         check(on_triangle({.a_xx = e("1 + x"), .a_yy = e("x + 1")})
+                   ->a_is_isotropic(),
+               "equal as written");
+         check(on_triangle({})->a_is_isotropic(), "A = 0");
+         check(!on_triangle({.a_xx = e("1"), .a_yy = e("2")})->a_is_isotropic(),
+               "a_xx != a_yy");
+         check(!on_triangle(
+                    {.a_xx = e("1"), .a_xy = e("x - x + 1"), .a_yy = e("1")})
+                    ->a_is_isotropic(),
+               "a_xy not zero");
        }},
 
       // ---------------------------------------------------------------
