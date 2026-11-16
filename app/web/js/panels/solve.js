@@ -114,13 +114,13 @@ function compareSection(result) {
     return compareWith(value);
   };
   const info = infoToggle(
-    "The library evaluates the expression (in x, y, t and the parameters) at every snapshot; the page subtracts it from u. u travels to the page as 32-bit floats, so errors below about 1e-7 × max |u| are rounding.",
+    "The server evaluates the expression (in x, y, t and the parameters) with the library at every snapshot and compares it with u in double precision: max |u − exact|, the nodal RMS and the lumped L2 norm.",
     "the comparison",
   );
   const showError = h("input", { type: "checkbox", id: "show-error", onchange: (event) => setViewOption("showError", event.target.checked) });
   return foldable(
     { id: "solve.compare", title: "Compare with an exact solution", kind: "section", extras: [info.button], info: info.panel },
-    h("div", { class: "field", dataset: { path: "field.text" } }, h("div", { class: "row compare-line" }, text, actionButton("Compare", run, { small: true }))),
+    h("div", { class: "field", dataset: { path: "exact" } }, h("div", { class: "row compare-line" }, text, actionButton("Compare", run, { small: true }))),
     h("div", { class: "compare-result", id: "compare-result" }),
     h("label", { class: "row inline-label" }, showError, "Show u − exact in the picture"),
     result.mode === "time" ? h("div", { class: "compare-chart", id: "compare-chart" }) : null,
@@ -158,8 +158,9 @@ function updateCompare(container) {
       "div",
       { class: "stats" },
       stat("max |u − exact|", shownNumber(linf[frame]), `At t = ${formatNumber(result.times[frame], 5)}`),
+      stat("L2 (lumped)", shownNumber(current.l2[frame]), "sqrt(Σ w_i d_i²), w_i a third of the area around node i"),
       result.mode === "time" ? stat("Largest over the snapshots", shownNumber(overall)) : null,
-      current.busy ? stat("Compared", `${current.done} of ${linf.length}`) : null,
+      current.busy ? stat("Compared", "…") : null,
     ),
   );
   const chartSlot = container.querySelector("#compare-chart");
@@ -291,7 +292,7 @@ export const solvePanel = {
     }
     slot.shown = { result, error, old, busy, fresh, running, state };
     const placed = markError(container, error);
-    const save = () => downloadExport("solution.csv", store.caseData).catch((e) => toast(e.message));
+    const save = () => downloadExport("solution.csv", store.caseData, store.caseName).catch((e) => toast(e.message));
     fill(
       slot,
       error && !placed ? errorBox(error, { openProblem }) : null,

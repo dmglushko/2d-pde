@@ -9,12 +9,17 @@ find_package(Threads REQUIRED)
 # Everything but HTTP: the case format, the catalog of components and the
 # stages. Tests link it directly.
 add_library(pde2d_app_core STATIC
+  src/case_set.cpp
   src/catalog.cpp
   src/domain_input.cpp
+  src/exports.cpp
+  src/field_eval.cpp
   src/options.cpp
   src/presets.cpp
   src/problem_input.cpp
+  src/runs.cpp
   src/session.cpp
+  src/stage_cache.cpp
   src/views.cpp)
 target_include_directories(pde2d_app_core PUBLIC src)
 target_compile_definitions(pde2d_app_core

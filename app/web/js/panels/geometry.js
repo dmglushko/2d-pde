@@ -290,7 +290,7 @@ export const geometryPanel = {
       view ? domainStats(view) : null,
     );
     slot.classList.toggle("outdated-result", Boolean(view) && !fresh);
-    const save = () => downloadExport("geometry.svg", store.caseData).catch((e) => toast(e.message));
+    const save = () => downloadExport("geometry.svg", store.caseData, store.caseName).catch((e) => toast(e.message));
     fill(
       container.querySelector("#geometry-regions"),
       view

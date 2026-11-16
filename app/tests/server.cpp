@@ -19,15 +19,20 @@ using test::check;
 
 namespace {
 
+app::ServerOptions test_options() {
+  app::ServerOptions options;
+  options.port = 0;
+  options.web_dir = PDE2D_APP_WEB_DIR;
+  options.examples_dir = PDE2D_APP_EXAMPLES_DIR;
+  return options;
+}
+
 // Starts a server on a free port for the length of one test.
 class Running {
 public:
-  Running()
-      : server_({.host = "127.0.0.1",
-                 .port = 0,
-                 .web_dir = PDE2D_APP_WEB_DIR,
-                 .examples_dir = PDE2D_APP_EXAMPLES_DIR}),
-        port_(server_.bind()), thread_([this] { server_.listen(); }) {}
+  explicit Running(app::ServerOptions options = test_options())
+      : server_(std::move(options)), port_(server_.bind()),
+        thread_([this] { server_.listen(); }) {}
   ~Running() {
     server_.stop();
     thread_.join();
@@ -164,11 +169,9 @@ int main() {
        }},
       {"large bodies are refused",
        [] {
-         app::Server server({.host = "127.0.0.1",
-                             .port = 0,
-                             .web_dir = PDE2D_APP_WEB_DIR,
-                             .examples_dir = {},
-                             .max_body_bytes = 1024});
+         app::ServerOptions options = test_options();
+         options.max_body_bytes = 1024;
+         app::Server server(options);
          const int port = server.bind();
          std::thread thread([&] { server.listen(); });
          httplib::Client client("127.0.0.1", port);

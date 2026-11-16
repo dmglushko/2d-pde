@@ -3,6 +3,7 @@
 import { api, ApiError } from "./api.js";
 import { RUN_ALL, STAGES, fieldScale, reconcileConditions, requestCase, stageInfo, stagesToRun } from "./core.js";
 import { settings } from "./settings.js";
+import { growSnapshots, loadAround } from "./snapshots.js";
 import { currentError, currentKey, editCase, freshResult, notify, openStep, setColorBy, store } from "./state.js";
 
 // --- the toast ------------------------------------------------------------------
@@ -59,9 +60,14 @@ const calls = {
   problem: (caseData) => api.problem(caseData),
   assemble: (caseData) => api.assemble(caseData),
   field: (caseData, field) => api.field(caseData, field),
+  // The summary, then the newest snapshot and its neighbours (the page
+  // keeps some snapshots only, snapshots.js).
   solve: async (caseData) => {
     const summary = await api.solve(caseData);
-    summary.values = await api.solveValues(summary.job, 0, summary.values);
+    summary.layout = summary.values;
+    summary.values = [];
+    growSnapshots(summary, summary.layout.snapshots);
+    if (summary.values.length > 0) await loadAround(summary, summary.values.length - 1);
     return summary;
   },
 };
@@ -157,18 +163,19 @@ async function followRun(run, data) {
     if (!live()) return null;
     const progress = await api.solveProgress(run.job);
     if (!live()) return null;
-    const have = data.values.length;
-    const ready = progress.values.snapshots;
-    if (ready > have) {
-      const more = await api.solveValues(run.job, have, progress.values);
-      if (!live()) return null;
-      data.values.push(...more);
-    }
     const values = data.values;
-    Object.assign(data, progress, { values });
+    const layout = progress.values;
+    Object.assign(data, progress, { values, layout });
+    growSnapshots(data, layout.snapshots);
     data.times = progress.times.slice(0, values.length);
     solveScale(data);
-    if (settings.followRun && !store.solveFrameChosen) store.solveFrame = values.length - 1;
+    const follow = settings.followRun && !store.solveFrameChosen;
+    if (follow) store.solveFrame = values.length - 1;
+    // The newest snapshot when it is shown; others load when shown.
+    if (follow && values.length > 0) {
+      await loadAround(data, values.length - 1);
+      if (!live()) return null;
+    }
     notify("progress");
     if (progress.state === "running") continue;
     following = null;
@@ -203,7 +210,13 @@ export async function stopRun() {
   try {
     const progress = await api.solveStop(run.job);
     // It may have ended before the stop arrived.
-    if (data && data.job === run.job && progress.state === "done" && data.values.length === progress.values.snapshots) data.state = "done";
+    if (data && data.job === run.job && progress.state === "done") {
+      const values = data.values;
+      Object.assign(data, progress, { values, layout: progress.values });
+      growSnapshots(data, progress.values.snapshots);
+      data.times = progress.times.slice(0, values.length);
+      solveScale(data);
+    }
   } catch (error) {
     toast(error.message);
   }

@@ -1,5 +1,6 @@
 #include "presets.hpp"
 
+#include "app_error.hpp"
 #include "catalog.hpp"
 
 #include <cmath>
@@ -280,8 +281,8 @@ Json apply_preset(const Json &case_json, std::string_view id,
   std::string known;
   for (const Preset &preset : presets())
     known += (known.empty() ? "" : ", ") + preset.id;
-  throw std::invalid_argument("preset: unknown preset '" + std::string(id) +
-                              "' (" + known + ")");
+  throw PathError("preset",
+                  "unknown preset '" + std::string(id) + "' (" + known + ")");
 }
 
 } // namespace pde2d::app

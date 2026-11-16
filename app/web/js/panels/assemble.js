@@ -147,7 +147,7 @@ function resultView(result, fresh) {
     `Symmetric "yes" holds at every t (from the formulas), "at this t" only for these numbers. The system is M2 U'' + B U' + A U = b in the unknowns U. The load ${assembly.load_depends_on_t ? "changes" : "does not change"} with t; b ${assembly.right_hand_side_depends_on_t ? "changes" : "does not change"} with t.`,
     "the operators",
   );
-  const save = (kind) => () => downloadExport(kind, store.caseData).catch((e) => toast(e.message));
+  const save = (kind) => () => downloadExport(kind, store.caseData, store.caseName).catch((e) => toast(e.message));
   return [
     h(
       "div",

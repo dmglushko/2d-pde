@@ -333,6 +333,14 @@ export function normalizeCase(input, defaults) {
   return { caseData, replaced };
 }
 
+// The path an error is about: its "path" field from the server, or for a
+// message without one, the path it starts with ("mesh.refiner.options.x:
+// ..."), or null.
+export function errorPathOf(error) {
+  if (typeof error?.path === "string" && error.path) return error.path;
+  return errorPath(error?.message);
+}
+
 // The path an error message names ("mesh.refiner.options.x: ..."), or
 // null when it names none.
 export function errorPath(message) {
@@ -422,6 +430,84 @@ export function nodePositions(values, scale) {
     out[i] = v === null || !Number.isFinite(v) ? NaN : scale.position(v);
   }
   return out;
+}
+
+// The mesh from its summary (POST /api/mesh, "mesh") and its arrays
+// (POST /api/mesh/arrays): nodes as a Float64Array [x0, y0, ...],
+// triangles as a Uint32Array [a0, b0, c0, ...] and boundary_edges as a
+// Uint32Array [a0, b0, region0, ...], with region_names, has_links and id.
+// Throws when the bytes do not fit the summary.
+export function decodeMesh(summary, buffer) {
+  const arrays = summary.arrays;
+  if (buffer.byteLength !== arrays.bytes) throw new Error(`the mesh has ${buffer.byteLength} bytes, expected ${arrays.bytes}`);
+  const view = new DataView(buffer);
+  const part = (name) => {
+    const found = arrays.parts.find((p) => p.name === name);
+    if (!found) throw new Error(`the mesh has no ${name}`);
+    return found;
+  };
+  const read = (name, Type, size, get) => {
+    const p = part(name);
+    const out = new Type(p.count);
+    for (let i = 0; i < p.count; i++) out[i] = get(p.offset + size * i);
+    return out;
+  };
+  const nodes = read("nodes", Float64Array, 8, (at) => view.getFloat64(at, true));
+  const triangles = read("triangles", Uint32Array, 4, (at) => view.getUint32(at, true));
+  const ends = read("boundary_edges", Uint32Array, 4, (at) => view.getUint32(at, true));
+  const regions = read("boundary_regions", Uint32Array, 4, (at) => view.getUint32(at, true));
+  const edges = new Uint32Array(3 * regions.length);
+  for (let e = 0; e < regions.length; e++) {
+    edges[3 * e] = ends[2 * e];
+    edges[3 * e + 1] = ends[2 * e + 1];
+    edges[3 * e + 2] = regions[e];
+  }
+  return { id: summary.id, nodes, triangles, boundary_edges: edges, region_names: summary.region_names, has_links: summary.has_links };
+}
+
+// How many snapshots of a run the page keeps at most: about 64 MB of
+// float32 values, from 8 to 1000 snapshots.
+export function keptSnapshots(nodes) {
+  if (!Number.isFinite(nodes) || nodes <= 0) return 1000;
+  return Math.max(8, Math.min(1000, Math.floor((64 * 1024 * 1024) / (4 * nodes))));
+}
+
+// What to fetch and what to drop so that snapshot `shown` and its
+// neighbours are loaded: `values` has one entry per ready snapshot (null
+// where not loaded). Fetches the missing ones in [shown − behind, shown +
+// ahead] as one range {first, count} (or null), and drops the loaded ones
+// farthest from `shown` beyond `kept`.
+export function snapshotPlan(values, shown, { ahead = 8, behind = 2, kept = 1000 } = {}) {
+  const ready = values.length;
+  if (ready === 0) return { fetch: null, evict: [] };
+  const k = Math.max(0, Math.min(ready - 1, shown));
+  const low = Math.max(0, k - behind);
+  const high = Math.min(ready - 1, k + ahead);
+  let first = -1;
+  let last = -1;
+  for (let i = low; i <= high; i++)
+    if (!values[i]) {
+      if (first < 0) first = i;
+      last = i;
+    }
+  const fetch = first < 0 ? null : { first, count: last - first + 1 };
+  const loaded = [];
+  for (let i = 0; i < ready; i++) if (values[i] || (fetch && i >= fetch.first && i < fetch.first + fetch.count)) loaded.push(i);
+  const evict = [];
+  if (loaded.length > kept) {
+    loaded.sort((a, b) => Math.abs(b - k) - Math.abs(a - k) || b - a);
+    for (const i of loaded.slice(0, loaded.length - kept)) if (values[i]) evict.push(i);
+  }
+  return { fetch, evict };
+}
+
+// The loaded snapshot nearest to k (k itself when loaded), or -1.
+export function nearestLoaded(values, k) {
+  for (let d = 0; d < values.length; d++) {
+    if (values[k - d]) return k - d;
+    if (values[k + d]) return k + d;
+  }
+  return -1;
 }
 
 // Splits float32 little-endian values (snapshots x nodes, in order) into

@@ -1,5 +1,7 @@
 #include "options.hpp"
 
+#include "app_error.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -27,7 +29,7 @@ std::string_view kind_name(OptionKind kind) {
 }
 
 [[noreturn]] void fail(std::string_view where, std::string_view what) {
-  throw std::invalid_argument(std::string(where) + ": " + std::string(what));
+  throw PathError(std::string(where), std::string(what));
 }
 
 std::optional<double> optional_length(const Json &bound, std::string_view key,
@@ -210,6 +212,69 @@ void reject_unknown_keys(const Json &object, std::string_view where,
   for (const auto &item : object.items())
     if (std::ranges::find(known, std::string_view(item.key())) == known.end())
       fail(where, "unknown key '" + item.key() + "'");
+}
+
+std::string named_option(std::string_view message,
+                         std::span<const OptionSpec> specs) {
+  const auto is_word = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+  };
+  std::size_t best = std::string_view::npos;
+  std::string suffix;
+  for (const OptionSpec &spec : specs) {
+    for (std::size_t at = message.find(spec.name);
+         at != std::string_view::npos && at < best;
+         at = message.find(spec.name, at + 1)) {
+      const std::size_t end = at + spec.name.size();
+      const bool starts = at == 0 || !is_word(message[at - 1]);
+      const bool ends = end == message.size() || !is_word(message[end]);
+      if (!starts || !ends)
+        continue;
+      best = at;
+      suffix = "." + spec.name;
+      if (spec.kind == OptionKind::length_bound)
+        for (const std::string_view part : {".absolute", ".relative"})
+          if (message.substr(end).starts_with(part))
+            suffix += part;
+      break;
+    }
+  }
+  return suffix;
+}
+
+std::uint64_t request_job(const Json &request,
+                          std::span<const std::string_view> known) {
+  require_object(request, "request");
+  reject_unknown_keys(request, "request", known);
+  const double job = require_number(member(request, "job"), "job");
+  if (job != std::floor(job) || job < 1 || job > 9e15)
+    fail("job", "expected a run's id");
+  return static_cast<std::uint64_t>(job);
+}
+
+std::size_t request_count(const Json &request, std::string_view key) {
+  const double value = require_number(member(request, key), key);
+  if (value != std::floor(value) || value < 0 || value > 1e9)
+    fail(key, "expected a whole number from 0");
+  return static_cast<std::size_t>(value);
+}
+
+Json error_json(const StageError &error) {
+  Json out = Json::object();
+  out["stage"] = error.stage();
+  out["kind"] = error.kind();
+  out["message"] = error.what();
+  out["path"] = error.path().empty() ? Json(nullptr) : Json(error.path());
+  return out;
+}
+
+StageError error_from_json(const Json &error) {
+  const Json &path = member(error, "path");
+  return StageError(error["stage"].get<std::string>(),
+                    error["kind"].get<std::string>(),
+                    error["message"].get<std::string>(),
+                    path.is_string() ? path.get<std::string>() : "");
 }
 
 } // namespace pde2d::app

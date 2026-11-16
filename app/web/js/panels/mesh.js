@@ -82,7 +82,7 @@ const STALE = "The mesh shown is outdated: mesh again to export it.";
 
 function resultView(result, fresh) {
   const s = result.stats;
-  const save = (kind) => () => downloadExport(kind, store.caseData).catch((e) => toast(e.message));
+  const save = (kind) => () => downloadExport(kind, store.caseData, store.caseName).catch((e) => toast(e.message));
   return [
     h(
       "div",

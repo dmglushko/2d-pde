@@ -3,7 +3,12 @@
 import assert from "node:assert/strict";
 import {
   barycentric,
+  decodeMesh,
   errorPath,
+  errorPathOf,
+  keptSnapshots,
+  nearestLoaded,
+  snapshotPlan,
   fieldScale,
   fileKind,
   formatNumber,
@@ -262,6 +267,10 @@ test("error paths and stage keys", () => {
   assert.equal(errorPath("mesh.refiner.options.min_angle_degrees: expected a number"), "mesh.refiner.options.min_angle_degrees");
   assert.equal(errorPath("mesh.improvers[0].options: x"), "mesh.improvers[0].options");
   assert.equal(errorPath("Something without a path"), null);
+  // The server's path field wins; the text is the fallback.
+  assert.equal(errorPathOf({ path: "geometry.options.width", message: "geometry.options.width: no" }), "geometry.options.width");
+  assert.equal(errorPathOf({ path: null, message: "mesh.spec: no" }), "mesh.spec");
+  assert.equal(errorPathOf({ message: "RuppertOptions::x must be" }), null);
   const a = { geometry: { s: 1 }, mesh: { m: 1 }, problem: { p: 1 } };
   const b = { ...a, problem: { p: 2 } };
   assert.equal(stageKey(a, "mesh"), stageKey(b, "mesh"), "the mesh does not depend on the problem");
@@ -511,6 +520,61 @@ test("picture names carry the case and the time", () => {
   assert.equal(pictureName("heat_annulus.json", 0.25), "heat_annulus-t0.25.png");
   assert.equal(pictureName("case.json"), "case.png");
   assert.equal(pictureName("my case (2).json", 1 / 3), "my_case_2_-t0.333333.png");
+});
+
+test("a mesh decodes from its summary and binary arrays", () => {
+  // Two nodes, one triangle (0 1 0), one boundary edge 1 -> 0 in region 2.
+  const buffer = new ArrayBuffer(32 + 12 + 8 + 4);
+  const view = new DataView(buffer);
+  [0, 0.5, 1, -2].forEach((v, i) => view.setFloat64(8 * i, v, true));
+  [0, 1, 0].forEach((v, i) => view.setUint32(32 + 4 * i, v, true));
+  view.setUint32(44, 1, true);
+  view.setUint32(48, 0, true);
+  view.setUint32(52, 2, true);
+  const summary = {
+    id: 3,
+    region_names: ["a", "b", "c"],
+    has_links: true,
+    arrays: {
+      bytes: 56,
+      parts: [
+        { name: "nodes", count: 4, offset: 0 },
+        { name: "triangles", count: 3, offset: 32 },
+        { name: "boundary_edges", count: 2, offset: 44 },
+        { name: "boundary_regions", count: 1, offset: 52 },
+      ],
+    },
+  };
+  const mesh = decodeMesh(summary, buffer);
+  assert.ok(mesh.nodes instanceof Float64Array);
+  assert.deepEqual([...mesh.nodes], [0, 0.5, 1, -2]);
+  assert.deepEqual([...mesh.triangles], [0, 1, 0]);
+  assert.deepEqual([...mesh.boundary_edges], [1, 0, 2], "a, b and the region, as the picture reads them");
+  assert.equal(mesh.id, 3);
+  assert.throws(() => decodeMesh(summary, new ArrayBuffer(8)), /bytes/);
+});
+
+test("the page keeps the shown snapshot, its neighbours and a bounded number", () => {
+  const loaded = (n, which) => Array.from({ length: n }, (_, i) => (which.includes(i) ? new Float32Array(1) : null));
+  assert.deepEqual(snapshotPlan([], 0), { fetch: null, evict: [] });
+  // Nothing loaded: the shown one, two behind and eight ahead in one range.
+  assert.deepEqual(snapshotPlan(loaded(20, []), 5).fetch, { first: 3, count: 11 });
+  // Only the missing span is fetched.
+  assert.deepEqual(snapshotPlan(loaded(20, [3, 4, 5, 6]), 5).fetch, { first: 7, count: 7 });
+  assert.equal(snapshotPlan(loaded(10, [8, 9]), 9).fetch.first, 7);
+  assert.equal(snapshotPlan(loaded(3, [0, 1, 2]), 1).fetch, null, "all there");
+  // Beyond `kept`, the loaded ones farthest from the shown one go.
+  const plan = snapshotPlan(loaded(30, [0, 1, 2, 20, 21]), 20, { kept: 6, ahead: 1, behind: 0 });
+  assert.equal(plan.fetch, null, "21 is loaded");
+  assert.deepEqual(plan.evict, []);
+  const tight = snapshotPlan(loaded(30, [0, 1, 2, 20]), 20, { kept: 3, ahead: 1, behind: 0 });
+  assert.deepEqual(tight.fetch, { first: 21, count: 1 });
+  assert.deepEqual(tight.evict.sort(), [0, 1], "the farthest two make room");
+  assert.equal(keptSnapshots(1000), 1000);
+  assert.equal(keptSnapshots(4e6), 8, "at least 8");
+  assert.equal(nearestLoaded(loaded(10, [2, 7]), 5), 7);
+  assert.equal(nearestLoaded(loaded(10, [2, 8]), 4), 2);
+  assert.equal(nearestLoaded(loaded(3, []), 1), -1);
 });
 
 let failed = 0;

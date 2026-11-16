@@ -25,6 +25,7 @@ globalThis.fetch = (path, options) =>
   new Promise((resolve) =>
     pending.push({
       path,
+      headers: options.headers,
       body: JSON.parse(options.body),
       answer: (data) => resolve({ ok: true, json: async () => data, arrayBuffer: async () => data }),
       fail: (error, status = 422) => resolve({ ok: false, status, statusText: "", json: async () => ({ error }) }),
@@ -47,6 +48,36 @@ const float32 = (values) => {
   values.forEach((v, i) => view.setFloat32(4 * i, v, true));
   return buffer;
 };
+// A mesh of `nodes` nodes (no triangles, no edges): the summary and its
+// arrays, as POST /api/mesh and /api/mesh/arrays answer.
+const meshSummary = (nodes = 0) => ({
+  id: 5,
+  nodes,
+  triangles: 0,
+  boundary_edges: 0,
+  region_names: [],
+  has_links: false,
+  arrays: {
+    path: "/api/mesh/arrays",
+    format: "little-endian",
+    bytes: 16 * nodes,
+    parts: [
+      { name: "nodes", type: "float64", count: 2 * nodes, offset: 0 },
+      { name: "triangles", type: "uint32", count: 0, offset: 16 * nodes },
+      { name: "boundary_edges", type: "uint32", count: 0, offset: 16 * nodes },
+      { name: "boundary_regions", type: "uint32", count: 0, offset: 16 * nodes },
+    ],
+  },
+});
+async function answerMesh(nodes = 3) {
+  (await next("/api/mesh")).answer({ mesh: meshSummary(nodes), stats: { nodes } });
+  const arrays = await next("/api/mesh/arrays");
+  assert.deepEqual(arrays.body, { mesh: 5 }, "the arrays of the mesh by its id");
+  const buffer = new ArrayBuffer(16 * nodes);
+  const view = new DataView(buffer);
+  for (let i = 0; i < 2 * nodes; i++) view.setFloat64(8 * i, i + 0.5, true);
+  arrays.answer(buffer);
+}
 const geometryView = (...regions) => ({ kind: "curves", loops: [], regions: regions.map((name) => ({ name, length: 1 })), bounding_box: { min: [0, 0], max: [1, 1] }, domain_size: 1 });
 
 store.catalog = { problem: { default_condition: { alpha: "1", g: "0" } } };
@@ -124,8 +155,9 @@ test("a problem check waits while a long stage runs, and runs once after", async
   scheduleProblemCheck();
   await sleep(400);
   assert.equal(pending.filter((p) => p.path === "/api/problem").length, 0, "no check while the mesh runs");
-  (await next("/api/mesh")).answer({ mesh: {}, stats: { nodes: 3 } });
+  await answerMesh();
   await mesh;
+  assert.deepEqual([...store.results.mesh.data.mesh.nodes], [0.5, 1.5, 2.5, 3.5, 4.5, 5.5], "nodes in float64 from the binary answer");
   const check = await next("/api/problem");
   check.answer({ ok: true });
   await flush();
@@ -138,7 +170,7 @@ test("a stage runs after its prerequisites that are not fresh", async () => {
   store.step = "problem";
   fresh("geometry", { regions: [{ name: "left" }] });
   const done = runWithPrerequisites("assemble");
-  (await next("/api/mesh")).answer({ mesh: {}, stats: { nodes: 3 } });
+  await answerMesh();
   (await next("/api/assemble")).answer({ assembly: {} });
   assert.equal(await done, true);
   assert.equal(pending.length, 0, "the fresh geometry did not run again");
@@ -220,9 +252,9 @@ test("a time run streams its snapshots and follows the newest", async () => {
   store.solveFrameChosen = true;
   store.solveFrame = 1;
   (await next("/api/solve/progress")).answer(timeRun("done", 5, 1));
-  (await next("/api/solve/values")).answer(float32([4, 4]));
   assert.equal(await run, true);
   assert.equal(data.values.length, 5);
+  assert.equal(data.values[4], null, "a snapshot not shown is not fetched");
   assert.equal(store.solveFrame, 1, "not moved");
   assert.equal(data.state, "done");
   assert.equal(stageStatus("solve"), "done");
@@ -284,7 +316,8 @@ test("a request carries only the sections its stage reads", async () => {
   const mesh = runStage("mesh");
   const meshRequest = await next("/api/mesh");
   assert.deepEqual(Object.keys(meshRequest.body).sort(), ["format", "geometry", "mesh", "version"]);
-  meshRequest.answer({ mesh: {} });
+  meshRequest.answer({ mesh: meshSummary(0), stats: { nodes: 0 } });
+  (await next("/api/mesh/arrays")).answer(new ArrayBuffer(0));
   await mesh;
 });
 
@@ -368,6 +401,37 @@ test("run all skips fresh stages and ends colouring by the solution", async () =
   assert.equal(await runAll(), true);
   assert.equal(pending.length, 0);
   assert.equal(store.view.colorBy, "field");
+});
+
+test("every request carries this page's client id", async () => {
+  start();
+  const run = runStage("geometry");
+  const request = await next("/api/geometry");
+  assert.match(request.headers["X-PDE2D-Client"], /^[0-9a-f]{24}$/);
+  assert.equal(request.headers["X-PDE2D-Token"], undefined, "no token on a loopback server");
+  request.answer(geometryView("left"));
+  await run;
+});
+
+test("the comparison is the server's, in double", async () => {
+  start();
+  const { compareWith, comparison, comparisonValues, currentComparison } = await import("../web/js/compare.js");
+  fresh("solve", { job: 9, state: "done", mode: "time", times: [0, 1], values: [new Float32Array(2), null], layout: layout(2) });
+  const comparing = compareWith("x");
+  const request = await next("/api/solve/compare");
+  assert.deepEqual(request.body, { job: 9, exact: "x" });
+  request.answer({ snapshots: [{ t: 0, max_abs: 1e-15, rms: 5e-16, l2: 4e-16 }, { t: 1, max_abs: 2e-15, rms: 1e-15, l2: 8e-16 }], max_abs: 2e-15 });
+  await comparing;
+  assert.equal(currentComparison(), comparison);
+  assert.deepEqual([...comparison.linf], [1e-15, 2e-15], "the server's figures, not float32 rounding");
+  assert.equal(comparison.scale.min, -2e-15, "one symmetric scale");
+  // u − exact of a snapshot is fetched when shown.
+  assert.equal(comparisonValues(1), null);
+  const difference = await next("/api/solve/compare/difference");
+  assert.deepEqual(difference.body, { job: 9, exact: "x", snapshot: 1 });
+  difference.answer(float32([1e-15, -2e-15]));
+  await sleep(5);
+  assert.ok(comparisonValues(1) instanceof Float32Array);
 });
 
 let failed = 0;

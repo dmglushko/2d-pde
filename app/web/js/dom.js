@@ -1,6 +1,6 @@
 // Small DOM helpers and the forms built from catalog option specs.
 
-import { errorPath, formatNumber, parseFolds, parseNumberText, regionToken } from "./core.js";
+import { errorPathOf, formatNumber, parseFolds, parseNumberText, regionToken } from "./core.js";
 
 // h("div", {class: "x", onclick: f}, child, "text", ...)
 export function h(tag, attributes = {}, ...children) {
@@ -263,13 +263,16 @@ export function optionsForm(specs, options, path, onChange) {
 export function markError(container, error) {
   clearErrors(container);
   if (!error) return false;
-  let path = errorPath(error.message);
+  let path = errorPathOf(error);
+  // The message without the path it starts with.
+  const prefix = path ? `${path}: ` : null;
+  const detail = prefix && error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message.slice(error.message.indexOf(": ") + 2);
   while (path) {
     const target = container.querySelector(`.field[data-path="${CSS.escape(path)}"], [data-path="${CSS.escape(path)}"]`);
     if (target) {
       const field = target.closest(".field") ?? target;
       field.classList.add("invalid");
-      field.append(h("div", { class: "error-text", "data-error": "" }, error.message.slice(error.message.indexOf(": ") + 2)));
+      field.append(h("div", { class: "error-text", "data-error": "" }, detail));
       revealFolded(field);
       return true;
     }

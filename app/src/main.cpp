@@ -2,6 +2,7 @@
 // server), and a command line that runs a saved case without it.
 // See app/README.md.
 
+#include "case_set.hpp"
 #include "server.hpp"
 #include "session.hpp"
 
@@ -16,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifndef PDE2D_APP_WEB_DIR
 #define PDE2D_APP_WEB_DIR "web"
@@ -29,14 +31,19 @@ namespace {
 using pde2d::app::Json;
 
 constexpr std::string_view usage = R"(Usage:
-  pde2d_app [--host HOST] [--port PORT] [--web DIR]
+  pde2d_app [--host HOST] [--port PORT] [--web DIR] [--token TOKEN]
       Starts the interface; open the printed address in a browser.
-      Default: 127.0.0.1:8765 and the page files of this checkout.
-  pde2d_app --run CASE.json [--output DIR]
+      Default: 127.0.0.1:8765 and the page files of this checkout. A host
+      that is not loopback needs a token on every request: TOKEN, or a
+      random one; the printed address carries it.
+  pde2d_app --run CASE.json [--set PATH=VALUE]... [--output DIR]
       Runs a saved case without the browser (geometry, mesh, problem,
       assembly, solve) and prints a JSON summary. Exit code 0 when every
-      stage ran. With --output, writes mesh.pde2d, mesh.svg,
-      solution.csv and the assembled system at assembly.t
+      stage ran. --set replaces one value of the case first (PATH dotted
+      with [i] indices, VALUE read as JSON, else as text), for example
+      --set mesh.spec.max_edge_length.relative=0.02. With --output,
+      writes mesh.pde2d, mesh.svg, solution.csv, solution.vtk,
+      provenance.json and the assembled system at assembly.t
       (stiffness.mtx, mass.mtx, damping.mtx, rhs.mtx) there.
   pde2d_app --default-case
       Prints the case a new session starts with.
@@ -56,25 +63,38 @@ std::string read_file(const std::filesystem::path &path) {
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
-void write_file(const std::filesystem::path &path, const std::string &text) {
+void write_file(const std::filesystem::path &path,
+                const pde2d::app::ExportedFile &file) {
   std::ofstream out(path, std::ios::binary);
-  out << text;
+  if (file.stream)
+    file.stream([&](std::string_view piece) {
+      out.write(piece.data(), static_cast<std::streamsize>(piece.size()));
+    });
+  else
+    out << file.content;
   if (!out)
     throw std::runtime_error("cannot write " + path.string());
 }
 
 int run_case(const std::filesystem::path &case_path,
+             const std::vector<std::string> &sets,
              const std::optional<std::filesystem::path> &output) {
-  const Json case_json = Json::parse(read_file(case_path));
+  Json case_json = Json::parse(read_file(case_path));
+  for (const std::string &set : sets)
+    pde2d::app::apply_set_argument(case_json, set);
   pde2d::app::Session session;
   Json summary = session.run(case_json);
   if (summary["ok"].get<bool>() && output) {
     std::filesystem::create_directories(*output);
+    const pde2d::app::ExportContext context{
+        .client = std::string(pde2d::app::local_client),
+        .case_name = case_path.filename().string()};
     for (const std::string_view kind :
-         {"mesh.pde2d", "mesh.svg", "solution.csv", "stiffness.mtx", "mass.mtx",
-          "damping.mtx", "rhs.mtx"}) {
-      const auto file = session.export_file(case_json, kind);
-      write_file(*output / file.name, file.content);
+         {"mesh.pde2d", "mesh.svg", "solution.csv", "solution.vtk",
+          "provenance.json", "stiffness.mtx", "mass.mtx", "damping.mtx",
+          "rhs.mtx"}) {
+      const auto file = session.export_file(case_json, kind, context);
+      write_file(*output / file.name, file);
     }
   }
   std::cout << summary.dump(2) << '\n';
@@ -88,9 +108,18 @@ int serve(pde2d::app::ServerOptions options) {
   running_server = &server;
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
+  if (!pde2d::app::Server::is_loopback(host))
+    std::cout << "pde2d app: WARNING: listening on " << host
+              << ", so other machines can reach this app. Every request "
+                 "needs the token below; share the address only with "
+                 "people you trust. Use --host 127.0.0.1 to keep it on "
+                 "this machine."
+              << std::endl;
+  const std::string query =
+      server.token().empty() ? "" : "?token=" + server.token();
   std::cout << "pde2d app: open http://"
-            << (host == "0.0.0.0" ? "127.0.0.1" : host) << ':' << port
-            << "/ in a browser (Ctrl+C stops it)" << std::endl;
+            << (host == "0.0.0.0" ? "127.0.0.1" : host) << ':' << port << '/'
+            << query << " in a browser (Ctrl+C stops it)" << std::endl;
   server.listen();
   running_server = nullptr;
   return 0;
@@ -100,12 +129,12 @@ int serve(pde2d::app::ServerOptions options) {
 
 int main(int argc, char **argv) {
   const std::span<char *> args(argv, static_cast<std::size_t>(argc));
-  pde2d::app::ServerOptions options{.host = "127.0.0.1",
-                                    .port = 8765,
-                                    .web_dir = PDE2D_APP_WEB_DIR,
-                                    .examples_dir = PDE2D_APP_EXAMPLES_DIR};
+  pde2d::app::ServerOptions options;
+  options.web_dir = PDE2D_APP_WEB_DIR;
+  options.examples_dir = PDE2D_APP_EXAMPLES_DIR;
   std::optional<std::filesystem::path> case_path;
   std::optional<std::filesystem::path> output;
+  std::vector<std::string> sets;
   try {
     for (std::size_t i = 1; i < args.size(); ++i) {
       const std::string_view arg = args[i];
@@ -132,11 +161,17 @@ int main(int argc, char **argv) {
         case_path = value();
       else if (arg == "--output")
         output = value();
+      else if (arg == "--set")
+        sets.push_back(value());
+      else if (arg == "--token")
+        options.token = value();
       else
         throw std::invalid_argument("unknown argument " + std::string(arg));
     }
+    if (!sets.empty() && !case_path)
+      throw std::invalid_argument("--set needs --run");
     if (case_path)
-      return run_case(*case_path, output);
+      return run_case(*case_path, sets, output);
     return serve(std::move(options));
   } catch (const std::exception &error) {
     std::cerr << "pde2d_app: " << error.what() << "\n\n" << usage;

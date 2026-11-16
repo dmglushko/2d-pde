@@ -1,5 +1,7 @@
 #include "problem_input.hpp"
 
+#include "app_error.hpp"
+
 #include "pde2d/fem/compiled_expression.hpp"
 
 #include <array>
@@ -70,29 +72,40 @@ class Errors {
 public:
   explicit Errors(Json *collected) : collected_(collected) {}
 
-  // Runs `step`; an std::invalid_argument it throws is collected with
-  // `path` in front, or thrown again with it. Returns false after an
-  // error.
+  // Runs `step`; an std::invalid_argument it throws is collected at
+  // `path` (or at the PathError's own path, which the JSON readers give),
+  // or thrown again as a PathError. Returns false after an error.
   bool attempt(const std::string &path, const std::function<void()> &step) {
     try {
       step();
       return true;
+    } catch (const PathError &error) {
+      fail(error.path().empty() ? path : error.path(), error.detail());
     } catch (const std::invalid_argument &error) {
-      std::string message = error.what();
-      // The JSON readers already put the path in front.
-      if (message.starts_with(path + ":") || message.starts_with(path + "."))
-        message = message.substr(message.find(':') + 2);
-      if (collected_ == nullptr)
-        throw std::invalid_argument(path + ": " + message);
-      Json item = Json::object();
-      item["path"] = path;
-      item["message"] = message;
-      collected_->push_back(std::move(item));
-      return false;
+      fail(path, error.what());
     }
+    return false;
+  }
+
+  // Whether an error was collected at `path`.
+  bool failed_at(const std::string &path) const {
+    if (collected_ != nullptr)
+      for (const Json &item : *collected_)
+        if (item["path"] == path)
+          return true;
+    return false;
   }
 
 private:
+  void fail(const std::string &path, const std::string &detail) {
+    if (collected_ == nullptr)
+      throw PathError(path, detail);
+    Json item = Json::object();
+    item["path"] = path;
+    item["message"] = detail;
+    collected_->push_back(std::move(item));
+  }
+
   Json *collected_;
 };
 
@@ -191,8 +204,8 @@ fem::Problem read_problem(const Json &section, Errors &errors) {
         if (value != std::floor(value) ||
             value < std::numeric_limits<int>::min() ||
             value > std::numeric_limits<int>::max())
-          throw std::invalid_argument(
-              where + ".priority: expected a whole number that fits an int");
+          throw PathError(where + ".priority",
+                          "expected a whole number that fits an int");
         condition.priority = static_cast<int>(value);
       });
       problem.boundary_conditions.emplace(item.key(), std::move(condition));
@@ -295,6 +308,10 @@ Json check_problem(const Json &problem_section) {
   Json facts = Json::object();
   const auto inspect = [&](const std::string &path,
                            const fem::Expression &expression) {
+    // A text that did not parse has no facts: the zero expression left in
+    // its place is not what was written.
+    if (errors.failed_at(path))
+      return;
     facts[path] = facts_json(expression.facts());
     if (parameters_valid && !expression.facts().zero)
       errors.attempt(path, [&] {

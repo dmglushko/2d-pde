@@ -1,9 +1,13 @@
 #include "views.hpp"
 
+#include "binary.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace pde2d::app {
@@ -27,31 +31,73 @@ Json reports_json(std::span<const mesh::StageReport> reports) {
   return out;
 }
 
-Json mesh_json(const mesh::Mesh &mesh) {
-  std::vector<double> nodes;
-  nodes.reserve(2 * mesh.nodes.size());
-  for (const geometry::Point &p : mesh.nodes) {
-    nodes.push_back(p.x);
-    nodes.push_back(p.y);
-  }
-  std::vector<std::size_t> triangles;
-  triangles.reserve(3 * mesh.triangles.size());
-  for (const mesh::Triangle &triangle : mesh.triangles)
-    triangles.insert(triangles.end(), triangle.nodes.begin(),
-                     triangle.nodes.end());
-  std::vector<std::size_t> edges;
-  edges.reserve(3 * mesh.boundary_edges.size());
+namespace {
+
+// The largest index a uint32 holds; a larger mesh cannot travel this way.
+std::uint32_t index32(std::size_t index) {
+  if (index > std::numeric_limits<std::uint32_t>::max())
+    throw std::runtime_error("the mesh is too large for 32-bit indices");
+  return static_cast<std::uint32_t>(index);
+}
+
+} // namespace
+
+Json mesh_summary_json(const mesh::Mesh &mesh, std::uint64_t id) {
   bool has_links = false;
-  for (const mesh::BoundaryEdge &edge : mesh.boundary_edges) {
-    edges.insert(edges.end(), {edge.nodes[0], edge.nodes[1], edge.region});
+  for (const mesh::BoundaryEdge &edge : mesh.boundary_edges)
     has_links = has_links || edge.link.has_value();
-  }
+  const std::size_t n = mesh.nodes.size();
+  const std::size_t t = mesh.triangles.size();
+  const std::size_t e = mesh.boundary_edges.size();
+  Json parts = Json::array();
+  std::size_t offset = 0;
+  const auto part = [&](std::string_view name, std::string_view type,
+                        std::size_t count, std::size_t size) {
+    Json item = Json::object();
+    item["name"] = name;
+    item["type"] = type;
+    item["count"] = count;
+    item["offset"] = offset;
+    parts.push_back(std::move(item));
+    offset += count * size;
+  };
+  part("nodes", "float64", 2 * n, 8);
+  part("triangles", "uint32", 3 * t, 4);
+  part("boundary_edges", "uint32", 2 * e, 4);
+  part("boundary_regions", "uint32", e, 4);
+  Json arrays = Json::object();
+  arrays["path"] = "/api/mesh/arrays";
+  arrays["format"] = "little-endian";
+  arrays["bytes"] = offset;
+  arrays["parts"] = std::move(parts);
+
   Json out = Json::object();
-  out["nodes"] = std::move(nodes);
-  out["triangles"] = std::move(triangles);
-  out["boundary_edges"] = std::move(edges);
+  out["id"] = id;
+  out["nodes"] = n;
+  out["triangles"] = t;
+  out["boundary_edges"] = e;
   out["region_names"] = mesh.region_names;
   out["has_links"] = has_links;
+  out["arrays"] = std::move(arrays);
+  return out;
+}
+
+std::string mesh_arrays_binary(const mesh::Mesh &mesh) {
+  std::string out;
+  out.reserve(16 * mesh.nodes.size() + 12 * mesh.triangles.size() +
+              12 * mesh.boundary_edges.size());
+  for (const geometry::Point &p : mesh.nodes) {
+    append_float64(out, p.x);
+    append_float64(out, p.y);
+  }
+  for (const mesh::Triangle &triangle : mesh.triangles)
+    for (const std::size_t node : triangle.nodes)
+      append_uint32(out, index32(node));
+  for (const mesh::BoundaryEdge &edge : mesh.boundary_edges)
+    for (const std::size_t node : edge.nodes)
+      append_uint32(out, index32(node));
+  for (const mesh::BoundaryEdge &edge : mesh.boundary_edges)
+    append_uint32(out, index32(edge.region));
   return out;
 }
 

@@ -7,6 +7,8 @@
 #include "catalog.hpp"
 #include "session.hpp"
 
+#include "app_support.hpp"
+
 #include "support/check.hpp"
 
 #include "pde2d/solve/bicgstab.hpp"
@@ -203,7 +205,7 @@ int main() {
          case_json["problem"]["equation"]["f"] = "0";
          case_json["solve"]["linear_solver"]["type"] = "conjugate_gradient";
          app::Session session;
-         const Json mesh = session.mesh(case_json)["mesh"];
+         const Json mesh = app::test_support::mesh_view(session, case_json);
          const Json result = session.solve(case_json);
          check(result["mode"] == "static", "static");
          check(result["times"] == Json::array({0.0}), "one time");
@@ -227,7 +229,7 @@ int main() {
          case_json["solve"]["time"] =
              time_section(0.0, 1.0, 4, 0.1, "implicit_euler");
          app::Session session;
-         const Json mesh = session.mesh(case_json)["mesh"];
+         const Json mesh = app::test_support::mesh_view(session, case_json);
          const Json result = session.solve(case_json);
          check(result["mode"] == "time", "time");
          check(result["time_order"] == 1, "time order 1");
@@ -309,13 +311,26 @@ int main() {
          app::Session session;
          const std::size_t nodes =
              session.mesh(case_json)["stats"]["nodes"].get<std::size_t>();
+         // An export never solves: without a run of the case it refuses.
+         expect_stage_error(
+             [&] { (void)session.export_file(case_json, "solution.csv"); },
+             "export", "no run of this case");
+         (void)session.solve(case_json);
          const app::ExportedFile file =
              session.export_file(case_json, "solution.csv");
          check(file.name == "solution.csv", "name");
-         check(file.content.starts_with("x,y,u(t=0),u(t=0.5),u(t=1)\n"),
-               "header: " + file.content.substr(0, 40));
+         check(static_cast<bool>(file.stream), "streamed");
+         const std::string text = file.text();
+         // The provenance in "#" lines, then the table.
+         check(text.starts_with("# produced by pde2d_app "), "provenance");
+         const std::size_t header = text.find("\nx,y,");
+         check(header != std::string::npos &&
+                   text.substr(header + 1)
+                       .starts_with("x,y,u(t=0),u(t=0.5),u(t=1)\n"),
+               "header");
          const auto lines = static_cast<std::size_t>(
-             std::count(file.content.begin(), file.content.end(), '\n'));
+             std::count(text.begin() + static_cast<std::ptrdiff_t>(header) + 1,
+                        text.end(), '\n'));
          check(lines == nodes + 1, "one row per node");
        }},
       {"assembly builds only the time terms asked for",
@@ -389,7 +404,7 @@ int main() {
          for (const std::string kind : {"stiffness", "damping", "mass"}) {
            const app::ExportedFile file =
                session.export_file(case_json, kind + ".mtx");
-           std::istringstream in(file.content);
+           std::istringstream in(file.text());
            std::string line;
            std::getline(in, line);
            check(line == "%%MatrixMarket matrix coordinate real general",
@@ -414,7 +429,7 @@ int main() {
          }
          const app::ExportedFile rhs =
              session.export_file(case_json, "rhs.mtx");
-         std::istringstream in(rhs.content);
+         std::istringstream in(rhs.text());
          std::string line;
          std::getline(in, line);
          check(line == "%%MatrixMarket matrix array real general",
@@ -434,7 +449,7 @@ int main() {
        [] {
          const Json case_json = load_example("wave_square.json");
          app::Session session;
-         const Json mesh = session.mesh(case_json)["mesh"];
+         const Json mesh = app::test_support::mesh_view(session, case_json);
          const Json result = session.solve(case_json);
          check(result["time_order"] == 2, "time order 2");
          const auto values = session.solution_values(case_json);

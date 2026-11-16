@@ -1,12 +1,15 @@
 // The probes pinned on the picture: a list with x, y and the shown
-// field's value at each (interpolated page-side from the node values),
+// field's value at each (interpolated page-side from the shown snapshot),
 // and for a solution in time the u(t) of every probe over all snapshots,
-// with the shown time marked. The list is the chart's legend.
+// with the shown time marked; u(t) comes from the server in double (POST
+// /api/solve/probes), since the page keeps some snapshots only. The list
+// is the chart's legend.
 
+import { api } from "./api.js";
 import { lineChart } from "./charts.js";
-import { formatNumber, interpolateAt, locatePoint, meshGrid, probeSeries } from "./core.js";
+import { formatNumber, interpolateAt, locatePoint, meshGrid } from "./core.js";
 import { fill, h } from "./dom.js";
-import { setProbes, store } from "./state.js";
+import { notify, setProbes, store } from "./state.js";
 import { showFrame } from "./timebar.js";
 
 const grids = new WeakMap();
@@ -64,10 +67,38 @@ export function updateProbes(root, { mesh, field, solution, frame, digits }) {
     );
     fill(list, h("table", { class: "data probes-table" }, h("thead", {}, header), h("tbody", {}, probes.map((p, i) => probeRow(p, located[i], field, digits)))));
   }
-  updateChart(root.querySelector(".probe-chart"), { probes, located, solution, frame });
+  updateChart(root.querySelector(".probe-chart"), { probes, solution, frame });
 }
 
-function updateChart(slot, { probes, located, solution, frame }) {
+// u(t) at the probes from the server, for one run, snapshot count and set
+// of probes (the key); asked again when any of them changes.
+const series = { key: null, data: null, asking: null };
+
+function seriesKey(solution, probes) {
+  return `${solution.job}|${solution.values.length}|${probes.map((p) => `${p.x},${p.y}`).join(";")}`;
+}
+
+function askSeries(solution, probes, key) {
+  if (series.asking === key) return;
+  series.asking = key;
+  api
+    .probes(
+      solution.job,
+      probes.map((p) => [p.x, p.y]),
+    )
+    .then((data) => {
+      if (series.asking !== key) return;
+      series.key = key;
+      series.data = data;
+      notify("frame");
+    })
+    .catch(() => {})
+    .finally(() => {
+      if (series.asking === key) series.asking = null;
+    });
+}
+
+function updateChart(slot, { probes, solution, frame }) {
   if (!solution || probes.length === 0) {
     chartState = null;
     fill(slot);
@@ -75,23 +106,31 @@ function updateChart(slot, { probes, located, solution, frame }) {
     return;
   }
   slot.hidden = false;
+  const key = seriesKey(solution, probes);
+  if (series.key !== key) askSeries(solution, probes, key);
+  // Until the new series arrive, the last ones for the same probes stay.
+  const data = series.key === key || (chartState && chartState.probes === probes) ? series.data : null;
+  if (!data || data.probes.length !== probes.length) {
+    if (!chartState) fill(slot, h("div", { class: "chart-title" }, "u(t) at the probes"), h("p", { class: "note" }, "Loading…"));
+    else chartState.chart.setCurrent(frame);
+    return;
+  }
   const width = Math.max(200, Math.round(slot.clientWidth || slot.parentElement?.clientWidth || 480));
-  const same =
-    chartState && chartState.probes === probes && chartState.solution === solution && chartState.count === solution.values.length && chartState.width === width;
+  const same = chartState && chartState.data === data && chartState.width === width;
   if (same) {
     chartState.chart.setCurrent(frame);
     return;
   }
-  const series = probes.map((p, i) => ({ name: probeName(p), cls: `s${p.slot + 1}`, values: probeSeries(located[i], solution.values) }));
+  const lines = probes.map((p, i) => ({ name: probeName(p), cls: `s${p.slot + 1}`, values: Float64Array.from(data.probes[i].values, (v) => (v === null ? NaN : v)) }));
   const chart = lineChart({
-    times: solution.times.slice(0, solution.values.length),
-    series,
+    times: data.times,
+    series: lines,
     current: frame,
     width,
     onPick: (k) => showFrame(k),
     label: `u over time at ${probes.map(probeName).join(", ")}`,
   });
-  chartState = { probes, solution, count: solution.values.length, width, chart };
+  chartState = { probes, data, width, chart };
   fill(slot, h("div", { class: "chart-title" }, "u(t) at the probes"), chart);
 }
 

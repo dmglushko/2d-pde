@@ -112,8 +112,9 @@ export function updateTimebar() {
   elements.slider.value = String(i);
   elements.slider.setAttribute("aria-valuetext", `t = ${formatNumber(result.times[i], 5)}`);
   elements.time.textContent = `t = ${formatNumber(result.times[i], 5)}`;
-  const range = rangeOf(result.values[i]);
-  elements.range.textContent = `min ${formatNumber(range.min)} · max ${formatNumber(range.max)}`;
+  // A snapshot the page has not loaded yet (snapshots.js) has no range.
+  const range = result.values[i] ? rangeOf(result.values[i]) : null;
+  elements.range.textContent = range ? `min ${formatNumber(range.min)} · max ${formatNumber(range.max)}` : "loading…";
   const running = Boolean(followedRun()) && result.state === "running";
   elements.run.hidden = !running;
   if (running) {

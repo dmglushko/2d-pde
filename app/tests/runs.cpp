@@ -6,6 +6,8 @@
 #include "presets.hpp"
 #include "session.hpp"
 
+#include "app_support.hpp"
+
 #include "support/check.hpp"
 
 #include <chrono>
@@ -259,7 +261,8 @@ int main() {
                  check(std::isfinite(v), what + ": a finite solution");
              check(largest(values) > 1e-3, what + ": not zero");
              if (id == "laplace") {
-               const Json mesh = session.mesh(applied)["mesh"]["nodes"];
+               const Json mesh =
+                   app::test_support::mesh_view(session, applied)["nodes"];
                for (std::size_t i = 0; i < values[0].size(); ++i)
                  check(std::abs(values[0][i] - mesh[2 * i].get<double>()) <
                            1e-8,

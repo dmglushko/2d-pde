@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
@@ -84,8 +85,18 @@ private:
   std::span<const OptionSpec> specs_;
 };
 
+// The option a component's (or shape's) constructor message is about, as
+// a path suffix (".min_angle_degrees", or ".max_curve_deviation.absolute"
+// for a part of a length bound), or "" when it names none. An option is
+// named when its name stands as a word: at the start, or after "::", ": "
+// or a space, and followed by the end, a space, ':' or '.' (the library
+// writes "RuppertOptions::min_angle_degrees must be ...", "fixed_step: dt
+// must be ..."). The first option named in the message wins.
+std::string named_option(std::string_view message,
+                         std::span<const OptionSpec> specs);
+
 // Small JSON readers shared by the app, with errors that name `where`.
-// All throw std::invalid_argument.
+// All throw PathError (app_error.hpp), an std::invalid_argument.
 const Json &require_object(const Json &value, std::string_view where);
 // The member `key` of the object `object`, or null when it is missing.
 const Json &member(const Json &object, std::string_view key);
@@ -94,5 +105,11 @@ std::string require_string(const Json &value, std::string_view where);
 // Rejects a key of `object` that is not in `known`.
 void reject_unknown_keys(const Json &object, std::string_view where,
                          std::span<const std::string_view> known);
+
+// A run's id from a request {"job": n, ...} with only the keys `known`.
+std::uint64_t request_job(const Json &request,
+                          std::span<const std::string_view> known);
+// A whole number from 0 at `key` of a request.
+std::size_t request_count(const Json &request, std::string_view key);
 
 } // namespace pde2d::app

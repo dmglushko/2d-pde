@@ -1,5 +1,6 @@
 // A preset applies and solves; comparing with its exact solution gives a
-// tiny error.
+// tiny error (in double, on the server); a broken expression is marked on
+// its input.
 export default async ({ q, tab, panel, button, click, select, type, until, text, check }) => {
   tab("problem");
   const presets = q('#panel-problem select[aria-label="Problem preset"]');
@@ -19,8 +20,12 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   click(button("Compare", panel("solve")));
   const figure = await until(() => { const v = q("#compare-result .stat .value"); return v && Number.isFinite(Number(v.textContent)) ? v : null; }, "the comparison", 30000);
   const error = Number(figure.textContent);
-  check("u = x is solved exactly (up to float32)", Number.isFinite(error) && error < 1e-5, figure.textContent);
+  check("u = x is solved exactly (in double, not float32 rounding)", Number.isFinite(error) && error < 1e-12, figure.textContent);
   click(q("#show-error"));
   await until(() => /u − exact/.test(text(q("#legend"))), "the error in the picture");
   check("the picture shows u − exact", true);
+  type(exact, "sin(");
+  click(button("Compare", panel("solve")));
+  const marked = await until(() => q('#panel-solve .field.invalid[data-path="exact"]'), "the marked expression", 30000);
+  check("a broken expression is marked on its input", text(marked.querySelector(".error-text")).length > 0);
 };

@@ -1,5 +1,7 @@
 #include "catalog.hpp"
 
+#include "app_error.hpp"
+
 #include "pde2d/mesh/cdt.hpp"
 #include "pde2d/mesh/chord_length_discretizer.hpp"
 #include "pde2d/mesh/delaunay_flips.hpp"
@@ -264,42 +266,6 @@ find_component(const std::vector<Component<Interface>> &components,
   return nullptr;
 }
 
-// The option a constructor's message is about, as a path suffix
-// (".min_angle_degrees", or ".max_curve_deviation.absolute" for a part of
-// a length bound), or "" when it names none. An option is named when its
-// name stands as a word: at the start, or after "::", ": " or a space, and
-// followed by the end, a space, ':' or '.' (the library writes
-// "RuppertOptions::min_angle_degrees must be ...", "fixed_step: dt must
-// be ..."). The first option named in the message wins.
-std::string named_option(std::string_view message,
-                         const std::vector<OptionSpec> &specs) {
-  const auto is_word = [](char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_';
-  };
-  std::size_t best = std::string_view::npos;
-  std::string suffix;
-  for (const OptionSpec &spec : specs) {
-    for (std::size_t at = message.find(spec.name);
-         at != std::string_view::npos && at < best;
-         at = message.find(spec.name, at + 1)) {
-      const std::size_t end = at + spec.name.size();
-      const bool starts = at == 0 || !is_word(message[at - 1]);
-      const bool ends = end == message.size() || !is_word(message[end]);
-      if (!starts || !ends)
-        continue;
-      best = at;
-      suffix = "." + spec.name;
-      if (spec.kind == OptionKind::length_bound)
-        for (const std::string_view part : {".absolute", ".relative"})
-          if (message.substr(end).starts_with(part))
-            suffix += part;
-      break;
-    }
-  }
-  return suffix;
-}
-
 // Builds the component chosen by `choice` ({"type": ..., "options": ...}).
 template <class Interface>
 std::shared_ptr<const Interface>
@@ -315,22 +281,20 @@ build_component(const std::vector<Component<Interface>> &components,
     std::string list;
     for (const Component<Interface> &candidate : components)
       list += (list.empty() ? "" : ", ") + candidate.type;
-    throw std::invalid_argument(where + ".type: unknown component '" + type +
-                                "' (available: " + list + ")");
+    throw PathError(where + ".type", "unknown component '" + type +
+                                         "' (available: " + list + ")");
   }
   const std::string options_path = where + ".options";
   const OptionReader options(member(choice, "options"), options_path,
                              component->options);
   try {
     return component->make(options);
+  } catch (const PathError &) {
+    throw; // the reader's own errors already carry the path
   } catch (const std::invalid_argument &error) {
     const std::string_view message = error.what();
-    // The reader's own errors already carry the path.
-    if (message.starts_with(options_path))
-      throw;
-    throw std::invalid_argument(options_path +
-                                named_option(message, component->options) +
-                                ": " + std::string(message));
+    throw PathError(options_path + named_option(message, component->options),
+                    std::string(message));
   }
 }
 
@@ -389,9 +353,8 @@ MeshSetup build_mesh_setup(const Json &mesh_section) {
   try {
     mesh::validate(spec);
   } catch (const std::invalid_argument &error) {
-    throw std::invalid_argument("mesh.spec" +
-                                named_option(error.what(), catalog.spec) +
-                                ": " + error.what());
+    throw PathError("mesh.spec" + named_option(error.what(), catalog.spec),
+                    error.what());
   }
 
   auto discretizer =
@@ -407,7 +370,7 @@ MeshSetup build_mesh_setup(const Json &mesh_section) {
   std::vector<std::shared_ptr<const mesh::Improver>> improvers;
   if (const Json &list = member(mesh_section, "improvers"); !list.is_null()) {
     if (!list.is_array())
-      throw std::invalid_argument("mesh.improvers: expected a list");
+      throw PathError("mesh.improvers", "expected a list");
     for (std::size_t i = 0; i < list.size(); ++i)
       improvers.push_back(
           build_component(catalog.improvers, list[i],
@@ -685,8 +648,8 @@ SolveSetup build_solve_setup(const Json &solve_section) {
   else if (mode == "time")
     setup.mode = SolveMode::time_integration;
   else
-    throw std::invalid_argument("solve.mode: unknown mode '" + mode +
-                                "' (static or time)");
+    throw PathError("solve.mode",
+                    "unknown mode '" + mode + "' (static or time)");
   setup.linear_solver =
       build_component(catalog.linear_solvers, member(section, "linear_solver"),
                       "solve.linear_solver");
@@ -717,8 +680,8 @@ SolveSetup build_solve_setup(const Json &solve_section) {
   setup.t1 = settings.number("t1");
   setup.snapshots = settings.count("snapshots");
   if (setup.snapshots < 1 || setup.snapshots > max_snapshots)
-    throw std::invalid_argument("solve.time.snapshots: between 1 and " +
-                                std::to_string(max_snapshots));
+    throw PathError("solve.time.snapshots",
+                    "between 1 and " + std::to_string(max_snapshots));
   setup.method =
       build_component(catalog.time_methods, method, "solve.time.method");
   setup.step_controller =

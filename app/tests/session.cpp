@@ -6,6 +6,8 @@
 #include "problem_input.hpp"
 #include "session.hpp"
 
+#include "app_support.hpp"
+
 #include "support/check.hpp"
 
 #include "pde2d/mesh/cdt.hpp"
@@ -239,7 +241,8 @@ int main() {
          Json shape = app::default_geometry_section();
          shape["options"]["width"] = -1;
          expect_throws<std::invalid_argument>(
-             [&] { (void)app::build_domain(shape); }, "geometry.options: ");
+             [&] { (void)app::build_domain(shape); },
+             "geometry.options.width: ");
 
          // A mesh file round trip: export a meshed case, import the text.
          app::Session session;
@@ -248,7 +251,7 @@ int main() {
          Json imported = Json::object();
          imported["source"] = "mesh_file";
          imported["format"] = "pde2d";
-         imported["text"] = file.content;
+         imported["text"] = file.text();
          const app::Domain from_file = app::build_domain(imported);
          check(from_file.mesh.has_value() && !from_file.geometry, "a mesh");
          check(from_file.mesh->region_names.size() == 4, "regions kept");
@@ -331,7 +334,7 @@ int main() {
          const auto file = session.export_file(case_json, "mesh.pde2d");
          Json section = {{"source", "mesh_file"},
                          {"format", "pde2d"},
-                         {"text", file.content}};
+                         {"text", file.text()}};
          const app::Domain plain = app::build_domain(section);
          const std::vector<std::string> before = plain.mesh->region_names;
          check(before ==
@@ -490,7 +493,7 @@ int main() {
          request["field"] = {
              {"kind", "expression"}, {"text", "k*x + t"}, {"t", 0.5}};
          const Json field = session.field(request);
-         const Json mesh = session.mesh(case_json)["mesh"];
+         const Json mesh = app::test_support::mesh_view(session, case_json);
          check(field["values"].size() * 2 == mesh["nodes"].size(), "size");
          for (std::size_t i = 0; i < field["values"].size(); ++i)
            near(field["values"][i].get<double>(),
@@ -558,7 +561,7 @@ int main() {
          const auto file = session.export_file(case_json, "mesh.pde2d");
          case_json["geometry"] = {{"source", "mesh_file"},
                                   {"format", "pde2d"},
-                                  {"text", file.content}};
+                                  {"text", file.text()}};
          case_json["mesh"]["spec"]["max_edge_length"]["relative"] = 0.02;
          const Json result = session.mesh(case_json);
          check(result["target_met"].get<bool>(), "refined to the target");

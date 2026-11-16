@@ -1,5 +1,7 @@
 #include "domain_input.hpp"
 
+#include "app_error.hpp"
+
 #include "pde2d/geometry/polygon.hpp"
 #include "pde2d/geometry/shapes.hpp"
 #include "pde2d/io/gmsh.hpp"
@@ -118,19 +120,6 @@ const std::vector<Shape> &shapes() {
   return list;
 }
 
-// Runs `step` and puts `where` in front of an std::invalid_argument it
-// throws, unless the message already starts with it.
-template <class Step> auto with_path(const std::string &where, Step step) {
-  try {
-    return step();
-  } catch (const std::invalid_argument &error) {
-    const std::string_view message = error.what();
-    if (message.starts_with(where))
-      throw;
-    throw std::invalid_argument(where + ": " + std::string(message));
-  }
-}
-
 geometry::CurveGeometry build_shape(const Json &section) {
   const std::string type =
       require_string(member(section, "shape"), "geometry.shape");
@@ -138,9 +127,18 @@ geometry::CurveGeometry build_shape(const Json &section) {
     if (shape.type == type) {
       const OptionReader options(member(section, "options"), "geometry.options",
                                  shape.options);
-      return with_path("geometry.options", [&] { return shape.make(options); });
+      try {
+        return shape.make(options);
+      } catch (const PathError &) {
+        throw; // the reader's own errors carry their path
+      } catch (const std::invalid_argument &error) {
+        // The option the shape's message names, like a component's.
+        throw PathError("geometry.options" +
+                            named_option(error.what(), shape.options),
+                        error.what());
+      }
     }
-  throw std::invalid_argument("geometry.shape: unknown shape '" + type + "'");
+  throw PathError("geometry.shape", "unknown shape '" + type + "'");
 }
 
 void apply_edit(geometry::CurveGeometry &geometry, const Json &edit,
@@ -150,7 +148,7 @@ void apply_edit(geometry::CurveGeometry &geometry, const Json &edit,
   const auto text = [&](std::string_view key) {
     return require_string(member(edit, key), where + "." + std::string(key));
   };
-  with_path(where, [&] {
+  at_path(where, [&] {
     if (op == "rename") {
       static constexpr std::string_view known[] = {"op", "from", "to"};
       reject_unknown_keys(edit, where, known);
@@ -168,8 +166,8 @@ void apply_edit(geometry::CurveGeometry &geometry, const Json &edit,
           require_number(member(edit, "fraction"), where + ".fraction"),
           text("first"), text("second"));
     } else {
-      throw std::invalid_argument(where + ".op: unknown edit '" + op +
-                                  "' (rename, merge or split)");
+      throw PathError(where + ".op",
+                      "unknown edit '" + op + "' (rename, merge or split)");
     }
   });
 }
@@ -227,7 +225,7 @@ void apply_mesh_edit(mesh::Mesh &mesh, const Json &edit,
   const auto text = [&](std::string_view key) {
     return require_string(member(edit, key), where + "." + std::string(key));
   };
-  with_path(where, [&] {
+  at_path(where, [&] {
     if (op == "rename") {
       static constexpr std::string_view known[] = {"op", "from", "to"};
       reject_unknown_keys(edit, where, known);
@@ -237,12 +235,12 @@ void apply_mesh_edit(mesh::Mesh &mesh, const Json &edit,
       reject_unknown_keys(edit, where, known);
       merge_mesh_region(mesh, text("source"), text("target"));
     } else if (op == "split") {
-      throw std::invalid_argument(
-          where + ".op: an imported mesh has no curves to split; only rename "
-                  "and merge apply to it");
+      throw PathError(where + ".op",
+                      "an imported mesh has no curves to split; only rename "
+                      "and merge apply to it");
     } else {
-      throw std::invalid_argument(where + ".op: unknown edit '" + op +
-                                  "' (rename or merge for a mesh file)");
+      throw PathError(where + ".op", "unknown edit '" + op +
+                                         "' (rename or merge for a mesh file)");
     }
   });
 }
@@ -254,7 +252,7 @@ void apply_edits(const Json &section, Target &target, Apply apply) {
   if (edits.is_null())
     return;
   if (!edits.is_array())
-    throw std::invalid_argument("geometry.region_edits: expected a list");
+    throw PathError("geometry.region_edits", "expected a list");
   for (std::size_t i = 0; i < edits.size(); ++i)
     apply(target, edits[i], "geometry.region_edits[" + std::to_string(i) + "]");
 }
@@ -377,12 +375,12 @@ Domain build_domain(const Json &section) {
                                         : std::span(shape_keys));
     geometry::CurveGeometry geometry =
         source == "svg"
-            ? with_path("geometry.svg",
-                        [&] {
-                          std::istringstream in(require_string(
-                              member(section, "svg"), "geometry.svg"));
-                          return io::import_svg(in);
-                        })
+            ? at_path("geometry.svg",
+                      [&] {
+                        std::istringstream in(require_string(
+                            member(section, "svg"), "geometry.svg"));
+                        return io::import_svg(in);
+                      })
             : build_shape(section);
     apply_edits(section, geometry, apply_edit);
     return {.geometry = std::move(geometry), .mesh = std::nullopt};
@@ -395,23 +393,23 @@ Domain build_domain(const Json &section) {
         require_string(member(section, "format"), "geometry.format");
     std::istringstream in(
         require_string(member(section, "text"), "geometry.text"));
-    mesh::Mesh mesh = with_path("geometry.text", [&] {
+    mesh::Mesh mesh = at_path("geometry.text", [&] {
       if (format == "gmsh")
         return io::import_gmsh(in);
       if (format == "pde2d")
         return io::import_pde2d(in);
-      throw std::invalid_argument("unknown mesh format '" + format +
-                                  "' (gmsh or pde2d)");
+      throw PathError("geometry.format",
+                      "unknown mesh format '" + format + "' (gmsh or pde2d)");
     });
     if (!member(section, "region_edits").is_null()) {
       apply_edits(section, mesh, apply_mesh_edit);
       // The edits keep the tags consistent; the library confirms it.
-      with_path("geometry.region_edits", [&] { mesh::validate(mesh); });
+      at_path("geometry.region_edits", [&] { mesh::validate(mesh); });
     }
     return {.geometry = std::nullopt, .mesh = std::move(mesh)};
   }
-  throw std::invalid_argument("geometry.source: unknown source '" + source +
-                              "' (svg, shape or mesh_file)");
+  throw PathError("geometry.source",
+                  "unknown source '" + source + "' (svg, shape or mesh_file)");
 }
 
 Json domain_json(const Domain &domain) {

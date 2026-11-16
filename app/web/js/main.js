@@ -3,8 +3,8 @@
 
 import { api, saveBlob } from "./api.js";
 import { caseChanged, runAll, runStage, scheduleProblemCheck, toast } from "./actions.js";
-import { currentComparison, recompareIfNeeded } from "./compare.js";
-import { MAX_PROBES, STEPS, fileKind, formatNumber, freeProbeSlot, getDefaultDigits, normalizeCase, pictureName, stageInfo } from "./core.js";
+import { comparisonValues, currentComparison, recompareIfNeeded } from "./compare.js";
+import { MAX_PROBES, STEPS, fileKind, formatNumber, freeProbeSlot, getDefaultDigits, nearestLoaded, normalizeCase, pictureName, stageInfo } from "./core.js";
 import { fill, h, readFileText } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
 import { geometryPanel, loadDomainFile } from "./panels/geometry.js";
@@ -13,6 +13,7 @@ import { problemPanel } from "./panels/problem.js";
 import { solvePanel } from "./panels/solve.js";
 import { dotClass } from "./panels/head.js";
 import { forgetChartSize, updateProbes } from "./probes.js";
+import { snapshotValues } from "./snapshots.js";
 import { onSettings, settings, wireSettings } from "./settings.js";
 import {
   currentError,
@@ -152,9 +153,14 @@ function shownField() {
     const i = Math.min(store.solveFrame, solved.times.length - 1);
     const t = formatNumber(solved.times[i], 5);
     const comparison = currentComparison();
-    if (store.view.showError && comparison?.errors[i])
-      return { label: `u − exact at t = ${t}`, short: "u − exact", values: comparison.errors[i], scale: comparison.scale };
-    return { label: `u at t = ${t}`, short: "u", values: solved.values[i], scale: solved.scale };
+    const difference = store.view.showError ? comparisonValues(i) : null;
+    if (difference) return { label: `${comparison.label} at t = ${t}`, short: comparison.label, values: difference, scale: comparison.scale };
+    // The page keeps some snapshots only (snapshots.js): until the shown
+    // one arrives, the nearest loaded one stands in, with its own time.
+    if (snapshotValues(solved, i)) return { label: `u at t = ${t}`, short: "u", values: solved.values[i], scale: solved.scale };
+    const near = nearestLoaded(solved.values, i);
+    if (near < 0) return null;
+    return { label: `u at t = ${formatNumber(solved.times[near], 5)} (loading t = ${t})`, short: "u", values: solved.values[near], scale: solved.scale };
   }
   const field = store.results.field;
   return field && field.key === currentKey("field") ? { ...field.data, short: "value", data: field.data } : null;
