@@ -64,17 +64,18 @@ public:
   static Json case_schema();
 
   // Each throws StageError. Every call reads only the sections it needs.
-  Json geometry(const Json &case_json);
+  // `client` only says whose call it is (status).
+  Json geometry(const Json &case_json, const std::string &client = {});
   // The mesh's summary (views.hpp, mesh_summary_json, under "mesh"), its
   // stats and reports; the arrays come from mesh_arrays.
-  Json mesh(const Json &case_json);
+  Json mesh(const Json &case_json, const std::string &client = {});
   // The arrays of a mesh this session made (views.hpp,
   // mesh_arrays_binary). request: {"mesh": id}.
-  std::string mesh_arrays(const Json &request);
-  Json check_problem(const Json &case_json);
-  Json assemble(const Json &case_json);
+  std::string mesh_arrays(const Json &request, const std::string &client = {});
+  Json check_problem(const Json &case_json, const std::string &client = {});
+  Json assemble(const Json &case_json, const std::string &client = {});
   // request: {"case": ..., "field": {"kind": ..., ...}}; see docs/app.md.
-  Json field(const Json &request);
+  Json field(const Json &request, const std::string &client = {});
 
   // A static solve or a time integration of the client's, as the case's
   // "solve" section says; see docs/app.md. Every solve is a run with an id
@@ -133,7 +134,7 @@ public:
   // The case with a complete problem of the preset `preset` for its
   // geometry (problem and solve sections replaced; see presets.hpp).
   // request: {"case": ..., "preset": id}.
-  Json apply_preset(const Json &request);
+  Json apply_preset(const Json &request, const std::string &client = {});
   // A file of the kind `kind` (exports.hpp, export_kinds). A solution
   // export needs the client's run of this case to be done: it never
   // computes one (StageError of kind "not_ready" otherwise).

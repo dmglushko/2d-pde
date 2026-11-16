@@ -132,23 +132,23 @@ Json constant(std::string_view value) {
 Json region_edits_schema(bool with_split) {
   const Json text = typed({"string"});
   Json alternatives = Json::array();
-  alternatives.push_back(object_schema(
-      rename_edit_keys,
-      {{"op", constant("rename")}, {"from", text}, {"to", text}},
-      {"op", "from", "to"}));
+  alternatives.push_back(
+      object_schema(rename_edit_keys,
+                    {{"op", constant("rename")}, {"from", text}, {"to", text}},
+                    {"op", "from", "to"}));
   alternatives.push_back(object_schema(
       merge_edit_keys,
       {{"op", constant("merge")}, {"source", text}, {"target", text}},
       {"op", "source", "target"}));
   if (with_split)
-    alternatives.push_back(object_schema(split_edit_keys,
-                                         {{"op", constant("split")},
-                                          {"region", text},
-                                          {"fraction", typed({"number"})},
-                                          {"first", text},
-                                          {"second", text}},
-                                         {"op", "region", "fraction", "first",
-                                          "second"}));
+    alternatives.push_back(
+        object_schema(split_edit_keys,
+                      {{"op", constant("split")},
+                       {"region", text},
+                       {"fraction", typed({"number"})},
+                       {"first", text},
+                       {"second", text}},
+                      {"op", "region", "fraction", "first", "second"}));
   Json items = Json::object();
   items["oneOf"] = std::move(alternatives);
   Json out = typed({"array", "null"});
@@ -177,35 +177,35 @@ Json geometry_schema() {
     }
     options["properties"] = std::move(properties);
     options["additionalProperties"] = false;
-    Json item = object_schema(
-        shape_section_keys,
-        {{"source", constant("shape")},
-         {"shape", constant(shape["type"].get<std::string>())},
-         {"options", std::move(options)},
-         {"region_edits", region_edits_schema(true)}},
-        {"source", "shape"});
+    Json item =
+        object_schema(shape_section_keys,
+                      {{"source", constant("shape")},
+                       {"shape", constant(shape["type"].get<std::string>())},
+                       {"options", std::move(options)},
+                       {"region_edits", region_edits_schema(true)}},
+                      {"source", "shape"});
     item["title"] = shape["label"];
     alternatives.push_back(std::move(item));
   }
-  alternatives.push_back(object_schema(svg_section_keys,
-                                       {{"source", constant("svg")},
-                                        {"name", name},
-                                        {"svg", text},
-                                        {"region_edits",
-                                         region_edits_schema(true)}},
-                                       {"source", "svg"}));
+  alternatives.push_back(
+      object_schema(svg_section_keys,
+                    {{"source", constant("svg")},
+                     {"name", name},
+                     {"svg", text},
+                     {"region_edits", region_edits_schema(true)}},
+                    {"source", "svg"}));
   Json formats = Json::object();
   formats["enum"] = Json::array();
   for (const std::string_view format : mesh_file_formats)
     formats["enum"].push_back(format);
-  alternatives.push_back(object_schema(
-      mesh_file_section_keys,
-      {{"source", constant("mesh_file")},
-       {"format", formats},
-       {"name", name},
-       {"text", text},
-       {"region_edits", region_edits_schema(false)}},
-      {"source", "format", "text"}));
+  alternatives.push_back(
+      object_schema(mesh_file_section_keys,
+                    {{"source", constant("mesh_file")},
+                     {"format", formats},
+                     {"name", name},
+                     {"text", text},
+                     {"region_edits", region_edits_schema(false)}},
+                    {"source", "format", "text"}));
   if (alternatives.size() != shape_catalog_json().size() + 2 ||
       std::size(geometry_sources) != 3)
     throw std::logic_error("case_schema: a geometry source is not described");
@@ -218,14 +218,13 @@ Json mesh_schema() {
   const MeshCatalog &catalog = mesh_catalog();
   Json improvers = typed({"array", "null"});
   improvers["items"] = choice_schema(catalog.improvers);
-  return object_schema(
-      mesh_section_keys,
-      {{"spec", options_schema(catalog.spec)},
-       {"discretizer", choice_schema(catalog.discretizers)},
-       {"triangulator", choice_schema(catalog.triangulators)},
-       {"refiner", choice_schema(catalog.refiners, true)},
-       {"improvers", std::move(improvers)}},
-      {"discretizer", "triangulator"});
+  return object_schema(mesh_section_keys,
+                       {{"spec", options_schema(catalog.spec)},
+                        {"discretizer", choice_schema(catalog.discretizers)},
+                        {"triangulator", choice_schema(catalog.triangulators)},
+                        {"refiner", choice_schema(catalog.refiners, true)},
+                        {"improvers", std::move(improvers)}},
+                       {"discretizer", "triangulator"});
 }
 
 // An object of coefficients (expression texts; a number is read as its
@@ -255,9 +254,9 @@ Json problem_schema() {
   Json parameters = typed({"object", "null"});
   parameters["additionalProperties"] = typed({"number"});
   Json conditions = typed({"object", "null"});
-  conditions["additionalProperties"] = coefficients_schema(
-      catalog["condition_fields"], condition_extra_keys,
-      typed({"integer", "null"}));
+  conditions["additionalProperties"] =
+      coefficients_schema(catalog["condition_fields"], condition_extra_keys,
+                          typed({"integer", "null"}));
   return object_schema(
       problem_section_keys,
       {{"equation", coefficients_schema(catalog["equation_fields"])},
@@ -277,13 +276,13 @@ Json solve_schema() {
   Json time = options_schema(catalog.time_settings);
   time["properties"]["method"] = choice_schema(catalog.time_methods);
   time["properties"]["step"] = choice_schema(catalog.step_controllers);
-  Json out = object_schema(
-      solve_section_keys,
-      {{"mode", std::move(modes)},
-       {"linear_solver", choice_schema(catalog.linear_solvers)},
-       {"static", options_schema(catalog.static_settings)},
-       {"time", std::move(time)}},
-      {"mode", "linear_solver"}, true);
+  Json out =
+      object_schema(solve_section_keys,
+                    {{"mode", std::move(modes)},
+                     {"linear_solver", choice_schema(catalog.linear_solvers)},
+                     {"static", options_schema(catalog.static_settings)},
+                     {"time", std::move(time)}},
+                    {"mode", "linear_solver"}, true);
   // In time, the time part needs its method and step.
   Json condition = Json::object();
   condition["properties"]["mode"] = constant("time");
@@ -307,10 +306,11 @@ Json case_schema() {
   version["maximum"] = case_version;
   Json format = Json::object();
   format["enum"] = Json::array({case_format, nullptr});
-  Json assembly = object_schema(assembly_section_keys,
-                                {{"t", typed({"number", "null"})},
-                                 {"max_time_order", typed({"integer", "null"})}},
-                                {}, true);
+  Json assembly =
+      object_schema(assembly_section_keys,
+                    {{"t", typed({"number", "null"})},
+                     {"max_time_order", typed({"integer", "null"})}},
+                    {}, true);
   Json view = Json::object();
   view["description"] = "Free for the page and for people.";
   Json notes = Json::object();

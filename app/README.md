@@ -1,7 +1,11 @@
 # pde2d app
 
-A graphical interface for the pde2d library: choose a domain, mesh it,
-write the problem and assemble it, and look at the results, in a browser.
+A graphical interface for the pde2d library, in a browser: choose a
+domain, mesh it, write the problem, assemble it, solve it (statically or in
+time, with the snapshots shown while the run goes on), compare the result
+with an exact solution or another run, and export it (CSV, VTK for
+ParaView, Matrix Market, provenance). The same cases also run from the
+command line, alone or as parameter sweeps.
 It is a separate program on top of the library; the library never depends
 on it. How it is built is described in [docs/app.md](../docs/app.md), and
 why in [docs/app-decisions.md](../docs/app-decisions.md).
@@ -35,8 +39,13 @@ reaches it at the same address. Stop the app with Ctrl+C.
 - `--host 0.0.0.0` makes it reachable from other machines on the network.
   The app then prints a warning and needs a token on every request: a
   random one, or `--token TOKEN`. Open the printed address (it ends in
-  `?token=...`); the page passes the token on. Anyone with the address
-  can drive the app, so do this only on a network you trust.
+  `?token=...`); the page keeps the token for this tab, removes it from
+  the address bar and sends it with every request. Anyone with the
+  address can drive the app, so do this only on a network you trust.
+- `--memory-budget 2G` bounds what the kept runs of all tabs may hold
+  (default 1G; K, M and G are powers of 1024). A solve that would not fit
+  even after dropping other tabs' finished runs is refused with advice
+  (fewer snapshots, a coarser mesh).
 - `--web DIR` serves the page from another directory. By default the page
   is served from `app/web` in this checkout, so editing a page file needs
   only a browser reload, not a rebuild.
@@ -229,14 +238,22 @@ build/app/pde2d_app --run app/examples/heat_annulus.json --output /tmp/heat
 ```
 
 This prints a JSON summary of every stage, the solve included, and, with
-`--output`, writes `mesh.pde2d`, `mesh.svg`, `solution.csv`,
-`solution.vtk` (open it in ParaView: one array per kept time),
-`provenance.json` (the whole case, the versions and the run's report) and
-the assembled system (`stiffness.mtx`, `damping.mtx`, `mass.mtx`,
-`rhs.mtx`). Every file but `.pde2d` starts with comment lines saying what
-produced it (`#` in the CSV: read it with
-`pandas.read_csv("solution.csv", comment="#")`). The exit code is 0 when
-every stage ran. `pde2d_app --default-case` prints a case to start from.
+`--output`, writes there `summary.json` (the same summary), `mesh.pde2d`,
+`mesh.svg`, `solution.csv`, `solution.vtk` (one file, one array per kept
+time), the time series `solution_0000.vtk`, `solution_0001.vtk`, … with
+`solution.vtk.series` (open the `.series` file in ParaView: it plays the
+snapshots with their times; the page's export is the same as one zip,
+`solution-vtk.zip`), `provenance.json` (the whole case, its SHA-256, the
+app's version and git commit, and the run's report) and the assembled
+system (`stiffness.mtx`, `damping.mtx`, `mass.mtx`, `rhs.mtx`). Each
+file but `.pde2d` says what produced it where its format allows: `#`
+lines at the top of the CSV (read it with
+`pandas.read_csv("solution.csv", comment="#")`), `%` lines after the
+Matrix Market banner, an XML comment in the SVGs, and in the VTK files
+the title line (their second line: legacy VTK has no comments).
+`.pde2d` has none (its format stays the old one). The exit code is 0
+when every stage ran. `pde2d_app --default-case` prints a case to start
+from.
 
 `--set PATH=VALUE` (repeatable) changes one value of the case before it
 runs: PATH is dotted keys with `[i]` for list items, VALUE is JSON or else
@@ -251,19 +268,32 @@ build/app/pde2d_app --run app/examples/heat_annulus.json \
 When the case has an exact solution (`view.exact_solution`, set by the
 Solve step's comparison), the summary also has `comparison`: the largest
 max |u − exact|, RMS and L2 error over the snapshots, the number of nodes
-and the longest edge. A convergence study is then a loop (here with
-[jq](https://jqlang.org/)):
+and the longest edge.
+
+**A convergence study** is one `--sweep PATH=V1,V2,...` (repeatable: every
+combination runs, the first `--sweep` varying slowest; one session, so
+what a combination does not change is not built again):
 
 ```sh
-for h in 0.08 0.04 0.02 0.01; do
-  build/app/pde2d_app --run app/examples/l_shape_corner.json \
-      --set mesh.spec.max_edge_length.relative=$h |
-    jq -r '[.comparison.longest_edge, .comparison.nodes, .comparison.max_l2] | @tsv'
-done
+build/app/pde2d_app --run app/examples/l_shape_corner.json \
+  --sweep mesh.spec.max_edge_length.relative=0.08,0.04,0.02
 ```
 
-The L-shaped example's L2 error falls about like h^(4/3), the rate its
-corner singularity allows (h^2 for a smooth solution).
+```
+mesh.spec.max_edge_length.relative    ok  nodes  longest_edge  solve_seconds  max_abs    max_l2  rate_max  rate_l2
+                              0.08  true    165        0.2256       0.000253   0.0249  0.007104         -        -
+                              0.04  true    648         0.113       0.001137  0.01416  0.003112    0.8165    1.194
+                              0.02  true   2452       0.05655       0.004727  0.01209  0.001249    0.2282    1.318
+```
+
+`rate_l2` and `rate_max` are the observed orders log(e₁/e₂) / log(h₁/h₂)
+between a row and the one before it, with h the longest edge. The
+L-shaped example's L2 error falls about like h^(4/3), the rate its
+corner singularity allows (h^2 for a smooth solution); its nodal maximum
+error, at the corner, falls much more slowly. With `--output DIR` the
+sweep is also written as `sweep.json` and `sweep.csv` (for a plot). A
+sweep over a time step or a method works the same way
+(`--sweep solve.time.step.options.dt=0.02,0.01,0.005`).
 
 ## Tests
 
@@ -271,9 +301,12 @@ corner singularity allows (h^2 for a smooth solution).
 the catalog (`app_session`), the Solve step against exact solutions
 (`app_solve`), runs in chunks and the presets (`app_runs`), comparisons,
 reference runs, probes and clients (`app_compare`), exports, provenance,
-error paths and `--set` (`app_exports`), the HTTP API with its token,
-Origin and 429 checks (`app_server`), every example case on the command
-line (`app_run_*`, and `app_run_set*` for `--set`) and the page's code in Node.js
+error paths, the VTK series zip, `--set` and `--sweep` (`app_exports`),
+the HTTP API with its token, Origin, 429 and status checks
+(`app_server`), every example case on the command line (`app_run_*`;
+`app_check_*` compares each one's figures with the bounds in
+`app/tests/example_checks.json`; `app_run_set*` for `--set`,
+`app_run_sweep` for `--sweep`) and the page's code in Node.js
 (`app_web`, `app_web_actions`; skipped without Node), and the page in
 headless Chrome (`app_browser`; skipped without Chrome: set
 `PDE2D_CHROME`, or have `google-chrome`/`chromium` on PATH, or the

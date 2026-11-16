@@ -316,16 +316,16 @@ Json Session::default_case() {
 
 // --- stages -----------------------------------------------------------------
 
-Json Session::geometry(const Json &input) {
-  const Work work(*this, "geometry", {});
+Json Session::geometry(const Json &input, const std::string &client) {
+  const Work work(*this, "geometry", client);
   const CaseInput read = read_case(input);
   const Json &case_json = read.json();
   return staged("geometry",
                 [&] { return domain_json(state_->cache.domain(case_json)); });
 }
 
-Json Session::mesh(const Json &input) {
-  const Work work(*this, "mesh", {});
+Json Session::mesh(const Json &input, const std::string &client) {
+  const Work work(*this, "mesh", client);
   const CaseInput read = read_case(input);
   const Json &case_json = read.json();
   const auto outcome = state_->cache.mesh(case_json);
@@ -347,8 +347,9 @@ Json Session::mesh(const Json &input) {
   return out;
 }
 
-std::string Session::mesh_arrays(const Json &request) {
-  const Work work(*this, "mesh arrays", {});
+std::string Session::mesh_arrays(const Json &request,
+                                 const std::string &client) {
+  const Work work(*this, "mesh arrays", client);
   const double id = staged("mesh", [&] {
     require_object(request, "request");
     static constexpr std::string_view known[] = {"mesh"};
@@ -375,8 +376,8 @@ std::string Session::mesh_arrays(const Json &request) {
   return staged("mesh", [&] { return mesh_arrays_binary(*mesh); });
 }
 
-Json Session::check_problem(const Json &input) {
-  const Work work(*this, "problem check", {});
+Json Session::check_problem(const Json &input, const std::string &client) {
+  const Work work(*this, "problem check", client);
   const CaseInput read = read_case(input);
   const Json &case_json = read.json();
   return staged("problem", [&] {
@@ -384,8 +385,8 @@ Json Session::check_problem(const Json &input) {
   });
 }
 
-Json Session::assemble(const Json &input) {
-  const Work work(*this, "assembly", {});
+Json Session::assemble(const Json &input, const std::string &client) {
+  const Work work(*this, "assembly", client);
   const CaseInput read = read_case(input);
   const Json &case_json = read.json();
   const AssemblySettings settings = read_assembly(case_json);
@@ -434,8 +435,8 @@ Json Session::assemble(const Json &input) {
   return out;
 }
 
-Json Session::field(const Json &request) {
-  const Work work(*this, "field", {});
+Json Session::field(const Json &request, const std::string &client) {
+  const Work work(*this, "field", client);
   staged("field", [&] {
     require_object(request, "request");
     static constexpr std::string_view known[] = {"case", "field"};
@@ -757,8 +758,8 @@ std::size_t Session::clients() {
 
 // --- presets and exports ----------------------------------------------------
 
-Json Session::apply_preset(const Json &request) {
-  const Work work(*this, "preset", {});
+Json Session::apply_preset(const Json &request, const std::string &client) {
+  const Work work(*this, "preset", client);
   staged("preset", [&] {
     require_object(request, "request");
     static constexpr std::string_view known[] = {"case", "preset"};

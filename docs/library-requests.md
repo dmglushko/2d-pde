@@ -50,6 +50,14 @@ cannot be stopped.
 - Possible shape: an optional callback in `IntegrationOutput` called after
   each step with the step record, returning whether to continue (or a
   cancellation token checked between steps).
+- **What chunks cost** (2026-11-16): each `integrate` call prepares the
+  linear solver and assembles at its start again, so the app sizes chunks
+  by their measured cost to keep that fixed cost a small share
+  (docs/app.md, "Runs"). With a factorization of seconds, the cap on a
+  chunk's length still leaves it up to half. A callback (above) would let
+  one call run the whole integration with progress and Stop; failing
+  that, an `integrate` that takes the previous call's prepared solver
+  (when the step matrix is unchanged) would make chunks free.
 
 ## 3. Symbolic work from more than one thread
 
@@ -58,7 +66,10 @@ app serializes every request: a problem check (parsing expressions) waits
 for a running solve (since runs go in chunks, for one chunk at most). Either a thread-safe SymEngine build, or a guarantee
 that a given operation (for example integrating an already-built
 `MeshedProblem`) never builds or drops `Expression`s, would let the app
-check the problem while a solve runs.
+check the problem while a solve runs. (Since 2026-11-16 progress, Stop, values,
+probes and status no longer wait: they read only the runs' bookkeeping
+under a short lock of their own, docs/app.md "Locks"; a problem check, a
+mesh or a field still waits for the chunk.)
 
 ## 4. Option errors that name the option
 
@@ -91,7 +102,9 @@ The app writes the library's version into every export's provenance. It
 takes the CMake project version at compile time (`PDE2D_VERSION`), which
 says nothing about the commit or local changes. A `pde2d::version()`
 (and, if wanted, a build id set at configure time) would make the
-provenance exact and the same for every program built on the library.
+provenance exact and the same for every program built on the library. (Since 2026-11-16 the app records the git
+commit and a dirty flag at build time itself, `app/cmake/build_info.cmake`;
+a library function would still serve every program.)
 
 ## 8. Point location and evaluation on a `Mesh`
 

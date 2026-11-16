@@ -69,8 +69,8 @@ Json components_json(const std::vector<Component<Interface>> &components) {
 }
 
 inline Json slot_json(std::string_view id, std::string_view label,
-               std::string_view description, std::string_view cardinality,
-               Json components) {
+                      std::string_view description,
+                      std::string_view cardinality, Json components) {
   Json out = Json::object();
   out["id"] = id;
   out["label"] = label;
@@ -87,7 +87,6 @@ Json default_choice(const Component<Interface> &component) {
   out["options"] = defaults(component.options);
   return out;
 }
-
 
 // Checks a component choice without building it: an object with "type"
 // and "options", a type the catalog has, and options with known names and

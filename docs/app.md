@@ -11,6 +11,39 @@ app must not change the library's design, and anything the app needs from
 the library is a library change, raised with the owner
 ([library-requests.md](library-requests.md)).
 
+## At a glance
+
+- **One program**, `pde2d_app`: a local HTTP server (cpp-httplib) that
+  serves the page (`app/web`, plain ES modules, no build step) and a JSON
+  API, and a command line that runs a saved case (`--run`, `--set`,
+  `--sweep`).
+- **A case** is one JSON object (geometry, mesh, problem, assembly,
+  solve, view, notes), read strictly, versioned with migrations, described
+  by a generated JSON Schema (`GET /api/case-schema`).
+- **The library decides everything**: the page and the app forward its
+  messages with the path of the field; components and their options come
+  from the catalog (`GET /api/catalog`).
+- **Stages are cached** by the text of the sections they read; **runs**
+  belong to a page (client), go in chunks sized by their measured cost,
+  and are kept within a byte budget.
+- **Two locks**: the session mutex for library work (SymEngine is one
+  thread), a short run lock for bookkeeping, so progress, Stop, values,
+  probes and `GET /api/status` never wait for a chunk or a mesh.
+- **Results in double on the server** (comparisons, probes, per-snapshot
+  min and max); float32 only for pictures. Exports carry their provenance
+  (versions, git commit, the case's SHA-256).
+
+## Contents
+
+[Shape](#shape) · [Files](#files) · [The case](#the-case) ·
+[Clients](#clients) · [The API](#the-api) ·
+[Binary answers](#binary-answers) · [Comparisons](#comparisons) ·
+[Probes](#probes) · [Exports](#exports) · [The catalog](#the-catalog) ·
+[Adding a component](#adding-a-component) ·
+[The stage cache](#the-stage-cache) · [Runs](#runs) · [Locks](#locks) ·
+[Memory](#memory) · [The page](#the-page) · [Presets](#presets) ·
+[Security](#security) · [The command line](#the-command-line)
+
 ## Shape
 
 ```mermaid
@@ -62,22 +95,25 @@ flowchart LR
 | --- | --- |
 | `app/src/options.*` | `OptionSpec` (an option as the page sees it), `OptionReader` (reads a JSON object strictly against the specs), small JSON readers, `named_option` (the option a library message names), `request_job` / `request_count`, `error_json` |
 | `app/src/app_error.hpp` | `PathError` (input refused at a path), `StageError` (a stage failed: stage, kind, message, path), `staged`, `at_path` |
-| `app/src/catalog.*` | the mesh and solve catalogs: every component, its options with the library's defaults, a function that builds it; `build_mesh_setup`, `build_solve_setup` |
+| `app/src/catalog.hpp`, `mesh_catalog.cpp`, `solve_catalog.cpp`, `catalog_parts.hpp` | the mesh and solve catalogs: every component, its options with the library's defaults, a function that builds it; `build_mesh_setup`, `build_solve_setup` (the inactive mode's part checked, not built: `check_component`); the sections' key lists |
+| `app/src/case_format.*` | the case's format, version and keys, `case_migrations` (`migrate_vN_to_vN+1`, none yet), `migrate_case`, `check_case`, `CaseInput` (a checked, migrated case) |
+| `app/src/case_schema.*` | `case_schema()`: the JSON Schema generated from the catalogs and the readers' key lists |
 | `app/src/domain_input.*` | the `geometry` section: shapes, SVG, mesh files, region edits; the geometry view; `DomainFacts` |
 | `app/src/problem_input.*` | the `problem` section: `build_problem`, `check_problem` (every error at once, with paths), the problem catalog and templates |
 | `app/src/presets.*` | problem presets: a complete problem and its solve settings for any geometry, scaled by `DomainFacts` |
 | `app/src/stage_cache.*` | `StageCache`: the last domain, mesh (with its id), `MeshedProblem` and assembly, keyed by the case sections; `assembly_settings`, `solve_key` |
-| `app/src/runs.*` | `SessionOptions`, `RunState`, `Run` (a solve: static, or a time run in chunks), `make_run`, `advance`, `progress_json`, `RunManager` (each client's run and reference run, bounded) |
+| `app/src/runs.*` | `SessionOptions`, `RunState`, `Run` (a solve: static, or a time run in chunks; its `published` part under the run lock), `RunSnapshots`, `ChunkCost`, `fit_chunk_cost`, `plan_chunk`, `MetricRule` and `combine_report`, `run_bytes`, `make_run`, `start_run`, `advance`, `progress_json`, `RunManager` (each client's run and reference run, bounded by count and bytes; runs that are gone and why) |
 | `app/src/field_eval.*` | expressions at the nodes, `lumped_weights`, `difference_stats`, `Comparison` (against an exact solution or the reference run), `PointLocator` (a grid over the mesh), `probe_series` |
-| `app/src/exports.*` | `ExportedFile` (content or a stream), `ExportKind`, `ExportNeeds`, the table of export kinds with their writers, provenance |
-| `app/src/case_set.*` | `--set PATH=VALUE`: `set_case_value`, `apply_set_argument` |
+| `app/src/exports.*` | `ExportedFile` (content, a stream, or an archive's members), `ExportKind`, `ExportNeeds`, the table of export kinds with their writers, provenance, `case_hash` |
+| `app/src/zip.*`, `sha256.*`, `build_info.hpp` | a stored zip writer with CRC-32 (Zip64 past 4 GiB), SHA-256, the build's git commit (written at build time by `app/cmake/build_info.cmake`) |
+| `app/src/case_set.*`, `sweep.*` | `--set PATH=VALUE`: `set_case_value`, `set_value`, `apply_set_argument`; `--sweep`: `parse_sweep_argument`, `run_sweep`, `sweep_table`, `sweep_csv` |
 | `app/src/views.*` | reports, mesh stats, sparsity as JSON; the mesh summary and its binary arrays |
 | `app/src/binary.hpp` | little-endian float32, float64 and uint32 |
-| `app/src/session.*` | `Session`: the facade the server and `--run` use (stages, runs, comparisons, probes, exports, `run`), the default case, `check_case` |
-| `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`: routes, client ids, token, Origin, the queue bound) and the command line |
+| `app/src/session.*` | `Session`: the facade the server and `--run` use (stages, runs, comparisons, probes, status, exports, `run`), the two locks and `Work` (a call under the session mutex, with what it does), the table of field kinds, the default case |
+| `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`: routes, client ids, token, Origin, the queue bound for calls that wait for the session) and the command line |
 | `app/web/` | `index.html`, `style.css` (one dark theme, every colour a token), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing and ticks; `color.js` OKLab ramps, field scales, the locked range; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, visible coefficients; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id and token headers), `state.js` (the store, `editCase`, tickets, undo, invalid entries), `actions.js` (stages, runs, presets, exports), `snapshots.js`, `settings.js`, `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
 | `app/examples/` | example cases (each runs as `app_run_*`) and an example SVG |
-| `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, error paths, `--set`), `server.cpp` (HTTP, token, Origin, 429, clients), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
+| `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, the series zip, CRC-32 and SHA-256, error paths, `--set`, `--sweep`), `server.cpp` (HTTP, token, Origin, 429, status, clients), `example_checks.json` and `example_check.cpp` (each example's expected figures, `app_check_*`), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
 
 ## The case
@@ -142,7 +178,10 @@ must not be ignored silently), and a missing value means its default.
 - `solve.mode` is `static` (`StaticSolver` at `static.t`) or `time`
   (`Integrator` from `t0` to `t1` with `method` and `step`). The linear
   solver serves both. Only the chosen mode's part is read into the
-  library's objects; the other is kept as written. A time run keeps the
+  library's objects; the other is kept as written, but checked for
+  unknown keys and value types with their paths (`solve.time.snapshots:
+  expected a whole number`, an unknown method type); a value only the
+  library would refuse (dt = 0) is allowed there. A time run keeps the
   solution at `snapshots` + 1 equal times from t0 to t1 (at most 1000
   snapshots). A case written before the solvers has `"solve": null`, which
   means the default section (a static solve).
@@ -151,8 +190,23 @@ must not be ignored silently), and a missing value means its default.
   with it too), `view.region_edit_undo` (one undo record per region edit)
   and `view.condition_archive` (conditions of regions that are gone)
   there.
-- `version` is checked: a whole number from 1 to the app's version; a
-  case from a newer app is refused, not misread.
+- `version` is checked: a whole number from 1 to the app's version
+  (`case_version`, 1); a case without one is taken as current. A case
+  from a newer app is refused with a message naming both versions, not
+  misread. An older case is migrated when it is read (`CaseInput`): the
+  chain `case_migrations()` holds one `migrate_vN_to_vN+1` per version
+  (none yet); each step sets `version` to N + 1, and the keys are checked
+  after the migration. A current case is not copied.
+- **The schema.** `GET /api/case-schema` is a JSON Schema (draft 2020-12)
+  generated from the catalogs (every component with its options, their
+  kinds, choices, labels and defaults; options carry `x-pde2d-kind`), the
+  shape catalog, the problem catalog's coefficients and each reader's key
+  list (`case_keys`, `shape_section_keys`, `mesh_section_keys`,
+  `problem_section_keys`, `assembly_section_keys`, `solve_section_keys`,
+  ...). A key in a list that the generator does not describe is an error,
+  so a reader cannot gain a key the schema lacks. It describes structure
+  and types, not ranges (the library's): a case that validates may still
+  be refused, with the library's message.
 
 ## Clients
 
@@ -167,7 +221,8 @@ client (it has no run to follow).
 The session keeps at most `SessionOptions::max_clients` (8) clients; a
 solve by a new client drops the one used least recently, with its runs
 (a running one stops). Only a solve makes a client; asking for an unknown
-client's run is an error, not a new client.
+client's run is an error (`expired`), not a new client. Runs are also
+bounded in bytes (see "Memory").
 
 The stage cache (domain, mesh, problem, assembly) is shared by all
 clients: it is keyed by the case's text, so a client gets the same answer
@@ -186,21 +241,23 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 | `GET /api/catalog` | | the catalog (below) and the default case |
 | `GET /api/default-case` | | the case a new session starts with |
 | `GET /api/examples`, `GET /api/examples/<name>.json` | | the example cases (name and notes), and each case |
+| `GET /api/case-schema` | | the case's JSON Schema (`application/schema+json`; see "The case") |
+| `GET /api/status` | | what the session is busy with, never waiting for it: `busy` (`{"task", "client", "yours", "job", "since", "seconds"}` or `null`; tasks: `geometry`, `mesh`, `mesh arrays`, `problem check`, `assembly`, `field`, `solve` (making or starting a run), `run` (a chunk), `comparison`, `reference`, `preset`, `export`), `waiting` (requests being served or waiting for the session), `running` (runs), `clients`, `memory` (`budget`, `used`, `room`: what a new run of this client may keep) |
 | `POST /api/geometry` | case | loops (each curve sampled for drawing, with its region and kind), regions and lengths, bounding box, domain size; for a mesh file its boundary edges |
-| `POST /api/mesh` | case | `mesh`: the mesh's summary (`id`, counts `nodes`, `triangles`, `boundary_edges`, `region_names`, `has_links`, and `arrays`: where its arrays are, see "Binary answers"); `stats`, `target_met`, `longest_edge`, `max_edge_length`, `domain_size`, every stage's `reports` |
+| `POST /api/mesh` | case | `mesh`: the mesh's summary (`id`, counts `nodes`, `triangles`, `boundary_edges`, `region_names`, `has_links`, and `arrays`: where its arrays are, see "Binary answers"); `stats`, `target_met`, `longest_edge`, `max_edge_length`, `domain_size`, every stage's `reports`, `memory` (`snapshot_bytes`: what a run on this mesh keeps per snapshot, about `snapshot_bytes` × (snapshots + 1) in all; `budget`) |
 | `POST /api/mesh/arrays` | `{"mesh": id}` | the mesh's arrays in binary. The session keeps the last 16 meshes it built and the meshes of every kept run |
 | `POST /api/problem` | case | the check: `ok`, `errors` (`path`, `message`), `facts` per path (none for a text that did not parse), each condition's kind, time order, needed initial conditions |
 | `POST /api/assemble` | case | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
 | `POST /api/field` | `{"case", "field"}` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`) |
 | `POST /api/solve` | case | starts the client's solve of the case, or finds its current one with the same inputs (see "Runs"), and answers its progress (below) |
-| `POST /api/solve/progress` | `{"job"}` | the same progress, now |
-| `POST /api/solve/stop` | `{"job"}` | stops the run after the chunk that is running; its progress. A solve of the same inputs continues it |
-| `POST /api/solve/values` | `{"job", "first", "count"}` | snapshots `first` to `first + count` (ready ones only) in binary |
+| `POST /api/solve/progress` | `{"job"}` | the same progress, now (never waits for a chunk) |
+| `POST /api/solve/stop` | `{"job"}` | stops the run after the chunk that is running (at once: it does not wait for it); its progress. A solve of the same inputs continues it |
+| `POST /api/solve/values` | `{"job", "first", "count"}` | snapshots `first` to `first + count` (ready ones only) in binary (never waits for a chunk) |
 | `POST /api/solve/reference` | `{"job"}` | keeps the client's run (it must be done) as its reference run: `{"reference": {"job", "mode", "times", "mesh_id"}}`. It stays when the run is replaced |
 | `POST /api/solve/reference/clear` | `{}` | forgets the reference: `{"reference": null}` |
 | `POST /api/solve/compare` | `{"job", "exact": text}` or `{"job", "reference": true}` | the comparison in double (see "Comparisons") |
 | `POST /api/solve/compare/difference` | the same and `"snapshot": k` | u − other at snapshot k in binary (float32) |
-| `POST /api/solve/probes` | `{"job", "points": [[x, y], ...]}` | u(t) at each point (at most 64) over the run's ready snapshots (see "Probes") |
+| `POST /api/solve/probes` | `{"job", "points": [[x, y], ...]}` | u(t) at each point (at most 64) over the run's ready snapshots (see "Probes"; never waits for a chunk) |
 | `POST /api/preset` | `{"case", "preset"}` | the case with its `problem` and `solve` sections replaced by the preset for the case's geometry (see "Presets") |
 | `POST /api/export/<kind>` | case | a file (see "Exports"); `X-PDE2D-Case-Name` (URL-encoded) names the case in its provenance |
 
@@ -208,12 +265,16 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 (the run's id), `state` (`running`, `done`, `failed`, `stopped`), `mode`
 (`static` or `time`), `mesh_id`, `times` of the snapshots ready, `min` and
 `max` over their values (exact doubles, `null` before any value),
+`snapshot_min` and `snapshot_max` (per ready snapshot, its smallest and
+largest finite value in double, `null` for a snapshot without one),
 `time_order` (assembly's, `Assembler::time_order`), `problem_time_order`
 (as written), `free_unknowns`, `reports` (`static_solver`'s, or one
-`integrator` report combining the chunks', with `chunks`), and `values`:
+`integrator` report combining the chunks', with `chunks`), `values`:
 `{"path": "/api/solve/values", "format": "float32le", "snapshots"
-(ready), "nodes", "bytes"}`. A time run adds `t0`, `t1`, `t` (reached) and
-`snapshots_total`; a failed one `error`. A static solve is `done` at once.
+(ready), "nodes", "bytes"}`, and `memory`: `{"bytes"` (what the run keeps
+when done, its share of the budget), `"budget"}`. A time run adds `t0`,
+`t1`, `t` (reached) and `snapshots_total`; a failed one `error`. A static
+solve is `done` at once.
 
 **Errors** are `{"error": {"stage", "kind", "message", "path"}}`.
 `message` is readable on its own; when the error concerns a field it
@@ -243,10 +304,13 @@ start of its text. Where the paths come from:
 | 400 | the body is not JSON | `input` |
 | 403 | the Host is not this machine (loopback server), the token is missing or wrong, or the Origin is another site | `input` |
 | 409 | a result that is not ready: a solution export before the client's run of the case is done, a reference that is not done | `not_ready` |
+| 409 | a run a newer solve of the same client replaced ("the run 3 was replaced by a newer solve of this page") | `replaced` |
+| 410 | a run that is gone: dropped for the memory budget or the client limit (the message says which), a reference run dropped for the budget, or a run this server never had (it was restarted: "this server has no run 3 (it was restarted, or the run was dropped long ago); solve again"), also for an unknown client | `expired` |
 | 413 | a body over 64 MiB | |
 | 415 | a POST that is not `application/json` | `input` |
 | 422 | the library refused the input (`std::invalid_argument`) or an algorithm could not finish (`std::runtime_error`) | `input`, `algorithm` |
-| 429 | more than `ServerOptions::max_waiting` (6) API requests are already being served or waiting for the session | `busy` |
+| 422 | a run that does not fit the memory budget even after dropping other clients' finished runs; the message gives its size, the room and what to change; `path` is `solve.time.snapshots` for a run in time | `memory` |
+| 429 | more than `ServerOptions::max_waiting` (6) API requests are already being served or waiting for the session (progress, stop, values, probes and status never count and are never refused) | `busy` |
 | 500 | anything else | `internal` |
 
 ## Binary answers
@@ -323,7 +387,8 @@ needs and its writer:
 | `rhs.mtx` | the assembly | b in Matrix Market `array` form |
 | `solution.csv` | a done run | x, y and u at every kept time (`u(t=...)` columns), one row per node, full doubles |
 | `solution.vtk` | a done run | VTK legacy ASCII `UNSTRUCTURED_GRID`: the nodes (z = 0), the triangles (`VTK_TRIANGLE`), and one `POINT_DATA` scalar array per kept snapshot, named `u(t=...)`; ParaView and VisIt open it |
-| `provenance.json` | the case | `{"format": "pde2d-app-provenance", "version": 1, "app", "library", "case_name", "exported", "file", "case" (the full case as sent), "run"}`: the run is the client's done run of the case with its progress (reports included, without the values layout) and `started`, or `null` |
+| `solution-vtk.zip` | a done run | a time series for ParaView, as a stored (uncompressed) zip: `solution_0000.vtk`, `solution_0001.vtk`, ... (each the mesh and one array `u`), `solution.vtk.series` (ParaView's JSON manifest: `{"file-series-version": "1.0", "files": [{"name", "time"}, ...]}`; ParaView opens it and plays the snapshots at their times) and `solution-vtk.provenance.json` (as `provenance.json`). `--output` writes these files into the directory instead of the zip |
+| `provenance.json` | the case | `{"format": "pde2d-app-provenance", "version": 1, "app" (`name`, `version`, `commit`, `dirty`), "library", "case_name", "case_sha256", "exported", "file", "case" (the full case as sent), "run"}`: the run is the client's done run of the case with its progress (reports included, without the values layout) and `started`, or `null` |
 
 - **Solution exports never compute.** They take the client's current run
   when its inputs (the geometry, mesh, problem and solve sections, as
@@ -337,8 +402,14 @@ needs and its writer:
   released; a done run's values do not change.
 - **Provenance.** Every file but `.pde2d` says what produced it: the app
   and library versions (both the CMake project version, `PDE2D_VERSION`),
-  the case's file name when known, the export time (UTC), the run (id,
-  state, start time) for solution exports, and `settings`: the case
+  the app's build (`commit`: the git commit of the tree it was built
+  from, and `dirty`: whether that tree had uncommitted changes to tracked
+  files; recorded at every build by `app/cmake/build_info.cmake`, rewritten
+  only when it changes, `"unknown"`/`null` outside git, never failing the
+  build), the case's content hash (`case_sha256`: SHA-256 of the case's
+  canonical JSON, keys sorted and no spaces, so the order of keys does not
+  change it), the case's file name when known, the export time (UTC), the
+  run (id, state, start time) for solution exports, and `settings`: the case
   sections the kind is built from (geometry with an SVG or mesh text
   replaced by its length; plus mesh; plus problem and assembly for the
   system; plus solve for a solution) as one line of JSON. As comments:
@@ -346,9 +417,10 @@ needs and its writer:
   CSV (read it with `pandas.read_csv(path, comment="#")`, `numpy.loadtxt`
   (`#` is its default comment), R's `read.csv(comment.char = "#")`;
   spreadsheets show them as rows), an XML comment after the SVG's
-  declaration. VTK legacy has no comments: its title line (at most 255
-  characters) names the app, the library, the run, the time and the
-  case; `provenance.json` has everything.
+  declaration. VTK legacy has no comments: its title line (the second,
+  at most 255 characters) names the app with its commit, the library, the
+  run, the first 16 digits of the case's hash, the time and the case (in
+  the series, also the snapshot's t); `provenance.json` has everything.
 
 ## The catalog
 
@@ -375,13 +447,15 @@ needs and its writer:
 
 ## Adding a component
 
-1. Add one entry to `make_mesh_catalog()` or `make_solve_catalog()` in
-   `app/src/catalog.cpp`: its `type` (the component's `name()`), label,
-   description, its options with defaults read from the library's options
-   struct, and `make`, which builds the component from an `OptionReader`.
-2. That is all for the page. `tests/session.cpp` and `tests/solve.cpp`
-   check that every type equals `name()`; add its defaults to the
-   defaults test.
+1. Add one entry to `make_mesh_catalog()` in `app/src/mesh_catalog.cpp`
+   or `make_solve_catalog()` in `app/src/solve_catalog.cpp`: its `type`
+   (the component's `name()`), label, description, its options with
+   defaults read from the library's options struct, and `make`, which
+   builds the component from an `OptionReader`.
+2. That is all for the page and the case schema. `tests/session.cpp` and
+   `tests/solve.cpp` check that every type equals `name()` and that the
+   schema's options are the catalog's; add its defaults to the defaults
+   test.
 
 Ranges are never checked in the app: the component's constructor
 validates its options, and its message is shown at the field.
@@ -416,22 +490,47 @@ there take the same steps.
   without (the command line, tests) `solve` runs them all before it
   returns. Both use `advance`.
 - Each chunk holds the session mutex only while it integrates; between
-  chunks the runner releases it for a moment, so other requests are
-  answered after at most one chunk.
-- The next chunk's number of snapshot intervals is scaled so that it
-  takes about `chunk_seconds` (0.4 s): between half and four times the
-  last one, at least one interval.
-- The combined `integrator` report adds up `steps`, `rejected_steps`,
-  `linear_iterations`, `assemblies`, `prepares`, `snapshots`, takes the
-  largest `max_linear_iterations`, `max_residual`, `max_dt`, the smallest
-  `min_dt`, the first `t0` and the last `t1`, and adds `chunks`.
-  `prepares` counts one more per chunk (each chunk prepares the linear
-  solver once).
+  chunks the runner releases it for a moment, so other library calls are
+  answered after at most one chunk (and the calls that read only runs do
+  not wait at all, see "Locks").
+- **Chunk sizes** (`plan_chunk`). Each `integrate` call prepares
+  (factorizes) the linear solver at least once and assembles at its start,
+  so a chunk has a fixed cost F besides a cost c per step. The run records
+  each chunk's intervals, steps and wall seconds (`ChunkCost`) and fits
+  seconds = F + c · steps by least squares (`fit_chunk_cost`: the last 8
+  chunks, or all of them when those 8 took the same steps; a fit needs two
+  step counts at least 10% apart). With a fit, the next chunk takes the
+  fewest steps that keep F at most `max_fixed_share` (20%) of it and make
+  it last at least `chunk_seconds` (0.4 s), but at most
+  max(`max_chunk_seconds` (3 s), 2F) seconds: the cap wins, so a fixed
+  cost above 0.6 s gives a larger share (at most half), and Stop and
+  progress still come every few seconds. Steps become intervals by the
+  steps per interval so far; a chunk grows by at most 8 times. Without a
+  fit (one chunk so far, or equal step counts) the next chunk doubles,
+  within max(`max_chunk_seconds`, twice the last chunk's time), so a chunk
+  that is all fixed cost still grows. The first chunk is `first_chunk` (1)
+  interval; `chunk_seconds` 0 keeps every chunk one interval (tests).
+  Measured on a 110,768-unknown heat run with a snapshot at every step
+  (Sparse LU, about 1.7 s a factorization): 30 steps took 30 chunks and
+  30 prepares (51.9 s) before, 4 chunks and 4 prepares (8.0 s) now.
+- The combined `integrator` report combines each metric by its declared
+  rule (`integrator_metric_rules`): `steps`, `rejected_steps`,
+  `linear_iterations`, `assemblies`, `prepares`, `snapshots` add up;
+  `max_linear_iterations`, `max_residual` take the largest; `min_dt` and
+  `max_dt` the smallest and largest over the chunks that took steps; `t0`
+  is the first's, `t1` and `time_order` the last's; `chunks` is added. A
+  metric without a rule is an error (a test checks that the rules are
+  exactly the integrator's metrics). `prepares` counts one per chunk at
+  least.
 - A solve of the same inputs reuses the client's run: a running or done
   one is answered as it is, a stopped one continues, a failed one starts
-  again. Other inputs replace it (the old one is dropped under the mutex:
-  it holds expressions). The reference run is a second pointer that keeps
-  a done run alive.
+  again. Other inputs replace it (the old one is dropped under the
+  session mutex: it holds expressions); asking for the old one then
+  answers `replaced`. The reference run is a second pointer that keeps a
+  done run alive.
+- Kept snapshots do not keep their velocities (only the state a chunk
+  ends with needs them), so a run of time order 2 holds the same bytes
+  per snapshot as one of order 1.
 - **Exactness.** For implicit Euler and the implicit midpoint rule the
   state is U (and U' for time order 2), which `final` carries, so the
   snapshots of a chunked run are bit for bit those of one call
@@ -441,6 +540,66 @@ there take the same steps.
   1e-8 of the largest value in the test).
 - What a chunk cannot do: show progress or stop inside one snapshot
   interval (library-requests.md, item 2).
+
+## Locks
+
+Two locks (`session.hpp`, `runs.hpp`):
+
+- **The session mutex** serializes everything that touches the library:
+  every stage, making and starting a run, running a chunk, comparisons
+  (they construct `CompiledExpression`: symbolic work), presets, exports,
+  and dropping a run (a `Run` holds its `MeshedProblem`, which holds
+  expressions). A call takes it through `Session::Work`, which also
+  records what it is doing for `/api/status`.
+- **The run lock** is short. It guards the runs' bookkeeping: the
+  `RunManager` (clients, current and reference runs, runs that are gone
+  and why, the use clock), every run's `published` part (state, kept
+  snapshots, per-snapshot min and max, t reached, the combined report,
+  error) and the activity. A chunk computes without it and takes it only
+  to publish what it made; Stop sets the state under it.
+- **Progress, stop, values, probes and status take only the run lock.**
+  They read a run's `RunSnapshots` (the mesh and the kept snapshots as
+  shared pointers: no expressions, and a kept snapshot never changes),
+  copied under the run lock, and work on them after releasing it (probes
+  build their point locator then). Calling an already compiled function
+  would be thread-safe (`compiled_expression.hpp`), but nothing here
+  needs it.
+- **Order:** the session mutex first, then the run lock, never the other
+  way round. A run is removed from the `RunManager` under both, kept in
+  its `dropped` list, and destroyed when `Work` ends, after the run lock
+  is released and before the session mutex is (so no reader holding only
+  the run lock ever sees a run being destroyed, and no expression is
+  dropped outside the session mutex).
+- The server's queue bound (429) counts only calls that wait for the
+  session mutex.
+
+## Memory
+
+The kept runs of all clients (current and reference runs) together may
+reserve at most `SessionOptions::memory_budget` bytes (`--memory-budget`,
+default 1 GiB). A run's reservation is fixed when it is made
+(`run_bytes`): its snapshots (times + 1 for a time run, 1 for a static
+solve) × (8 bytes a node + 128) plus the state a chunk starts from (8
+bytes a node, twice for time order 2); the mesh and the stage cache are
+not counted.
+
+- **Before a run starts** (after its setup is read, before anything is
+  solved), the session checks that it fits: the client's own current run
+  does not count (the solve replaces it) unless it is also the reference.
+  If it does not fit, the finished runs (done, failed or stopped) of other
+  clients are dropped, least recently used first (a lookup marks a run
+  used), until it does. Running runs, the client's own reference and the
+  run being replaced are never dropped for it.
+- **When it cannot fit even then**, the solve is refused (422, kind
+  `memory`, path `solve.time.snapshots` in time) with the run's size, the
+  room and what to change: fewer snapshots, a coarser mesh, forgetting
+  the reference run, or a larger `--memory-budget`.
+- A dropped run answers `expired` with the reason ("dropped to make room
+  for newer runs (the server's memory budget for runs)"); a dropped
+  reference does the same for a comparison with it.
+- The page can warn before solving: the mesh answer has `snapshot_bytes`
+  and the budget, `/api/status` the room for this client, and the
+  progress of a run its `bytes`.
 
 ## The page
 
@@ -584,10 +743,17 @@ rectangle and on an annulus in `tests/runs.cpp`.
 - **A token beyond this machine.** With `--host` anything else, the
   server prints a warning and requires a token on every `/api/` request:
   `--token TOKEN`, or 32 random hex digits made at start. It prints the
-  address with `?token=...`; the page reads the token from its own
-  address and sends it in `X-PDE2D-Token` (a request may also carry
-  `?token=`). The page's files themselves need no token. `--token` on
-  loopback requires it too.
+  address with `?token=...`, which opens the page (the page's files need
+  no token). The page (`api.js`) reads the token from its address once,
+  keeps it in this tab's `sessionStorage` (a reload of the tab finds it
+  there), removes it from the address bar with `history.replaceState`
+  (so it is not in a copied link, a bookmark or the history from then
+  on), and sends it in `X-PDE2D-Token`. The API takes the token only in
+  that header, never in the address. `--token` on loopback requires it
+  too.
+- **No referrer.** Every answer carries `Referrer-Policy: no-referrer`, so
+  a link followed from the page never sends its address (with the token
+  of the first load) to another site.
 - **Origin.** A POST that carries an `Origin` header must name the same
   host and port as its Host header (the page's own); a POST must be
   `application/json`, which a cross-site form cannot send without a
@@ -595,14 +761,20 @@ rectangle and on an annulus in `tests/runs.cpp`.
 - **Bounded waiting.** At most `max_waiting` + 1 API requests are served
   or wait for the session at a time; one more is answered 429 at once
   instead of queueing behind a long mesh.
-- **Bounded memory.** Bodies up to 64 MiB, at most 8 clients, 1000
-  snapshots per run, 64 probe points per request.
+- **Bounded memory.** Bodies up to 64 MiB, at most 8 clients, kept runs
+  within `--memory-budget` (see "Memory"), 1000 snapshots per run, 64
+  probe points per request.
 
 ## The command line
 
 ```sh
+pde2d_app [--host HOST] [--port PORT] [--web DIR] [--token TOKEN] [--memory-budget BYTES]
 pde2d_app --run CASE.json [--set PATH=VALUE]... [--output DIR]
+pde2d_app --run CASE.json --sweep PATH=V1,V2,... [--sweep ...] [--set ...] [--output DIR]
 ```
+
+- `--memory-budget` (the server): a number of bytes, or with `K`, `M`,
+  `G` (powers of 1024; `iB` or `B` may follow); default `1G`.
 
 - Runs geometry, mesh, problem check, assembly and solve (to the end, in
   the same chunks as the page's runs) and prints a JSON summary; the exit
@@ -617,8 +789,34 @@ pde2d_app --run CASE.json [--set PATH=VALUE]... [--output DIR]
   exist; the last may be a new key of an object (the case reader refuses
   one it does not know). A step that does not exist is an error naming
   the path.
-- `--output DIR` writes `mesh.pde2d`, `mesh.svg`, `solution.csv`,
-  `solution.vtk`, `provenance.json` and the system (`stiffness.mtx`,
-  `damping.mtx`, `mass.mtx`, `rhs.mtx`), with the case file's name in
-  their provenance.
+- `--output DIR` writes `summary.json` (the printed summary, also for a
+  run that failed), and when every stage ran `mesh.pde2d`, `mesh.svg`,
+  `solution.csv`, `solution.vtk`, the members of `solution-vtk.zip` as
+  files (`solution_NNNN.vtk`, `solution.vtk.series`,
+  `solution-vtk.provenance.json`), `provenance.json` and the system
+  (`stiffness.mtx`, `damping.mtx`, `mass.mtx`, `rhs.mtx`), with the case
+  file's name in their provenance.
+- `--sweep PATH=V1,V2,...` (repeatable) runs the case once per
+  combination of the values (each read like a `--set` VALUE; values are
+  separated by commas, so a JSON value with a comma cannot be swept), the
+  first `--sweep` varying slowest, after the `--set`s, in one `Session`
+  so the stages a combination does not change are reused from the stage
+  cache. It prints a table, one row per run: the swept values, `ok`,
+  `nodes`, `longest_edge`, `solve_seconds` (the solve stage's reports),
+  and with `view.exact_solution` `max_abs`, `max_l2` and the observed
+  orders `rate_max`, `rate_l2` = log(e_prev / e) / log(h_prev / h)
+  against the row before (h the longest edge; `-` where the mesh did not
+  change); a failed run is a row with `ok` false and its message below the
+  table. With `--output DIR` it writes `sweep.json` (`{"axes", "rows"}`,
+  each row with `values`, the figures above, `max_rms` and `error`) and
+  `sweep.csv`. The exit code is 0 when every run finished.
+- **A convergence study** (`app/README.md` shows its output):
+  `pde2d_app --run app/examples/l_shape_corner.json --sweep
+  mesh.spec.max_edge_length.relative=0.08,0.04,0.02` gives an L2 order
+  near 4/3, the corner singularity's.
+- `app_check_<example>` compares each example's `summary.json` with the
+  bounds in `app/tests/example_checks.json` (dotted paths into the
+  summary with `min`, `max` or `equals`: the L-shape's error against its
+  exact solution, the range of u of the others); every example needs an
+  entry.
 - `--default-case` prints the case a new session starts with.

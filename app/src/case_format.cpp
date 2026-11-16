@@ -27,7 +27,8 @@ void check_format(const Json &case_json) {
 
 std::span<const CaseMigration> case_migrations() {
   static_assert(case_version >= 1);
-  if (migrations_of_this_app.size() != static_cast<std::size_t>(case_version - 1))
+  if (migrations_of_this_app.size() !=
+      static_cast<std::size_t>(case_version - 1))
     throw std::logic_error("case_migrations: one migration per version");
   return migrations_of_this_app;
 }

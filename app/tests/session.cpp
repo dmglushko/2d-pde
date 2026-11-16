@@ -1,6 +1,7 @@
 // The app's core without HTTP: the catalog matches the library, cases are
 // read strictly with errors that name their path, and every stage runs.
 
+#include "case_format.hpp"
 #include "catalog.hpp"
 #include "domain_input.hpp"
 #include "problem_input.hpp"
@@ -23,6 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -72,6 +74,122 @@ void expect_stage_error(F &&f, const std::string &stage,
     return;
   }
   throw test::Failure("expected a StageError of " + stage);
+}
+
+// A small JSON Schema validator: the keywords the case schema uses (type,
+// const, enum, properties, additionalProperties, required, items, oneOf,
+// allOf, if/then, minimum, maximum). Returns the first violation's place,
+// or "" when `value` is valid.
+std::string violation(const Json &schema, const Json &value,
+                      const std::string &where);
+
+bool has_type(const Json &value, const std::string &type) {
+  if (type == "null")
+    return value.is_null();
+  if (type == "object")
+    return value.is_object();
+  if (type == "array")
+    return value.is_array();
+  if (type == "string")
+    return value.is_string();
+  if (type == "boolean")
+    return value.is_boolean();
+  if (type == "number")
+    return value.is_number();
+  if (type == "integer")
+    return value.is_number_integer() ||
+           (value.is_number_float() &&
+            value.get<double>() == std::floor(value.get<double>()));
+  throw std::logic_error("unknown type " + type);
+}
+
+std::string violation(const Json &schema, const Json &value,
+                      const std::string &where) {
+  if (schema.contains("type")) {
+    bool any = false;
+    const Json &type = schema["type"];
+    for (const Json &name : type.is_array() ? type : Json::array({type}))
+      any = any || has_type(value, name.get<std::string>());
+    if (!any)
+      return where + ": not " + type.dump();
+  }
+  if (schema.contains("const") && schema["const"] != value)
+    return where + ": not " + schema["const"].dump();
+  if (schema.contains("enum") &&
+      std::ranges::find(schema["enum"], value) == schema["enum"].end())
+    return where + ": not one of " + schema["enum"].dump();
+  if (value.is_number()) {
+    if (schema.contains("minimum") &&
+        value.get<double>() < schema["minimum"].get<double>())
+      return where + ": below the minimum";
+    if (schema.contains("maximum") &&
+        value.get<double>() > schema["maximum"].get<double>())
+      return where + ": above the maximum";
+  }
+  if (value.is_object()) {
+    for (const Json &key : schema.value("required", Json::array()))
+      if (!value.contains(key.get<std::string>()))
+        return where + ": misses " + key.dump();
+    const Json properties = schema.value("properties", Json::object());
+    for (const auto &[key, item] : value.items()) {
+      const std::string place = where + "." + key;
+      if (properties.contains(key)) {
+        if (const std::string v = violation(properties[key], item, place);
+            !v.empty())
+          return v;
+      } else if (schema.contains("additionalProperties")) {
+        const Json &extra = schema["additionalProperties"];
+        if (extra == false)
+          return place + ": not allowed";
+        if (extra.is_object())
+          if (const std::string v = violation(extra, item, place); !v.empty())
+            return v;
+      }
+    }
+  }
+  if (value.is_array() && schema.contains("items"))
+    for (std::size_t i = 0; i < value.size(); ++i)
+      if (const std::string v = violation(
+              schema["items"], value[i], where + "[" + std::to_string(i) + "]");
+          !v.empty())
+        return v;
+  if (schema.contains("oneOf")) {
+    std::size_t matches = 0;
+    std::string reasons;
+    for (const Json &alternative : schema["oneOf"]) {
+      const std::string v = violation(alternative, value, where);
+      if (v.empty())
+        ++matches;
+      else
+        reasons += " | " + v;
+    }
+    if (matches != 1)
+      return where + ": matches " + std::to_string(matches) +
+             " alternatives of oneOf" + reasons;
+  }
+  for (const Json &part : schema.value("allOf", Json::array()))
+    if (const std::string v = violation(part, value, where); !v.empty())
+      return v;
+  if (schema.contains("if") && violation(schema["if"], value, where).empty() &&
+      schema.contains("then"))
+    if (const std::string v = violation(schema["then"], value, where);
+        !v.empty())
+      return v;
+  return "";
+}
+
+// The fake migrations of the mechanism's test: version 1 had "solver" at
+// the top, version 2 renamed it "solve_settings", version 3 moved it into
+// "solve".
+Json fake_v1_to_v2(Json case_json) {
+  case_json["solve_settings"] = case_json["solver"];
+  case_json.erase("solver");
+  return case_json;
+}
+Json fake_v2_to_v3(Json case_json) {
+  case_json["solve"] = case_json["solve_settings"];
+  case_json.erase("solve_settings");
+  return case_json;
 }
 
 } // namespace
@@ -580,6 +698,138 @@ int main() {
            check(summary["solve"]["times"].size() >= 1,
                  std::string(name) + " solved");
          }
+       }},
+      {"a case from an older version is migrated, step by step",
+       [] {
+         Json old = app::Session::default_case();
+         old["version"] = 1;
+         old["solver"] = old["solve"];
+         old.erase("solve");
+         constexpr app::CaseMigration fakes[] = {fake_v1_to_v2, fake_v2_to_v3};
+         const auto migrated = app::migrate_case(old, 3, fakes);
+         check(migrated.has_value(), "migrated");
+         check((*migrated)["version"] == 3, "the version follows");
+         check((*migrated)["solve"] == app::Session::default_case()["solve"] &&
+                   !migrated->contains("solver") &&
+                   !migrated->contains("solve_settings"),
+               "both steps in order");
+         Json middle = old;
+         middle = fake_v1_to_v2(middle);
+         middle["version"] = 2;
+         check(app::migrate_case(middle, 3, fakes)->at("solve") ==
+                   (*migrated)["solve"],
+               "from the middle of the chain");
+         Json current = app::Session::default_case();
+         current["version"] = 3;
+         check(!app::migrate_case(current, 3, fakes).has_value(),
+               "a current case is not copied");
+         current["version"] = 4;
+         expect_throws<std::invalid_argument>(
+             [&] { (void)app::migrate_case(current, 3, fakes); },
+             "version: the case was written by a newer version of the app "
+             "(case version 4; this app reads versions 1 to 3)");
+         constexpr app::CaseMigration short_chain[] = {fake_v1_to_v2};
+         expect_throws<std::logic_error>(
+             [&] { (void)app::migrate_case(old, 3, short_chain); },
+             "a migration is missing");
+         // This app: no migration yet, one per version.
+         check(app::case_migrations().size() ==
+                   static_cast<std::size_t>(app::case_version - 1),
+               "one migration per version");
+       }},
+      {"every example validates against the generated case schema",
+       [] {
+         const Json schema = app::Session::case_schema();
+         check(schema["$schema"].get<std::string>().find("2020-12") !=
+                   std::string::npos,
+               "draft 2020-12");
+         std::vector<std::filesystem::path> files;
+         for (const auto &entry :
+              std::filesystem::directory_iterator(PDE2D_APP_EXAMPLES_DIR))
+           if (entry.path().extension() == ".json")
+             files.push_back(entry.path());
+         check(files.size() >= 6, "the examples");
+         for (const auto &file : files) {
+           const Json example = load_example(file.filename().string());
+           const std::string v = violation(schema, example, "case");
+           check(v.empty(), file.filename().string() + ": " + v);
+         }
+         check(violation(schema, app::Session::default_case(), "case").empty(),
+               "the default case");
+         // What the readers refuse, the schema refuses too.
+         Json bad = app::Session::default_case();
+         bad["mesh"]["refiner"]["options"]["min_angel_degrees"] = 25;
+         check(!violation(schema, bad, "case").empty(), "a misspelt option");
+         bad = app::Session::default_case();
+         bad["solve"]["time"]["snapshots"] = "ten";
+         check(!violation(schema, bad, "case").empty(), "a wrong type");
+         bad = app::Session::default_case();
+         bad["geometry"]["shape"] = "hexagon";
+         check(!violation(schema, bad, "case").empty(), "an unknown shape");
+         bad = app::Session::default_case();
+         bad["extra"] = 1;
+         check(!violation(schema, bad, "case").empty(), "an unknown section");
+         bad = app::Session::default_case();
+         bad["solve"]["mode"] = "time";
+         bad["solve"]["time"].erase("method");
+         check(!violation(schema, bad, "case").empty(),
+               "in time the method is needed");
+       }},
+      {"the schema's options are the catalog's, with their kinds",
+       [] {
+         const Json schema = app::Session::case_schema();
+         // name -> kind of every option in a choice list of the schema.
+         const auto options_of = [](const Json &choice) {
+           std::map<std::string, std::map<std::string, std::string>> out;
+           for (const Json &alternative : choice["oneOf"]) {
+             if (!alternative.contains("properties"))
+               continue; // null
+             const std::string type =
+                 alternative["properties"]["type"]["const"].get<std::string>();
+             auto &options = out[type];
+             for (const auto &[name, option] :
+                  alternative["properties"]["options"]["properties"].items())
+               options[name] = option["x-pde2d-kind"].get<std::string>();
+           }
+           return out;
+         };
+         const auto catalog_options = [](const auto &components) {
+           std::map<std::string, std::map<std::string, std::string>> out;
+           for (const auto &component : components) {
+             auto &options = out[component.type];
+             for (const app::OptionSpec &spec : component.options)
+               options[spec.name] = app::option_kind_name(spec.kind);
+           }
+           return out;
+         };
+         const Json &mesh = schema["properties"]["mesh"]["properties"];
+         const app::MeshCatalog &m = app::mesh_catalog();
+         check(options_of(mesh["discretizer"]) ==
+                   catalog_options(m.discretizers),
+               "discretizers");
+         check(options_of(mesh["triangulator"]) ==
+                   catalog_options(m.triangulators),
+               "triangulators");
+         check(options_of(mesh["refiner"]) == catalog_options(m.refiners),
+               "refiners");
+         check(options_of(mesh["improvers"]["items"]) ==
+                   catalog_options(m.improvers),
+               "improvers");
+         const Json &solve = schema["properties"]["solve"]["properties"];
+         const app::SolveCatalog &s = app::solve_catalog();
+         check(options_of(solve["linear_solver"]) ==
+                   catalog_options(s.linear_solvers),
+               "linear solvers");
+         check(options_of(solve["time"]["properties"]["method"]) ==
+                   catalog_options(s.time_methods),
+               "time methods");
+         check(options_of(solve["time"]["properties"]["step"]) ==
+                   catalog_options(s.step_controllers),
+               "step controllers");
+         std::set<std::string> spec;
+         for (const auto &[name, option] : mesh["spec"]["properties"].items())
+           spec.insert(name);
+         check(spec.size() == m.spec.size(), "the mesh spec");
        }},
       {"the catalog lists every section",
        [] {

@@ -275,10 +275,49 @@ int main() {
          case_json["solve"]["time"]["step"]["options"]["dt"] = 0.0;
          expect_stage_error([&] { (void)session.solve(case_json); }, "solve",
                             "solve.time.step.options");
-         // A static solve does not read the time part.
+         // A static solve does not build the time part: a value only the
+         // library refuses (dt = 0) stays allowed.
          case_json["solve"]["mode"] = "static";
          check(session.solve(case_json)["mode"] == "static",
-               "time part ignored");
+               "time part not built");
+       }},
+      {"the inactive solve part is checked for keys and types",
+       [] {
+         app::Session session;
+         const auto refused = [&](const Json &case_json,
+                                  const std::string &path) {
+           try {
+             (void)session.solve(case_json);
+           } catch (const app::StageError &error) {
+             check(error.path() == path, error.path() + " should be " + path);
+             return;
+           }
+           throw test::Failure("expected a refusal at " + path);
+         };
+         Json case_json = app::Session::default_case(); // static
+         case_json["solve"]["time"]["snapshots"] = "ten";
+         refused(case_json, "solve.time.snapshots");
+         case_json = app::Session::default_case();
+         case_json["solve"]["time"]["typo"] = 1;
+         refused(case_json, "solve.time");
+         case_json = app::Session::default_case();
+         case_json["solve"]["time"]["method"]["type"] = "runge_kutta";
+         refused(case_json, "solve.time.method.type");
+         case_json = app::Session::default_case();
+         case_json["solve"]["time"]["step"]["options"]["dt"] = "small";
+         refused(case_json, "solve.time.step.options.dt");
+         case_json = app::Session::default_case();
+         case_json["solve"]["time"]["step"]["options"]["size"] = 1;
+         refused(case_json, "solve.time.step.options");
+         // In time, the static part is checked the same way.
+         case_json = app::Session::default_case();
+         case_json["solve"]["mode"] = "time";
+         case_json["solve"]["static"]["t"] = "now";
+         refused(case_json, "solve.static.t");
+         // A missing or null inactive part is fine.
+         case_json = app::Session::default_case();
+         case_json["solve"]["time"] = nullptr;
+         check(session.solve(case_json)["state"] == "done", "no time part");
        }},
       {"the library's refusals reach the page",
        [] {

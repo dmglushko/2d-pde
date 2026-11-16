@@ -1,0 +1,38 @@
+{
+  "about": "Expected figures of each example's --run summary (summary.json), checked by app_check_<example>. A path is dotted keys into the summary; each bound has min and/or max (inclusive), or equals. Every example in app/examples must have an entry.",
+  "examples": {
+    "channel_obstacle": {
+      "solve.state": {"equals": "done"},
+      "solve.min": {"min": -1e-9, "max": 1e-9},
+      "solve.max": {"min": 0.999, "max": 1.000000001}
+    },
+    "heat_annulus": {
+      "solve.state": {"equals": "done"},
+      "solve.snapshots_total": {"equals": 51},
+      "solve.min": {"min": -1e-9},
+      "solve.max": {"min": 0.9, "max": 1.000000001}
+    },
+    "l_shape_corner": {
+      "solve.state": {"equals": "done"},
+      "solve.max": {"min": 1.25, "max": 1.26},
+      "comparison.max_abs": {"max": 0.02},
+      "comparison.max_l2": {"max": 0.005}
+    },
+    "plate_with_hole": {
+      "solve.state": {"equals": "done"},
+      "solve.min": {"min": -1e-9, "max": 1e-9},
+      "solve.max": {"min": 0.999, "max": 1.000000001}
+    },
+    "poisson_rectangle": {
+      "solve.state": {"equals": "done"},
+      "solve.min": {"min": -1e-12},
+      "solve.max": {"min": 0.110, "max": 0.117}
+    },
+    "wave_square": {
+      "solve.state": {"equals": "done"},
+      "solve.snapshots_total": {"equals": 101},
+      "solve.min": {"min": -1.01, "max": -0.9},
+      "solve.max": {"min": 0.99, "max": 1.01}
+    }
+  }
+}

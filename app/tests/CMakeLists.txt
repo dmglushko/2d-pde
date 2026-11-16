@@ -28,7 +28,11 @@ target_compile_definitions(app_server
   PRIVATE PDE2D_APP_WEB_DIR="${PROJECT_SOURCE_DIR}/app/web"
           PDE2D_APP_EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/app/examples")
 
-# The command line on every example case.
+# The command line on every example case, and its figures against the
+# bounds in example_checks.json (app_check_<example>, after the run).
+add_executable(app_example_check example_check.cpp)
+target_link_libraries(app_example_check
+  PRIVATE nlohmann_json::nlohmann_json pde2d_warnings)
 file(GLOB example_cases CONFIGURE_DEPENDS
      ${PROJECT_SOURCE_DIR}/app/examples/*.json)
 foreach(example IN LISTS example_cases)
@@ -36,7 +40,22 @@ foreach(example IN LISTS example_cases)
   add_test(NAME app_run_${stem}
     COMMAND pde2d_app --run ${example}
             --output ${CMAKE_CURRENT_BINARY_DIR}/run_${stem})
+  set_tests_properties(app_run_${stem} PROPERTIES
+    FIXTURES_SETUP app_example_${stem})
+  add_test(NAME app_check_${stem}
+    COMMAND app_example_check ${CMAKE_CURRENT_SOURCE_DIR}/example_checks.json
+            ${stem} ${CMAKE_CURRENT_BINARY_DIR}/run_${stem}/summary.json)
+  set_tests_properties(app_check_${stem} PROPERTIES
+    FIXTURES_REQUIRED app_example_${stem})
 endforeach()
+
+# --sweep: a convergence study of the L-shaped corner prints a row per run.
+add_test(NAME app_run_sweep
+  COMMAND pde2d_app --run ${PROJECT_SOURCE_DIR}/app/examples/l_shape_corner.json
+          --sweep mesh.spec.max_edge_length.relative=0.08,0.04
+          --output ${CMAKE_CURRENT_BINARY_DIR}/run_sweep)
+set_tests_properties(app_run_sweep PROPERTIES
+  PASS_REGULAR_EXPRESSION "rate_l2")
 
 # --set on the command line: a finer mesh of an example runs, and a path
 # that does not exist fails naming it.

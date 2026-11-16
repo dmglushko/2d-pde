@@ -337,21 +337,25 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
           waits);
     });
   };
-  route("/api/geometry", [&session](const Json &body, const std::string &) {
-    return session.geometry(body);
+  route("/api/geometry",
+        [&session](const Json &body, const std::string &client) {
+          return session.geometry(body, client);
+        });
+  route("/api/mesh", [&session](const Json &body, const std::string &client) {
+    return session.mesh(body, client);
   });
-  route("/api/mesh", [&session](const Json &body, const std::string &) {
-    return session.mesh(body);
-  });
-  binary("/api/mesh/arrays", [&session](const Json &body, const std::string &) {
-    return session.mesh_arrays(body);
-  });
-  route("/api/problem", [&session](const Json &body, const std::string &) {
-    return session.check_problem(body);
-  });
-  route("/api/assemble", [&session](const Json &body, const std::string &) {
-    return session.assemble(body);
-  });
+  binary("/api/mesh/arrays",
+         [&session](const Json &body, const std::string &client) {
+           return session.mesh_arrays(body, client);
+         });
+  route("/api/problem",
+        [&session](const Json &body, const std::string &client) {
+          return session.check_problem(body, client);
+        });
+  route("/api/assemble",
+        [&session](const Json &body, const std::string &client) {
+          return session.assemble(body, client);
+        });
   route("/api/solve", [&session](const Json &body, const std::string &client) {
     return session.solve(body, client);
   });
@@ -408,11 +412,11 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
         return session.probes(body, client);
       },
       false);
-  route("/api/preset", [&session](const Json &body, const std::string &) {
-    return session.apply_preset(body);
+  route("/api/preset", [&session](const Json &body, const std::string &client) {
+    return session.apply_preset(body, client);
   });
-  route("/api/field", [&session](const Json &body, const std::string &) {
-    return session.field(body);
+  route("/api/field", [&session](const Json &body, const std::string &client) {
+    return session.field(body, client);
   });
 
   http.Post(R"(/api/export/([a-z0-9.]+))", [&session, &impl](

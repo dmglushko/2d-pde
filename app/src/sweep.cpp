@@ -27,9 +27,8 @@ Json row_of(const Json &values, const Json &summary) {
   const Json &mesh = member(summary, "mesh");
   row["nodes"] = member(member(mesh, "stats"), "nodes");
   row["longest_edge"] = member(mesh, "longest_edge");
-  row["solve_seconds"] = summary.contains("solve")
-                             ? Json(solve_seconds(summary))
-                             : Json(nullptr);
+  row["solve_seconds"] =
+      summary.contains("solve") ? Json(solve_seconds(summary)) : Json(nullptr);
   const Json &comparison = member(summary, "comparison");
   for (const char *key : {"max_abs", "max_rms", "max_l2"})
     row[key] = member(comparison, key);
@@ -43,8 +42,7 @@ Json rate(const Json &previous, const Json &row, const char *error) {
   const Json &e0 = member(previous, error), &e1 = member(row, error);
   const Json &h0 = member(previous, "longest_edge"),
              &h1 = member(row, "longest_edge");
-  if (!e0.is_number() || !e1.is_number() || !h0.is_number() ||
-      !h1.is_number())
+  if (!e0.is_number() || !e1.is_number() || !h0.is_number() || !h1.is_number())
     return nullptr;
   const double ratio_h = h0.get<double>() / h1.get<double>();
   const double ratio_e = e0.get<double>() / e1.get<double>();

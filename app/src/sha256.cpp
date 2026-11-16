@@ -23,8 +23,8 @@ constexpr std::array<std::uint32_t, 64> k{
 } // namespace
 
 Sha256::Sha256()
-    : state_{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f,
-             0x9b05688c, 0x1f83d9ab, 0x5be0cd19} {}
+    : state_{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19} {}
 
 void Sha256::block(const unsigned char *data) {
   std::array<std::uint32_t, 64> w{};
@@ -34,10 +34,10 @@ void Sha256::block(const unsigned char *data) {
            (std::uint32_t{data[4 * i + 2]} << 8) |
            std::uint32_t{data[4 * i + 3]};
   for (std::size_t i = 16; i < 64; ++i) {
-    const std::uint32_t s0 = std::rotr(w[i - 15], 7) ^
-                             std::rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
-    const std::uint32_t s1 = std::rotr(w[i - 2], 17) ^
-                             std::rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+    const std::uint32_t s0 =
+        std::rotr(w[i - 15], 7) ^ std::rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+    const std::uint32_t s1 =
+        std::rotr(w[i - 2], 17) ^ std::rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
     w[i] = w[i - 16] + s0 + w[i - 7] + s1;
   }
   auto [a, b, c, d, e, f, g, h] = state_;

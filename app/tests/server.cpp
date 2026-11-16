@@ -269,6 +269,72 @@ int main() {
                          "application/json");
          check(later && later->status == 200, "served once it is free");
        }},
+      {"status and lightweight calls answer while the session is busy",
+       [] {
+         app::ServerOptions options = test_options();
+         options.max_waiting = 0; // one waiting request at a time
+         const Running running(options);
+         Json slow = app::Session::default_case();
+         slow["mesh"]["spec"]["max_edge_length"]["relative"] = 0.003;
+         std::jthread first([&] {
+           auto client = running.client();
+           (void)client.Post("/api/mesh", {{"X-PDE2D-Client", "mesher"}},
+                             slow.dump(), "application/json");
+         });
+         auto client = running.client();
+         Json status;
+         const auto until =
+             std::chrono::steady_clock::now() + std::chrono::seconds(10);
+         while (std::chrono::steady_clock::now() < until) {
+           const auto answer = client.Get("/api/status");
+           check(answer && answer->status == 200, "status answers");
+           status = Json::parse(answer->body);
+           if (!status["busy"].is_null())
+             break;
+         }
+         check(status["busy"]["task"] == "mesh", status.dump());
+         check(status["busy"]["client"] == "mesher" &&
+                   status["busy"]["yours"] == false,
+               "whose");
+         check(status["busy"]["seconds"].is_number() &&
+                   status["busy"]["since"].is_string(),
+               "since when");
+         check(status["waiting"].get<int>() >= 1 &&
+                   status["memory"]["budget"].is_number(),
+               "waiting and memory");
+         // A progress call does not wait and is not refused as busy.
+         const auto start = std::chrono::steady_clock::now();
+         const auto progress =
+             client.Post("/api/solve/progress", Json{{"job", 5}}.dump(),
+                         "application/json");
+         const double seconds = std::chrono::duration<double>(
+                                    std::chrono::steady_clock::now() - start)
+                                    .count();
+         check(progress && progress->status == 410,
+               "expired, not 429: " +
+                   std::to_string(progress ? progress->status : 0));
+         check(seconds < 0.5, "at once: " + std::to_string(seconds) + " s");
+         check(client.Get("/api/status")->status == 200, "still busy, answers");
+         first.join();
+         const Json idle = Json::parse(client.Get("/api/status")->body);
+         check(idle["busy"].is_null(), "idle afterwards");
+       }},
+      {"the case schema and the headers every answer has",
+       [] {
+         const Running running;
+         auto client = running.client();
+         const auto schema = client.Get("/api/case-schema");
+         check(schema && schema->status == 200, "served");
+         check(schema->get_header_value("Content-Type") ==
+                   "application/schema+json",
+               "its type");
+         check(Json::parse(schema->body)["title"] == "pde2d app case", "it");
+         const auto page = client.Get("/");
+         check(page->get_header_value("Referrer-Policy") == "no-referrer",
+               "no referrer from the page");
+         check(schema->get_header_value("Referrer-Policy") == "no-referrer",
+               "nor from the API");
+       }},
       {"runs are per client, and exports wait for a done run",
        [] {
          const Running running;

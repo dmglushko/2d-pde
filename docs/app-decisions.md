@@ -545,3 +545,173 @@ What changed for the page in this round, all documented in app.md:
   check of the field's colours, |∇u|, the line profile, zoom, pinch and
   the picture's height on a phone, and the reference run with the
   outdated comparison.
+
+## 2026-11-16, round 3, part A (server and C++ side)
+
+- **Chunks sized by their measured cost** (was: scaled towards 0.4 s per
+  chunk). Every `integrate` call prepares the linear solver and assembles
+  at its start, so a chunk of one interval with a snapshot at every step
+  refactorized every step: at 110k unknowns, 1.7 s a step, prepares =
+  steps. The run now fits seconds = F + c · steps to its chunks (least
+  squares over the last 8, or all when those are equal) and picks the
+  fewest steps that keep F at most 20% and the chunk at least 0.4 s,
+  within max(3 s, 2F). The cap wins over the share: Stop and progress
+  come between chunks only (library-requests.md, item 2), and a page
+  that does not answer for 10 s is worse than a run that takes a third
+  longer. 2F rather than 3 s alone when F is large: otherwise a chunk
+  that is all factorization would never grow past one interval and the
+  share would stay near 100%. Without a fit the chunk doubles (within
+  max(3 s, twice the last)), which is what gives the fit its second
+  point. Measured on the 110,768-unknown heat run with 30 snapshot
+  intervals of one step each: 30 chunks, 30 prepares, 51.9 s before; 4
+  chunks, 4 prepares, 8.0 s after (100 steps: 5 chunks, 11.9 s, where it
+  was about 170 s). Wall time, not the integrator's `time`, is the cost:
+  it is what the user waits for. Rejected: a fixed larger first chunk
+  (wrong for a cheap problem with expensive steps), and assuming the
+  fixed cost is the first chunk minus one step (one chunk cannot tell the
+  two apart).
+- **Two locks** (was: one session mutex for everything). The session
+  mutex stays for anything that touches the library (it must: SymEngine's
+  reference counts, and a `Run` holds expressions); a short run lock
+  guards the bookkeeping. What made it safe: kept snapshots are
+  `shared_ptr<const Solution>`, published under the run lock and never
+  changed after, so a reader copies the pointers (`RunSnapshots`: the
+  mesh and the snapshots, no expressions) and works without any lock;
+  runs are dropped only under the session mutex, after the run lock is
+  released (`take_dropped`, emptied when `Work` ends), so a reader under
+  the run lock never sees one destroyed. Comparisons keep the session
+  mutex: they construct a `CompiledExpression`. Calling a compiled
+  function is thread-safe, but no lock-free caller needs it, so none was
+  added. Probes, values, progress, stop and status take only the run
+  lock; the 429 bound counts only calls that wait for the session (a
+  progress poll during a mesh was refused as "busy" before).
+- **A byte budget for runs** (was: only 8 clients and 1000 snapshots, so
+  8 tabs × 1000 snapshots × 110k nodes could ask for 7 GB). The
+  reservation of a run is fixed when it is made, from its snapshot count
+  and nodes, so the check happens before anything is solved and a run in
+  progress never needs more than it reserved. Dropping least recently
+  used finished runs of other clients first: a tab that is gone should
+  not block one that is used; a client's own reference and running runs
+  are never dropped for its own solve (the user asked for them). Kept
+  snapshots no longer carry velocities (only the state a chunk ends with
+  needs them), which halves a wave run. The mesh and the stage cache are
+  not counted: they are bounded by count already (16 meshes, one of each
+  stage) and their size is the same order as one snapshot.
+- **Gone runs say why**: `replaced` (409) for a run a newer solve of the
+  same page replaced, `expired` (410) for one dropped (budget, client
+  limit) or never known (a restarted server; also an unknown client). The
+  page needs the difference: "replaced" means it is following the wrong
+  run, "expired" that the result is gone and solving again is the answer.
+  A record of gone runs (the last 4096 ids) gives the reason; ids are not
+  reused within a server's life.
+- **`GET /api/status`** without the session mutex: the call holding it
+  (task, client, job, since), waiting requests, running runs, memory. It
+  is a GET, so it carries no body and is never refused as busy. Every
+  stage call now names its client, so "busy: meshing for another tab" can
+  be told from "your own mesh".
+- **Per-snapshot min and max in double** in the progress (was: the time
+  bar computed them in float32 from the loaded values, and only for
+  loaded snapshots). The whole list in every progress answer: at most
+  1000 pairs, smaller than the times already sent.
+- **Provenance: the commit at build time, not configure time** (the task
+  said configure time; the earlier decision had rejected a commit for
+  being stale between configures). A custom target runs
+  `cmake/build_info.cmake` at every build and rewrites the generated file
+  only when its text changes, so it is right after a commit without a
+  reconfigure and an unchanged tree rebuilds nothing. `dirty` counts
+  tracked files only (an untracked scratch file does not change the
+  build). Outside git, or without git, both are "unknown" and the build
+  goes on. The case's SHA-256 is of its canonical JSON (nlohmann's sorted
+  object, compact), so saving a case with keys in another order keeps
+  its hash; a small SHA-256 in the app (no new dependency for one hash).
+- **The VTK time series as a stored zip** (was: one file with an array
+  per time, which ParaView shows as separate arrays, not as a time axis).
+  `.vtk.series` is ParaView's own JSON manifest for legacy files, simpler
+  than `.pvd` (which wants XML VTK files). Stored, not deflated: no zlib
+  dependency, and ASCII VTK is what users open rather than archive. Each
+  member is built in memory before it is written (its CRC and size go in
+  the local header, so no data descriptors, which some readers mishandle
+  for stored entries); offsets past 4 GiB use Zip64 (1000 snapshots of a
+  110k mesh pass it). The zip's provenance member is called
+  `solution-vtk.provenance.json` so that `--output`, which writes the
+  members into the directory, does not overwrite `provenance.json`. The
+  single `solution.vtk` stays (one file is handier for a static solve).
+- **The case schema is generated** from the catalogs and from key lists
+  that the readers themselves now check against (the readers' `known[]`
+  arrays became named constants in their headers). A key in a list
+  without a description in `case_schema.cpp` throws, so the two cannot
+  drift; the test validates every example and the default case with a
+  small validator of the keywords used, and compares the schema's
+  options and kinds with the catalog's. Ranges stay out of the schema:
+  they are the library's, and a second copy would drift from it.
+- **The inactive solve part is checked** for unknown keys and value
+  types (not built), with paths: a misspelt key there was silently kept
+  and surfaced only when the mode was switched. A value the library would
+  refuse stays allowed, since the library is not asked.
+- **Case migrations**: a chain of `migrate_vN_to_vN+1`, one per version,
+  applied when a case is read (`CaseInput`), the keys checked after the
+  migration (an old case may have had other keys). A current case is not
+  copied (cases carry SVG and mesh texts). The test runs the mechanism on
+  a fake chain of two steps.
+- **The token in a header only** (was: header or `?token=` on every API
+  call). The address with `?token=` is only for opening the page, which
+  moves it to `sessionStorage` (per tab, survives a reload, gone with the
+  tab) and out of the address bar. `Referrer-Policy: no-referrer` on
+  every answer, so the first load's address does not leak through a
+  link.
+- **Code structure**: a table of field kinds in `Session::field`; the
+  catalogs in two files with a private header for what they share;
+  `combine_report` from declared rules, with a test that the rules are
+  exactly the integrator's metrics (a new library metric fails loudly
+  instead of being added up wrongly).
+- **`--sweep`**: values separated by commas (simple to type; a value
+  with a comma cannot be swept, which no current case option needs), the
+  first axis slowest (reads like nested loops), one session so unchanged
+  stages are reused. The observed order between consecutive rows is in
+  the table, since that is what a convergence study is for; a row where
+  the mesh did not change has none. A text table on stdout (unlike
+  `--run`'s JSON) because it is read by people; `--output` adds JSON and
+  CSV for scripts and plots.
+- **Example checks in one file** (`app/tests/example_checks.json`), not
+  next to each example: `examples/` is what the page offers, and a
+  `.checks.json` there would be listed as an example. Bounds are physical
+  (maximum principle for the heat and Laplace cases, the L-shape's error
+  against its exact solution, the wave's amplitude), loose enough for
+  another mesh order but tight enough to catch a sign or a scale. `--run
+  --output` writes `summary.json`, which the check reads (a CTest
+  fixture orders the two).
+
+### API changes for the page (part B)
+
+- **Token:** `api.js` now moves `?token=` into `sessionStorage`
+  (`pde2d-token`) and removes it from the address (done, minimal). The
+  API refuses `?token=` (403): every request, downloads included, must
+  send `X-PDE2D-Token` (`apiHeaders` does).
+- **Gone runs:** progress, stop, values, probes, compare, reference and
+  exports answer 409 `kind: "replaced"` for a run a newer solve of this
+  page replaced and 410 `kind: "expired"` for a dropped or unknown run
+  (was 422 `input`). Following a run should stop on either; `expired`
+  wants "the result is gone (…); Solve again", with the server's message.
+  An expired reference (compare with `reference: true`) is 410 too.
+- **Memory:** a solve may answer 422 `kind: "memory"` with `path`
+  `solve.time.snapshots` (time mode). The progress has `memory: {bytes,
+  budget}`; `/api/mesh` has `memory: {snapshot_bytes, budget}`, so the
+  Solve panel can say "this run keeps about X of the server's Y" before
+  solving (snapshot_bytes × (snapshots + 1)); `/api/status` has
+  `memory.room` for this client. The page's current 50 MB warning can
+  use these.
+- **Status:** `GET /api/status` (`busy` with `task`, `yours`, `seconds`;
+  `waiting`; `running`; `memory`). For "server busy: meshing (12 s)"
+  while a request waits, and to explain a 429.
+- **Per-snapshot range:** progress has `snapshot_min` and `snapshot_max`
+  (double, one per ready snapshot); the time bar should show these
+  instead of computing float32 min/max from loaded values.
+- **Exports:** a new kind `solution-vtk.zip` (`application/zip`) for
+  "Export VTK series (ParaView)"; provenance now has `app.commit`,
+  `app.dirty` and `case_sha256` (the page may show the commit in an
+  "about" line).
+- **Schema:** `GET /api/case-schema` exists (for editors; the page need
+  not use it). Inactive solve parts are now checked: a stored case with a
+  wrong type in the unused mode's part is refused at its path, which the
+  page already marks.
+- Light calls (progress, stop, values, probes, status) are never 429.
