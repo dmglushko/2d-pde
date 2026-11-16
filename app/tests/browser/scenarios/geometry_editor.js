@@ -3,7 +3,7 @@
 // the boundary (a drawing in the page, a shape through the server's
 // locator) with its names edited right there, and the conditions that
 // follow.
-export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, type }) => {
+export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, type, reloadPage }) => {
   tab("geometry");
   const stats = () => text(q("#geometry-summary .stats"));
   // A figure of the Geometry step's result by its label.
@@ -137,4 +137,13 @@ export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, 
   check("the edited shape is a drawing with its regions", converted.loops[0].edges.map((e) => e.region).join(",") === "bottom,bottom_2,top,left", converted.loops[0].edges.map((e) => e.region).join(","));
   await idle();
   check("its regions read the same", regions().join(",") === "bottom,bottom_2,top,left", regions().join(","));
+
+  // A reload finds the drawing and its tools again.
+  savedCase();
+  const page = await reloadPage();
+  await until(() => page.q("#geometry-summary .stats"), "the page again");
+  page.q('.steps button[data-step="geometry"]').click();
+  await until(() => page.qa("#geometry-regions tr[data-region]").length === 4, "the drawing's regions after the reload");
+  check("after a reload the drawing is there", page.q('input[name="geometry-source"]:checked')?.parentElement.textContent.trim() === "Drawing");
+  check("and its tools", !page.q(".geometry-tools").hidden && !page.q('.geometry-tools [data-tool="rectangle"]').hidden);
 };

@@ -960,7 +960,7 @@ test("drawing edits: move, bend, kinds, insert and delete vertices", () => {
   // An arc next to it follows; a cubic's handle moves with its vertex.
   let arcs = D.setEdgeKind(d, 0, 1, "arc");
   const bulge = D.pointAt(D.edgeCurve(arcs.loops[0], 1), 0.5);
-  assert.ok(closePoint(bulge, [2.5, 1]), `outward by a quarter: ${bulge}`);
+  assert.ok(closePoint(bulge, [2.3, 1]), `outward by 0.15 of the edge: ${bulge}`);
   arcs = D.moveVertex(arcs, 0, 2, [2, 4]);
   const followed = D.edgeCurve(arcs.loops[0], 1);
   assert.ok(closePoint(D.pointAt(followed, 1), [2, 4]) && closePoint(D.pointAt(followed, 0), [2, 0]));

@@ -365,6 +365,34 @@ int main() {
              app::build_domain({{"source", "svg"}, {"svg", svg}});
          check_round_trip(*domain.geometry, "plate_with_hole.svg");
        }},
+      {"a drawing takes every preset and exports its geometry",
+       [] {
+         app::Session session;
+         Json case_json =
+             load_example(std::filesystem::path(PDE2D_APP_EXAMPLES_DIR) /
+                          "cooling_fin.json");
+         for (const Json &preset :
+              app::Session::catalog()["problem"]["presets"]) {
+           const Json preset_case = session.apply_preset(
+               {{"case", case_json}, {"preset", preset["id"]}});
+           check(preset_case["geometry"] == case_json["geometry"],
+                 "the drawing stays");
+           check(preset_case["problem"]["boundary_conditions"].size() == 5,
+                 "a condition per region");
+           const Json summary = session.run(preset_case);
+           check(summary["ok"].get<bool>(),
+                 preset["id"].get<std::string>() + ": " + summary.dump());
+         }
+         const auto file = session.export_file(case_json, "geometry.svg");
+         check(file.text().find("<path") != std::string::npos, "an SVG");
+         // The exported SVG reads back as the same regions.
+         const app::Domain back =
+             app::build_domain({{"source", "svg"}, {"svg", file.text()}});
+         check(
+             back.geometry->region_names() ==
+                 std::vector<std::string>{"base", "tip", "top", "root", "hole"},
+             "the regions back");
+       }},
       {"a mesh file is not a drawing",
        [] {
          app::Session session;

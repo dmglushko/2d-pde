@@ -12,6 +12,9 @@
 // start_angle, sweep_angle), and its ends lie on its vertices.
 
 const TAU = 2 * Math.PI;
+// How far a straight edge bulges (over its length) when it becomes a
+// curve.
+const BULGE = 0.15;
 // Points per curved edge when one is drawn or searched.
 export const CURVE_SAMPLES = 64;
 
@@ -560,7 +563,8 @@ export function bendEdge(drawing, l, e, p) {
 }
 
 // Edge e as another kind, the same ends: a line becomes an arc or a
-// Bezier bulging outward by a quarter of its length; a Bezier or an arc
+// Bezier bulging outward by 0.15 of its length (its handles stay near
+// it); a Bezier or an arc
 // becomes the arc through its middle, or a Bezier with its end tangents;
 // a quadratic becomes the same curve as a cubic. A closed arc stays an
 // arc (throws).
@@ -575,7 +579,7 @@ export function setEdgeKind(drawing, l, e, kind) {
   const chord = sub(b, a);
   const length = Math.hypot(chord[0], chord[1]);
   const normal = scale(outwardSign(loop) / (length || 1), [chord[1], -chord[0]]);
-  const middle = curve.kind === "line" ? add(lerp(a, b, 0.5), scale(0.25 * length, normal)) : pointAt(curve, 0.5);
+  const middle = curve.kind === "line" ? add(lerp(a, b, 0.5), scale(BULGE * length, normal)) : pointAt(curve, 0.5);
   let data;
   if (kind === "line") data = { kind: "line" };
   else if (kind === "arc") {
@@ -584,12 +588,12 @@ export function setEdgeKind(drawing, l, e, kind) {
     data = arc;
   } else if (kind === "quadratic") {
     if (curve.kind === "cubic") data = { kind, control: scale(0.25, sub(scale(3, add(curve.control1, curve.control2)), add(a, b))) };
-    else if (curve.kind === "line") data = { kind, control: add(lerp(a, b, 0.5), scale(0.5 * length, normal)) };
+    else if (curve.kind === "line") data = { kind, control: add(lerp(a, b, 0.5), scale(2 * BULGE * length, normal)) };
     else data = { kind, control: sub(scale(2, middle), scale(0.5, add(a, b))) };
   } else if (kind === "cubic") {
     if (curve.kind === "quadratic") data = { kind, control1: lerp(a, curve.control, 2 / 3), control2: lerp(b, curve.control, 2 / 3) };
     else if (curve.kind === "line") {
-      const lift = scale(0.33 * length, normal);
+      const lift = scale((4 / 3) * BULGE * length, normal);
       data = { kind, control1: add(lerp(a, b, 1 / 3), lift), control2: add(lerp(a, b, 2 / 3), lift) };
     } else data = { kind, control1: add(a, scale(1 / 3, derivativeAt(curve, 0))), control2: sub(b, scale(1 / 3, derivativeAt(curve, 1))) };
   } else throw new Error(`unknown edge kind ${kind}`);

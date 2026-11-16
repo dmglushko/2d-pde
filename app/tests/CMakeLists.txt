@@ -67,6 +67,10 @@ add_test(NAME app_run_set
   COMMAND pde2d_app --run ${PROJECT_SOURCE_DIR}/app/examples/poisson_rectangle.json
           --set mesh.spec.max_edge_length.relative=0.08
           --set mesh.refiner.options.min_angle_degrees=28)
+# --set on a drawing: a vertex of the drawn cooling fin moved.
+add_test(NAME app_run_set_drawing
+  COMMAND pde2d_app --run ${PROJECT_SOURCE_DIR}/app/examples/cooling_fin.json
+          "--set" "geometry.loops[0].vertices[3][1]=1.2")
 add_test(NAME app_run_set_missing
   COMMAND pde2d_app --run ${PROJECT_SOURCE_DIR}/app/examples/poisson_rectangle.json
           --set mesh.nothing.here=1)

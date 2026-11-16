@@ -1,0 +1,182 @@
+{
+  "format": "pde2d-app-case",
+  "version": 1,
+  "notes": "A drawn cooling fin (the drawing source): a hot root (u = 1), a round tip and a curved top that lose heat to the air, a coolant hole at u = 0. -(u_xx + u_yy) = 0.",
+  "geometry": {
+    "source": "drawing",
+    "loops": [
+      {
+        "vertices": [
+          [
+            0,
+            0
+          ],
+          [
+            3,
+            0
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            0,
+            1
+          ]
+        ],
+        "edges": [
+          {
+            "kind": "line",
+            "region": "base"
+          },
+          {
+            "kind": "arc",
+            "region": "tip",
+            "center": [
+              3,
+              0.5
+            ],
+            "radius_x": 0.5,
+            "radius_y": 0.5,
+            "rotation": 0,
+            "start_angle": -1.5707963267948966,
+            "sweep_angle": 3.141592653589793
+          },
+          {
+            "kind": "cubic",
+            "region": "top",
+            "control1": [
+              2,
+              1.4
+            ],
+            "control2": [
+              1,
+              0.6
+            ]
+          },
+          {
+            "kind": "line",
+            "region": "root"
+          }
+        ]
+      },
+      {
+        "vertices": [
+          [
+            1.7,
+            0.5
+          ]
+        ],
+        "edges": [
+          {
+            "kind": "arc",
+            "region": "hole",
+            "center": [
+              1.5,
+              0.5
+            ],
+            "radius_x": 0.2,
+            "radius_y": 0.2,
+            "rotation": 0,
+            "start_angle": 0,
+            "sweep_angle": 6.283185307179586
+          }
+        ]
+      }
+    ]
+  },
+  "mesh": {
+    "spec": {
+      "max_edge_length": {
+        "absolute": null,
+        "relative": 0.04
+      }
+    },
+    "discretizer": {
+      "type": "chord_length",
+      "options": {
+        "max_curve_deviation": {
+          "absolute": null,
+          "relative": null
+        },
+        "corner_angle_degrees": 30
+      }
+    },
+    "triangulator": {
+      "type": "cdt",
+      "options": {}
+    },
+    "refiner": {
+      "type": "ruppert",
+      "options": {
+        "min_angle_degrees": 25,
+        "max_points": 10000000
+      }
+    },
+    "improvers": []
+  },
+  "problem": {
+    "equation": {
+      "a_xx": "-1",
+      "a_yy": "-1",
+      "f": "0"
+    },
+    "parameters": {
+      "h": 0.5
+    },
+    "boundary_conditions": {
+      "base": {
+        "alpha": "h",
+        "beta_n": "1",
+        "g": "0"
+      },
+      "tip": {
+        "alpha": "h",
+        "beta_n": "1",
+        "g": "0"
+      },
+      "top": {
+        "alpha": "h",
+        "beta_n": "1",
+        "g": "0"
+      },
+      "root": {
+        "alpha": "1",
+        "g": "1"
+      },
+      "hole": {
+        "alpha": "1",
+        "g": "0"
+      }
+    },
+    "initial": {}
+  },
+  "assembly": {
+    "t": 0.0
+  },
+  "solve": {
+    "mode": "static",
+    "linear_solver": {
+      "type": "sparse_lu",
+      "options": {}
+    },
+    "static": {
+      "t": 0.0
+    },
+    "time": {
+      "t0": 0.0,
+      "t1": 1.0,
+      "snapshots": 50,
+      "method": {
+        "type": "implicit_euler",
+        "options": {}
+      },
+      "step": {
+        "type": "fixed_step",
+        "options": {
+          "dt": 0.01
+        }
+      }
+    }
+  }
+}

@@ -6,6 +6,11 @@
       "solve.min": {"min": -1e-9, "max": 1e-9},
       "solve.max": {"min": 0.999, "max": 1.000000001}
     },
+    "cooling_fin": {
+      "solve.state": {"equals": "done"},
+      "solve.min": {"min": -1e-9, "max": 1e-9},
+      "solve.max": {"min": 0.999, "max": 1.000000001}
+    },
     "heat_annulus": {
       "solve.state": {"equals": "done"},
       "solve.snapshots_total": {"equals": 51},
