@@ -62,7 +62,9 @@ struct Preset {
   std::function<PresetProblem(const DomainFacts &)> make;
 };
 
-Json dirichlet(std::string g) { return texts({{"alpha", "1"}, {"g", std::move(g)}}); }
+Json dirichlet(std::string g) {
+  return texts({{"alpha", "1"}, {"g", std::move(g)}});
+}
 
 Json static_solve(std::string_view linear_solver) {
   Json out = default_solve_section();
@@ -107,7 +109,8 @@ double bump_width(const DomainFacts &facts) {
 
 const std::vector<Preset> &presets() {
   static const std::vector<Preset> list = {
-      {"poisson", "Poisson", "-(u_xx + u_yy) = 1 with u = 0 on the boundary; static",
+      {"poisson", "Poisson",
+       "-(u_xx + u_yy) = 1 with u = 0 on the boundary; static",
        [](const DomainFacts &) {
          PresetProblem p;
          p.equation = texts({{"a_xx", "-1"}, {"a_yy", "-1"}, {"f", "1"}});
@@ -162,8 +165,8 @@ const std::vector<Preset> &presets() {
        [](const DomainFacts &facts) {
          PresetProblem p;
          p.equation = texts({{"m1", "1"}, {"a_xx", "-k"}, {"a_yy", "-k"}});
-         p.parameters = numbers(
-             {{"k", 1.0}, {"h", 2.0}, {"u0", 1.0}, {"u_out", 0.0}});
+         p.parameters =
+             numbers({{"k", 1.0}, {"h", 2.0}, {"u0", 1.0}, {"u_out", 0.0}});
          p.condition =
              texts({{"alpha", "h"}, {"beta_n", "1"}, {"g", "h*u_out"}});
          p.initial = texts({{"u", "u0"}});
@@ -212,10 +215,9 @@ const std::vector<Preset> &presets() {
                              {"b_x", "v_x"},
                              {"b_y", "v_y"},
                              {"f", "1"}});
-         p.parameters =
-             numbers({{"k", round_to(0.05 * facts.domain_size, 2)},
-                      {"v_x", 1.0},
-                      {"v_y", 0.5}});
+         p.parameters = numbers({{"k", round_to(0.05 * facts.domain_size, 2)},
+                                 {"v_x", 1.0},
+                                 {"v_y", 0.5}});
          p.condition = dirichlet("0");
          p.solve = static_solve("sparse_lu");
          return p;
@@ -225,12 +227,12 @@ const std::vector<Preset> &presets() {
        "(the reaction makes it well posed); static",
        [](const DomainFacts &facts) {
          PresetProblem p;
-         p.equation = texts(
-             {{"a_xx", "-k"}, {"a_yy", "-k"}, {"c", "s"}, {"f", bump}});
+         p.equation =
+             texts({{"a_xx", "-k"}, {"a_yy", "-k"}, {"c", "s"}, {"f", bump}});
          p.parameters = numbers(
              {{"k", 1.0},
-              {"s", round_to(16 / (facts.domain_size * facts.domain_size),
-                             2)}});
+              {"s",
+               round_to(16 / (facts.domain_size * facts.domain_size), 2)}});
          add_bump(p.parameters, facts);
          p.condition = texts({{"beta_n", "1"}, {"g", "0"}});
          p.solve = static_solve("simplicial_ldlt");
@@ -262,9 +264,9 @@ Json apply_preset(const Json &case_json, std::string_view id,
     const PresetProblem p = preset.make(facts);
     Json conditions = Json::object();
     for (std::size_t i = 0; i < facts.regions.size(); ++i)
-      conditions[facts.regions[i]] =
-          i == 0 && !p.first_condition.is_null() ? p.first_condition
-                                                 : p.condition;
+      conditions[facts.regions[i]] = i == 0 && !p.first_condition.is_null()
+                                         ? p.first_condition
+                                         : p.condition;
     Json problem = Json::object();
     problem["equation"] = p.equation;
     problem["parameters"] = p.parameters;

@@ -72,7 +72,8 @@ Values single(const Json &case_json) {
   return session.solution_values(case_json);
 }
 
-void check_identical(const Values &a, const Values &b, const std::string &what) {
+void check_identical(const Values &a, const Values &b,
+                     const std::string &what) {
   check(a.size() == b.size(), what + ": as many snapshots");
   for (std::size_t k = 0; k < a.size(); ++k)
     check(a[k] == b[k], what + ": snapshot " + std::to_string(k) +
@@ -106,7 +107,8 @@ const Json &metrics(const Json &progress) {
 
 // Polls until the run is no longer running.
 Json wait(app::Session &session, std::uint64_t job) {
-  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+  const auto until =
+      std::chrono::steady_clock::now() + std::chrono::seconds(60);
   while (std::chrono::steady_clock::now() < until) {
     Json progress = session.solve_progress(job);
     if (progress["state"] != "running")
@@ -133,9 +135,10 @@ int main() {
       {"implicit Euler and the implicit midpoint rule: chunks give the same "
        "snapshots bit for bit",
        [] {
-         for (const std::string method : {"implicit_euler", "implicit_midpoint"}) {
-           check_identical(chunked(heat_case(method)), single(heat_case(method)),
-                           method + ", order 1");
+         for (const std::string method :
+              {"implicit_euler", "implicit_midpoint"}) {
+           check_identical(chunked(heat_case(method)),
+                           single(heat_case(method)), method + ", order 1");
            if (supports(method, 2))
              check_identical(chunked(wave_case(method)),
                              single(wave_case(method)), method + ", order 2");
@@ -203,15 +206,17 @@ int main() {
                "every snapshot");
          check(session.solution_values(case_json) == expected,
                "continuing gives the same snapshots");
-         expect_throws<app::StageError>([&] { (void)session.solution_values_float32(job, 400, 5); },
-                       "not ready");
+         expect_throws<app::StageError>(
+             [&] { (void)session.solution_values_float32(job, 400, 5); },
+             "not ready");
          // Other inputs replace the run.
          Json other = case_json;
          other["solve"]["time"]["t1"] = 0.5;
          const auto next = session.solve(other)["job"].get<std::uint64_t>();
          check(next != job, "a new run");
-         expect_throws<app::StageError>([&] { (void)session.solve_progress(job); },
-                       "no longer the current one");
+         expect_throws<app::StageError>(
+             [&] { (void)session.solve_progress(job); },
+             "no longer the current one");
          (void)wait(session, next);
        }},
       {"a static solve is a run that is done at once",
@@ -220,9 +225,8 @@ int main() {
          const Json progress = session.solve(app::Session::default_case());
          check(progress["state"] == "done" && progress["mode"] == "static",
                "done");
-         check(session
-                       .solution_values_float32(
-                           progress["job"].get<std::uint64_t>(), 0, 1)
+         check(session.solution_values_float32(
+                          progress["job"].get<std::uint64_t>(), 0, 1)
                        .size() ==
                    4 * progress["values"]["nodes"].get<std::size_t>(),
                "one snapshot");
