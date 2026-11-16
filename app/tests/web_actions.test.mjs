@@ -14,9 +14,10 @@ globalThis.localStorage = {
   removeItem: (key) => storage.delete(key),
 };
 const { applyPreset, caseChanged, followedRun, runAll, runStage, runWithPrerequisites, scheduleProblemCheck, showField, stopRun } = await import("../web/js/actions.js");
-const { applyRegionEdit, stageKey } = await import("../web/js/core.js");
+const { applyRegionEdit } = await import("../web/js/pure/case_model.js");
+const { stageKey } = await import("../web/js/pure/stages.js");
 const { settings, setSetting } = await import("../web/js/settings.js");
-const { currentError, currentKey, editCase, flushPersist, outdatedError, setCase, stageStatus, store } = await import("../web/js/state.js");
+const { blockedReason, canRedo, canUndo, currentError, currentKey, editCase, flushPersist, outdatedError, redoCase, setCase, setInputGroup, setInvalid, sealHistory, stageStatus, store, undoCase } = await import("../web/js/state.js");
 
 // Every fetch waits until the test answers it: answer(data) with JSON or
 // an ArrayBuffer, fail(error, status) with an error body.
@@ -415,23 +416,138 @@ test("every request carries this page's client id", async () => {
 
 test("the comparison is the server's, in double", async () => {
   start();
-  const { compareWith, comparison, comparisonValues, currentComparison } = await import("../web/js/compare.js");
+  const { compareWith, comparisons, comparisonValues, currentComparison, isOutdated } = await import("../web/js/compare.js");
   fresh("solve", { job: 9, state: "done", mode: "time", times: [0, 1], values: [new Float32Array(2), null], layout: layout(2) });
   const comparing = compareWith("x");
   const request = await next("/api/solve/compare");
   assert.deepEqual(request.body, { job: 9, exact: "x" });
   request.answer({ snapshots: [{ t: 0, max_abs: 1e-15, rms: 5e-16, l2: 4e-16 }, { t: 1, max_abs: 2e-15, rms: 1e-15, l2: 8e-16 }], max_abs: 2e-15 });
   await comparing;
-  assert.equal(currentComparison(), comparison);
+  const comparison = comparisons.exact;
+  assert.equal(currentComparison("exact"), comparison);
   assert.deepEqual([...comparison.linf], [1e-15, 2e-15], "the server's figures, not float32 rounding");
+  assert.deepEqual([...comparison.rms], [5e-16, 1e-15]);
   assert.equal(comparison.scale.min, -2e-15, "one symmetric scale");
   // u − exact of a snapshot is fetched when shown.
-  assert.equal(comparisonValues(1), null);
+  assert.equal(comparisonValues("exact", 1), null);
   const difference = await next("/api/solve/compare/difference");
   assert.deepEqual(difference.body, { job: 9, exact: "x", snapshot: 1 });
   difference.answer(float32([1e-15, -2e-15]));
   await sleep(5);
-  assert.ok(comparisonValues(1) instanceof Float32Array);
+  assert.ok(comparisonValues("exact", 1) instanceof Float32Array);
+  // The comparison belongs to its expression: another one in the case
+  // marks it outdated, the same one again makes it current.
+  editCase((c) => ((c.view ??= {}).exact_solution = "x"), "edit", { sections: ["view"] });
+  assert.equal(isOutdated("exact"), false);
+  editCase((c) => (c.view.exact_solution = "x + 1"), "edit", { sections: ["view"] });
+  assert.equal(isOutdated("exact"), true, "for the previous expression");
+  assert.equal(currentComparison("exact"), comparison, "still shown, greyed");
+});
+
+test("an answer to an older comparison is dropped", async () => {
+  start();
+  const { compare, comparisons } = await import("../web/js/compare.js");
+  fresh("solve", { job: 9, state: "done", mode: "static", times: [0], values: [new Float32Array(2)], layout: layout(1) });
+  const first = compare("exact", { exact: "x" });
+  const older = await next("/api/solve/compare");
+  const second = compare("exact", { exact: "y" });
+  const newer = await next("/api/solve/compare");
+  newer.answer({ snapshots: [{ t: 0, max_abs: 2, rms: 2, l2: 2 }], max_abs: 2 });
+  await second;
+  older.answer({ snapshots: [{ t: 0, max_abs: 1, rms: 1, l2: 1 }], max_abs: 1 });
+  await first;
+  assert.equal(comparisons.exact.linf[0], 2, "the newer comparison stays");
+  assert.equal(comparisons.exact.against.exact, "y");
+});
+
+test("a reference run is kept, compared and forgotten; a refusal says why", async () => {
+  start();
+  const { compare, comparisons, forgetReference, keepReference } = await import("../web/js/compare.js");
+  fresh("solve", { job: 4, state: "done", mode: "static", times: [0], values: [new Float32Array(2)], layout: layout(1) });
+  const keeping = keepReference();
+  const keep = await next("/api/solve/reference");
+  assert.deepEqual(keep.body, { job: 4 });
+  keep.answer({ reference: { job: 4, mode: "static", times: [0], mesh_id: 2 } });
+  assert.equal(await keeping, null);
+  assert.equal(store.reference.job, 4);
+  fresh("solve", { job: 5, state: "done", mode: "static", times: [0], values: [new Float32Array(2)], layout: layout(1) });
+  const comparing = compare("reference", { reference: 4 });
+  const request = await next("/api/solve/compare");
+  assert.deepEqual(request.body, { job: 5, reference: true });
+  request.fail({ stage: "compare", kind: "input", message: "the reference run 4 is on another mesh than run 5" });
+  await comparing;
+  assert.match(comparisons.reference.error.message, /another mesh/);
+  const forgetting = forgetReference();
+  (await next("/api/solve/reference/clear")).answer({ reference: null });
+  assert.equal(await forgetting, null);
+  assert.equal(store.reference, null);
+});
+
+test("a preset answer does not overwrite an edit made after the request", async () => {
+  start();
+  const done = applyPreset({ id: "wave", label: "Wave" });
+  const request = await next("/api/preset");
+  editCase((c) => (c.problem.parameters = { k: 7 }), "edit", { sections: ["problem"] });
+  request.answer({ ...fullCase(), problem: { equation: { m2: "1" } }, solve: { mode: "time" } });
+  assert.equal(await done, false);
+  assert.deepEqual(store.caseData.problem.parameters, { k: 7 }, "the edit stays");
+  assert.equal(store.caseData.problem.equation, undefined);
+});
+
+test("a preset answer for a case that was replaced is dropped", async () => {
+  start();
+  const done = applyPreset({ id: "wave", label: "Wave" });
+  const request = await next("/api/preset");
+  setCase(fullCase());
+  request.answer({ ...fullCase(), problem: { equation: { m2: "1" } }, solve: { mode: "time" } });
+  assert.equal(await done, false);
+  assert.equal(store.caseData.problem.equation, undefined);
+});
+
+test("invalid number fields block every run", async () => {
+  start();
+  setInvalid("mesh.spec.max_edge_length.relative", { label: "Max edge length, relative", reason: "not a number" });
+  assert.equal(blockedReason(), "1 field is not a number: Max edge length, relative");
+  assert.equal(await runWithPrerequisites("solve"), false);
+  assert.equal(await runAll(), false);
+  await flush();
+  assert.equal(pending.length, 0, "nothing was sent");
+  setInvalid("mesh.spec.max_edge_length.relative", null);
+  assert.equal(blockedReason(), null);
+  setInvalid("a", { label: "A" });
+  setCase(fullCase());
+  assert.equal(blockedReason(), null, "a new case has no invalid fields");
+});
+
+test("undo and redo of case edits; typing in one field is one step", () => {
+  start();
+  assert.equal(canUndo(), false, "a new case starts without history");
+  const field = {};
+  setInputGroup(field);
+  for (const g of ["1", "12", "123"]) editCase((c) => (c.problem.boundary_conditions.left.g = g), "edit", { sections: ["problem"] });
+  setInputGroup(null);
+  sealHistory();
+  editCase((c) => (c.mesh.m = 9), "structure");
+  assert.equal(canUndo(), true);
+  assert.deepEqual(undoCase(), ["mesh"], "only the changed section");
+  assert.equal(store.caseData.mesh.m, 1);
+  assert.equal(currentKey("mesh"), stageKey(store.caseData, "mesh"), "keys follow");
+  assert.deepEqual(undoCase(), ["problem"]);
+  assert.equal(store.caseData.problem.boundary_conditions.left.g, "0", "the whole typing at once");
+  assert.equal(canUndo(), false);
+  redoCase();
+  assert.equal(store.caseData.problem.boundary_conditions.left.g, "123");
+  assert.equal(canRedo(), true);
+  redoCase();
+  assert.equal(store.caseData.mesh.m, 9);
+  // A section the edit created is removed by undo.
+  editCase((c) => (c.notes = "hello"));
+  undoCase();
+  assert.equal("notes" in store.caseData, false);
+  // Conditions that follow a new geometry are not a step of their own.
+  const before = canUndo();
+  editCase((c) => (c.problem.boundary_conditions.right = { alpha: "1" }), "structure", { sections: ["problem"], record: false });
+  assert.equal(canUndo(), before);
 });
 
 let failed = 0;

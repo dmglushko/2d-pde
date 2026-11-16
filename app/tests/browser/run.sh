@@ -31,6 +31,12 @@ all=(
   "phone 390 844 solve"
   "time_bar 1280 800 solve"
   "steps 1280 800 assemble"
+  "invalid_entry 1280 800 mesh"
+  "race_example 1280 800 problem"
+  "undo_redo 1280 800 problem"
+  "two_tabs 1440 900 solve"
+  "lock_range 1440 900 solve"
+  "reference 1440 900 solve"
 )
 
 chrome="${PDE2D_CHROME:-}"

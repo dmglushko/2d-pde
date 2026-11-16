@@ -3,10 +3,9 @@
 // improvers), each with its components and their options. The head holds
 // the Mesh button and the status, the result follows, the settings last.
 
-import { downloadExport } from "../api.js";
-import { runWithPrerequisites, toast } from "../actions.js";
-import { formatNumber } from "../core.js";
-import { actionButton, errorBox, exportButton, fill, foldable, h, markError, optionsForm, reportsView, stat } from "../dom.js";
+import { exportFile, runWithPrerequisites } from "../actions.js";
+import { formatNumber } from "../pure/format.js";
+import { actionButton, errorBox, exportButton, fill, foldable, h, markError, optionsForm, reportsView, stat, warningChip } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 import { choiceCard, componentBody, componentInfo, defaultChoice } from "./components.js";
 import { setStepStatus, stepHead } from "./head.js";
@@ -82,8 +81,9 @@ const STALE = "The mesh shown is outdated: mesh again to export it.";
 
 function resultView(result, fresh) {
   const s = result.stats;
-  const save = (kind) => () => downloadExport(kind, store.caseData, store.caseName).catch((e) => toast(e.message));
+  const save = (kind) => () => exportFile(kind);
   return [
+    warningChip(result.reports, "mesh.reports"),
     h(
       "div",
       { class: "stats" },
@@ -122,7 +122,7 @@ export const meshPanel = {
     const key = section.settings.key;
     mesh[key] ??= {};
     const fromFile = store.caseData.geometry?.source === "mesh_file";
-    const head = stepHead("mesh", actionButton("Mesh", () => runWithPrerequisites("mesh"), { primary: true }));
+    const head = stepHead("mesh", actionButton("Mesh", () => runWithPrerequisites("mesh"), { primary: true, guarded: true }));
     const spec = foldable(
       { id: `mesh.${key}`, title: section.settings.label, attributes: { dataset: { path: `mesh.${key}` } } },
       optionsForm(section.settings.options, mesh[key], `mesh.${key}`, () => editCase(() => {}, "edit", { sections: ["mesh"] })),

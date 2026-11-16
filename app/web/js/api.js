@@ -1,6 +1,7 @@
 // The server's JSON API (docs/app.md, "The API").
 
-import { decodeMesh, splitSnapshots } from "./core.js";
+import { decodeMesh } from "./pure/mesh_math.js";
+import { splitSnapshots } from "./pure/run_values.js";
 
 export class ApiError extends Error {
   constructor(error) {
@@ -75,7 +76,7 @@ export const api = {
   examples: () => request("/api/examples"),
   example: (name) => request(`/api/examples/${encodeURIComponent(name)}`),
   geometry: (caseData) => request("/api/geometry", caseData),
-  // The mesh's summary, then its arrays in binary (core.js, decodeMesh):
+  // The mesh's summary, then its arrays in binary (pure/mesh_math.js, decodeMesh):
   // the answer has "mesh" with nodes, triangles and boundary_edges as
   // typed arrays, as the picture uses them.
   mesh: async (caseData) => {

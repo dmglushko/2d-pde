@@ -1,15 +1,18 @@
 // Switching the case while a request runs shows only the new case's
 // results.
-export default async ({ q, tab, panel, button, click, select, until, sleep, text, check }) => {
+export default async ({ q, tab, panel, button, click, select, until, idle, text, check }) => {
   select(q("#examples"), "wave_square.json");
   await until(() => text(q("#toast")).includes("wave_square"), "the wave case");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   tab("solve");
   click(button("Solve", panel("solve")));
-  await sleep(40);
+  await until(() => /Solving|Running|Meshing/.test(text(q("#panel-solve .step-status"))) || q(".steps .dot.busy"), "the solve to start");
   select(q("#examples"), "poisson_rectangle.json");
   await until(() => text(q("#toast")).includes("poisson_rectangle"), "the Poisson case");
-  await sleep(3000);
+  // The server answers in order: once the new case's geometry is here
+  // and nothing is in flight, the wave case's answers have come and gone.
+  await until(() => q("#geometry-summary .stats") && !q(".steps .dot.busy"), "the Poisson geometry");
+  await idle();
   check("no result of the wave case is shown", !q("#solve-result .stats"), text(q("#solve-result")));
   check("no time bar from the wave case", q("#timebar").hidden);
   check("the Solve step is not running", !/Running|Solving/.test(text(q("#panel-solve .step-status"))), text(q("#panel-solve .step-status")));

@@ -18,10 +18,10 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   check("the comparison is offered", Boolean(exact));
   type(exact, "x");
   click(button("Compare", panel("solve")));
-  const figure = await until(() => { const v = q("#compare-result .stat .value"); return v && Number.isFinite(Number(v.textContent)) ? v : null; }, "the comparison", 30000);
+  const figure = await until(() => { const v = q('.comparison[data-kind="exact"] .compare-result .stat .value'); return v && Number.isFinite(Number(v.textContent)) ? v : null; }, "the comparison", 30000);
   const error = Number(figure.textContent);
   check("u = x is solved exactly (in double, not float32 rounding)", Number.isFinite(error) && error < 1e-12, figure.textContent);
-  click(q("#show-error"));
+  click(q("#show-exact"));
   await until(() => /u − exact/.test(text(q("#legend"))), "the error in the picture");
   check("the picture shows u − exact", true);
   type(exact, "sin(");

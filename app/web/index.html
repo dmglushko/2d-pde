@@ -16,6 +16,10 @@
     <header class="topbar">
       <div class="brand">pde2d <small id="version"></small></div>
       <div class="case-actions">
+        <div class="history-buttons" role="group" aria-label="Undo and redo">
+          <button id="undo" class="icon" type="button" aria-label="Undo" title="Undo the last case edit (Ctrl+Z)" disabled>↶</button>
+          <button id="redo" class="icon" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
+        </div>
         <button id="new-case" type="button">New</button>
         <select id="examples" aria-label="Open an example">
           <option value="">Examples…</option>
@@ -24,6 +28,7 @@
         <input id="open-case" type="file" accept=".json,application/json" tabindex="-1" hidden />
         <button id="save-case" type="button">Save case</button>
         <span id="unsaved" class="chip" hidden>unsaved changes</span>
+        <button id="restore-case" type="button" hidden>Restore previous case</button>
         <button id="run-all" class="primary" type="button">Run all</button>
         <button id="open-settings" class="icon" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog">⚙</button>
       </div>
@@ -47,15 +52,16 @@
             <label title="Dirichlet nodes"><input type="checkbox" id="layer-dirichlet" /> Dirichlet</label>
             <label><input type="checkbox" id="layer-isolines" /> Isolines</label>
             <label
-              >Colour
-              <select id="color-by">
+              ><span class="toolbar-label">Colour</span>
+              <select id="color-by" aria-label="Colour">
                 <option value="none">none</option>
                 <option value="quality">smallest angle</option>
                 <option value="field">field</option>
+                <option value="gradient">|∇| of the field</option>
               </select>
             </label>
-            <button id="fit-view" class="small" type="button" title="Fit the picture (0)">Fit</button>
-            <button id="save-picture" class="small" type="button" title="Save the picture with its legend as PNG">Save picture</button>
+            <button id="profile-tool" class="small" type="button" aria-pressed="false" title="Drag across the picture to plot the shown field along a line">Line profile</button>
+            <button id="save-picture" class="small" type="button" title="Save the picture with its legend as PNG">Save<span class="wide-only"> picture</span></button>
             <span class="status" id="view-status"></span>
           </div>
           <div class="canvas-wrap" id="canvas-wrap">
@@ -66,13 +72,27 @@
             ></canvas>
             <div class="empty-view" id="empty-view">Choose a geometry, or drop an SVG, .msh or .pde2d file here.</div>
             <div class="tooltip" id="tooltip" hidden></div>
+            <div class="zoom-buttons" role="group" aria-label="Zoom">
+              <button id="zoom-in" class="icon" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+              <button id="zoom-out" class="icon" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+              <button id="fit-view" class="icon" type="button" aria-label="Fit the picture" title="Fit the picture (0)">⤢</button>
+            </div>
           </div>
+          <div
+            class="picture-handle"
+            id="picture-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Picture height: drag, or use the arrow keys"
+            tabindex="0"
+          ></div>
           <div class="timebar" id="timebar" hidden></div>
           <div class="legend" id="legend"></div>
         </div>
         <div class="viewer-extra" id="probes" hidden>
           <div class="probe-list"></div>
           <div class="probe-chart" hidden></div>
+          <div class="profile-chart" hidden></div>
         </div>
       </section>
     </main>

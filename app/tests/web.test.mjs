@@ -1,58 +1,29 @@
 // Tests of the page's pure helpers (app/web/js/core.js), without a
 // browser. Run by CTest as app_web when Node.js is installed.
 import assert from "node:assert/strict";
+import { applyRegionEdit, fileKind, normalizeCase, reconcileConditions, renameParameter, undoRegionEdit, visibleCoefficients } from "../web/js/pure/case_model.js";
+import { fieldScale, lockedScale, nodePositions, oklabToRgb, rampTable, regionToken, rgbToOklab } from "../web/js/pure/color.js";
+import { formatNumber, niceTicks, numberText, parseNumberText, pictureName, setDefaultDigits } from "../web/js/pure/format.js";
+import { History } from "../web/js/pure/history.js";
 import {
   barycentric,
   decodeMesh,
-  errorPath,
-  errorPathOf,
-  keptSnapshots,
-  nearestLoaded,
-  snapshotPlan,
-  fieldScale,
-  fileKind,
-  formatNumber,
-  oklabToRgb,
-  rampTable,
-  regionToken,
-  rgbToOklab,
-  smallestAngle,
-  stageKey,
-  applyRegionEdit,
-  normalizeCase,
-  reconcileConditions,
-  undoRegionEdit,
-  triangleAngles,
-  STAGES,
-  STEPS,
-  RUN_ALL,
-  stagesToRun,
-  solutionBytes,
-  LARGE_SOLUTION_BYTES,
-  splitSnapshots,
-  parseNumberText,
-  renameParameter,
-  requestCase,
-  viewTransform,
-  nodePositions,
-  normalizeSettings,
-  SETTINGS_DEFAULTS,
-  parseFolds,
-  setDefaultDigits,
-  meshGrid,
-  locatePoint,
+  gradientMagnitudes,
   interpolateAt,
-  probeSeries,
-  nearestValuedNode,
-  freeProbeSlot,
   isolineLevels,
   isolines,
-  errorValues,
-  maxAbs,
-  valueRange,
-  niceTicks,
-  pictureName,
-} from "../web/js/core.js";
+  locatePoint,
+  meshGrid,
+  nearestValuedNode,
+  sampleLine,
+  smallestAngle,
+  triangleAngles,
+  viewTransform,
+} from "../web/js/pure/mesh_math.js";
+import { SETTINGS_DEFAULTS, clampPictureHeight, freeProbeSlot, normalizeSettings, parseFolds } from "../web/js/pure/prefs.js";
+import { keptSnapshots, nearestLoaded, snapshotPlan, splitSnapshots, valueRange } from "../web/js/pure/run_values.js";
+import { LARGE_SOLUTION_BYTES, RUN_ALL, STAGES, STEPS, errorPath, errorPathOf, requestCase, solutionBytes, stageKey, stagesToRun, stepOfPath } from "../web/js/pure/stages.js";
+import { Tickets } from "../web/js/pure/tickets.js";
 
 const cases = [];
 const test = (name, body) => cases.push([name, body]);
@@ -84,6 +55,94 @@ test("field scales: sequential, diverging around zero, constant, empty", () => {
   assert.equal(div.position(-4), 0);
   assert.equal(fieldScale([2, 2]).kind, "constant");
   assert.equal(fieldScale([null, NaN]).kind, "empty");
+  assert.deepEqual([seq.low, seq.high, div.low, div.high], [1, 3, -4, 4], "the ends of the colour bar");
+});
+
+test("a locked colour range is exactly the range given", () => {
+  const scale = lockedScale(-1, 3);
+  assert.equal(scale.kind, "diverging", "it spans zero");
+  assert.deepEqual([scale.low, scale.high], [-1, 3]);
+  assert.equal(scale.position(-1), 0);
+  assert.equal(scale.position(3), 1);
+  assert.equal(scale.position(1), 0.5);
+  assert.equal(lockedScale(0, 2).kind, "sequential");
+  assert.equal(lockedScale(2, 2), null, "low must be below high");
+  assert.equal(lockedScale(NaN, 2), null);
+  const positions = nodePositions([0, 4], scale);
+  assert.equal(positions[1], 1.25, "a value beyond the range lies beyond the bar (the drawing clamps it)");
+});
+
+test("request tickets: the newest of a kind, in the same scope, for the same key", () => {
+  const tickets = new Tickets();
+  const first = tickets.issue("mesh", 1, "k1");
+  assert.ok(tickets.holds(first, 1, "k1"));
+  assert.ok(!tickets.holds(first, 1, "k2"), "the input changed");
+  assert.ok(tickets.isLive(first, 1), "still live: kept as an outdated result");
+  assert.ok(!tickets.isLive(first, 2), "another case");
+  const second = tickets.issue("mesh", 1, "k1");
+  assert.ok(!tickets.isLive(first, 1), "a newer request of the kind replaces it");
+  assert.ok(tickets.holds(second, 1, "k1"));
+  const other = tickets.issue("problem", 1, "p");
+  assert.ok(tickets.holds(second, 1, "k1"), "kinds are independent");
+  tickets.supersede("problem");
+  assert.ok(!tickets.isLive(other, 1), "superseded");
+  const a = tickets.issue("difference", 1, "c", { exclusive: false });
+  const b = tickets.issue("difference", 1, "c", { exclusive: false });
+  assert.ok(tickets.holds(a, 1, "c") && tickets.holds(b, 1, "c"), "requests side by side");
+  assert.ok(!tickets.holds(a, 1, "d"), "but only for the same key");
+});
+
+test("undo history: typing in one field is one step, bounded, redo after undo", () => {
+  const history = new History({ limit: 3 });
+  const field = {};
+  assert.equal(history.record({ problem: "a" }, { problem: "a" }, field), false, "no change, no step");
+  history.record({ problem: "a" }, { problem: "ab" }, field);
+  history.record({ problem: "ab" }, { problem: "abc" }, field);
+  assert.equal(history.undoSteps.length, 1, "typing merges");
+  history.seal();
+  history.record({ problem: "abc" }, { problem: "abcd" }, field);
+  assert.equal(history.undoSteps.length, 2, "a sealed step does not take more typing");
+  history.record({ problem: "abcd", mesh: "m" }, { problem: "abcd", mesh: "n" }, null);
+  assert.deepEqual(history.undoSteps.at(-1).before, { mesh: "m" }, "only the sections that changed are kept");
+  assert.deepEqual(history.undo(), { mesh: "m" });
+  assert.ok(history.canRedo());
+  assert.deepEqual(history.redo(), { mesh: "n" });
+  history.undo();
+  history.record({ geometry: "g" }, { geometry: "h" }, null);
+  assert.ok(!history.canRedo(), "a new edit drops the redo steps");
+  history.record({ geometry: "h" }, { geometry: "i" }, null);
+  history.record({ geometry: "i" }, { geometry: "j" }, null);
+  assert.equal(history.undoSteps.length, 3, "bounded: the oldest go");
+  assert.deepEqual(history.undo(), { geometry: "i" });
+  // Typing back to where the step began leaves no step.
+  const again = new History();
+  again.record({ view: "1" }, { view: "12" }, field);
+  again.record({ view: "12" }, { view: "1" }, field);
+  assert.ok(!again.canUndo());
+  // Another field is another step.
+  again.record({ view: "1" }, { view: "2" }, field);
+  again.record({ view: "2" }, { view: "3" }, {});
+  assert.equal(again.undoSteps.length, 2);
+});
+
+test("the coefficients a form shows", () => {
+  const fields = [{ name: "alpha", term: "u" }, { name: "beta_n", term: "u_n" }, { name: "gamma", term: "u_t" }, { name: "g", term: "" }];
+  assert.deepEqual(visibleCoefficients(fields, { alpha: "1", g: "0" }), ["alpha", "g"], "a Dirichlet condition");
+  assert.deepEqual(visibleCoefficients(fields, { beta_n: "1", alpha: " " }), ["beta_n", "g"], "blank is not set; the right side always shows");
+  assert.deepEqual(visibleCoefficients(fields, {}, new Set(["gamma"])), ["gamma", "g"], "revealed by a template");
+});
+
+test("the step of a case path, and the picture's height", () => {
+  assert.equal(stepOfPath("mesh.spec.max_edge_length.relative"), "mesh");
+  assert.equal(stepOfPath("problem.parameters.k"), "problem");
+  assert.equal(stepOfPath("assembly.t"), "assemble");
+  assert.equal(stepOfPath("solve.time.step.options.dt"), "solve");
+  assert.equal(stepOfPath("geometry.options.width"), "geometry");
+  assert.equal(stepOfPath("geometry.region_edits[0]"), "geometry");
+  assert.equal(clampPictureHeight(50, 800), 160);
+  assert.equal(clampPictureHeight(700, 800), 560);
+  assert.equal(clampPictureHeight(300.4, 800), 300);
+  assert.equal(clampPictureHeight(NaN, 800), null);
 });
 
 test("regions take the categorical slots in order, then one neutral colour", () => {
@@ -326,11 +385,19 @@ test("solution sizes and binary snapshots", () => {
 test("number texts and parameter names", () => {
   assert.deepEqual(parseNumberText("2.5"), { kind: "number", value: 2.5 });
   assert.deepEqual(parseNumberText(" -1e-3 "), { kind: "number", value: -0.001 });
+  assert.deepEqual(parseNumberText(".5"), { kind: "number", value: 0.5 });
+  assert.deepEqual(parseNumberText("+3E2"), { kind: "number", value: 300 });
+  assert.deepEqual(parseNumberText("7."), { kind: "number", value: 7 });
   assert.deepEqual(parseNumberText(""), { kind: "empty" });
-  assert.deepEqual(parseNumberText("-"), { kind: "invalid" });
-  assert.deepEqual(parseNumberText("1e"), { kind: "invalid" });
-  assert.deepEqual(parseNumberText("", true), { kind: "invalid" }, "a number input reports '' for '1e'");
-  assert.deepEqual(parseNumberText("Infinity"), { kind: "invalid" });
+  assert.deepEqual(parseNumberText("   "), { kind: "empty" });
+  for (const text of ["-", "1e", "Infinity", "0x10", "1 000", "abc", "1.2.3", "1e5.5"]) assert.equal(parseNumberText(text).kind, "invalid", text);
+  assert.deepEqual(parseNumberText("-"), { kind: "invalid", reason: "not a number" });
+  assert.deepEqual(parseNumberText("0,05"), { kind: "invalid", reason: "use a decimal point (0.05), not a comma" }, "a decimal comma is named, not misread");
+  assert.equal(parseNumberText("1e400").reason, "too large for a number");
+  assert.equal(numberText(0.05), "0.05", "a decimal point whatever the locale");
+  assert.equal(numberText(1e-7), "1e-7");
+  assert.equal(numberText(null), "");
+  for (const value of [0.1, -2.5e-12, 123456.789, 1 / 3]) assert.equal(parseNumberText(numberText(value)).value, value, "shown text reads back exactly");
   const parameters = { k: 1, c: 2 };
   assert.deepEqual(Object.entries(renameParameter(parameters, "k", "kappa")), [["kappa", 1], ["c", 2]], "order kept");
   assert.deepEqual(renameParameter(parameters, "k", " k "), parameters);
@@ -437,12 +504,30 @@ test("a point is located and a P1 field interpolated exactly", () => {
   assert.ok(Number.isNaN(interpolateAt(locatePoint(square, grid, 1, 0.4), holes)), "a missing value gives NaN");
 });
 
-test("a probe's series is its interpolant at every snapshot", () => {
+test("the gradient of a P1 field per triangle", () => {
+  // A linear field has the same gradient (3, -4) on every triangle.
+  const grads = gradientMagnitudes(square.nodes, square.triangles, linear((x, y) => 3 * x - 4 * y + 2));
+  assert.equal(grads.length, 4);
+  for (const g of grads) assert.ok(Math.abs(g - 5) < 1e-12, `|∇u| = ${g}`);
+  // u = x² at the nodes: on the bottom triangle (0,0), (2,0), (1,0.5) with
+  // values 0, 4, 1 the interpolant is 2x - 2y, so |∇u| = sqrt(8).
+  const quad = gradientMagnitudes(square.nodes, square.triangles, linear((x) => x * x));
+  assert.ok(Math.abs(quad[0] - Math.sqrt(8)) < 1e-12, `${quad[0]}`);
+  const holes = linear((x) => x);
+  holes[4] = NaN;
+  assert.ok(gradientMagnitudes(square.nodes, square.triangles, holes).every(Number.isNaN), "a missing value gives NaN");
+  assert.ok(Number.isNaN(gradientMagnitudes([0, 0, 1, 0, 2, 0], [0, 1, 2], [0, 1, 2])[0]), "a degenerate triangle gives NaN");
+});
+
+test("a line profile samples the interpolant along the line", () => {
   const grid = meshGrid(square);
-  const found = locatePoint(square, grid, 0.5, 0.25);
-  const snapshots = [0, 1, 2].map((k) => Float32Array.from(linear((x, y) => k * (x + y))));
-  const series = probeSeries(found, snapshots);
-  assert.deepEqual([...series].map((v) => Math.round(v * 1e6) / 1e6), [0, 0.75, 1.5]);
+  const values = linear((x, y) => x + 2 * y);
+  const { distance, values: along } = sampleLine(square, grid, values, [0, 0.5], [2, 0.5], 4);
+  assert.deepEqual([...distance], [0, 0.5, 1, 1.5, 2]);
+  along.forEach((v, i) => assert.ok(Math.abs(v - (0.5 * i + 1)) < 1e-12, `${v} at ${i}`));
+  const out = sampleLine(square, grid, values, [1, 0.5], [3, 0.5], 2);
+  assert.ok(Math.abs(out.values[0] - 2) < 1e-12);
+  assert.ok(Number.isNaN(out.values[2]), "outside the mesh is a gap");
 });
 
 test("the nearest node with a value, within a radius", () => {
@@ -496,13 +581,7 @@ test("marching triangles: a level through a node is drawn once", () => {
   assert.equal(skipped.length, 0, "triangles with a missing value are skipped");
 });
 
-test("errors against an exact solution and their norms", () => {
-  const error = errorValues(Float32Array.from([1, 2, 3, NaN]), [1, 2.5, 2, 4]);
-  assert.deepEqual([...error].slice(0, 3), [0, -0.5, 1]);
-  assert.ok(Number.isNaN(error[3]));
-  assert.equal(maxAbs(error), 1);
-  assert.equal(maxAbs([-3, 2]), 3);
-  assert.ok(Number.isNaN(maxAbs([NaN, null])));
+test("the range of one snapshot", () => {
   assert.deepEqual(valueRange([3, NaN, -1, 2]), { min: -1, max: 3 });
   assert.ok(Number.isNaN(valueRange([NaN]).min));
 });

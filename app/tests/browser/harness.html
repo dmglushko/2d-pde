@@ -49,11 +49,49 @@
       frame.src = "index.html";
       if (params.get("w")) frame.style.width = `${params.get("w")}px`;
       document.body.append(frame);
+      // Counts a page's requests in flight, so a scenario can wait until
+      // every answer arrived (idle) instead of sleeping.
+      function watch(w) {
+        w.addEventListener("error", (e) => log(`FAIL page error: ${e.message} ${e.filename}:${e.lineno}`));
+        w.addEventListener("unhandledrejection", (e) => log(`FAIL page rejection: ${e.reason?.stack ?? e.reason}`));
+        const fetch = w.fetch.bind(w);
+        w.inflight = 0;
+        w.fetch = (...args) => {
+          w.inflight++;
+          return fetch(...args).finally(() => w.inflight--);
+        };
+      }
+      // One turn of the page's event loop (a timer, which headless Chrome
+      // runs under virtual time; animation frames it may not).
+      const nextFrame = (w) => new Promise((resolve) => w.setTimeout(resolve, 0));
+      // Waits until a page has had no request in flight for three turns
+      // in a row (an answer's handlers may send the next request).
+      async function idle(w, ms = 30000) {
+        const start = performance.now();
+        for (let quiet = 0; quiet < 3; ) {
+          if (performance.now() - start > ms) throw new Error("timeout waiting for the page to be idle");
+          await new Promise((resolve) => w.setTimeout(resolve, 20));
+          quiet = w.inflight === 0 ? quiet + 1 : 0;
+        }
+      }
+      // A second page instance (another tab: its own client id).
+      function openPage() {
+        return new Promise((resolve) => {
+          const other = document.createElement("iframe");
+          other.src = "index.html";
+          other.style.width = "800px";
+          other.style.height = "600px";
+          other.onload = () => {
+            watch(other.contentWindow);
+            resolve({ d: other.contentDocument, w: other.contentWindow, q: (s) => other.contentDocument.querySelector(s) });
+          };
+          document.body.append(other);
+        });
+      }
       frame.onload = async () => {
         const d = frame.contentDocument;
         const w = frame.contentWindow;
-        w.addEventListener("error", (e) => log(`FAIL page error: ${e.message} ${e.filename}:${e.lineno}`));
-        w.addEventListener("unhandledrejection", (e) => log(`FAIL page rejection: ${e.reason?.stack ?? e.reason}`));
+        watch(w);
         const q = (selector) => d.querySelector(selector);
         const qa = (selector) => [...d.querySelectorAll(selector)];
         const click = (element) => element.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
@@ -70,7 +108,30 @@
         };
         const text = (element) => (element?.innerText ?? "").replace(/\s+/g, " ").trim();
         const check = (name, ok, detail = "") => log(`${ok ? "PASS" : "FAIL"} ${name}${ok || !detail ? "" : `: ${detail}`}`);
-        const ctx = { d, w, q, qa, click, tab, button, panel, select, type, text, until, sleep, log, check };
+        const key = (target, k, extra = {}) => target.dispatchEvent(new w.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...extra }));
+        // A pointer event on the picture at (fx, fy), fractions of its size.
+        const pointer = (kind, fx, fy, id = 1) => {
+          const canvas = q("#view");
+          const r = canvas.getBoundingClientRect();
+          canvas.dispatchEvent(new w.PointerEvent(kind, { clientX: r.left + r.width * fx, clientY: r.top + r.height * fy, button: 0, pointerId: id, pointerType: "touch", isPrimary: id === 1, bubbles: true }));
+        };
+        // The picture's pixels at a grid of points: how many distinct
+        // colours, and a hash that changes when the picture does.
+        const pixels = () => {
+          const canvas = q("#view");
+          const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+          const colours = new Set();
+          let hash = 0;
+          for (let j = 1; j < 40; j++)
+            for (let i = 1; i < 40; i++) {
+              const o = 4 * (Math.floor((j * canvas.height) / 40) * canvas.width + Math.floor((i * canvas.width) / 40));
+              const c = (data[o] << 16) | (data[o + 1] << 8) | data[o + 2];
+              colours.add(c);
+              hash = (hash * 31 + c) | 0;
+            }
+          return { colours: colours.size, hash };
+        };
+        const ctx = { d, w, q, qa, click, tab, button, panel, select, type, text, until, sleep, log, check, idle: (ms) => idle(w, ms), openPage, key, pointer, pixels, nextFrame: () => nextFrame(w) };
         try {
           await until(() => q("#geometry-summary .stats"), "the geometry");
           const scenario = (await import(`./scenarios/${params.get("s")}.js`)).default;

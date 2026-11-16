@@ -2,9 +2,9 @@
 // file), its regions and region edits. The geometry is read a moment
 // after each change, so the head has no button, only the status.
 
-import { downloadExport } from "../api.js";
-import { runStage, toast } from "../actions.js";
-import { applyRegionEdit, fileKind, formatNumber, undoRegionEdit } from "../core.js";
+import { exportFile, runStage, toast } from "../actions.js";
+import { applyRegionEdit, fileKind, undoRegionEdit } from "../pure/case_model.js";
+import { formatNumber, parseNumberText } from "../pure/format.js";
 import { errorBox, exportButton, fileButton, fill, foldable, h, infoToggle, labelWithInfo, markError, optionsForm, readFileText, regionSwatch, stat } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 import { setStepStatus, stepHead } from "./head.js";
@@ -150,7 +150,7 @@ function describeEdit(edit) {
 }
 
 // Adds a region edit; its boundary conditions move with it, and undoing
-// it restores them (core.js, applyRegionEdit and undoRegionEdit).
+// it restores them (pure/case_model.js, applyRegionEdit and undoRegionEdit).
 function replaceCase(next) {
   editCase((c) => {
     for (const key of Object.keys(c)) delete c[key];
@@ -173,7 +173,7 @@ function regionEditor(region, regions, canSplit) {
   const text = (value, label, size) => h("input", { type: "text", value, "aria-label": label, class: `name-input ${size}` });
   const renameInput = text(region, "New name", "wide");
   const mergeSelect = h("select", { "aria-label": "Merge into" }, others.map((r) => h("option", { value: r }, r)));
-  const fraction = h("input", { type: "number", step: "any", value: "0.5", min: "0", max: "1", "aria-label": "Fraction", class: "fraction-input" });
+  const fraction = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", value: "0.5", "aria-label": "Fraction", class: "number fraction-input" });
   const first = text(`${region}_a`, "First name", "narrow");
   const second = text(`${region}_b`, "Second name", "narrow");
   const splitInfo = infoToggle("Measured along the boundary (domain on the left) from the start of the region.", "splitting");
@@ -183,9 +183,11 @@ function regionEditor(region, regions, canSplit) {
     editLine("Rename to", renameInput, () => addEdit({ op: "rename", from: region, to: renameInput.value.trim() })),
     others.length ? editLine("Merge into", mergeSelect, () => addEdit({ op: "merge", source: region, target: mergeSelect.value })) : null,
     canSplit
-      ? editLine("Split at", [fraction, splitInfo.button, "into", first, second], () =>
-          addEdit({ op: "split", region, fraction: Number(fraction.value), first: first.value.trim(), second: second.value.trim() }),
-        )
+      ? editLine("Split at", [fraction, splitInfo.button, "into", first, second], () => {
+          const parsed = parseNumberText(fraction.value);
+          if (parsed.kind !== "number") return toast(`The fraction: ${parsed.kind === "empty" ? "a value is needed" : parsed.reason}.`);
+          addEdit({ op: "split", region, fraction: parsed.value, first: first.value.trim(), second: second.value.trim() });
+        })
       : null,
     splitInfo.panel,
   );
@@ -290,7 +292,7 @@ export const geometryPanel = {
       view ? domainStats(view) : null,
     );
     slot.classList.toggle("outdated-result", Boolean(view) && !fresh);
-    const save = () => downloadExport("geometry.svg", store.caseData, store.caseName).catch((e) => toast(e.message));
+    const save = () => exportFile("geometry.svg");
     fill(
       container.querySelector("#geometry-regions"),
       view

@@ -4,7 +4,8 @@
 // During a run it shows how far the run got.
 
 import { followedRun } from "./actions.js";
-import { formatNumber, valueRange } from "./core.js";
+import { formatNumber } from "./pure/format.js";
+import { valueRange } from "./pure/run_values.js";
 import { h } from "./dom.js";
 import { settings } from "./settings.js";
 import { freshResult, notify, store } from "./state.js";
@@ -42,7 +43,7 @@ export function showFrame(index) {
   store.solveFrame = index;
   store.solveFrameChosen = true;
   store.fieldSource = "solve";
-  if (store.view.colorBy !== "field") store.view.colorBy = "field";
+  if (store.view.colorBy !== "field" && store.view.colorBy !== "gradient") store.view.colorBy = "field";
   notify("frame");
 }
 

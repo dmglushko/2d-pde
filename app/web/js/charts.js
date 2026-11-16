@@ -4,7 +4,7 @@
 // tooltip under the pointer; a click picks that snapshot. Colours come
 // from the tokens through classes (style.css, .chart .s1 to .s4).
 
-import { formatNumber, niceTicks } from "./core.js";
+import { formatNumber, niceTicks } from "./pure/format.js";
 import { h } from "./dom.js";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -16,11 +16,14 @@ function svg(tag, attributes = {}, ...children) {
   return element;
 }
 
-// series: [{name, cls ("s1".."s4"), values (one per time)}]. `width` in
-// CSS pixels; `onPick(index)` when the chart is clicked; `label` names
-// the chart for screen readers. Returns the element; .setCurrent(index)
-// moves the marker without drawing the chart again.
-export function lineChart({ times, series, current = 0, width = 480, height = 128, onPick = null, label = "chart", format = formatNumber }) {
+// series: [{name, cls ("s1".."s4", or "ink" for a single line that is no
+// series of a set), values (one per time)}]. `times` are the x values
+// (`xName` names them in the tooltip: "t", or "s" for a distance along a
+// line). `width` in CSS pixels; `onPick(index)` when the chart is clicked;
+// `label` names the chart for screen readers; `current` is the index
+// marked (null: no marker). Returns the element; .setCurrent(index) moves
+// the marker without drawing the chart again.
+export function lineChart({ times, series, current = 0, width = 480, height = 128, onPick = null, label = "chart", format = formatNumber, xName = "t" }) {
   const margin = { left: 52, right: series.length > 1 ? 28 : 12, top: 8, bottom: 22 };
   const plotW = Math.max(40, width - margin.left - margin.right);
   const plotH = Math.max(30, height - margin.top - margin.bottom);
@@ -94,6 +97,12 @@ export function lineChart({ times, series, current = 0, width = 480, height = 12
   wrap.append(chart, tooltip);
 
   wrap.setCurrent = (index) => {
+    const hide = index === null || index === undefined;
+    marker.setAttribute("visibility", hide ? "hidden" : "visible");
+    if (hide) {
+      for (const dot of markerDots) dot.setAttribute("visibility", "hidden");
+      return;
+    }
     const k = Math.max(0, Math.min(times.length - 1, index));
     marker.setAttribute("x1", x(times[k]));
     marker.setAttribute("x2", x(times[k]));
@@ -122,7 +131,7 @@ export function lineChart({ times, series, current = 0, width = 480, height = 12
     cross.setAttribute("x2", x(times[k]));
     cross.setAttribute("visibility", "visible");
     tooltip.replaceChildren(
-      h("div", { class: "tip-head" }, `t = ${formatNumber(times[k], 5)}`),
+      h("div", { class: "tip-head" }, `${xName} = ${formatNumber(times[k], 5)}`),
       ...series.map((s) => h("div", { class: "tip-row" }, h("span", { class: `key-line ${s.cls}` }), s.name, h("span", { class: "num" }, formatNumber(s.values[k])))),
     );
     tooltip.hidden = false;

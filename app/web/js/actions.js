@@ -1,10 +1,25 @@
 // Running the stages on the server and keeping their results.
 
-import { api, ApiError } from "./api.js";
-import { RUN_ALL, STAGES, fieldScale, reconcileConditions, requestCase, stageInfo, stagesToRun } from "./core.js";
+import { api, ApiError, downloadExport } from "./api.js";
+import { reconcileConditions } from "./pure/case_model.js";
+import { fieldScale } from "./pure/color.js";
+import { RUN_ALL, STAGES, requestCase, stageInfo, stagesToRun } from "./pure/stages.js";
 import { settings } from "./settings.js";
 import { growSnapshots, loadAround } from "./snapshots.js";
-import { currentError, currentKey, editCase, freshResult, notify, openStep, setColorBy, store } from "./state.js";
+import {
+  blockedReason,
+  currentError,
+  currentKey,
+  editCase,
+  freshResult,
+  notify,
+  openStep,
+  requestTicket,
+  sectionRevision,
+  setColorBy,
+  store,
+  supersede,
+} from "./state.js";
 
 // --- the toast ------------------------------------------------------------------
 
@@ -74,11 +89,12 @@ const calls = {
 for (const stage of STAGES) if (!calls[stage.call]) throw new Error(`no call for ${stage.id}`);
 
 // Requests overlap (a slow mesh, a quick edit, a new case). Each run of a
-// stage gets a generation; only the latest run of a stage, for the case
-// that is still loaded, may change the state. Older answers are dropped.
-const latest = {};
+// stage takes a request ticket (state.js) of the stage's kind for its
+// stage key: only the newest run of a stage, for the case that is still
+// loaded, may change the state (a result whose key changed since is kept,
+// as outdated). Older answers are dropped.
 
-// A time run being followed: {job, key, caseId, generation}; while one is,
+// A time run being followed: {job, key, ticket}; while one is,
 // the solve stage is busy but the server answers other requests between
 // its chunks.
 let following = null;
@@ -95,11 +111,10 @@ function solveScale(data) {
 // when it failed, and null when a newer run or another case superseded it
 // (its answer is then dropped).
 async function run(stage, field) {
-  const generation = (latest[stage] = (latest[stage] ?? 0) + 1);
-  const caseId = store.caseId;
-  const key = currentKey(stage);
+  const ticket = requestTicket(stage, () => currentKey(stage));
+  const key = ticket.key;
   const caseData = structuredClone(requestCase(store.caseData, stage));
-  const current = () => generation === latest[stage] && caseId === store.caseId;
+  const current = () => ticket.live();
   if (stage === "solve") stopFollowing();
   store.busy.add(stage);
   store.busySince[stage] = globalThis.performance?.now() ?? Date.now();
@@ -109,7 +124,7 @@ async function run(stage, field) {
     if (!current()) return null;
     // A check of a problem that was edited since is not worth showing: a
     // newer one is on its way.
-    if (stage === "problem" && key !== currentKey("problem")) return null;
+    if (stage === "problem" && !ticket.holds()) return null;
     if (stage === "solve") {
       solveScale(data);
       store.solveFrame = data.times.length - 1;
@@ -125,7 +140,7 @@ async function run(stage, field) {
     store.errors[stage] = null;
     if (stage === "geometry") syncConditions(data, key);
     if (stage === "solve" && data.state === "running") {
-      following = { job: data.job, key, caseId, generation };
+      following = { job: data.job, key, ticket };
       notify("result");
       return await followRun(following, data);
     }
@@ -137,7 +152,7 @@ async function run(stage, field) {
     store.errors[stage] = failure;
     return false;
   } finally {
-    if (generation === latest[stage]) {
+    if (ticket.newest()) {
       store.busy.delete(stage);
       delete store.busySince[stage];
     }
@@ -157,7 +172,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // user chose one with the slider, or the setting is off). Returns true
 // when done, false when it failed, null when it was stopped or replaced.
 async function followRun(run, data) {
-  const live = () => following === run && store.caseId === run.caseId && latest.solve === run.generation;
+  const live = () => following === run && run.ticket.live();
   while (live()) {
     await wait(POLL_MS);
     if (!live()) return null;
@@ -231,9 +246,9 @@ export function followedRun() {
 // A change of the case that changes the solve's inputs stops its run
 // (main.js calls this after every change).
 export function caseChanged() {
-  if (following && (store.caseId !== following.caseId || currentKey("solve") !== following.key)) {
+  if (following && !following.ticket.holds()) {
     stopFollowing();
-    latest.solve = (latest.solve ?? 0) + 1;
+    supersede("solve");
     store.busy.delete("solve");
     delete store.busySince.solve;
     const data = store.results.solve?.data;
@@ -258,11 +273,12 @@ function failed(stage) {
   openStep(stage);
 }
 
-// Runs `stage` after its prerequisites (core.js, STAGES) that are not
+// Runs `stage` after its prerequisites (pure/stages.js, STAGES) that are not
 // fresh, stopping at the first failure with a toast that opens the
 // failing step. `field` is the field of a "field" run. Returns true when
 // the stage ran and worked, false after a failure, null when superseded.
 export async function runWithPrerequisites(stage, field) {
+  if (refuseWhileInvalid()) return false;
   for (const id of stagesToRun(stage, isFresh)) {
     const ok = await run(id, id === stage ? field : undefined);
     if (ok === null) return null;
@@ -274,13 +290,23 @@ export async function runWithPrerequisites(stage, field) {
   return true;
 }
 
+// While a number field holds text that is not a number, the case still
+// has its previous value: running would compute something the page does
+// not show. Says so and returns true.
+function refuseWhileInvalid() {
+  const reason = blockedReason();
+  if (!reason) return false;
+  toast(`Fix it first: ${reason}. The case still has the previous value.`);
+  return true;
+}
+
 // Evaluates a field on the mesh (docs/app.md, "The API").
 export function showField(field) {
   return run("field", field);
 }
 
 // After a geometry the library accepted: every region gets a boundary
-// condition (core.js, reconcileConditions). Only for the geometry that is
+// condition (pure/case_model.js, reconcileConditions). Only for the geometry that is
 // still in the case.
 function syncConditions(geometryView, key) {
   if (key !== currentKey("geometry")) return;
@@ -294,7 +320,7 @@ function syncConditions(geometryView, key) {
       c.view = next.view;
     },
     "structure",
-    { sections: ["problem", "view"] },
+    { sections: ["problem", "view"], record: false },
   );
 }
 
@@ -302,6 +328,7 @@ function syncConditions(geometryView, key) {
 // fresh; stops at the first failure (with the toast of
 // runWithPrerequisites). Returns true when all are up to date.
 export async function runAll() {
+  if (refuseWhileInvalid()) return false;
   for (const stage of RUN_ALL) {
     if (isFresh(stage)) continue;
     const ok = await run(stage);
@@ -336,19 +363,27 @@ export function scheduleProblemCheck({ now = false } = {}) {
 }
 
 // Fills the problem and the solve settings from a preset of the server's
-// catalog, for the case's geometry. The toast offers to take it back.
+// catalog, for the case's geometry. The answer is applied only when the
+// geometry, problem and solve sections are still the ones it was made for
+// (an edit made meanwhile is never overwritten). The toast offers to take
+// it back.
 export async function applyPreset(preset) {
-  const caseId = store.caseId;
+  const ticket = requestTicket("preset", () => sectionRevision("geometry", "problem", "solve"));
   const before = { problem: structuredClone(store.caseData.problem), solve: structuredClone(store.caseData.solve) };
   let next;
   try {
     const { format, version, geometry, problem, solve } = store.caseData;
     next = await api.preset({ format, version, geometry, problem, solve }, preset.id);
   } catch (error) {
-    toast(`The preset needs a geometry the library accepts: ${error.message}`);
+    if (ticket.live()) toast(`The preset needs a geometry the library accepts: ${error.message}`);
     return false;
   }
-  if (caseId !== store.caseId) return false;
+  if (!ticket.live()) return false;
+  if (!ticket.holds()) {
+    toast(`${preset.label} was not applied: the case changed while it was prepared. Choose it again to apply it.`);
+    return false;
+  }
+  const caseId = store.caseId;
   const replace = (values) =>
     editCase(
       (c) => {
@@ -372,4 +407,25 @@ export async function applyPreset(preset) {
     },
   });
   return true;
+}
+
+// --- exports ------------------------------------------------------------------------
+
+// An error of an export in plain words: a result that is not ready (409)
+// or a server that is busy (429) says what to do.
+export function exportErrorText(kind, error) {
+  const message = String(error?.message ?? error);
+  const sentence = message.charAt(0).toUpperCase() + message.slice(1);
+  if (error?.kind === "not_ready") return `${kind} is not ready: ${sentence.replace(/\.$/, "")}.`;
+  if (error?.kind === "busy") return "The app is busy with earlier requests. Try the export again in a moment.";
+  return `${kind} could not be exported: ${sentence}`;
+}
+
+// Saves an export of the case, named after the case in its provenance.
+export async function exportFile(kind) {
+  try {
+    await downloadExport(kind, store.caseData, store.caseName);
+  } catch (error) {
+    toast(exportErrorText(kind, error));
+  }
 }

@@ -3,7 +3,8 @@
 // drives code; the computation group is shown disabled until the library
 // can run in parallel (docs/library-requests.md, item 1).
 
-import { normalizeSettings, SETTINGS_DEFAULTS, setDefaultDigits } from "./core.js";
+import { parseNumberText, setDefaultDigits } from "./pure/format.js";
+import { normalizeSettings, SETTINGS_DEFAULTS } from "./pure/prefs.js";
 import { h, infoToggle } from "./dom.js";
 
 const SETTINGS_KEY = "pde2d-app-settings";
@@ -66,14 +67,17 @@ function number(key, { min, max, step, unit }) {
     "span",
     { class: "inputs" },
     h("input", {
-      type: "number",
-      class: "setting-number",
-      min: String(min),
-      max: String(max),
-      step: String(step),
+      type: "text",
+      inputmode: step < 1 ? "decimal" : "numeric",
+      autocomplete: "off",
+      class: "number setting-number",
+      title: `From ${min} to ${max}`,
       value: String(settings[key]),
+      // A value out of range is clamped, text that is not a number leaves
+      // the setting as it was; the field then shows what holds.
       onchange: (e) => {
-        setSetting(key, Number(e.target.value));
+        const parsed = parseNumberText(e.target.value);
+        if (parsed.kind === "number") setSetting(key, parsed.value);
         e.target.value = String(settings[key]);
       },
     }),

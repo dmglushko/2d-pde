@@ -1,7 +1,10 @@
 // The page's state: the catalog, the case being edited and the last result
 // of each stage. Panels and the viewer subscribe and redraw on changes.
+// Every case edit goes through editCase (stage keys, revisions, undo).
 
-import { STAGES, stageInfo } from "./core.js";
+import { History } from "./pure/history.js";
+import { STAGES, stageInfo } from "./pure/stages.js";
+import { Tickets } from "./pure/tickets.js";
 
 const STORAGE_KEY = "pde2d-app-case";
 const NAME_KEY = "pde2d-app-case-name";
@@ -26,8 +29,8 @@ export const store = {
   busy: new Set(),
   // Per running stage: when it started (performance.now()).
   busySince: {},
-  // Changes whenever a case replaces the current one, so answers to
-  // requests made for the old case can be told apart.
+  // Changes whenever a case replaces the current one: the scope of every
+  // request ticket.
   caseId: 0,
   // What the picture colours by "field" shows: "field" (the last field of
   // the Assemble step) or "solve" (the solution), whichever came last.
@@ -37,13 +40,28 @@ export const store = {
   // True once the user moved the slider during the current run: the
   // picture then stops following the newest snapshot.
   solveFrameChosen: false,
-  // The picture's settings: colorBy is "none", "quality" or "field";
-  // isolines draws the shown field's isolines; showError shows u − exact
-  // (compare.js) instead of u while a comparison is current.
-  view: { colorBy: "none", isolines: false, showError: false },
+  // The picture's settings: colorBy is "none", "quality", "field" or
+  // "gradient" (|∇u| of the shown field); isolines draws the shown field's
+  // isolines; difference shows u − exact ("exact") or u − reference
+  // ("reference") instead of u while that comparison is current; locked
+  // holds the colour range the viewer fixed, per quantity ("field",
+  // "gradient"), kept until unlocked; tool is "pan" or "profile" (a drag
+  // draws the line of the profile).
+  view: { colorBy: "none", isolines: false, difference: null, locked: { field: null, gradient: null }, tool: "pan" },
   // The probes pinned on the picture: {slot (its colour), x, y}, at most
   // MAX_PROBES. The viewer's, not the case's.
   probes: [],
+  // The line of the line profile ({from: [x, y], to: [x, y]}) or null.
+  profile: null,
+  // The client's reference run on the server ({job, mode, times,
+  // mesh_id}) or null.
+  reference: null,
+  // Number fields whose text is not a number: path -> {label, reason}.
+  // While any exist, runs are blocked (actions.js) and Save warns.
+  invalid: new Map(),
+  // The case the last New, Open, Example or file replaced ({caseData,
+  // name, dirty}), offered back until the next replacement.
+  previousCase: null,
   // The open step.
   step: "geometry",
   // A notice about the loaded case (sections replaced by defaults), shown
@@ -59,36 +77,127 @@ export function subscribe(listener) {
 
 // reason: "case" (a new case was loaded: forms rebuild), "edit" (a value
 // changed), "structure" (a change that needs a form rebuilt, such as a new
-// component type), "result" (a stage started or finished), "frame"
-// (another snapshot of the solution is shown; only the picture changes),
-// "view" (a setting of the picture), "step" (another step was opened),
-// "probes" (a probe was pinned or removed), "compare" (a comparison with
-// an exact solution moved on).
+// component type, or an undo), "result" (a stage started or finished),
+// "frame" (another snapshot of the solution is shown; only the picture
+// changes), "view" (a setting of the picture), "step" (another step was
+// opened), "probes" (a probe was pinned or removed, or the profile line
+// changed), "compare" (a comparison moved on), "invalid" (a number field
+// became invalid or valid again), "history" (undo or redo became
+// possible or not).
 export function notify(reason) {
   for (const listener of listeners) listener(reason);
 }
 
+// --- request tickets (pure/tickets.js) ---------------------------------------
+
+const tickets = new Tickets();
+
+// A ticket for a request of `kind`, made now for the input keyOf()
+// returns (read again when the answer arrives). ticket.live(): no newer
+// request of its kind and the same case; ticket.holds(): live and the
+// input is still the same. `exclusive: false` for requests that may run
+// side by side (the differences of several snapshots).
+export function requestTicket(kind, keyOf = () => null, { exclusive = true } = {}) {
+  const ticket = tickets.issue(kind, store.caseId, keyOf(), { exclusive });
+  return {
+    ...ticket,
+    newest: () => tickets.isNewest(ticket),
+    live: () => tickets.isLive(ticket, store.caseId),
+    holds: () => tickets.holds(ticket, store.caseId, keyOf()),
+  };
+}
+
+// Every ticket of `kind` taken so far no longer holds.
+export function supersede(kind) {
+  tickets.supersede(kind);
+}
+
+// --- the case ---------------------------------------------------------------------
+
+const history = new History({ limit: 100 });
+
 // Replaces the case. `name` is the file name to save it under; `dirty`
-// whether it differs from that file.
+// whether it differs from that file. Undo starts over (a replaced case
+// comes back with "Restore previous case", not with undo).
 export function setCase(caseData, { name = store.caseName, dirty = false } = {}) {
   store.caseId += 1;
   store.caseData = caseData;
   store.caseName = name;
   store.dirty = dirty;
   for (const stage of Object.keys(store.errors)) store.errors[stage] = null;
+  store.invalid.clear();
+  store.profile = null;
+  history.clear();
   forgetKeys(null);
+  bumpRevisions(null);
   persist();
   notify("case");
 }
 
+// The group of the edit being made: the element whose "input" event is
+// being handled (main.js sets it around each input event), so typing in
+// one field is one undo step.
+let inputGroup = null;
+export function setInputGroup(group) {
+  inputGroup = group;
+}
+
 // `sections`: the case sections the edit changes (their keys are
-// computed again); by default every section.
-export function editCase(mutate, reason = "edit", { sections = null } = {}) {
+// computed again); by default every section. `record: false` leaves it
+// out of undo (a consequence of another edit, such as the conditions
+// following the regions of a new geometry).
+export function editCase(mutate, reason = "edit", { sections = null, record = true } = {}) {
+  const names = sections ?? Object.keys(store.caseData);
+  const before = record ? textsOf(names) : null;
   mutate(store.caseData);
   store.dirty = true;
-  forgetKeys(sections);
+  const touched = sections ?? [...new Set([...names, ...Object.keys(store.caseData)])];
+  forgetKeys(touched);
+  bumpRevisions(touched);
+  if (record) {
+    for (const name of touched) if (!(name in before)) before[name] = "null";
+    history.record(before, textsOf(touched), inputGroup);
+  }
   schedulePersist();
   notify(reason);
+  if (record) notify("history");
+}
+
+// The next edit starts a new undo step (a field was left).
+export function sealHistory() {
+  history.seal();
+}
+
+export const canUndo = () => history.canUndo();
+export const canRedo = () => history.canRedo();
+
+// Puts back sections ({section: JSON text}) from the history.
+function restoreSections(texts) {
+  if (!texts) return null;
+  for (const [section, text] of Object.entries(texts)) {
+    if (text === "null") delete store.caseData[section];
+    else store.caseData[section] = JSON.parse(text);
+  }
+  const sections = Object.keys(texts);
+  forgetKeys(sections);
+  bumpRevisions(sections);
+  store.dirty = true;
+  // The forms are built again from the case: their invalid texts go.
+  store.invalid.clear();
+  schedulePersist();
+  notify("structure");
+  notify("history");
+  return sections;
+}
+
+// Undoes the last case edit; returns the sections it changed, or null.
+export function undoCase() {
+  return restoreSections(history.undo());
+}
+
+// Redoes the edit undone last; returns the sections it changed, or null.
+export function redoCase() {
+  return restoreSections(history.redo());
 }
 
 // After the case was written to its file.
@@ -98,7 +207,33 @@ export function markSaved() {
   notify("view");
 }
 
-// --- stage keys ------------------------------------------------------------------
+// --- invalid entries -------------------------------------------------------------
+
+// Marks the number field at `path` as holding text that is not a number
+// ({label, reason}), or valid again (null).
+export function setInvalid(path, entry) {
+  const had = store.invalid.has(path);
+  if (entry) store.invalid.set(path, entry);
+  else store.invalid.delete(path);
+  if (had !== Boolean(entry) || entry) notify("invalid");
+}
+
+// The forms were built again from the case: no field holds invalid text.
+export function clearInvalid() {
+  if (store.invalid.size === 0) return;
+  store.invalid.clear();
+  notify("invalid");
+}
+
+// Why runs are blocked now ("1 field is not a number: Width"), or null.
+export function blockedReason() {
+  const entries = [...store.invalid.values()];
+  if (entries.length === 0) return null;
+  const count = entries.length === 1 ? "1 field is not a number" : `${entries.length} fields are not numbers`;
+  return `${count}: ${entries.map((e) => e.label).join(", ")}`;
+}
+
+// --- stage keys and revisions -------------------------------------------------------
 
 // Each section's JSON text, computed once per change of the section: a
 // keystroke in the problem must not stringify an SVG or a mesh file again
@@ -119,10 +254,32 @@ function sectionText(section) {
   return text;
 }
 
-// The current case's key for `stage` (core.js stageKey: the same text).
+function textsOf(sections) {
+  return Object.fromEntries(sections.map((s) => [s, sectionText(s)]));
+}
+
+// How many times each section was changed: the key of a request whose
+// answer replaces sections (a preset) is their revisions.
+const revisions = new Map();
+let allRevision = 0;
+
+function bumpRevisions(sections) {
+  if (!sections) allRevision += 1;
+  else for (const section of sections) revisions.set(section, (revisions.get(section) ?? 0) + 1);
+}
+
+// The revision of `sections`, as one text.
+export function sectionRevision(...sections) {
+  return `${allRevision}:${sections.map((s) => revisions.get(s) ?? 0).join(",")}`;
+}
+
+// The current case's key for `stage` (pure/stages.js stageKey: the same
+// text).
 export function currentKey(stage) {
   return `[${stageInfo(stage).sections.map(sectionText).join(",")}]`;
 }
+
+// --- the viewer's state ------------------------------------------------------------
 
 export function openStep(step) {
   store.step = step;
@@ -135,10 +292,17 @@ export function setColorBy(colorBy) {
   notify("view");
 }
 
-// One of the picture's switches (isolines, showError).
+// One of the picture's settings (isolines, difference, tool).
 export function setViewOption(name, value) {
   if (store.view[name] === value) return;
   store.view[name] = value;
+  notify("view");
+}
+
+// Fixes the colour range of `quantity` ("field" or "gradient") to
+// {low, high}, or frees it (null).
+export function setLockedRange(quantity, range) {
+  store.view.locked = { ...store.view.locked, [quantity]: range };
   notify("view");
 }
 
@@ -146,6 +310,13 @@ export function setProbes(probes) {
   store.probes = probes;
   notify("probes");
 }
+
+export function setProfile(profile) {
+  store.profile = profile;
+  notify("probes");
+}
+
+// --- results -------------------------------------------------------------------------
 
 // A stage's result, if it was built from the current case.
 export function freshResult(stage) {
@@ -180,6 +351,8 @@ export function stageStatus(stage) {
   if (result || store.errors[stage]) return "stale";
   return "none";
 }
+
+// --- keeping the case in this browser ---------------------------------------------
 
 // The case is kept in this browser between visits (a convenience; saving
 // a case file is the reliable way to keep it). Writing it stringifies the

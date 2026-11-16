@@ -127,6 +127,11 @@ textarea {
   margin-left: 6px;
 }
 
+.history-buttons {
+  display: flex;
+  gap: 4px;
+}
+
 .case-actions {
   display: flex;
   gap: 8px;
@@ -202,12 +207,14 @@ button.link:hover {
   text-decoration: underline;
 }
 
-/* The info toggle: a small round "i" next to what it explains. */
+/* The info toggle: a small round "i" next to what it explains (24 px,
+   with a larger invisible target on touch screens). */
 button.info {
-  min-height: 22px;
-  min-width: 22px;
-  width: 22px;
-  height: 22px;
+  position: relative;
+  min-height: 24px;
+  min-width: 24px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border-radius: 50%;
   border-color: var(--control-border);
@@ -215,6 +222,29 @@ button.info {
   color: var(--muted);
   font: italic 600 12px/1 Georgia, serif;
   flex: none;
+}
+
+@media (pointer: coarse) {
+  button.info::after,
+  button.icon::after {
+    content: "";
+    position: absolute;
+    inset: -10px;
+  }
+  button.icon {
+    position: relative;
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .zoom-buttons button.icon {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+button[aria-pressed="true"] {
+  background: var(--accent-wash);
+  border-color: var(--accent-text);
 }
 
 button.info:hover,
@@ -235,7 +265,6 @@ button.info[aria-expanded="true"] {
 }
 
 select,
-input[type="number"],
 input[type="text"],
 textarea {
   min-height: 32px;
@@ -600,8 +629,12 @@ input.expr {
   flex-wrap: wrap;
 }
 
-.field .inputs input[type="number"] {
+.field .inputs input.number {
   width: 120px;
+}
+
+input.number {
+  font-variant-numeric: tabular-nums;
 }
 
 .bound {
@@ -1153,6 +1186,103 @@ canvas.spy {
   font-size: 13px;
 }
 
+/* Warnings of a result, visible without unfolding the reports. */
+.warning-chip {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  margin: 8px 0;
+  padding: 4px 10px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: left;
+  white-space: normal;
+  font-size: 13px;
+}
+
+.warning-chip .warning-count {
+  font-weight: 600;
+  flex: none;
+}
+
+.warning-chip .warning-first {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.warning-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--warning);
+  color: var(--page);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+/* Number fields that hold text: said in every step's head. */
+.invalid-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--critical);
+  background: var(--critical-wash);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 13px;
+}
+
+.invalid-notice .warning-mark {
+  background: var(--critical);
+}
+
+/* Coefficients not in use wait behind "Show all coefficients". */
+.coefficients:not(.showing-all) > [data-optional] {
+  display: none;
+}
+
+.show-all-row {
+  margin-top: 6px;
+}
+
+/* A comparison made for the previous expression: shown, greyed. */
+.outdated-comparison .compare-result .stats,
+.outdated-comparison .compare-chart {
+  opacity: 0.5;
+}
+
+.chart-key {
+  display: flex;
+  gap: 4px 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--ink-2);
+  margin-bottom: 2px;
+}
+
+.chart-key .item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .legend .item {
   display: inline-flex;
   gap: 6px;
@@ -1161,9 +1291,19 @@ canvas.spy {
 
 .colorbar {
   display: inline-flex;
-  gap: 8px;
+  gap: 6px 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.colorbar .bar-label {
+  font-weight: 550;
+}
+
+.colorbar .range-input {
+  width: 92px;
+  min-height: 28px;
+  padding: 2px 6px;
 }
 
 .colorbar canvas {
@@ -1175,6 +1315,36 @@ canvas.spy {
 .colorbar .num {
   font-variant-numeric: tabular-nums;
   color: var(--ink-2);
+  min-width: 4ch;
+}
+
+.colorbar > .num:first-of-type {
+  text-align: right;
+}
+
+/* Zoom in, out and fit, over the picture's top right corner. */
+.zoom-buttons {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 1;
+}
+
+.zoom-buttons button {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  font-size: 16px;
+  background: var(--surface-2);
+  box-shadow: 0 1px 4px var(--shadow);
+}
+
+/* The drag handle of the picture's height (phone width only). */
+.picture-handle {
+  display: none;
 }
 
 .status {
@@ -1217,7 +1387,8 @@ canvas.spy {
 .probe-dot.s3 { background: var(--series-3); }
 .probe-dot.s4 { background: var(--series-4); }
 
-.probe-chart {
+.probe-chart,
+.profile-chart {
   margin-top: 8px;
 }
 
@@ -1285,6 +1456,8 @@ canvas.spy {
   cursor: pointer;
 }
 
+.chart .line.ink { stroke: var(--ink-2); }
+.key-line.ink { background: var(--ink-2); }
 .chart .line.s1 { stroke: var(--series-1); }
 .chart .line.s2 { stroke: var(--series-2); }
 .chart .line.s3 { stroke: var(--series-3); }
@@ -1539,7 +1712,12 @@ dialog.settings h3 {
   .step-head {
     position: static;
   }
-  .case-actions {
+  .history-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.case-actions {
     margin-left: 0;
   }
   .viewer-toolbar {
@@ -1547,13 +1725,41 @@ dialog.settings h3 {
     padding: 4px 16px;
     font-size: 13px;
   }
-  .viewer-toolbar .status {
+  .viewer-toolbar .status,
+  .viewer-toolbar .toolbar-label,
+  .viewer-toolbar .wide-only {
     display: none;
   }
+  #color-by {
+    max-width: 150px;
+  }
   .canvas-wrap {
-    min-height: 180px;
-    height: 28vh;
+    min-height: 160px;
+    height: var(--picture-height, 26vh);
     flex: none;
+  }
+  .picture-handle {
+    display: block;
+    height: 18px;
+    cursor: row-resize;
+    touch-action: none;
+    background: var(--surface);
+    border-top: 1px solid var(--hairline);
+    position: relative;
+  }
+  .picture-handle::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 7px;
+    width: 40px;
+    height: 4px;
+    margin-left: -20px;
+    border-radius: 2px;
+    background: var(--control-border);
+  }
+  .picture-handle:focus-visible {
+    outline-offset: -3px;
   }
   .legend {
     min-height: 0;

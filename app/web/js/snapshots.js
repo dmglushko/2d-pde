@@ -2,12 +2,12 @@
 // `values` has one entry per ready snapshot, a Float32Array where loaded
 // and null where not. The shown snapshot and its neighbours are fetched on
 // demand (by range, POST /api/solve/values), and the ones farthest from
-// the shown one are dropped beyond keptSnapshots (core.js). Exact numbers
+// the shown one are dropped beyond keptSnapshots (pure/run_values.js). Exact numbers
 // (comparisons, probes) are the server's, so nothing here needs every
 // snapshot.
 
 import { api } from "./api.js";
-import { keptSnapshots, snapshotPlan } from "./core.js";
+import { keptSnapshots, snapshotPlan } from "./pure/run_values.js";
 import { notify } from "./state.js";
 
 // The fetch going on per result, so one runs at a time.

@@ -4,8 +4,8 @@
 // coefficient depends on are shown next to the fields.
 
 import { applyPreset, scheduleProblemCheck } from "../actions.js";
-import { renameParameter } from "../core.js";
-import { errorBox, fill, foldable, h, infoToggle, markLocal, numberHandler, regionSwatch, revealFolded } from "../dom.js";
+import { renameParameter, visibleCoefficients } from "../pure/case_model.js";
+import { errorBox, fill, foldable, h, infoToggle, markLocal, numberInput, regionSwatch, revealFolded } from "../dom.js";
 import { settings } from "../settings.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
 import { setStepStatus, stepHead } from "./head.js";
@@ -23,6 +23,50 @@ function edit(mutate, reason = "edit") {
 const checkOnCommit = () => {
   if (!settings.checkWhileTyping) scheduleProblemCheck({ now: true });
 };
+
+// Which coefficients each form shows (pure/case_model.js,
+// visibleCoefficients): per form path, the names a template revealed in
+// this visit, and whether "Show all" is on. The viewer's, not the case's.
+const revealed = new Map();
+const showingAll = new Set();
+
+function revealedOf(path) {
+  let names = revealed.get(path);
+  if (!names) revealed.set(path, (names = new Set()));
+  return names;
+}
+
+// A template was chosen for the form at `path`: its coefficients show.
+function reveal(path, values) {
+  for (const name of Object.keys(values)) revealedOf(path).add(name);
+}
+
+// The coefficient rows of one form: those in use, the rest hidden behind
+// a "Show all coefficients" button (rows are only hidden, so a field
+// cleared while typing stays where it is).
+function coefficientsForm(fields, object, path, placeholder) {
+  const visible = new Set(visibleCoefficients(fields, object, revealedOf(path)));
+  const rows = fields.map((f) => {
+    const [name, cell] = coefficientRow(f, object, path, placeholder);
+    const hidden = !visible.has(f.name);
+    if (hidden) for (const element of [name, cell]) element.dataset.optional = "";
+    return [name, cell];
+  });
+  const grid = h("div", { class: "coefficients" }, rows);
+  const extra = fields.length - visible.size;
+  if (extra === 0) return grid;
+  const toggle = h("button", { type: "button", class: "link show-all", "aria-expanded": "false" });
+  const apply = (all) => {
+    grid.classList.toggle("showing-all", all);
+    toggle.setAttribute("aria-expanded", String(all));
+    toggle.textContent = all ? "Show only the coefficients in use" : `Show all coefficients (${extra} more)`;
+    if (all) showingAll.add(path);
+    else showingAll.delete(path);
+  };
+  toggle.addEventListener("click", () => apply(!grid.classList.contains("showing-all")));
+  apply(showingAll.has(path));
+  return [grid, h("div", { class: "show-all-row" }, toggle)];
+}
 
 // One coefficient row: its name, the term it multiplies, a text input.
 function coefficientRow(field, object, path, placeholder = "0") {
@@ -87,11 +131,14 @@ function presetSelect(presets) {
 function equationSection(catalog, problem) {
   problem.equation ??= {};
   const help = infoToggle(catalog.expression_help, "expressions");
-  const start = templateSelect("Start from…", catalog.equation_templates, (values) => edit((c) => (c.problem.equation = values), "structure"));
+  const start = templateSelect("Start from…", catalog.equation_templates, (values) => {
+    reveal("problem.equation", values);
+    edit((c) => (c.problem.equation = values), "structure");
+  });
   return foldable(
     { id: "problem.equation", title: "Equation", kind: "section", extras: [help.button, h("span", { class: "spacer" }), start], info: help.panel },
     h("div", { class: "form-line" }, catalog.equation_form),
-    h("div", { class: "coefficients" }, catalog.equation_fields.map((f) => coefficientRow(f, problem.equation, "problem.equation"))),
+    coefficientsForm(catalog.equation_fields, problem.equation, "problem.equation"),
   );
 }
 
@@ -137,14 +184,13 @@ function parametersSection(problem) {
         onchange: (event) => rename(event.target, name),
       }),
       "=",
-      h("input", {
-        type: "number",
-        step: "any",
-        class: "param-value",
-        value: String(value),
-        "aria-label": `Value of ${name}`,
-        oninput: numberHandler((v) => edit((c) => (c.problem.parameters[name] = v))),
-        onchange: checkOnCommit,
+      numberInput({
+        value,
+        label: `Value of ${name}`,
+        path: `problem.parameters.${name}`,
+        className: "param-value",
+        onNumber: (v) => edit((c) => (c.problem.parameters[name] = v)),
+        onCommit: checkOnCommit,
       }),
       h(
         "button",
@@ -163,20 +209,18 @@ function parametersSection(problem) {
 function conditionCard(catalog, conditions, region, index, count) {
   const condition = conditions[region];
   const path = `problem.boundary_conditions.${region}`;
-  const type = templateSelect("Type…", catalog.condition_templates, (values) =>
-    edit((c) => (c.problem.boundary_conditions[region] = { ...values, priority: condition.priority ?? 0 }), "structure"),
-  );
-  const priority = h("input", {
-    type: "number",
-    step: "1",
-    class: "priority-input",
-    value: String(condition.priority ?? 0),
-    "aria-label": `Priority of ${region}`,
-    oninput: numberHandler(
-      (v) => edit(() => (condition.priority = v)),
-      () => edit(() => delete condition.priority),
-    ),
-    onchange: checkOnCommit,
+  const type = templateSelect("Type…", catalog.condition_templates, (values) => {
+    reveal(path, values);
+    edit((c) => (c.problem.boundary_conditions[region] = { ...values, priority: condition.priority ?? 0 }), "structure");
+  });
+  const priority = numberInput({
+    value: condition.priority ?? 0,
+    label: `Priority of ${region}`,
+    path: `${path}.priority`,
+    className: "priority-input",
+    onNumber: (v) => edit(() => (condition.priority = v)),
+    onEmpty: () => edit(() => delete condition.priority),
+    onCommit: checkOnCommit,
   });
   return foldable(
     {
@@ -187,7 +231,7 @@ function conditionCard(catalog, conditions, region, index, count) {
       attributes: { class: "field", dataset: { path } },
     },
     h("div", { class: "row condition-line" }, type, h("label", { class: "row inline-label" }, "priority", priority)),
-    h("div", { class: "coefficients" }, catalog.condition_fields.map((f) => coefficientRow(f, condition, path))),
+    coefficientsForm(catalog.condition_fields, condition, path),
   );
 }
 
@@ -280,7 +324,7 @@ export const problemPanel = {
 
     // Per field: its facts and its error.
     const errors = new Map((check?.errors ?? []).map((e) => [e.path, e.message]));
-    for (const cell of container.querySelectorAll("[data-path]")) {
+    for (const cell of container.querySelectorAll("[data-path]:not(input)")) {
       const path = cell.dataset.path;
       cell.classList.toggle("invalid", errors.has(path));
       for (const old of cell.querySelectorAll(":scope > [data-error]")) old.remove();
@@ -305,7 +349,7 @@ export const problemPanel = {
     if (fresh && !error) {
       children.push(summaryChips(check));
       // Errors without a field of their own (the whole section).
-      const unplaced = check.errors.filter((e) => !container.querySelector(`[data-path="${CSS.escape(e.path)}"]`));
+      const unplaced = check.errors.filter((e) => !container.querySelector(`[data-path="${CSS.escape(e.path)}"]:not(input)`));
       for (const e of unplaced) children.push(h("div", { class: "alert" }, `${e.path}: ${e.message}`));
     }
     fill(summary, ...children);

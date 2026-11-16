@@ -3,10 +3,10 @@
 // and the status, the result follows, then the settings and the field
 // form.
 
-import { downloadExport } from "../api.js";
-import { runWithPrerequisites, toast } from "../actions.js";
-import { formatNumber, parseColor, rampTable } from "../core.js";
-import { actionButton, errorBox, exportButton, fill, foldable, h, infoToggle, labelWithInfo, markError, numberHandler, reportsView, stat } from "../dom.js";
+import { exportFile, runWithPrerequisites, toast } from "../actions.js";
+import { parseColor, rampTable } from "../pure/color.js";
+import { formatNumber, parseNumberText } from "../pure/format.js";
+import { actionButton, errorBox, exportButton, fill, foldable, h, infoToggle, labelWithInfo, markError, numberInput, reportsView, stat, warningChip } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, openStep, outdatedError, store } from "../state.js";
 import { setStepStatus, stepHead } from "./head.js";
 
@@ -27,10 +27,9 @@ const fieldForm = { kind: "expression", text: "sin(pi*x)*y", t: "" };
 async function showFieldFromForm() {
   const field = { kind: fieldForm.kind };
   if (fieldForm.kind === "expression") field.text = fieldForm.text;
-  if (String(fieldForm.t).trim() !== "") {
-    field.t = Number(fieldForm.t);
-    if (!Number.isFinite(field.t)) return toast("t is not a number.");
-  }
+  const t = parseNumberText(fieldForm.t);
+  if (t.kind === "invalid") return toast(`t: ${t.reason}.`);
+  if (t.kind === "number") field.t = t.value;
   // The picture colours by the field once it arrives (actions.js).
   await runWithPrerequisites("field", field);
 }
@@ -57,9 +56,10 @@ function fieldSection() {
     FIELD_KINDS.map(([value, label]) => h("option", { value, selected: value === fieldForm.kind }, label)),
   );
   const t = h("input", {
-    type: "number",
-    step: "any",
-    class: "time-input",
+    type: "text",
+    inputmode: "decimal",
+    autocomplete: "off",
+    class: "number time-input",
     value: fieldForm.t,
     placeholder: "assembly t",
     "aria-label": "t",
@@ -71,7 +71,7 @@ function fieldSection() {
   );
   return foldable(
     { id: "assemble.field", title: "Show a field on the mesh", kind: "section", extras: [info.button], info: info.panel, attributes: { id: "field-form" } },
-    h("div", { class: "row" }, kind, h("label", { class: "row inline-label" }, "t =", t), actionButton("Show", showFieldFromForm)),
+    h("div", { class: "row" }, kind, h("label", { class: "row inline-label" }, "t =", t), actionButton("Show", showFieldFromForm, { guarded: true })),
     textRow,
     h("div", { id: "field-error" }),
   );
@@ -147,8 +147,9 @@ function resultView(result, fresh) {
     `Symmetric "yes" holds at every t (from the formulas), "at this t" only for these numbers. The system is M2 U'' + B U' + A U = b in the unknowns U. The load ${assembly.load_depends_on_t ? "changes" : "does not change"} with t; b ${assembly.right_hand_side_depends_on_t ? "changes" : "does not change"} with t.`,
     "the operators",
   );
-  const save = (kind) => () => downloadExport(kind, store.caseData, store.caseName).catch((e) => toast(e.message));
+  const save = (kind) => () => exportFile(kind);
   return [
+    warningChip([meshed.report, assembly.report], "assemble.reports"),
     h(
       "div",
       { class: "stats" },
@@ -182,7 +183,6 @@ function resultView(result, fresh) {
 }
 
 function settingsPart(assembly) {
-  const setT = numberHandler((t) => editCase((c) => (c.assembly.t = t), "edit", { sections: ["assembly"] }));
   const order = h(
     "select",
     { "aria-label": "Time terms to build", onchange: (e) => editCase((c) => (c.assembly.max_time_order = Number(e.target.value))) },
@@ -202,7 +202,11 @@ function settingsPart(assembly) {
       "div",
       { class: "field", dataset: { path: "assembly.t" } },
       h("div", { class: "label" }, "Time t"),
-      h("div", { class: "inputs" }, h("input", { type: "number", step: "any", value: String(assembly.t ?? 0), "aria-label": "Time t", oninput: setT })),
+      h(
+        "div",
+        { class: "inputs" },
+        numberInput({ value: assembly.t ?? 0, label: "Time t", path: "assembly.t", onNumber: (t) => editCase((c) => (c.assembly.t = t), "edit", { sections: ["assembly"] }) }),
+      ),
     ),
     h("div", { class: "field", dataset: { path: "assembly.max_time_order" } }, orderLabel, h("div", { class: "inputs" }, order), orderInfo),
   );
@@ -211,7 +215,7 @@ function settingsPart(assembly) {
 export const assemblePanel = {
   build(container) {
     const assembly = (store.caseData.assembly ??= { t: 0 });
-    const head = stepHead("assemble", actionButton("Assemble", assemble, { primary: true }));
+    const head = stepHead("assemble", actionButton("Assemble", assemble, { primary: true, guarded: true }));
     fill(
       container,
       head,

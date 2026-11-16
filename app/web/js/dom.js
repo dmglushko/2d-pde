@@ -1,6 +1,10 @@
 // Small DOM helpers and the forms built from catalog option specs.
 
-import { errorPathOf, formatNumber, parseFolds, parseNumberText, regionToken } from "./core.js";
+import { regionToken } from "./pure/color.js";
+import { formatNumber, numberText, parseNumberText } from "./pure/format.js";
+import { parseFolds } from "./pure/prefs.js";
+import { errorPathOf } from "./pure/stages.js";
+import { blockedReason, setInvalid } from "./state.js";
 
 // h("div", {class: "x", onclick: f}, child, "text", ...)
 export function h(tag, attributes = {}, ...children) {
@@ -127,34 +131,43 @@ export function markLocal(input, message) {
   if (note) note.textContent = message;
 }
 
-// The handler of a number input: onNumber(value) for a number, onEmpty()
-// for an empty field; text that is not a number (such as "-" or "1e")
-// changes nothing and marks the field "not a number" until it parses.
-export function numberHandler(onNumber, onEmpty = null) {
-  return (event) => {
-    const input = event.target;
-    const parsed = parseNumberText(input.value, input.validity?.badInput);
+// A number field: a text input that shows and reads numbers with a
+// decimal point whatever the browser's locale (pure/format.js). Text that
+// is not a number changes nothing in the case: the field says so with the
+// value the case keeps and, when it has a case `path`, is recorded as
+// invalid (state.js), which blocks runs until it is fixed or the forms
+// are built again. onNumber(value) for a number; onEmpty() for an empty
+// field (without it, an empty field is invalid too).
+export function numberInput({ value, label, path = null, placeholder = "", className = null, onNumber, onEmpty = null, onCommit = null }) {
+  let kept = numberText(value);
+  const input = h("input", {
+    type: "text",
+    inputmode: "decimal",
+    autocomplete: "off",
+    spellcheck: false,
+    class: className ? `number ${className}` : "number",
+    value: kept,
+    placeholder,
+    "aria-label": label,
+    dataset: path ? { path } : {},
+    onchange: onCommit,
+  });
+  input.addEventListener("input", () => {
+    const parsed = parseNumberText(input.value);
     if (parsed.kind === "invalid" || (parsed.kind === "empty" && !onEmpty)) {
-      markLocal(input, parsed.kind === "invalid" ? "not a number" : "a value is needed");
+      const reason = parsed.kind === "invalid" ? parsed.reason : "a value is needed";
+      const keeps = kept === "" ? "no value (its default)" : kept;
+      markLocal(input, `${reason.charAt(0).toUpperCase()}${reason.slice(1)}. The case still has ${keeps}.`);
+      if (path) setInvalid(path, { label, reason });
       return;
     }
     markLocal(input, null);
+    if (path) setInvalid(path, null);
+    kept = parsed.kind === "empty" ? "" : numberText(parsed.value);
     if (parsed.kind === "empty") onEmpty();
     else onNumber(parsed.value);
-  };
-}
-
-// A number input whose empty value is null.
-function numberInput(value, { integer = false, placeholder = "", label, path, onChange }) {
-  return h("input", {
-    type: "number",
-    step: integer ? "1" : "any",
-    value: value === null || value === undefined ? "" : String(value),
-    placeholder,
-    "aria-label": label,
-    dataset: { path },
-    oninput: numberHandler(onChange, () => onChange(null)),
   });
+  return input;
 }
 
 // A small "i" button that shows or hides `text` (a description the user
@@ -205,18 +218,22 @@ function lengthBoundInputs(spec, value, path, onChange) {
     "div",
     { class: "bound", dataset: { path } },
     h("span", {}, "absolute"),
-    numberInput(bound.absolute, {
+    numberInput({
+      value: bound.absolute,
       label: `${spec.label}, absolute`,
       placeholder: "no bound",
       path: `${path}.absolute`,
-      onChange: set("absolute"),
+      onNumber: set("absolute"),
+      onEmpty: () => set("absolute")(null),
     }),
     h("span", {}, "× domain size"),
-    numberInput(bound.relative, {
+    numberInput({
+      value: bound.relative,
       label: `${spec.label}, relative`,
       placeholder: "no bound",
       path: `${path}.relative`,
-      onChange: set("relative"),
+      onNumber: set("relative"),
+      onEmpty: () => set("relative")(null),
     }),
   );
 }
@@ -236,12 +253,13 @@ export function optionField(spec, value, path, onChange) {
   if (spec.kind === "choice") input = choiceInput(spec, value, path, onChange);
   else if (spec.kind === "length_bound") input = lengthBoundInputs(spec, value, path, onChange);
   else
-    input = numberInput(value ?? spec.default, {
-      integer: spec.kind === "integer",
+    input = numberInput({
+      value: value ?? spec.default,
       label: spec.label,
-      placeholder: `default ${formatNumber(spec.default)}`,
+      placeholder: `default ${numberText(spec.default)}`,
       path,
-      onChange: (v) => onChange(v ?? spec.default),
+      onNumber: onChange,
+      onEmpty: () => onChange(spec.default),
     });
   const unit = spec.unit ? h("span", { class: "unit" }, spec.unit) : null;
   const [labelRow, info] = labelWithInfo(spec.label, spec.description);
@@ -343,7 +361,7 @@ export function reportsView(reports) {
   return reports.map((report) =>
     h(
       "details",
-      { class: "report" },
+      { class: "report", dataset: report.messages.length ? { messages: "" } : {} },
       reportSummary(report),
       h(
         "div",
@@ -353,6 +371,39 @@ export function reportsView(reports) {
       ),
     ),
   );
+}
+
+// A chip at the top of a result when its reports hold messages (each a
+// "worked, but…" of the library): the count and the first message. A
+// click opens the reports (the fold `foldId` of the same panel) and every
+// report that has messages.
+export function warningChip(reports, foldId) {
+  const messages = (reports ?? []).flatMap((r) => r.messages);
+  if (messages.length === 0) return null;
+  const count = messages.length;
+  return h(
+    "button",
+    {
+      type: "button",
+      class: "warning-chip",
+      title: "Open the reports",
+      onclick: (event) => openReports(event.currentTarget, foldId),
+    },
+    h("span", { class: "warning-mark", "aria-hidden": "true" }, "!"),
+    h("span", { class: "warning-count" }, `${count} warning${count > 1 ? "s" : ""}`),
+    h("span", { class: "warning-first" }, messages[0]),
+  );
+}
+
+function openReports(from, foldId) {
+  const root = from.closest(".panel") ?? document;
+  const toggle = root.querySelector(`[data-fold="${CSS.escape(foldId)}"]`);
+  if (!toggle) return;
+  setOpen(toggle, true, false);
+  const body = document.getElementById(toggle.getAttribute("aria-controls"));
+  for (const details of body?.querySelectorAll("details[data-messages]") ?? []) details.open = true;
+  toggle.scrollIntoView({ block: "start", behavior: "smooth" });
+  toggle.focus({ preventScroll: true });
 }
 
 // The colour swatch of region `index` (style.css: .swatch.series-N).
@@ -365,22 +416,42 @@ export function stat(label, value, title = null) {
   return h("div", { class: "stat", title }, h("div", { class: "value" }, value), h("div", { class: "label" }, label));
 }
 
-// A button that shows a spinner while `action` runs.
-export function actionButton(label, action, { primary = false, small = false } = {}) {
+// A button that shows a spinner while `action` runs. `guarded`: a run
+// that number fields holding text block (state.js, blockedReason); the
+// button is then disabled with the reason (guardButtons).
+export function actionButton(label, action, { primary = false, small = false, guarded = false } = {}) {
   const classes = [primary ? "primary" : "", small ? "small" : ""].join(" ").trim();
-  const button = h("button", { type: "button", class: classes || null }, label);
+  const button = h("button", { type: "button", class: classes || null, dataset: guarded ? { guarded: "" } : {} }, label);
   button.addEventListener("click", async () => {
     button.disabled = true;
+    button.dataset.running = "";
     const spinner = h("span", { class: "busy", "aria-hidden": "true" });
     button.prepend(spinner);
     try {
       await action();
     } finally {
       spinner.remove();
-      button.disabled = false;
+      delete button.dataset.running;
+      button.disabled = guarded && blockedReason() !== null;
     }
   });
+  if (guarded) guardButton(button);
   return button;
+}
+
+// Disables a guarded button while runs are blocked, with the reason as
+// its tooltip.
+export function guardButton(button) {
+  if (button.dataset.running !== undefined) return;
+  const reason = blockedReason();
+  button.disabled = reason !== null;
+  if (reason) button.title = `Blocked: ${reason}`;
+  else if (button.title.startsWith("Blocked: ")) button.title = "";
+}
+
+// Every guarded button of the page.
+export function guardButtons() {
+  for (const button of document.querySelectorAll("button[data-guarded]")) guardButton(button);
 }
 
 // A button that opens a file chooser (a hidden file input): a real

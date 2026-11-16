@@ -1,6 +1,7 @@
 // The time bar plays and pauses; probes are pinned by click and keyboard
 // and get a u(t) chart.
 export default async ({ w, q, qa, click, select, until, sleep, text, check }) => {
+  // sleep only where the check is that nothing happens (Pause).
   select(q("#examples"), "heat_annulus.json");
   await until(() => text(q("#toast")).includes("heat_annulus"), "the heat case");
   await until(() => q("#geometry-summary .stats"), "its geometry");
@@ -11,16 +12,15 @@ export default async ({ w, q, qa, click, select, until, sleep, text, check }) =>
   check("the slider covers every snapshot", Number(slider.max) === 50, slider.max);
   slider.value = "10";
   slider.dispatchEvent(new w.Event("input", { bubbles: true }));
-  await sleep(50);
-  check("the legend follows the slider", text(q("#legend")).includes(text(q(".time-now")).replace("t = ", "")), `${text(q("#legend"))} / ${text(q(".time-now"))}`);
+  await until(() => text(q("#legend")).includes(`u at t = ${text(q(".time-now")).replace("t = ", "")}`), "the legend to follow");
+  check("the legend follows the slider", true);
   click(q("#time-play"));
-  await sleep(700);
-  const playing = Number(slider.value);
+  const playing = await until(() => (Number(slider.value) > 12 ? Number(slider.value) : null), "Play to move on");
   check("Play moves on", playing > 10, String(playing));
   check("the button says Pause", q("#time-play").getAttribute("aria-label") === "Pause");
   click(q("#time-play"));
   const paused = Number(slider.value);
-  await sleep(500);
+  await sleep(4 * (1000 / 12)); // four playback frames: nothing may move
   check("Pause stops", Number(slider.value) === paused, `${paused} -> ${slider.value}`);
   // A probe by click, one by keyboard.
   const canvas = q("#view");
@@ -30,11 +30,12 @@ export default async ({ w, q, qa, click, select, until, sleep, text, check }) =>
   canvas.dispatchEvent(new w.PointerEvent("pointerup", at));
   canvas.focus();
   canvas.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await sleep(100);
-  const rows = qa(".probes-table tbody tr");
+  const rows = await until(() => (qa(".probes-table tbody tr").length === 2 ? qa(".probes-table tbody tr") : null), "two probes");
   check("two probes are listed", rows.length === 2, String(rows.length));
-  check("the u(t) chart is drawn", qa(".probe-chart path.line").length === 2);
+  await until(() => qa(".probe-chart path.line").length === 2, "the u(t) chart");
+  check("the u(t) chart is drawn", true);
+  const plain = q("#view").toDataURL();
   click(q("#layer-isolines"));
-  await sleep(100);
+  await until(() => q("#view").toDataURL() !== plain, "the isolines");
   check("isolines can be shown", q("#layer-isolines").checked);
 };
