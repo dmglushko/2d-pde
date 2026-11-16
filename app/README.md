@@ -3,7 +3,8 @@
 A graphical interface for the pde2d library: choose a domain, mesh it,
 write the problem and assemble it, and look at the results, in a browser.
 It is a separate program on top of the library; the library never depends
-on it. How it is built is described in [docs/app.md](../docs/app.md).
+on it. How it is built is described in [docs/app.md](../docs/app.md), and
+why in [docs/app-decisions.md](../docs/app-decisions.md).
 
 ## Start it
 
@@ -14,9 +15,11 @@ changed, starts it and opens it in your browser. Closing that window
 stops the app. Double-clicking again while it runs just opens the page.
 In Linux or WSL, `app/start-app.sh` does the same.
 
-The first start needs a configured build directory (`build/`; run
-`tools/test.sh` once, see the root README). After that, the launcher
-rebuilds only what changed.
+The first start configures the build directory (`build/`) if there is
+none. When SymEngine is not found on its own, the launcher tries the
+newest `~/.local/opt/symengine*/lib/cmake/symengine`; when nlohmann/json
+is missing, it says so with the package to install. After that, the
+launcher rebuilds only what changed.
 
 By hand, from the project root, in Linux or WSL:
 
@@ -30,7 +33,10 @@ reaches it at the same address. Stop the app with Ctrl+C.
 
 - `--port 9000` picks another port (if 8765 is taken).
 - `--host 0.0.0.0` makes it reachable from other machines on the network.
-  There is no login, so do this only on a network you trust.
+  The app then prints a warning and needs a token on every request: a
+  random one, or `--token TOKEN`. Open the printed address (it ends in
+  `?token=...`); the page passes the token on. Anyone with the address
+  can drive the app, so do this only on a network you trust.
 - `--web DIR` serves the page from another directory. By default the page
   is served from `app/web` in this checkout, so editing a page file needs
   only a browser reload, not a rebuild.
@@ -107,10 +113,11 @@ previous input". A number field whose text is not a number yet (`-`,
    shown time with that snapshot's min and max) walks through the
    snapshots; the colours keep one scale for every time. **Compare with
    an exact solution** takes an expression in x, y, t: it shows
-   max |u − exact| at the shown time and over all snapshots, a chart of
-   it per snapshot, and can show u − exact in the picture. **Export solution .csv** saves
-   x, y and u at every kept time (full precision; the picture gets the
-   values as 32-bit floats). Before a run, the panel says how large the
+   max |u − exact| and the L2 error at the shown time, the largest over
+   all snapshots, a chart per snapshot, and can show u − exact in the
+   picture. The server computes it in double precision (the picture gets
+   u as 32-bit floats). **Export solution .csv** saves x, y and u at every
+   kept time (full precision), once the run is done. Before a run, the panel says how large the
    solution will be and warns above 50 MB. A run in time shows its
    snapshots while it goes on: the status shows t reached, steps and
    snapshots with a progress bar, and the picture the newest snapshot,
@@ -149,8 +156,15 @@ shown time.
 
 **Probes.** Click the picture to pin a probe (up to four). The list under
 the picture gives each probe's x, y and value; for a run in time a chart
-shows u(t) at every probe, with the shown time marked; click the chart to
-show that time. **✕** removes a probe.
+shows u(t) at every probe (computed on the server over all snapshots),
+with the shown time marked; click the chart to show that time. **✕**
+removes a probe.
+
+The page keeps the snapshots around the shown one, not all of them: a
+long run with a large mesh does not fill the browser's memory. When you
+jump far, the picture shows the nearest loaded snapshot for a moment
+("loading t = ..."). Each browser tab has its own run: two tabs do not
+replace or stop each other's solve.
 
 The page has one, dark, theme. On a phone, the steps stay at the top and
 the picture with its time bar stays under them while the panel scrolls.
@@ -176,18 +190,51 @@ build/app/pde2d_app --run app/examples/heat_annulus.json --output /tmp/heat
 ```
 
 This prints a JSON summary of every stage, the solve included, and, with
-`--output`, writes `mesh.pde2d`, `mesh.svg`, `solution.csv` and the
-assembled system (`stiffness.mtx`, `damping.mtx`, `mass.mtx`, `rhs.mtx`).
-The exit code is 0 when every stage ran.
-`pde2d_app --default-case` prints a case to start from.
+`--output`, writes `mesh.pde2d`, `mesh.svg`, `solution.csv`,
+`solution.vtk` (open it in ParaView: one array per kept time),
+`provenance.json` (the whole case, the versions and the run's report) and
+the assembled system (`stiffness.mtx`, `damping.mtx`, `mass.mtx`,
+`rhs.mtx`). Every file but `.pde2d` starts with comment lines saying what
+produced it (`#` in the CSV: read it with
+`pandas.read_csv("solution.csv", comment="#")`). The exit code is 0 when
+every stage ran. `pde2d_app --default-case` prints a case to start from.
+
+`--set PATH=VALUE` (repeatable) changes one value of the case before it
+runs: PATH is dotted keys with `[i]` for list items, VALUE is JSON or else
+text, and a path that does not exist is an error naming it.
+
+```sh
+build/app/pde2d_app --run app/examples/heat_annulus.json \
+  --set mesh.spec.max_edge_length.relative=0.02 \
+  --set solve.time.method.type=implicit_midpoint
+```
+
+When the case has an exact solution (`view.exact_solution`, set by the
+Solve step's comparison), the summary also has `comparison`: the largest
+max |u − exact|, RMS and L2 error over the snapshots, the number of nodes
+and the longest edge. A convergence study is then a loop (here with
+[jq](https://jqlang.org/)):
+
+```sh
+for h in 0.08 0.04 0.02 0.01; do
+  build/app/pde2d_app --run app/examples/l_shape_corner.json \
+      --set mesh.spec.max_edge_length.relative=$h |
+    jq -r '[.comparison.longest_edge, .comparison.nodes, .comparison.max_l2] | @tsv'
+done
+```
+
+The L-shaped example's L2 error falls about like h^(4/3), the rate its
+corner singularity allows (h^2 for a smooth solution).
 
 ## Tests
 
 `ctest --test-dir build -R app_` runs the app's tests: the stages and
 the catalog (`app_session`), the Solve step against exact solutions
-(`app_solve`), runs in chunks and the presets (`app_runs`), the HTTP API
-(`app_server`), every example
-case on the command line (`app_run_*`) and the page's code in Node.js
+(`app_solve`), runs in chunks and the presets (`app_runs`), comparisons,
+reference runs, probes and clients (`app_compare`), exports, provenance,
+error paths and `--set` (`app_exports`), the HTTP API with its token,
+Origin and 429 checks (`app_server`), every example case on the command
+line (`app_run_*`, and `app_run_set*` for `--set`) and the page's code in Node.js
 (`app_web`, `app_web_actions`; skipped without Node), and the page in
 headless Chrome (`app_browser`; skipped without Chrome: set
 `PDE2D_CHROME`, or have `google-chrome`/`chromium` on PATH, or the

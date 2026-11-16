@@ -84,3 +84,30 @@ meaningless u with a large residual and no error. Well-posedness checks
 are deferred in decisions.md. Until they exist, the app can only warn on
 the symptoms (a residual far above the solver's tolerance, no Dirichlet
 node).
+
+## 7. A version the program can read
+
+The app writes the library's version into every export's provenance. It
+takes the CMake project version at compile time (`PDE2D_VERSION`), which
+says nothing about the commit or local changes. A `pde2d::version()`
+(and, if wanted, a build id set at configure time) would make the
+provenance exact and the same for every program built on the library.
+
+## 8. Point location and evaluation on a `Mesh`
+
+Probes need the triangle that holds a point and the P1 value there. The
+app has its own grid index and barycentric coordinates in double
+(`app/src/field_eval.cpp`, `PointLocator`), with a tolerance on edges. A
+library function (locate with the exact predicates, and evaluate a nodal
+field at a point) would keep this geometry in one place, next to the
+mesh's other invariants.
+
+## 9. Norms of P1 functions
+
+Comparisons report max |d|, the nodal RMS and a lumped L2 norm computed
+in the app from triangle areas. The consistent-mass L2 norm (dᵀ M d) and
+the H1 seminorm (dᵀ K d) are the usual measures of a finite element
+error; they need the mass and stiffness matrices of the mesh alone,
+which the app can only get by assembling a problem made for the purpose.
+Functions in `pde2d_fem` that give these norms (or a pure mass and
+Laplace matrix of a mesh) would make error studies standard.

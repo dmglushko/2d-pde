@@ -1,14 +1,15 @@
 # The app
 
-How the graphical interface in `app/` is built. How to use it is in
-[app/README.md](../app/README.md).
+How the graphical interface in `app/` is built, as it is now. How to use
+it is in [app/README.md](../app/README.md); why it is like this, decision
+by decision, is in [app-decisions.md](app-decisions.md).
 
 **The app's design is delegated** (the owner, 2026-11-14). Agents make
-the app's decisions themselves and record them in the decision list
-below. The library's rules still hold: the app must not change the
-library's design, and anything the app needs from the library is a
-library change, raised with the owner as usual (see
-[decisions.md](decisions.md)).
+the app's decisions themselves and record them in
+[app-decisions.md](app-decisions.md). The library's rules still hold: the
+app must not change the library's design, and anything the app needs from
+the library is a library change, raised with the owner
+([library-requests.md](library-requests.md)).
 
 ## Shape
 
@@ -19,26 +20,35 @@ flowchart LR
     end
     subgraph pde2d_app
         SERVER["server.cpp · cpp-httplib"]
-        SESSION["Session: stages + cache"]
+        SESSION["Session (facade)"]
+        CACHE["StageCache"]
+        RUNS["RunManager: runs per client"]
+        EVAL["field_eval: comparisons, probes"]
+        EXPORTS["exports: table of kinds"]
         INPUT["catalog / domain_input / problem_input"]
-        VIEWS["views: library results as JSON"]
     end
     LIB["pde2d::pde2d (geometry, mesh, io, fem, solve)"]
 
-    PAGE -- "JSON over HTTP (127.0.0.1)" --> SERVER
+    PAGE -- "JSON and binary over HTTP" --> SERVER
     SERVER --> SESSION
-    SESSION --> INPUT
-    SESSION --> VIEWS
+    SESSION --> CACHE
+    SESSION --> RUNS
+    SESSION --> EVAL
+    SESSION --> EXPORTS
+    CACHE --> INPUT
     INPUT --> LIB
-    SESSION --> LIB
+    CACHE --> LIB
+    RUNS --> LIB
+    EVAL --> LIB
 ```
 
-- **One program, `pde2d_app`**, serves the page and a JSON API on
-  127.0.0.1, and runs a saved case without the browser (`--run`).
+- **One program, `pde2d_app`**, serves the page and an API (on 127.0.0.1
+  by default), and runs a saved case without the browser (`--run`).
 - **The page holds no physics.** It edits a *case* (JSON), sends it to the
-  server and draws what comes back. Every check is the library's own:
-  the app forwards the library's messages with the path of the field
-  they concern.
+  server and draws what comes back. Every check is the library's own: the
+  app forwards the library's messages with the path of the field they
+  concern. Numbers the user reads as results (errors against an exact
+  solution, u(t) at probes) are computed on the server in double.
 - **The page is generated from a catalog.** The server describes every
   component and its options (`GET /api/catalog`); the forms are built from
   that, so a new library component needs one catalog entry in C++ and no
@@ -50,17 +60,24 @@ flowchart LR
 
 | Path | Contents |
 | --- | --- |
-| `app/src/options.*` | `OptionSpec` (an option as the page sees it), `OptionReader` (reads a JSON object strictly against the specs), small JSON readers |
+| `app/src/options.*` | `OptionSpec` (an option as the page sees it), `OptionReader` (reads a JSON object strictly against the specs), small JSON readers, `named_option` (the option a library message names), `request_job` / `request_count`, `error_json` |
+| `app/src/app_error.hpp` | `PathError` (input refused at a path), `StageError` (a stage failed: stage, kind, message, path), `staged`, `at_path` |
 | `app/src/catalog.*` | the mesh and solve catalogs: every component, its options with the library's defaults, a function that builds it; `build_mesh_setup`, `build_solve_setup` |
-| `app/src/domain_input.*` | the `geometry` section: shapes, SVG, mesh files, region edits; the geometry view |
+| `app/src/domain_input.*` | the `geometry` section: shapes, SVG, mesh files, region edits; the geometry view; `DomainFacts` |
 | `app/src/problem_input.*` | the `problem` section: `build_problem`, `check_problem` (every error at once, with paths), the problem catalog and templates |
-| `app/src/presets.*` | problem presets: a complete problem and its solve settings for any geometry, scaled by `DomainFacts` (`domain_input.*`: regions, domain size, a point well inside) |
-| `app/src/views.*` | meshes, reports and sparsity as JSON |
-| `app/src/session.*` | `Session`: the stages with their cache, solves as runs in chunks (`SessionOptions`, the background runner), `StageError`, the default case, presets, exports, `run` for the command line |
-| `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`) and the command line |
-| `app/web/` | `index.html`, `style.css` (one dark theme, every colour a token), `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `settings.js` (preferences and their dialog), `dom.js` (forms from specs, info toggles, foldable sections), `view.js` (the picture: layers, isolines, probes, keyboard, PNG export), `timebar.js` (the time bar under the picture), `probes.js` (the probe list and u(t)), `charts.js` (the SVG line chart), `compare.js` (comparison with an exact solution), `panels/*.js` (one per step, `head.js`: the head of every step, `components.js`: the cards of component slots), `main.js` |
-| `app/examples/` | example cases and an example SVG |
-| `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks against one call, stop and continue, every preset on a rectangle and an annulus), `server.cpp`, `web.test.mjs` (pure helpers, the stage registry), `web_actions.test.mjs` (overlapping requests, prerequisites, errors per input, the binary solve, following a run, Stop, presets, settings, debounced storage, with a mocked fetch) |
+| `app/src/presets.*` | problem presets: a complete problem and its solve settings for any geometry, scaled by `DomainFacts` |
+| `app/src/stage_cache.*` | `StageCache`: the last domain, mesh (with its id), `MeshedProblem` and assembly, keyed by the case sections; `assembly_settings`, `solve_key` |
+| `app/src/runs.*` | `SessionOptions`, `RunState`, `Run` (a solve: static, or a time run in chunks), `make_run`, `advance`, `progress_json`, `RunManager` (each client's run and reference run, bounded) |
+| `app/src/field_eval.*` | expressions at the nodes, `lumped_weights`, `difference_stats`, `Comparison` (against an exact solution or the reference run), `PointLocator` (a grid over the mesh), `probe_series` |
+| `app/src/exports.*` | `ExportedFile` (content or a stream), `ExportKind`, `ExportNeeds`, the table of export kinds with their writers, provenance |
+| `app/src/case_set.*` | `--set PATH=VALUE`: `set_case_value`, `apply_set_argument` |
+| `app/src/views.*` | reports, mesh stats, sparsity as JSON; the mesh summary and its binary arrays |
+| `app/src/binary.hpp` | little-endian float32, float64 and uint32 |
+| `app/src/session.*` | `Session`: the facade the server and `--run` use (stages, runs, comparisons, probes, exports, `run`), the default case, `check_case` |
+| `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`: routes, client ids, token, Origin, the queue bound) and the command line |
+| `app/web/` | `index.html`, `style.css` (one dark theme, every colour a token), `js/`: `core.js` (pure helpers, tested in Node), `api.js` (every call, the client id and token headers), `state.js`, `actions.js`, `snapshots.js` (the bounded cache of a run's snapshots), `settings.js`, `dom.js` (forms from specs, error marks, info toggles, foldable sections), `view.js` (the picture), `timebar.js`, `probes.js` (the probe list and u(t)), `charts.js` (the SVG line chart), `compare.js` (the comparison with an exact solution), `panels/*.js` (one per step), `main.js` |
+| `app/examples/` | example cases (each runs as `app_run_*`) and an example SVG |
+| `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, error paths, `--set`), `server.cpp` (HTTP, token, Origin, 429, clients), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
 
 ## The case
@@ -97,22 +114,23 @@ must not be ignored silently), and a missing value means its default.
     "time": {"t0": 0, "t1": 1, "snapshots": 50,
              "method": {"type": "implicit_euler", "options": {}},
              "step": {"type": "fixed_step", "options": {"dt": 0.01}}}
-  }
+  },
+  "view": {"exact_solution": "x"}
 }
 ```
 
 - `geometry.source` is `shape` (`shape`, `options`), `svg` (`svg`: the
   document's text, `name`) or `mesh_file` (`format`: `gmsh` or `pde2d`,
-  `text`, `name`). Shapes and SVGs take `region_edits`: `{"op": "rename",
-  "from", "to"}`, `{"op": "merge", "source", "target"}`, `{"op": "split",
-  "region", "fraction", "first", "second"}`, applied in order with
-  `CurveGeometry`'s methods. A mesh file takes `rename` and `merge` (not
-  `split`: it has no curves); the app applies them to the imported
-  `mesh::Mesh` (a renamed region keeps its tag; a merge moves the
-  source's boundary edges to the target's tag and drops the source's
-  name, renumbering the tags above it) and checks the result with
-  `mesh::validate`. Errors name the edit (`geometry.region_edits[1]:
-  ...`).
+  `text`, `name`). SVG's y axis points down; the library flips it, so the
+  SVG point (x, y) is (x, −y) in the case. Shapes and SVGs take
+  `region_edits`: `{"op": "rename", "from", "to"}`, `{"op": "merge",
+  "source", "target"}`, `{"op": "split", "region", "fraction", "first",
+  "second"}`, applied in order with `CurveGeometry`'s methods. A mesh file
+  takes `rename` and `merge` (not `split`: it has no curves); the app
+  applies them to the imported `mesh::Mesh` (a renamed region keeps its
+  tag; a merge moves the source's boundary edges to the target's tag and
+  drops the source's name, renumbering the tags above it) and checks the
+  result with `mesh::validate`.
 - A mesh file is not meshed again: the `Remesher` runs the refiner and
   the improvers on it (the discretizer and triangulator are not used).
 - `mesh.refiner` may be `null` (no refiner). A length bound is
@@ -125,51 +143,212 @@ must not be ignored silently), and a missing value means its default.
   (`Integrator` from `t0` to `t1` with `method` and `step`). The linear
   solver serves both. Only the chosen mode's part is read into the
   library's objects; the other is kept as written. A time run keeps the
-  solution at `snapshots` + 1 equal times from t0 to t1. A case written
-  before the solvers has `"solve": null`, which means the default
-  section (a static solve).
-- `view` and
-  `notes` are free for the page and for people. The page keeps
-  `view.region_edit_undo` (one undo record per region edit) and
-  `view.condition_archive` (conditions of regions that are gone) there.
+  solution at `snapshots` + 1 equal times from t0 to t1 (at most 1000
+  snapshots). A case written before the solvers has `"solve": null`, which
+  means the default section (a static solve).
+- `view` and `notes` are free for the page and for people. The page keeps
+  `view.exact_solution` (the comparison's expression; `--run` compares
+  with it too), `view.region_edit_undo` (one undo record per region edit)
+  and `view.condition_archive` (conditions of regions that are gone)
+  there.
 - `version` is checked: a whole number from 1 to the app's version; a
   case from a newer app is refused, not misread.
 
+## Clients
+
+Every page instance makes a random client id when it loads (`api.js`,
+`clientId`) and sends it on every request in `X-PDE2D-Client` (letters,
+digits, `-`, `_`, at most 64). Runs, reference runs and their progress
+belong to the client: two tabs do not replace each other's run, and one
+tab cannot read or stop another's. A request without the header is the
+client `local` (the command line, tests, `curl`). A reload is a new
+client (it has no run to follow).
+
+The session keeps at most `SessionOptions::max_clients` (8) clients; a
+solve by a new client drops the one used least recently, with its runs
+(a running one stops). Only a solve makes a client; asking for an unknown
+client's run is an error, not a new client.
+
+The stage cache (domain, mesh, problem, assembly) is shared by all
+clients: it is keyed by the case's text, so a client gets the same answer
+whoever built it; two clients that alternate between different meshes
+rebuild them in turn.
+
 ## The API
 
-All on `127.0.0.1:8765` by default. Every POST body is a case (or, for
-`/api/field`, `{"case", "field"}`, for `/api/preset` `{"case", "preset"}`,
-and for a run's calls `{"job", ...}`) and must be sent as
-`application/json`. A stage reads only the sections it needs (the page
-sends only those: `requestCase`).
+All on `127.0.0.1:8765` by default. Every POST body is JSON and must be
+sent as `application/json`. Stage calls take a case (the page sends only
+the sections the stage reads: `requestCase`); run calls take `{"job",
+...}`.
 
-| Call | Gives |
-| --- | --- |
-| `GET /api/catalog` | the catalog (below) and the default case |
-| `GET /api/default-case` | the case a new session starts with |
-| `GET /api/examples`, `GET /api/examples/<name>.json` | the example cases |
-| `POST /api/geometry` | loops (each curve sampled for drawing, with its region and kind), regions and lengths, bounding box, domain size; for a mesh file its boundary edges |
-| `POST /api/mesh` | the mesh (flat arrays), stats, `target_met`, the resolved bound, every stage report |
-| `POST /api/problem` | the check: `ok`, `errors` (`path`, `message`), facts per path, each condition's kind, time order, needed initial conditions |
-| `POST /api/assemble` | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
-| `POST /api/solve` | starts the solve of the case, or finds the current one with the same inputs (see "Runs in chunks"), and answers its progress: `job` (the run's id), `state` (`running`, `done`, `failed`, `stopped`), `mode`, `times` of the snapshots ready, `min` and `max` over their values (exact doubles), `time_order` (assembly's, `Assembler::time_order`) and `problem_time_order` (as written), `free_unknowns`, the reports (`static_solver`, or one `integrator` report combining the chunks', with `chunks`), and `values`: `{"path": "/api/solve/values", "format": "float32le", "snapshots" (ready), "nodes", "bytes"}`. A time run adds `t0`, `t1`, `t` (reached) and `snapshots_total`; a failed one `error` (`stage`, `kind`, `message`). A static solve is `done` at once |
-| `POST /api/solve/progress` | `{"job"}`: the same progress, now |
-| `POST /api/solve/stop` | `{"job"}`: stops the run after the chunk that is running; its progress. A solve of the same inputs continues it |
-| `POST /api/solve/values` | `{"job", "first", "count"}`: snapshots `first` to `first + count` (ready ones only) as `application/octet-stream`: float32, little-endian, snapshot after snapshot, each one value per mesh node (NaN for a value that is not finite) |
-| `POST /api/preset` | `{"case", "preset"}`: the case with its `problem` and `solve` sections replaced by the preset for the case's geometry (see "Presets") |
-| `POST /api/field` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`; the right-hand side is assembled at that t). The request has only `case` and `field`, and `field` only `kind`, `text` and `t`: another key is an error |
-| `POST /api/export/<kind>` | a file: `mesh.pde2d`, `mesh.svg`, `geometry.svg`, `solution.csv` (x, y and u at every kept time, one row per node, full doubles), or the system assembled at `assembly.t` in Matrix Market form: `stiffness.mtx`, `damping.mtx`, `mass.mtx` (the free part, `coordinate real general`, 1-based; a zero operator has no entries) and `rhs.mtx` (`array`) |
+| Call | Body | Gives |
+| --- | --- | --- |
+| `GET /api/catalog` | | the catalog (below) and the default case |
+| `GET /api/default-case` | | the case a new session starts with |
+| `GET /api/examples`, `GET /api/examples/<name>.json` | | the example cases (name and notes), and each case |
+| `POST /api/geometry` | case | loops (each curve sampled for drawing, with its region and kind), regions and lengths, bounding box, domain size; for a mesh file its boundary edges |
+| `POST /api/mesh` | case | `mesh`: the mesh's summary (`id`, counts `nodes`, `triangles`, `boundary_edges`, `region_names`, `has_links`, and `arrays`: where its arrays are, see "Binary answers"); `stats`, `target_met`, `longest_edge`, `max_edge_length`, `domain_size`, every stage's `reports` |
+| `POST /api/mesh/arrays` | `{"mesh": id}` | the mesh's arrays in binary. The session keeps the last 16 meshes it built and the meshes of every kept run |
+| `POST /api/problem` | case | the check: `ok`, `errors` (`path`, `message`), `facts` per path (none for a text that did not parse), each condition's kind, time order, needed initial conditions |
+| `POST /api/assemble` | case | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
+| `POST /api/field` | `{"case", "field"}` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`) |
+| `POST /api/solve` | case | starts the client's solve of the case, or finds its current one with the same inputs (see "Runs"), and answers its progress (below) |
+| `POST /api/solve/progress` | `{"job"}` | the same progress, now |
+| `POST /api/solve/stop` | `{"job"}` | stops the run after the chunk that is running; its progress. A solve of the same inputs continues it |
+| `POST /api/solve/values` | `{"job", "first", "count"}` | snapshots `first` to `first + count` (ready ones only) in binary |
+| `POST /api/solve/reference` | `{"job"}` | keeps the client's run (it must be done) as its reference run: `{"reference": {"job", "mode", "times", "mesh_id"}}`. It stays when the run is replaced |
+| `POST /api/solve/reference/clear` | `{}` | forgets the reference: `{"reference": null}` |
+| `POST /api/solve/compare` | `{"job", "exact": text}` or `{"job", "reference": true}` | the comparison in double (see "Comparisons") |
+| `POST /api/solve/compare/difference` | the same and `"snapshot": k` | u − other at snapshot k in binary (float32) |
+| `POST /api/solve/probes` | `{"job", "points": [[x, y], ...]}` | u(t) at each point (at most 64) over the run's ready snapshots (see "Probes") |
+| `POST /api/preset` | `{"case", "preset"}` | the case with its `problem` and `solve` sections replaced by the preset for the case's geometry (see "Presets") |
+| `POST /api/export/<kind>` | case | a file (see "Exports"); `X-PDE2D-Case-Name` (URL-encoded) names the case in its provenance |
 
-A failure is `{"error": {"stage", "kind", "message"}}`. The HTTP status
-is 400 for a body that is not JSON, 422 when the library refused the input
-(`kind: "input"`, from `std::invalid_argument`) or an algorithm could not
-finish (`kind: "algorithm"`, from `std::runtime_error`), and 500 for
-anything else. A message that concerns a field starts with its path in the
-case (`mesh.refiner.options.min_angle_degrees: ...`); the page marks that
-field. When a component's constructor refuses its options and its message
-names one of them (`RuppertOptions::min_angle_degrees must be ...`,
-`fixed_step: dt must be ...`), the path is that option's, so the mark
-lands on the field itself.
+**The progress of a run** (`/api/solve`, `/progress`, `/stop`): `job`
+(the run's id), `state` (`running`, `done`, `failed`, `stopped`), `mode`
+(`static` or `time`), `mesh_id`, `times` of the snapshots ready, `min` and
+`max` over their values (exact doubles, `null` before any value),
+`time_order` (assembly's, `Assembler::time_order`), `problem_time_order`
+(as written), `free_unknowns`, `reports` (`static_solver`'s, or one
+`integrator` report combining the chunks', with `chunks`), and `values`:
+`{"path": "/api/solve/values", "format": "float32le", "snapshots"
+(ready), "nodes", "bytes"}`. A time run adds `t0`, `t1`, `t` (reached) and
+`snapshots_total`; a failed one `error`. A static solve is `done` at once.
+
+**Errors** are `{"error": {"stage", "kind", "message", "path"}}`.
+`message` is readable on its own; when the error concerns a field it
+starts with that field's path (`mesh.refiner.options.min_angle_degrees:
+...`), and `path` holds the same path as a field (`null` when the error
+names none, as most of the library's own algorithm messages). The page
+marks the field `path` names (or its nearest ancestor that has a form
+element); only an error without `path` falls back to the path at the
+start of its text. Where the paths come from:
+
+- The JSON readers (`require_*`, `OptionReader`) throw `PathError` at the
+  value they read.
+- A component's constructor (mesh and solve components) and a shape's
+  function refuse their options with the library's message; when it names
+  one of the options as a word (`RuppertOptions::min_angle_degrees must
+  be ...`, `fixed_step: dt must be ...`, `Rectangle width must be ...`),
+  the path is that option's (`named_option`), else the options object's.
+- An SVG or mesh text the library refuses is at `geometry.svg` or
+  `geometry.text`; a region edit at `geometry.region_edits[i]` (or its
+  `.op`); a coefficient at `problem.equation.a_xx` and so on; the mesh
+  spec at `mesh.spec.max_edge_length...`; `--set` at the path it was
+  given; a comparison's expression at `exact`; a probe point at
+  `points[i]`.
+
+| Status | When | `kind` |
+| --- | --- | --- |
+| 400 | the body is not JSON | `input` |
+| 403 | the Host is not this machine (loopback server), the token is missing or wrong, or the Origin is another site | `input` |
+| 409 | a result that is not ready: a solution export before the client's run of the case is done, a reference that is not done | `not_ready` |
+| 413 | a body over 64 MiB | |
+| 415 | a POST that is not `application/json` | `input` |
+| 422 | the library refused the input (`std::invalid_argument`) or an algorithm could not finish (`std::runtime_error`) | `input`, `algorithm` |
+| 429 | more than `ServerOptions::max_waiting` (6) API requests are already being served or waiting for the session | `busy` |
+| 500 | anything else | `internal` |
+
+## Binary answers
+
+All little-endian, as `application/octet-stream`.
+
+- **Solution values** (`/api/solve/values`): float32, snapshot after
+  snapshot, one value per mesh node (in node order).
+- **Differences** (`/api/solve/compare/difference`): float32, one per
+  node.
+- **Mesh arrays** (`/api/mesh/arrays`): the parts listed in the summary's
+  `arrays.parts` (`name`, `type`, `count`, `offset` in bytes), one after
+  the other: `nodes` (float64 x0, y0, x1, y1, ...), `triangles` (uint32
+  a0, b0, c0, ...; counterclockwise), `boundary_edges` (uint32 a0, b0, a1,
+  b1, ...; the domain on the left) and `boundary_regions` (uint32, the
+  region tag of each boundary edge, an index into `region_names`).
+  `arrays.bytes` is the total. The page decodes them into a
+  `Float64Array` of nodes, a `Uint32Array` of triangles and a
+  `Uint32Array` of boundary edges as `[a, b, region, ...]` (`core.js`,
+  `decodeMesh`).
+
+## Comparisons
+
+`POST /api/solve/compare` compares the run `job` with an exact solution
+(`"exact"`: an expression in x, y, t and the run's parameters, compiled
+by the library's `CompiledExpression` under the session mutex and
+evaluated at every node at each snapshot's time) or with the client's
+reference run (`"reference": true`). The answer, all in double:
+
+```json
+{"job": 3, "against": {"exact": "x + t"}, "nodes": 564,
+ "snapshots": [{"t": 0, "max_abs": 1e-16, "rms": 4e-17, "l2": 3e-17}, ...],
+ "max_abs": 2e-15, "max_rms": 9e-16, "max_l2": 6e-16}
+```
+
+- `max_abs` is max over nodes of |u − other|; `rms` is the nodal root
+  mean square sqrt(Σ d²/N); `l2` is the lumped L2 norm sqrt(Σ w_i d_i²)
+  with w_i a third of the area of the triangles around node i (the L2
+  norm of the P1 function d with nodal quadrature). A node where a value
+  is not finite makes the snapshot's figures `null`. `max_*` are the
+  largest over the snapshots (`null` when none could be compared).
+- **A reference run** must be on the same mesh object as the run (node i
+  is the same point in both): solving after a change of the geometry or
+  mesh sections gives another mesh, and the comparison is refused with a
+  message saying so. Each run snapshot is compared with the reference's
+  snapshot at the same time (up to rounding); a static reference (one
+  snapshot) stands for every time; a snapshot without a match is `null`.
+- The figures cover the snapshots ready when the call is made.
+
+## Probes
+
+`POST /api/solve/probes` gives, for each point, `x`, `y`, `inside`,
+`triangle` and `values` (u at the point at every ready snapshot, in
+double, `null` where not finite; empty outside the mesh), and `times`.
+The point's triangle is found with a uniform grid over the mesh's
+bounding box (about one triangle per cell, at most 1024 cells a side;
+each cell lists the triangles whose boxes overlap it) and barycentric
+coordinates in double; on an edge the triangle with the largest smallest
+weight wins, and a point outside every triangle by more than 1e−10 in
+barycentric terms is outside. u is the P1 interpolant there.
+
+## Exports
+
+`POST /api/export/<kind>` with the case. One table (`exports.cpp`,
+`export_kinds`) lists each kind with its file name, content type, what it
+needs and its writer:
+
+| Kind | Needs | Contents |
+| --- | --- | --- |
+| `mesh.pde2d` | the mesh | the old `.pde2d` format, exactly (no provenance: the format has no place for it) |
+| `mesh.svg` | the mesh | an SVG picture of the mesh |
+| `geometry.svg` | the domain | the curve geometry as SVG (refused for an imported mesh) |
+| `stiffness.mtx`, `damping.mtx`, `mass.mtx` | the assembly at `assembly.t` | the free part of A, B or M2 in Matrix Market `coordinate real general`, 1-based; a zero operator has no entries |
+| `rhs.mtx` | the assembly | b in Matrix Market `array` form |
+| `solution.csv` | a done run | x, y and u at every kept time (`u(t=...)` columns), one row per node, full doubles |
+| `solution.vtk` | a done run | VTK legacy ASCII `UNSTRUCTURED_GRID`: the nodes (z = 0), the triangles (`VTK_TRIANGLE`), and one `POINT_DATA` scalar array per kept snapshot, named `u(t=...)`; ParaView and VisIt open it |
+| `provenance.json` | the case | `{"format": "pde2d-app-provenance", "version": 1, "app", "library", "case_name", "exported", "file", "case" (the full case as sent), "run"}`: the run is the client's done run of the case with its progress (reports included, without the values layout) and `started`, or `null` |
+
+- **Solution exports never compute.** They take the client's current run
+  when its inputs (the geometry, mesh, problem and solve sections, as
+  text) are the case's and it is done; with no such run, or one that is
+  running, stopped or failed, they answer 409 with a message. Mesh and
+  system exports use the stage cache (built when missing).
+- **Large files stream.** `solution.csv` and `solution.vtk` are written
+  piece by piece as they are sent (`ExportedFile::stream`, an httplib
+  chunked content provider). The stream holds only the mesh and the
+  values (no expressions), so it runs after the session mutex is
+  released; a done run's values do not change.
+- **Provenance.** Every file but `.pde2d` says what produced it: the app
+  and library versions (both the CMake project version, `PDE2D_VERSION`),
+  the case's file name when known, the export time (UTC), the run (id,
+  state, start time) for solution exports, and `settings`: the case
+  sections the kind is built from (geometry with an SVG or mesh text
+  replaced by its length; plus mesh; plus problem and assembly for the
+  system; plus solve for a solution) as one line of JSON. As comments:
+  `%` lines after the `%%MatrixMarket` banner, `#` lines at the top of the
+  CSV (read it with `pandas.read_csv(path, comment="#")`, `numpy.loadtxt`
+  (`#` is its default comment), R's `read.csv(comment.char = "#")`;
+  spreadsheets show them as rows), an XML comment after the SVG's
+  declaration. VTK legacy has no comments: its title line (at most 255
+  characters) names the app, the library, the run, the time and the
+  case; `provenance.json` has everything.
 
 ## The catalog
 
@@ -192,15 +371,14 @@ lands on the field itself.
   initial conditions in order, with the term each multiplies; help text;
   templates of common equations and conditions; `presets` (`id`,
   `label`, `description`).
-- `default_case`.
+- `format`, `version`, `library_version`, `default_case`.
 
 ## Adding a component
 
 1. Add one entry to `make_mesh_catalog()` or `make_solve_catalog()` in
-   `app/src/catalog.cpp`: its
-   `type` (the component's `name()`), label, description, its options with
-   defaults read from the library's options struct, and `make`, which
-   builds the component from an `OptionReader`.
+   `app/src/catalog.cpp`: its `type` (the component's `name()`), label,
+   description, its options with defaults read from the library's options
+   struct, and `make`, which builds the component from an `OptionReader`.
 2. That is all for the page. `tests/session.cpp` and `tests/solve.cpp`
    check that every type equals `name()`; add its defaults to the
    defaults test.
@@ -208,56 +386,38 @@ lands on the field itself.
 Ranges are never checked in the app: the component's constructor
 validates its options, and its message is shown at the field.
 
-## The Solve step
+## The stage cache
 
-`Session::solve` is cached like the other stages, keyed by the mesh,
-problem and solve sections (not by `assembly`): the current run (see
-"Runs in chunks"). The page shows the
-solution in the picture as a field with one colour scale for every
-snapshot (from `min` to `max`), so a colour means the same value at
-every time. The **time bar** under the picture (play or pause, a slider,
-the shown time with that snapshot's min and max) is the one control of
-the shown snapshot (`store.solveFrame`); during a run it also shows how
-far the run got.
+`StageCache` keeps the last result of each stage with the key it was
+built from: the domain (the `geometry` section's text), the mesh (plus
+`mesh`), the `MeshedProblem` (plus `problem`) and the assembly (plus
+`assembly.t` and `max_time_order`). Changing the problem does not remesh;
+an assembly at another t of the same `MeshedProblem` passes the previous
+one so the library reuses its constant parts. Each mesh it builds gets an
+id (`MeshOutcome::id`); the last 16 stay findable by id for
+`/api/mesh/arrays`.
 
-**Probes.** A click on the picture (or Enter with the picture focused)
-pins a probe, up to four; each keeps its colour slot while others come
-and go. The list under the picture gives x, y and the shown field's
-value there; for a run in time a line chart shows u(t) of every probe
-over all snapshots with the shown time marked (a click on it shows that
-snapshot). Values are interpolated page-side from the snapshot arrays
-with the barycentric weights of the probe's triangle (`core.js`:
-`meshGrid`, `locatePoint`, `interpolateAt`, `probeSeries`).
+## Runs
 
-**Comparing with an exact solution.** The Solve result takes an
-expression (kept in the case as `view.exact_solution`). The page asks
-`/api/field` (kind `expression`) for it at every snapshot's time, the
-shown one first, and subtracts it from u: max |u − exact| at the shown
-snapshot and over all, a chart of the largest error per snapshot for a
-run in time, and "Show u − exact in the picture" with one diverging
-scale over every snapshot. The expression is checked by the library;
-its error lands on the input. A new solution is compared again with the
-same text.
+`Session::solve` makes a **run** (`Run`) for the client, keyed by
+`solve_key` (the geometry, mesh, problem and solve sections' text): a
+static solve is done when it is made; a time integration runs in chunks
+that end on snapshot times. Each chunk is one `Integrator::integrate(meshed,
+ta, tb, output, &last)` from the state the previous chunk ended with
+(`IntegrationResult::final`, with its velocities for time order 2); the
+library guarantees that a run that lands on a time and one that starts
+there take the same steps.
 
-## Runs in chunks
-
-A time run is integrated in chunks that end on snapshot times. Each chunk
-is one `Integrator::integrate(meshed, ta, tb, output, &last)` from the
-state the previous chunk ended with (`IntegrationResult::final`, with its
-velocities for time order 2); the library guarantees that a run that
-lands on a time and one that starts there take the same steps. The
-`Session` keeps one run at a time (`SolveJob`): its inputs' key, the
-snapshots so far, the last state, the combined report.
-
-- `Session::solve` runs the first chunk (one snapshot interval) before it
-  answers, so the library's refusals (a time order the method does not
-  support, a solver's requirement) are thrown as before and land on their
-  field. With `SessionOptions::background_runs` (the server) a thread then
-  runs the next chunks; without (the command line, tests) `solve` runs
-  them all before it returns. Both use `advance`, the same code.
+- `solve` runs the first chunk (one snapshot interval) before it answers,
+  so the library's refusals (a time order the method does not support, a
+  solver's requirement) are thrown as before and land on their field.
+  With `SessionOptions::background_runs` (the server) one thread then
+  runs the next chunks of every running run, taking the clients in turn;
+  without (the command line, tests) `solve` runs them all before it
+  returns. Both use `advance`.
 - Each chunk holds the session mutex only while it integrates; between
-  chunks the runner releases it for a moment, so a problem check or a
-  field is answered after at most one chunk.
+  chunks the runner releases it for a moment, so other requests are
+  answered after at most one chunk.
 - The next chunk's number of snapshot intervals is scaled so that it
   takes about `chunk_seconds` (0.4 s): between half and four times the
   last one, at least one interval.
@@ -267,29 +427,67 @@ snapshots so far, the last state, the combined report.
   `min_dt`, the first `t0` and the last `t1`, and adds `chunks`.
   `prepares` counts one more per chunk (each chunk prepares the linear
   solver once).
-- A solve of the same inputs reuses the run: a running or done one is
-  answered as it is, a stopped one continues, a failed one starts again.
-  Other inputs replace it (the old one is dropped under the mutex: it
-  holds expressions).
+- A solve of the same inputs reuses the client's run: a running or done
+  one is answered as it is, a stopped one continues, a failed one starts
+  again. Other inputs replace it (the old one is dropped under the mutex:
+  it holds expressions). The reference run is a second pointer that keeps
+  a done run alive.
 - **Exactness.** For implicit Euler and the implicit midpoint rule the
   state is U (and U' for time order 2), which `final` carries, so the
   snapshots of a chunked run are bit for bit those of one call
   (`tests/runs.cpp`). Newmark's state also has the acceleration, which
   `Solution` does not carry: each chunk's start computes it again from
-  the equation (M2 a = b − B v − A u at the chunk's start), so the
-  snapshots differ from one call by rounding (below 1e-8 of the largest
-  value in the test).
+  the equation, so the snapshots differ from one call by rounding (below
+  1e-8 of the largest value in the test).
 - What a chunk cannot do: show progress or stop inside one snapshot
-  interval. A run with few, long intervals still answers late; that needs
-  a progress callback in the library (docs/library-requests.md, item 2).
+  interval (library-requests.md, item 2).
 
-The page (`actions.js`, `followRun`) polls the progress every 250 ms,
-fetches only the new snapshots by range and shows the newest unless the
-time bar was moved during the run (or the setting is off). The colour scale
-is the range so far, so it can change while the run goes on. **Stop**
-keeps what arrived; the step's dot says "stopped before the end", and
-**Continue** solves again, which continues the run on the server. A change
-of the case that changes the solve's inputs stops the run.
+## The page
+
+**Following a run** (`actions.js`, `followRun`): the page polls the
+progress every 250 ms, shows the newest snapshot unless the time bar was
+moved during the run (or the setting is off), and colours with the range
+so far (the summary's exact `min` and `max`, one scale for every
+snapshot). **Stop** keeps what arrived; **Continue** solves again, which
+continues the run on the server. A change of the case that changes the
+solve's inputs stops the run.
+
+**Snapshots on demand** (`snapshots.js`): a solve result's `values` has
+one entry per ready snapshot, a `Float32Array` where loaded and `null`
+where not. Showing snapshot k fetches the missing ones from k − 2 to
+k + 8 in one range request; beyond `keptSnapshots(nodes)` (about 64 MB of
+float32, from 8 to 1000 snapshots) the loaded ones farthest from k are
+dropped (`core.js`, `snapshotPlan`). Until the shown one arrives the
+picture keeps the nearest loaded snapshot and says so in its label
+("u at t = 0.2 (loading t = 0.3)"); the time bar says "loading…" for its
+range.
+
+**The time bar** under the picture (play or pause, a slider, the shown
+time with that snapshot's min and max) is the one control of the shown
+snapshot (`store.solveFrame`); during a run it also shows how far the run
+got.
+
+**Probes.** A click on the picture (or Enter with the picture focused)
+pins a probe, up to four; each keeps its colour slot while others come
+and go. The list under the picture gives x, y and the shown field's
+value there (interpolated page-side from the shown values, `core.js`:
+`meshGrid`, `locatePoint`, `interpolateAt`); for a run in time a line
+chart shows u(t) of every probe from `/api/solve/probes`, asked again when
+the probes or the number of ready snapshots change.
+
+**Comparing with an exact solution** (`compare.js`): the Solve result
+takes an expression (kept in the case as `view.exact_solution`) and asks
+`/api/solve/compare`; it shows max |u − exact| and the lumped L2 error at
+the shown snapshot, the largest over all, a chart of max |u − exact| per
+snapshot, and "Show u − exact in the picture" (the shown snapshot's
+difference from `/api/solve/compare/difference`, fetched when shown) with
+one diverging scale from −max to max. The expression's error is marked on
+its input (`path` `exact`). A new solution is compared again with the
+same text. The reference run has API calls (`api.keepReference`,
+`api.compare(job, {reference: true})`) but no controls yet.
+
+**Errors** carry `path` (`ApiError.path`); `markError` uses it, and the
+text only for an error without one (`core.js`, `errorPathOf`).
 
 ## Presets
 
@@ -305,283 +503,51 @@ a width of half that distance. The page names presets only by the ids the
 catalog gives; every physical choice is in `presets.cpp`, which spells out
 the sign conventions (−k Δu is `a_xx = a_yy = -k`; cooling is
 `alpha = h, beta_n = 1, g = h u_out`). Each preset runs on the default
-rectangle and on an annulus in `tests/runs.cpp` (finite, not zero;
-Laplace gives u = x exactly; the bump, cooling and damped wave decay).
+rectangle and on an annulus in `tests/runs.cpp`.
 
-## Decisions
+## Security
 
-Made by agents under the delegation above. Change them freely when there
-is a reason; record the new choice here.
+- **Loopback by default.** On 127.0.0.1 (or `localhost`, `::1`) API
+  requests must name a loopback host in their Host header (against DNS
+  rebinding).
+- **A token beyond this machine.** With `--host` anything else, the
+  server prints a warning and requires a token on every `/api/` request:
+  `--token TOKEN`, or 32 random hex digits made at start. It prints the
+  address with `?token=...`; the page reads the token from its own
+  address and sends it in `X-PDE2D-Token` (a request may also carry
+  `?token=`). The page's files themselves need no token. `--token` on
+  loopback requires it too.
+- **Origin.** A POST that carries an `Origin` header must name the same
+  host and port as its Host header (the page's own); a POST must be
+  `application/json`, which a cross-site form cannot send without a
+  preflight this server never answers.
+- **Bounded waiting.** At most `max_waiting` + 1 API requests are served
+  or wait for the session at a time; one more is answered 429 at once
+  instead of queueing behind a long mesh.
+- **Bounded memory.** Bodies up to 64 MiB, at most 8 clients, 1000
+  snapshots per run, 64 probe points per request.
 
-- **A local web server with a browser page,** not a desktop toolkit:
-  works from WSL with the Windows browser, needs no GUI library, and the
-  page can be edited without rebuilding.
-- **In this repository, behind `PDE2D_BUILD_APP`** (on by default), so a
-  library change that breaks the app fails the same build and tests.
-- **`pde2d::pde2d`** bundles the modules into one target; the modules stay
-  separate libraries.
-- **cpp-httplib, vendored** (one header, MIT, 0.18.3), used only in
-  `server.cpp`; **nlohmann/json** from the system. Neither reaches the
-  library.
-- **No build step for the page**: plain JavaScript modules, no npm.
-- **One case object** holds everything, including the SVG or mesh text,
-  so a saved case is complete and can run on the command line.
-- **Strict reading**: unknown keys are errors; ranges are left to the
-  library, so there is one source of truth for every rule.
-- **The server keeps the last result of each stage**, keyed by the case
-  sections it was built from, so changing the problem does not remesh.
-  All work runs under one mutex: SymEngine's reference counts are not
-  thread-safe in this build, and the app has one user.
-- **Only this machine can drive the server**: it listens on 127.0.0.1;
-  API requests must name a loopback host (against DNS rebinding) and send
-  JSON (which a cross-site form cannot).
-- **Region edits carry their boundary conditions and undo exactly.**
-  Adding an edit moves the conditions at once, as the library will apply
-  the edit (a renamed region keeps its condition, the halves of a split
-  copy it, a merged region takes its target's), and stores the earlier
-  condition of every name it touched in `view.region_edit_undo`, one
-  record per edit. Edits are undone last first, which restores those
-  conditions exactly, whether or not the library accepted the edit. The
-  case is consistent at every moment, so saving or reloading never loses
-  a move. Any other change of the regions (another SVG or shape) is
-  reconciled after the library accepts the geometry: a condition whose
-  region disappears is kept in `view.condition_archive` and comes back
-  with its region; a region without either gets u = 0 (`core.js`:
-  `applyRegionEdit`, `undoRegionEdit`, `reconcileConditions`).
-- **Only the latest answer counts.** Every request of a stage carries a
-  generation, and every loaded case an id; an answer to an older request,
-  or for a case that was replaced, is dropped. Conditions are synced only
-  for the geometry that is still in the case.
-- **Region names are arbitrary keys**: the page keeps region-keyed
-  conditions in prototype-free dictionaries, so names such as
-  `constructor` or `__proto__` (valid region names) behave like any other.
-- **A case is normalized before it is shown** (`normalizeCase`): a missing
-  or malformed section, down to the containers the forms write into
-  (shape options, component choices and their options, region edits,
-  each boundary condition), is replaced by the default's, with a notice, and
-  a case the forms still cannot show is replaced by a new case instead of
-  failing on every visit.
-- **Request bodies are limited** to 64 MiB (`ServerOptions::
-  max_body_bytes`); larger ones get 413.
-- **Whole numbers are checked before they are narrowed** (`OptionReader::
-  small_integer`, priorities): a value that does not fit is an error.
-- **Fields are drawn with exact linear interpolation** per pixel; values
-  given at some nodes only (Dirichlet values, b) are drawn as dots.
-- **Colours** follow a fixed categorical order for regions (eight, then
-  one neutral colour), one hue dark to light for values of one sign, and
-  two hues around a neutral zero for values of both signs.
-- **One dark theme** (2026-11-16, the owner's request; was: light and
-  dark from the system setting). Every colour is a token on `:root` with
-  `color-scheme: dark`; the contrasts are listed at the top of
-  `style.css` (text at least 5.5:1, control borders and status dots at
-  least 3.2:1). The field ramps and the smallest-angle colouring go
-  through a middle stop (dark blue, clear blue, pale blue): a two-stop
-  ramp from near-surface navy to pale blue had a grey, muddy middle where
-  most triangles and values sit.
-- **The browser keeps the current case** in local storage as a
-  convenience; saving a case file is the reliable way to keep it.
-- **One double-click starts it** (`app/Start pde2d app.cmd`, 2026-11-15).
-  The `.cmd` only finds its WSL distribution and folder from its own path
-  and runs `app/start-app.sh` there; the script holds all the logic
-  (incremental build of `pde2d_app`, start, wait until `/api/catalog`
-  answers, open the default browser), so it is the same in Linux. The app
-  lives as long as the window: closing it stops the app, so no server is
-  left behind unseen. A second start finds the running app and only opens
-  the page. Pass the distribution name to `wsl.exe -d` unquoted: it takes
-  quotes as part of the name.
-- **The Solve step offers what pde2d_solve offers** (2026-11-15): a static
-  solve or a time integration, every linear solver, time method and step
-  controller from the solve catalog. Nothing is pre-checked in the app:
-  a method that does not support the problem's time order, or a solver
-  whose symmetry requirement a matrix misses, is refused by the library
-  and its message is shown. The page only shows the declared traits as
-  chips, and a hint when a static solve would drop time terms.
-- **A new case's dt is 0.01**, not the library's default: `FixedStepOptions`
-  has `dt = 0`, which its constructor refuses. The catalog still shows the
-  library's default; only `default_solve_section` sets a usable step.
-- **Snapshots are equal intervals of [t0, t1]** (at most 1000, the app's
-  own limit, since each is a value per node sent to the page). A dt that
-  does not divide the interval shortens steps to land on them, which makes
-  the integrator prepare the linear solver again for each changed step:
-  pick snapshots and dt so that they fit.
-- **Time runs go in chunks that end on snapshot times** (2026-11-15; was:
-  a long run blocked the app). The library's continuation
-  (`integrate(..., &previous.final)`) gives progress, Stop and the
-  snapshots during the run without a library change, at the price of
-  granularity (one snapshot interval) and, for Newmark, a recomputed
-  acceleration at each chunk start (see "Runs in chunks").
-- **Every solve is a run with an id**, even a static one (done at once):
-  one way for the page to get values (by run and snapshot range) and one
-  progress shape. The values are no longer fetched by sending the case
-  again.
-- **One run at a time**, replaced by a solve of other inputs; a stopped
-  run continues when the same inputs are solved again, since the server
-  still has its state.
-- **The first chunk runs inside `POST /api/solve`**, so the library's
-  refusals keep landing on their fields; it is one snapshot interval, so
-  the answer is quick.
-- **A case change stops a running run** (the page sends Stop): the run
-  would answer a question nobody asks any more and hold the server.
-- **Typing stays instant** (2026-11-15). A keystroke used to redraw the
-  picture (a per-pixel field raster), stringify the whole case for local
-  storage and for every stage key (an SVG or mesh file included, several
-  times), and send the whole case to the problem check. Now: stage keys
-  are kept per section and recomputed only for the sections an edit
-  names (`editCase(..., {sections})`; every edit must go through
-  `editCase`); the picture is drawn only when something it shows changed
-  (`Viewer.set` returns whether it drew; the legend is rebuilt only then);
-  the case is written to storage 600 ms after the last edit and at once
-  when the page is hidden or closed; a stage's request carries only its
-  sections; the problem check runs after a pause (a setting) and an answer
-  for a problem edited since is dropped. Measured in Chrome (heat annulus
-  solved, colouring by u, 1280×800 at 2×): 50 input events in f took
-  11.5 ms each before, 6.1 ms after on average and 0.38 ms each once the
-  first one has updated the panel.
-- **Pan and zoom move the last picture** (2026-11-15): during a gesture,
-  at most one frame per animation frame shows the last full picture moved
-  and scaled (`viewTransform`, `drawImage`); the full picture is drawn
-  once the gesture pauses for 120 ms. What does not depend on the view is
-  computed once: per mesh the quality buckets (one path per colour), per
-  field the colour position of each node (interpolated per pixel instead
-  of the value), per theme the colour tokens and tables. Measured: a pan
-  frame took 34 ms before (a full redraw per move), now a move costs
-  0.01 ms and the frame is a blit (16 ms per frame is the display's
-  rate); the full redraw takes 4.2 ms at 1720×1328 pixels.
-- **Every section folds** (2026-11-15): the title of each card and
-  section is a button with `aria-expanded`; the state is remembered per
-  section id in local storage (a per-viewer preference). Rarely changed
-  ones start folded: the boundary discretizer and initial triangulator,
-  the linear solver, every Reports section, region conditions when there
-  are more than four regions. An error marked inside a folded section
-  opens it (without changing the stored state).
-- **Settings are the viewer's, not the case's** (2026-11-15): kept in
-  local storage, read with `normalizeSettings` (a bad value takes its
-  default). Problem check while typing (on/off, delay), playback speed,
-  following the newest snapshot, significant digits, picture quality (the
-  largest pixel ratio). Parallel assembly and solves are shown disabled
-  with the note that the library request is recorded: visible and
-  honest, not a dead control that pretends.
-- **Presets come from the server** (2026-11-15) and are applied there,
-  where the geometry is known: the page stays free of physics and
-  presets are tested in C++ on two shapes. Applying one is undone from
-  its toast.
-- **The solution travels in binary** (2026-11-15): `POST /api/solve`
-  answers the summary, `POST /api/solve/values` the values as float32
-  (snapshots × nodes), decoded into one `Float32Array` per snapshot. JSON
-  numbers took about 20 bytes a value and a parse; float32 takes 4, which
-  matters at 1000 snapshots. Float32 is plenty for colours and the
-  readout; `min` and `max` stay exact doubles in the summary (the colour
-  scale), and the CSV export keeps full doubles. The values are asked for by
-  run and snapshot range (since 2026-11-15, see "Runs in chunks"), so a
-  run's new snapshots travel once. The Solve step estimates the size from the fresh mesh
-  before a run and warns above 50 MB (the page keeps every snapshot in
-  memory).
-- **One stage registry** (`STAGES` in `web/js/core.js`): each stage's id,
-  label, the case sections its result depends on, the stages that must be
-  fresh first, its API call and its "running" text. `stageKey`, the
-  store, the step tabs and panels, `runWithPrerequisites` (the Mesh,
-  Assemble, Solve and Show buttons) and Run all all read it, so a new
-  stage is one entry. A failure anywhere gives the same toast and opens
-  the failing step.
-- **Run all ends on the solution**: after a solve (from Run all or the
-  Solve button) the picture colours by the solution. The colour choice
-  lives in the store (`store.view.colorBy`); the toolbar only shows and
-  sets it.
-- **A problem check never queues behind a long stage.** The server runs
-  everything under one mutex (the library's thread-safety rule), so a
-  check sent during a mesh, assembly or solve would wait for it anyway;
-  the page holds it and sends one check when the stage ends.
-- **Errors belong to their input.** A stage's error keeps the key of the
-  case it was produced for. Once the case changes, it is shown greyed out
-  "for the previous input", its field mark is cleared, and the step's dot
-  says outdated, not failed. Exports are offered only for results that
-  are up to date, and the Problem step greys out a check of an earlier
-  problem and says "Checking…" until the new one arrives.
-- **Option errors land on their field**: `build_component` puts the
-  option's name in the path when the library's message names one of the
-  component's options as a word. The library's messages are not changed;
-  a message that names no option keeps the path of the options object.
-- **Number fields never write a guess**: text that is not a number yet
-  marks the field "not a number" and leaves the case as it was; an empty
-  option field means the default (as before), an empty parameter value
-  is refused the same way.
-- **Imported meshes take rename and merge.** `mesh::Mesh` keeps region
-  names apart from the edges' tags, so both edits are a change of names
-  and tags, with no geometry; the library's `validate` confirms the
-  result. Split needs curves and stays refused, with a message saying
-  so. The page's region editor offers rename and merge for mesh files.
-- **The case remembers its file name** (the opened file's or example's,
-  `case.json` for a new case) and whether it changed since it was opened
-  or saved (an "unsaved changes" chip). New, Open and Examples keep the
-  replaced case while their toast offers to restore it (12 s; a toast
-  with a button stays longer than a plain one); afterwards it is dropped.
-  Sections replaced by defaults when a case is read are listed in a
-  notice that stays until dismissed: a toast was too easy to miss.
-- **The assembled system exports as Matrix Market**, the format every
-  sparse tool reads (SciPy, MATLAB, Julia): the free parts of A, B and M2
-  and b, at `assembly.t`, so the system can be checked or solved
-  elsewhere.
-- **Fields are one column wide in the grid** (`.field` uses
-  `minmax(0, 1fr)`): a long option name in a select no longer widens the
-  panel on narrow screens.
-- **Few words on screen** (2026-11-16, the owner's request). No lead
-  paragraphs; descriptions of components, options, shapes and sections
-  sit behind a small "i" toggle (a real button with `aria-expanded`, its
-  text also the tooltip, `dom.js`: `infoToggle`); what stays printed is
-  what the user needs now: errors, warnings, a hint that changes what to
-  do. Plain labels: "min u", "max u", "Time order 1" (both orders only
-  when assembly's differs from the problem's), "‖b‖₂, right-hand side".
-- **Action and result first** (2026-11-16). Every step starts with a
-  head that stays at the top while its panel scrolls: the title, the
-  primary action (Solve becomes Stop during a run and Continue after a
-  stop; Problem's is its preset menu; Geometry is read on its own) and a
-  one-line status (running with the seconds, up to date, outdated,
-  failed, stopped), with "Next: <step>" once the result is up to date
-  (`panels/head.js`). The result follows; the settings come last, under
-  a "Settings" rule. A result of an earlier case is shown muted.
-- **Tabs always fit** (2026-11-16): five equal grid columns; in a sidebar
-  narrower than 410 px (a container query) the dot sits above the label.
-  The tabs take the arrow keys, Home and End.
-- **The time bar lives under the picture** (2026-11-16; was: a slider
-  and player in the Solve panel): what it controls is the picture, and at
-  phone width it stays next to it. There is one copy, so they cannot
-  disagree.
-- **Probes and charts are page-side** (2026-11-16): the snapshots are
-  already in the page as float32, so u(t) at a point is an interpolation,
-  not a request. Charts are hand-written SVG (`charts.js`, no library):
-  2 px lines, a hairline grid, round ticks, a marker at the shown time,
-  a crosshair with values, the probe list as the legend, end labels left
-  out where two would touch. Probe colours are series slots 1 to 4
-  (validated as a set on the dark surface).
-- **Dot fields read the nearest dot** (Dirichlet values, b): the readout
-  under the pointer gives the value of the nearest node with a value
-  within 8 px (`nearestValuedNode`).
-- **Isolines** (2026-11-16): marching triangles on the P1 field
-  (`core.js`: `isolines`), at levels evenly inside the colour scale
-  (count from Settings). Over the field's own colours they are drawn
-  light on a dark halo (lines in the field's colours would vanish);
-  without the colouring, each line takes its level's colour.
-- **The comparison asks the library per snapshot** (2026-11-16): one
-  `/api/field` request per snapshot time. The library keeps the
-  expression rules and its messages; the page only subtracts. It costs a
-  request per snapshot (fast for the usual 50 to 100; a run of 1000
-  snapshots takes a few seconds and shows its progress).
-- **Save picture** (2026-11-16) saves the canvas as drawn (at the
-  picture-quality pixel ratio) with the legend drawn underneath as a
-  PNG, named after the case and the shown time (`pictureName`).
-- **Keyboard** (2026-11-16): the picture is focusable (arrows pan, Shift
-  for larger steps, + and - zoom, 0 fits, Enter pins a probe at the
-  centre); file choosers are real buttons that open hidden inputs; every
-  control has a visible focus ring.
-- **Phone layout** (2026-11-16): below 860 px the tabs come first and
-  stay at the top, the picture with its toolbar, time bar and legend
-  stays under them (28% of the height), then the probes and the panel
-  scroll. On a short screen (a phone held sideways) nothing sticks.
-- **A real-browser test** (2026-11-16): `app/tests/browser/run.sh`
-  starts `pde2d_app` on a free port with the page and a harness, runs
-  each scenario in headless Chrome and fails on a failed check, a page
-  error or a scenario that does not finish. CTest runs it as
-  `app_browser` when Chrome is found (`PDE2D_CHROME`, Chrome or
-  Chromium on PATH, or the Windows Chrome from WSL, which reaches the
-  WSL port only after a moment: a page that did not load is tried
-  again). `--shots DIR` saves a screenshot per scenario.
+## The command line
+
+```sh
+pde2d_app --run CASE.json [--set PATH=VALUE]... [--output DIR]
+```
+
+- Runs geometry, mesh, problem check, assembly and solve (to the end, in
+  the same chunks as the page's runs) and prints a JSON summary; the exit
+  code is 0 when every stage ran. With `view.exact_solution` in the case,
+  the summary has `comparison`: `max_abs`, `max_rms`, `max_l2` over the
+  snapshots against it, with `nodes` and `longest_edge` (for convergence
+  studies).
+- `--set PATH=VALUE` (repeatable, applied in order before running)
+  replaces one value: PATH is dotted keys with `[i]` indices
+  (`mesh.improvers[0].options.use`); VALUE is read as JSON, or else taken
+  as a string (`--set solve.mode=time`). Every step before the last must
+  exist; the last may be a new key of an object (the case reader refuses
+  one it does not know). A step that does not exist is an error naming
+  the path.
+- `--output DIR` writes `mesh.pde2d`, `mesh.svg`, `solution.csv`,
+  `solution.vtk`, `provenance.json` and the system (`stiffness.mtx`,
+  `damping.mtx`, `mass.mtx`, `rhs.mtx`), with the case file's name in
+  their provenance.
+- `--default-case` prints the case a new session starts with.

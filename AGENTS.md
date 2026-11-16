@@ -10,7 +10,9 @@ types, data flow) and [docs/vision.md](docs/vision.md) (direction).
 
 The graphical interface in `app/` is a separate program on top of the
 library, and **its design is delegated to agents**: inside `app/` you
-decide yourself and record the decision in [docs/app.md](docs/app.md).
+decide yourself and record the decision in
+[docs/app-decisions.md](docs/app-decisions.md) (the design as it is:
+[docs/app.md](docs/app.md)).
 Read [app/AGENTS.md](app/AGENTS.md) before working there. Everything
 below about the owner deciding applies to the library.
 
@@ -41,7 +43,7 @@ impossible or unclear, ask.
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
 | `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
 | `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `iterative_solve.hpp` and the solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`); `time_methods.cpp` holds the three time methods |
-| `app/` | the graphical interface (`pde2d_app`): `src/` (case format, component catalog, stages, runs in chunks, problem presets, local HTTP server), `web/` (the page, plain JS modules), `examples/` (cases), `Start pde2d app.cmd` and `start-app.sh` (double-click launcher), `tests/` (`browser/`: the page in headless Chrome), `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md` and its design `docs/app.md` |
+| `app/` | the graphical interface (`pde2d_app`): `src/` (case format, component catalog, the stage cache, runs in chunks per client, comparisons and probes, exporters, problem presets, `--set`, local HTTP server), `web/` (the page, plain JS modules), `examples/` (cases), `Start pde2d app.cmd` and `start-app.sh` (double-click launcher), `tests/` (`browser/`: the page in headless Chrome), `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md`, its design `docs/app.md` and its decisions `docs/app-decisions.md` |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
