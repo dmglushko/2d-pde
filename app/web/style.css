@@ -385,7 +385,9 @@ input.expr {
   font-weight: 600;
 }
 
-@container (min-width: 410px) {
+/* Beside the label only where a bold "Geometry" or "Assemble" still fits
+   next to its dot (at 420 px it would be cut by a few pixels). */
+@container (min-width: 480px) {
   .steps button {
     flex-direction: row;
     gap: 6px;
