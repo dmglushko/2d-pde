@@ -111,7 +111,7 @@ flowchart LR
 | `app/src/binary.hpp` | little-endian float32, float64 and uint32 |
 | `app/src/session.*` | `Session`: the facade the server and `--run` use (stages, runs, comparisons, probes, status, exports, `run`), the two locks and `Work` (a call under the session mutex, with what it does), the table of field kinds, the default case |
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`: routes, client ids, token, Origin, the queue bound for calls that wait for the session) and the command line |
-| `app/web/` | `index.html`, `style.css` (one dark theme, every colour a token), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing and ticks; `color.js` OKLab ramps, field scales, the locked range; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, visible coefficients; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id and token headers), `state.js` (the store, `editCase`, tickets, undo, invalid entries), `actions.js` (stages, runs, presets, exports), `snapshots.js`, `settings.js`, `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
+| `app/web/` | `index.html`, `css/` (one dark theme, every colour a token: `tokens.css` tokens and base, `panels.css` controls, step heads, forms, results, toast, settings, `picture.css` viewer, time bar, legend, overlays, charts, `layout.css` top bar, columns, tabs, narrow screens; loaded in that order), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing, chart, colour-bar and log ticks, CSV, byte sizes; `color.js` OKLab ramps, field scales, the locked range, the colour maps; `display.js` what the picture shows (`resolveDisplay`); `requests.js` retries, backoff, plain error texts, the server's busy text; `study.js` refinement levels and observed orders; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, visible coefficients; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id kept per tab and its claim, the token header, requests that wait), `state.js` (the store, `editCase`, tickets, undo, invalid entries, the picture's state per tab), `actions.js` (stages, runs and their progress with retries, reattaching after a reload, presets, exports), `display.js` (the store gathered for `resolveDisplay`), `snapshots.js`, `settings.js`, `case_menu.js`, `server_status.js`, `refinement.js` (the refinement study), `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart: keyboard readout, CSV, log–log), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
 | `app/examples/` | example cases (each runs as `app_run_*`) and an example SVG |
 | `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, the series zip, CRC-32 and SHA-256, error paths, `--set`, `--sweep`), `server.cpp` (HTTP, token, Origin, 429, status, clients), `example_checks.json` and `example_check.cpp` (each example's expected figures, `app_check_*`), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
@@ -210,13 +210,17 @@ must not be ignored silently), and a missing value means its default.
 
 ## Clients
 
-Every page instance makes a random client id when it loads (`api.js`,
-`clientId`) and sends it on every request in `X-PDE2D-Client` (letters,
-digits, `-`, `_`, at most 64). Runs, reference runs and their progress
-belong to the client: two tabs do not replace each other's run, and one
-tab cannot read or stop another's. A request without the header is the
-client `local` (the command line, tests, `curl`). A reload is a new
-client (it has no run to follow).
+Every tab has a random client id (`api.js`, `clientId`), kept in the
+tab's `sessionStorage`, and sends it on every request in
+`X-PDE2D-Client` (letters, digits, `-`, `_`, at most 64). A reload of the
+tab is the same client and finds its run again (`POST
+/api/solve/current`). A duplicated tab copies `sessionStorage`: on load,
+a page with a kept id asks the other tabs on a `BroadcastChannel`
+whether one uses it (150 ms, while the catalog loads) and takes a new id
+if so. Runs, reference runs and their progress belong to the client: two
+tabs do not replace each other's run, and one tab cannot read or stop
+another's. A request without the header is the client `local` (the
+command line, tests, `curl`).
 
 The session keeps at most `SessionOptions::max_clients` (8) clients; a
 solve by a new client drops the one used least recently, with its runs
@@ -251,6 +255,7 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 | `POST /api/field` | `{"case", "field"}` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`) |
 | `POST /api/solve` | case | starts the client's solve of the case, or finds its current one with the same inputs (see "Runs"), and answers its progress (below) |
 | `POST /api/solve/progress` | `{"job"}` | the same progress, now (never waits for a chunk) |
+| `POST /api/solve/current` | case | `{"run": progress}`: the client's current run when its inputs (geometry, mesh, problem and solve sections) are the case's, else `{"run": null}`; never starts or continues a run, never makes a client, the run lock only (a reloaded page finds its run with it) |
 | `POST /api/solve/stop` | `{"job"}` | stops the run after the chunk that is running (at once: it does not wait for it); its progress. A solve of the same inputs continues it |
 | `POST /api/solve/values` | `{"job", "first", "count"}` | snapshots `first` to `first + count` (ready ones only) in binary (never waits for a chunk) |
 | `POST /api/solve/reference` | `{"job"}` | keeps the client's run (it must be done) as its reference run: `{"reference": {"job", "mode", "times", "mesh_id"}}`. It stays when the run is replaced |
@@ -310,7 +315,7 @@ start of its text. Where the paths come from:
 | 415 | a POST that is not `application/json` | `input` |
 | 422 | the library refused the input (`std::invalid_argument`) or an algorithm could not finish (`std::runtime_error`) | `input`, `algorithm` |
 | 422 | a run that does not fit the memory budget even after dropping other clients' finished runs; the message gives its size, the room and what to change; `path` is `solve.time.snapshots` for a run in time | `memory` |
-| 429 | more than `ServerOptions::max_waiting` (6) API requests are already being served or waiting for the session (progress, stop, values, probes and status never count and are never refused) | `busy` |
+| 429 | more than `ServerOptions::max_waiting` (6) API requests are already being served or waiting for the session (progress, stop, values, probes, status and current never count and are never refused) | `busy` |
 | 500 | anything else | `internal` |
 
 ## Binary answers
@@ -557,7 +562,7 @@ Two locks (`session.hpp`, `runs.hpp`):
   snapshots, per-snapshot min and max, t reached, the combined report,
   error) and the activity. A chunk computes without it and takes it only
   to publish what it made; Stop sets the state under it.
-- **Progress, stop, values, probes and status take only the run lock.**
+- **Progress, stop, values, probes, status and current take only the run lock.**
   They read a run's `RunSnapshots` (the mesh and the kept snapshots as
   shared pointers: no expressions, and a kept snapshot never changes),
   copied under the run lock, and work on them after releasing it (probes
@@ -603,56 +608,137 @@ not counted.
 
 ## The page
 
+**The top bar**: the case menu (New case, Open case…, Save case, Restore
+previous case, Undo, Redo, the examples; the menu button pattern:
+Enter, Space or ArrowDown opens it, the arrows, Home and End move,
+Escape closes it; the button names the case), an "unsaved" chip, the
+server's status, Run all and Settings. It is one row at phone width.
+
+**What the picture shows is resolved in one place** (`pure/display.js`,
+`resolveDisplay`, fed by `display.js`): the quantity (u, u − exact, u −
+reference, a field of the Assemble step), its source and snapshot, the
+comparison asked for and its state (`none`, `busy`, `failed`, `outdated`,
+`current`), whether the result is outdated, loading or failed, the
+precision note and the scale. The picture, the legend, the Colour menu,
+the overlays, the comparison checkboxes and the probe table read that
+answer. A difference is drawn only while its comparison is current for
+the fresh solution; otherwise u is drawn, labelled u, and the legend says
+why ("u − exact is for the previous expression: press Compare"); the
+checkbox keeps the choice and says the same beside it.
+
+**An outdated result** (the case changed since) is drawn at 40% opacity
+on the mesh it was computed on, with "Outdated: the case changed since
+this result" over the picture and "(outdated)" in the legend and the
+Colour menu; it never draws a comparison.
+
 **Following a run** (`actions.js`, `followRun`): the page polls the
 progress every 250 ms, shows the newest snapshot unless the time bar was
 moved during the run (or the setting is off), and colours with the range
 so far (the summary's exact `min` and `max`, one scale for every
-snapshot). **Stop** keeps what arrived; **Continue** solves again, which
-continues the run on the server. A change of the case that changes the
-solve's inputs stops the run.
+snapshot). A poll answered `busy` (429) or not at all is tried again
+after 250 ms, doubling to 4 s (`pure/requests.js`), and the Solve step's
+head says so; a `replaced` or `expired` answer, or another error, ends
+the following with its message (an expired run offers "Solve again").
+**Stop** keeps what arrived; **Continue** solves again, which continues
+the run on the server. A change of the case that changes the solve's
+inputs stops the run.
+
+**After a reload** (`reattachRun`): the page asks `POST
+/api/solve/current` for this tab's run of the restored case; if the
+server still has it, the page fetches the mesh and shows the run (and
+follows it while it runs), else it shows no solution.
+
+**The picture's state belongs to the tab**: probes, the profile line,
+the locked ranges, the colouring and the comparison asked for are kept in
+`sessionStorage` (`pde2d-app-view`), restored after a reload, not saved
+in the case. The colour maps are a preference (Settings, localStorage).
 
 **Snapshots on demand** (`snapshots.js`): a solve result's `values` has
 one entry per ready snapshot, a `Float32Array` where loaded and `null`
 where not. Showing snapshot k fetches the missing ones from k − 2 to
 k + 8 in one range request; beyond `keptSnapshots(nodes)` (about 64 MB of
 float32, from 8 to 1000 snapshots) the loaded ones farthest from k are
-dropped (`pure/run_values.js`, `snapshotPlan`). Until the shown one arrives the
-picture keeps the nearest loaded snapshot and says so in its label
-("u at t = 0.2 (loading t = 0.3)"); the time bar says "loading…" for its
-range.
+dropped (`pure/run_values.js`, `snapshotPlan`). Until the shown one arrives
+the picture keeps the nearest loaded snapshot and says so in its label
+("u at t = 0.2 (loading t = 0.3)"); with none loaded, "Loading u at t =
+0.3…" is over the picture. A failed fetch is kept and said over the
+picture in plain words with Retry (or Solve again when the run is gone),
+and no new fetch starts until then. Differences behave the same.
 
 **The time bar** under the picture (play or pause, a slider, the shown
-time with that snapshot's min and max) is the one control of the shown
-snapshot (`store.solveFrame`); during a run it also shows how far the run
-got.
+time with that snapshot's min and max of u from the progress's
+`snapshot_min` and `snapshot_max`, in double) is the one control of the
+shown snapshot (`store.solveFrame`); during a run it also shows how far
+the run got.
 
 **Probes.** A click on the picture (or Enter with the picture focused)
 pins a probe, up to four; each keeps its colour slot while others come
-and go. The list under the picture gives x, y and the shown field's
-value there (interpolated page-side from the shown values, `pure/mesh_math.js`:
-`meshGrid`, `locatePoint`, `interpolateAt`); for a run in time a line
-chart shows u(t) of every probe from `/api/solve/probes`, asked again when
-the probes or the number of ready snapshots change.
+and go. The list under the picture gives x, y and the shown quantity's
+value there: for u, the server's double values (`/api/solve/probes`, at
+the shown snapshot, static solutions too); for a difference, interpolated
+in the page from the float32 values drawn; for a field of the Assemble
+step, from its values; a line under the table says which. For a run in
+time a line chart shows u(t) of every probe. A failed request is said at
+the chart with Retry.
+
+**Boundary regions.** A click within 7 px of a boundary edge selects its
+region instead of pinning a probe: the region is drawn wider on a halo,
+its legend entry is pressed, and its condition opens in the Problem step
+(its row in the Geometry step when that step is open). The legend's
+regions are buttons that do the same (the keyboard path).
+
+**Charts** (`charts.js`): u(t), the line profile, the error per snapshot,
+the reference difference and the refinement study. A hairline grid,
+round ticks, a crosshair readout under the pointer; a click picks the
+snapshot. The plot takes the focus: the arrows (Shift: a tenth of the
+points), Home and End move the readout, which a live region announces;
+Enter picks the snapshot. "Download data (CSV)" saves the numbers drawn
+(full precision, empty cells for gaps).
 
 **Comparisons** (`compare.js`, the Solve result). *With an exact
 solution*: an expression (kept in the case as `view.exact_solution`) is
 sent to `/api/solve/compare`; the section shows max |u − exact|, the RMS
 over the nodes and the lumped L2 error at the shown snapshot, the largest
 max over all, and for a run in time a chart of the three per snapshot.
-Next to the figures it says that this is the nodal error in double, not
-the solver's residual, and that a difference picture is float32. "Show
-u − exact in the picture" (`store.view.difference`) fetches the shown
-snapshot's difference from `/api/solve/compare/difference` and draws it
-with one diverging scale from −max to max. A comparison belongs to its
+Next to the figures it says that this is the nodal error computed in
+double, not the solver's residual, and that only the picture is float32.
+"Show u − exact in the picture" (`store.view.difference`) fetches the
+shown snapshot's difference from `/api/solve/compare/difference` and draws
+it with one diverging scale from −max to max. A comparison belongs to its
 solution and its expression: another solution drops it (a new done run is
 compared again with the same text), another expression in the case
-greys it out with "for the previous expression" until Compare. The
-expression's error is marked on its input (`path` `exact`). *With the
+greys it out with "for the previous expression" until Compare. A failed
+comparison that may pass (busy, no answer) offers Retry. *With the
 reference run*: "Keep as reference" (a done, fresh run;
 `/api/solve/reference`, kept in `store.reference`), "Compare with
 reference" (max difference per snapshot, a chart for a run in time, "Show
 u − reference in the picture"), "Forget reference"; a refusal (another
 mesh, a run not done) shows the server's message in the section.
+
+**Refinement study** (`refinement.js`, the Solve result, with an exact
+solution in the case): 3 to 5 levels of the mesh's max edge length (the
+relative bound, else the absolute one), halved level by level; each level
+is solved and compared with the existing actions, one after another. A
+table gives h (the longest edge), nodes, the largest nodal and lumped L2
+errors over the snapshots and the observed orders log(e₁/e₂) /
+log(h₁/h₂) between levels (`pure/study.js`); a log–log chart draws them
+with h¹ and h² reference slopes through the first L2 point. The mesh bound
+is set by automatic edits and put back at the end, also when stopped or
+failed; after a whole study the case's own level is solved again. An
+edit by the user meanwhile stops the study. Stop ends it after stopping
+the running solve.
+
+**Before solving**, the Solve step says what the run will keep on the
+server (`memory.snapshot_bytes` of the mesh answer × the snapshots)
+against the server's budget once it is a quarter of it or more, and the
+page's float32 share above 50 MB. A `memory` refusal is marked at
+`solve.time.snapshots`.
+
+**Server status** (`server_status.js`): while a request of this page
+that waits for the session has waited 0.6 s, the top bar says what the
+server is busy with from `GET /api/status` (polled each second then):
+"server busy: meshing for another tab (12 s)". It stays hidden when the
+server is busy with the stage this page shows as running.
 
 **Request tickets** (`state.js`, `requestTicket`; `pure/tickets.js`).
 Every asynchronous answer is applied by one rule: a request takes a ticket
@@ -660,13 +746,14 @@ of its kind with the case it was made in (`store.caseId`) and the key of
 its input; `live()` is true while no newer request of the kind was made in
 the same case (the answer may be kept, as outdated), `holds()` while the
 input key is also the same. Kinds and keys: each stage (its stage key;
-the problem check needs `holds`), `open` (New, Open, an example, a file:
-any newer replacement wins), `preset` (the revisions of the geometry,
-problem and solve sections: an edit made meanwhile refuses the answer
-with a toast), `compare-exact` and `compare-reference` (the solution),
-`difference-*` (not exclusive: several snapshots side by side, for the
-same comparison), `probes` (the run, snapshot count and points),
-`reference`.
+the problem check needs `holds`), `open` (New, Open, an example, a file,
+a domain file read: any newer replacement wins; a domain file also needs
+the geometry's revision unchanged), `preset` (the revisions of the
+geometry, problem and solve sections: an edit made meanwhile refuses the
+answer with a toast), `compare-exact` and `compare-reference` (the
+solution), `difference-*` (not exclusive: several snapshots side by
+side, for the same comparison), `probes` (the run, snapshot count and
+points), `reference`, and `solve` for a reattached run.
 
 **Invalid entries.** Number fields are `numberInput` (`dom.js`): text
 inputs with `inputmode="decimal"` and the page's own parsing
@@ -691,33 +778,47 @@ loses the focus, so typing in a field is one step. At most 100 steps; a
 new case clears them. Undo and redo put the sections back, rebuild the
 forms and read the geometry again when it changed. Keys: Ctrl+Z, and
 Ctrl+Shift+Z or Ctrl+Y, except in a text field typed in since it got the
-focus, where the browser's own undo of the field wins; the conditions that
-follow a new geometry (`record: false`) are not steps of their own.
-**Restore previous case** (top bar, `store.previousCase`) brings back the
-case the last New, Open, example or file replaced, until the next
-replacement.
+focus, where the browser's own undo of the field wins. **Edits the page
+makes by itself** (`editCase(..., {automatic: true})`: the conditions
+that follow a new geometry, the refinement study's mesh levels) are not
+undo steps and leave the case saved or not as it was; reading a case
+(normalization) does not mark it unsaved either. **Restore previous
+case** (case menu, `store.previousCase`) brings back the case the last
+New, Open, example or file replaced, until the next replacement.
 
 **The picture** (`view/`). The legend names the field shown (`u at t =
 …`, `u − exact at t = …`, `Dirichlet values at t = …`, `|∇u| at t = …`),
 the Colour menu's options name it too (`field: u`, `|∇| of u`), a field
-with one value says "constant: <value>". **Lock range** fixes the colour
-range per quantity (field or |∇|) in `store.view.locked` (`lockedScale`),
-kept until **Unlock** and editable at its ends. **|∇|** colours each
-triangle by the gradient of the shown P1 field (`gradientMagnitudes`,
-display only). **Line profile**: with the tool on, a drag draws a line;
-the shown field along it (`sampleLine`, 200 intervals, gaps outside the
-mesh) is charted under the probes and follows the shown snapshot.
-Interaction: one pointer pans (a press that does not move pins a probe),
-two pinch and pan, the wheel zooms, +/−/fit buttons on the picture; at
-phone width a handle under the picture sets its height (kept in this
-browser). Edges are drawn fainter over a field's colours. Results whose
-reports hold messages show a warning chip with the count and the first
-message; it opens the reports. Solution exports are CSV, VTK and
-provenance; a 409 or 429 answer is said in plain words
-(`exportErrorText`).
+with one value says "constant: <value>". The colour bar has round ticks
+under it (`colorbarTicks`: 1, 2 or 5 × 10ⁿ inside the range, zero always
+on a range that spans it, as few digits as keep them apart; the exact
+ends are its tooltip and accessible name). Colour maps (Settings):
+sequential blue (default), orange or green, one hue from dark to light;
+diverging blue–red (default) or blue–orange with a grey middle
+(`COLOR_MAPS`). **Lock range** fixes the colour range per quantity (field
+or |∇|) in `store.view.locked` (`lockedScale`), kept until **Unlock** and
+editable at its ends. **|∇|** colours each triangle by the gradient of the
+shown P1 field (`gradientMagnitudes`, display only). **Line profile**:
+with the tool on, a drag draws a line; the shown field along it
+(`sampleLine`, 200 intervals, gaps outside the mesh) is charted under the
+probes and follows the shown snapshot. Interaction: one pointer pans (a
+press that does not move selects a boundary region or pins a probe), two
+pinch and pan, the wheel zooms, +/−/fit buttons on the picture; at phone
+width a handle under the picture sets its height and ▴ folds the picture
+away (both kept in this browser). Edges are drawn fainter over a field's
+colours. Results whose reports hold messages show a warning chip with the
+count and the first message; it opens the reports. Solution exports are
+CSV, VTK, the VTK series (zip) and provenance; a 409 or 429 answer is
+said in plain words (`exportErrorText`). Toasts sit at the foot of the
+sidebar (at the bottom at phone width): never over the picture, its time
+bar or its charts. Expert terms are in plain words with the formula as
+the tooltip ("Damping (u_t terms)": B = M1 − D; time orders "0 ·
+stationary", "1 · first order", "2 · second order").
 
-**Errors** carry `path` (`ApiError.path`); `markError` uses it, and the
-text only for an error without one (`pure/stages.js`, `errorPathOf`).
+**Errors** carry `path` (`ApiError.path`) and `kind` (the server's, or
+`network` when the server does not answer); `markError` uses the path,
+and the text only for an error without one (`pure/stages.js`,
+`errorPathOf`).
 
 ## Presets
 

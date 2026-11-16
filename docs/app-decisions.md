@@ -715,3 +715,156 @@ What changed for the page in this round, all documented in app.md:
   wrong type in the unused mode's part is refused at its path, which the
   page already marks.
 - Light calls (progress, stop, values, probes, status) are never 429.
+
+## 2026-11-16, round 3, part B (the page)
+
+- **One resolved display** (was: the picture took `shownField()` while
+  the legend, the Colour menu and the comparison controls each asked
+  their own questions; after the exact expression changed, the controls
+  went outdated while the picture still drew the old u − exact, labelled
+  as current). `pure/display.js`, `resolveDisplay`, decides from plain
+  inputs what is shown: the quantity, its source and snapshot, the
+  comparison and its state (`none`, `busy`, `failed`, `outdated`,
+  `current`), whether the result is outdated, loading or failed, the
+  precision note and the scale; `display.js` gathers the store into it.
+  The picture, the legend, the Colour menu, the overlays, the comparison
+  checkbox and the probes all read that one answer. Rule: a difference is
+  drawn only while its comparison is `current` for the fresh solution;
+  otherwise u is drawn, labelled u, and the legend says why ("u − exact is
+  for the previous expression: press Compare"). The checkbox keeps the
+  user's choice (it is a request, not a state) and says beside it why the
+  picture does not draw it, so comparing again brings the difference back
+  without a second click. Pure, so every case is a Node test.
+- **An outdated result is drawn greyed with a stamp** (was: an empty
+  picture as soon as the case changed). The last solution is drawn at 40%
+  opacity on the mesh it was computed on (only while that mesh is the one
+  the picture has: its id is checked), with "Outdated: the case changed
+  since this result" over the picture and "(outdated)" in the legend; it
+  never draws a comparison. An empty picture hid what the user was
+  looking at; drawing it at full colour would pass it as current.
+- **Failed secondary requests are kept and said** (was: snapshots,
+  differences and probes swallowed their errors, so the picture stayed
+  on a stand-in or "loading" forever). Each keeps its last failure and
+  is not asked again until Retry, so a failing server is not asked on
+  every redraw; the failure is said over the picture (snapshots,
+  differences) or at its chart (probes) in plain words
+  (`pure/requests.js`, `plainError`: `replaced`, `expired` with "Solve
+  again", `memory`, `busy`, `network`). A difference that failed is
+  never replaced by u. Progress polls, the one request a run depends on,
+  retry by themselves after `busy` or no answer, doubling from 250 ms to
+  4 s, and say so in the Solve step's head; the run goes on on the server
+  meanwhile. Other failures end the following with the server's reason.
+  The network failure got its own kind (`network`, was `internal`).
+- **Recovery after a reload.** The client id is kept in the tab's
+  `sessionStorage`, so a reload is the same client. A duplicated tab
+  copies `sessionStorage` too, so on load a page with a restored id asks
+  the other tabs on a `BroadcastChannel` whether one uses it and takes a
+  new id if so (150 ms, while the catalog loads; the reloading tab is gone
+  by then and does not answer). Rejected: Web Locks (not in insecure
+  contexts, which `--host` gives, and a reload's lock release can race
+  the new page). A new call, `POST /api/solve/current` (case → `{"run":
+  progress or null}`, the run lock only, never makes a client), finds the
+  client's run of the case; the page fetches the mesh and shows the run,
+  following it if it still runs, else shows nothing (no stale picture).
+- **The picture's state is the tab's, not the case's**: probes, the
+  profile line, locked ranges, the colouring and the comparison asked
+  for are kept in `sessionStorage` per tab (a reload finds them), not in
+  the case's `view`. They describe how one person looks at a result, not
+  the problem; writing them into the case would make every probe an
+  unsaved change, put them in files shared with others, and sync them
+  between tabs that look at different things. Colour maps are a
+  preference of the viewer (localStorage, Settings).
+- **The page's own edits are not the user's** (was: opening an example
+  and Run all marked it "unsaved"). `editCase(..., {automatic: true})`
+  leaves `dirty` as it was and records no undo step: the conditions that
+  follow a new geometry, the refinement study's mesh levels. Normalizing
+  a case when it is read no longer marks it unsaved either (the notice
+  still says which sections were replaced).
+- **Numbers from the right source.** The probe table's value of u comes
+  from the server's double series (`/api/solve/probes`, for static
+  solutions too) at the shown snapshot; a difference is interpolated in
+  the page from the float32 values drawn, and the table says which. The
+  time bar's min and max are the progress's `snapshot_min` and
+  `snapshot_max` (double, every snapshot, loaded or not). The notes say
+  what is float32: only the drawn values; the differences are computed in
+  double on the server, then drawn as float32.
+- **Server status in the top bar** while a request of this page that
+  waits for the session has waited 0.6 s: "server busy: meshing for
+  another tab (12 s)" from `GET /api/status`, polled each second only
+  then, and hidden when the server is busy with exactly the stage this
+  page shows as running (its step already says so). A chunk of this
+  page's own run is said, since other requests wait for it. **Memory
+  before solving:** from the mesh's `memory.snapshot_bytes` the Solve
+  step says what the run will keep on the server against its budget once
+  it is a quarter of it or more (and that it will be refused above it);
+  the page's own float32 share is said beside it. A `memory` refusal
+  lands on `solve.time.snapshots` (its path), as before.
+- **Colour bar ticks and colour maps.** Round ticks (1, 2, 5 × 10ⁿ,
+  zero always on a scale that spans it) under the bar, in tabular
+  numbers, as few digits as keep them apart (`colorbarTicks`); the ends'
+  exact values are the bar's tooltip and accessible name. Ticks are an
+  SVG under the bar (the page has no inline styles). Maps per the
+  dataviz method: sequential maps are one hue, dark (low, near the dark
+  surface) to light — blue (default), orange, green; diverging maps two
+  hues with a grey middle — blue–red (default), blue–orange. No rainbow.
+  The choice is the viewer's (Settings), not the case's.
+- **Charts without a mouse**: the plot takes the focus; the arrows move
+  the readout point by point (Shift: a tenth of the points; Home, End),
+  Enter picks the snapshot, and the readout is announced in a live
+  region. Each chart offers "Download data (CSV)" of exactly the numbers
+  it draws (full precision, empty cells for gaps): the numbers behind a
+  picture must be reachable without reading pixels.
+- **A boundary click selects its region** (a click within 7 px of a
+  boundary edge; elsewhere it pins a probe, as before): the region is
+  drawn wider on a halo, its legend entry is pressed, and its condition
+  opens in the Problem step (its row in the Geometry step when that step
+  is open). The legend's regions are buttons, which is the keyboard path.
+- **Refinement study** in the Solve step, with an exact solution in the
+  case: k levels (3–5) of the mesh's max edge length (the relative bound,
+  or the absolute one when only it is set), halved level by level, each
+  run with the existing actions (`runWithPrerequisites`, `compare`) and
+  their tickets, one after another; a table of h (the longest edge),
+  nodes, the largest nodal and lumped L2 errors over the snapshots and
+  the observed orders between levels (`pure/study.js`), and a log–log
+  chart with h¹ and h² reference slopes through the first L2 point. The
+  mesh bound is set as automatic edits and put back at the end (also
+  when stopped or failed), so the case is as it was; any edit by the
+  user meanwhile stops it, and an edit of the mesh bound is kept. After a
+  whole study the case's own level (the first, the cheapest) is solved
+  again, so the picture and the figures are current, not the finest
+  level's outdated solution; after Stop it is not (the user asked for
+  the work to end), and the last solution shows as outdated.
+- **Layout.** New, Open, Save, Restore, Undo, Redo and the examples are
+  in one case menu (the menu button pattern: arrows, Home, End, Escape,
+  Tab); the button names the case; the bar is one row at phone width
+  ("unsaved" chip, server status, Run all, Settings beside it). Ctrl+Z
+  and Ctrl+Shift+Z stay. A ▴ button folds the picture away at phone width
+  (kept in this browser). Toasts sit at the foot of the sidebar on wide
+  screens (the top of the sidebar, suggested, would cover the step's
+  head and its Solve button) and at the bottom at phone width (the
+  picture is at the top there): never over the picture, its time bar or
+  its charts. A long component name wraps the card's head instead of
+  being cut (the select also has it as a tooltip). Expert terms: the
+  operators are "Mass (u_tt terms)", "Damping (u_t terms)", "Stiffness
+  (u terms)" with the formula as the tooltip (and for screen readers);
+  time orders read "0 · stationary", "1 · first order", "2 · second
+  order". Contrast checked against WCAG AA: every text token passes 4.5:1
+  on every surface (the lowest, muted text on `--surface-3`, is 4.77:1),
+  so no token changed.
+- **CSS by area**: `css/tokens.css` (tokens and base), `css/panels.css`
+  (controls, step heads, forms, results, toast, settings),
+  `css/picture.css` (viewer, time bar, legend, overlays, charts),
+  `css/layout.css` (top bar, columns, tabs, narrow screens), loaded in that
+  order with `<link>` tags, so the narrow-screen rules come last.
+- **Tests.** Node: the resolved display (every comparison state, loading,
+  failures, outdated), retries and plain messages, ticks, CSV, colour
+  maps, the study's levels and orders, the condition sync that leaves the
+  case saved, progress polls that retry, a run that is gone, the
+  reattached run, a failed snapshot. Browser: the reproduced outdated
+  comparison (display_state), a slow domain file (domain_file), failed
+  snapshots and probes with Retry and the keyboard chart (failures), a
+  reload that reattaches and a copied tab that does not (reload), no
+  false "unsaved" (unsaved), a boundary click (region_click), the study
+  on the L-shape (study), the case menu by keyboard at desktop and phone
+  width (case_menu, phone_menu), the phone's one-row top bar and the
+  folded picture (phone).

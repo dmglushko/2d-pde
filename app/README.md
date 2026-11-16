@@ -75,9 +75,11 @@ gets the previous value). A warning chip at the top of a result shows how
 many messages its reports hold and the first one; click it to open the
 reports.
 
-**Undo and redo** (the arrows in the top bar, Ctrl+Z and Ctrl+Shift+Z or
-Ctrl+Y) take back and redo edits of the case, up to 100; typing in one
-field is one step. While you type in a text field, Ctrl+Z belongs to that
+**Undo and redo** (in the **Case** menu of the top bar, or Ctrl+Z and
+Ctrl+Shift+Z or Ctrl+Y) take back and redo edits of the case, up to 100;
+typing in one field is one step. What the page fills in by itself (the
+conditions of new regions) is not a step and does not make the case
+"unsaved". While you type in a text field, Ctrl+Z belongs to that
 field (the browser's own undo, letter by letter); once you leave the
 field, Ctrl+Z undoes the whole edit of the field.
 
@@ -140,10 +142,16 @@ field, Ctrl+Z undoes the whole edit of the field.
    largest nodal error max |u − exact|, its RMS over the nodes and the
    lumped L2 error at the shown time, the largest over all snapshots and,
    for a run in time, the three per snapshot in a chart; it can show
-   u − exact in the picture. The server computes the figures in double
-   precision; the picture of a difference is drawn from 32-bit floats.
-   Editing the expression greys the figures out ("for the previous
-   expression") until you compare again. **Compare with a reference
+   u − exact in the picture. The server computes the figures and the
+   difference in double precision; only the picture is drawn from 32-bit
+   floats. Editing the expression greys the figures out ("for the
+   previous expression") and the picture goes back to u, saying why,
+   until you compare again. **Refinement study** (with an exact solution
+   written): solves on 3 to 5 meshes, halving the max edge length of the
+   Mesh step each time, and shows h, the nodes, the largest nodal and L2
+   errors and the observed order between levels, with a log–log chart
+   and h¹, h² reference slopes; the mesh setting is put back afterwards
+   and **Stop study** ends it. **Compare with a reference
    run**: **Keep as reference** keeps a finished run on the server;
    change the case (dt, the method, a coefficient), solve again and
    **Compare with reference** shows the largest difference per snapshot
@@ -151,16 +159,21 @@ field, Ctrl+Z undoes the whole edit of the field.
    same mesh: after a change of the geometry or the mesh the server
    refuses and says so. **Forget reference** drops it. **Export .csv**
    saves x, y and u at every kept time (full precision), **Export .vtk**
-   the mesh and every snapshot for ParaView, **Export provenance** the
-   whole case with the versions and the run, once the run is done; an
+   the mesh and every snapshot for ParaView, **Export VTK series** one
+   file per snapshot in a zip that ParaView plays in time, **Export
+   provenance** the whole case with the versions and the run, once the run is done; an
    export that is not ready, or a server that is busy, says so in plain
-   words. Before a run, the panel says how large the
-   solution will be and warns above 50 MB. A run in time shows its
+   words. Before a large run, the panel says how much of the server's
+   memory budget for runs it will keep (the server refuses a run that
+   does not fit) and how much the page holds. A run in time shows its
    snapshots while it goes on: the status shows t reached, steps and
    snapshots with a progress bar, and the picture the newest snapshot,
    unless you moved the time bar. **Stop** (in place of Solve while it
    runs) keeps what arrived; **Continue** goes on from there.
-   Changing the case stops a run.
+   Changing the case stops a run. If the server is busy or does not
+   answer for a moment, the page keeps asking (and says so); a snapshot,
+   a difference or u(t) that could not be loaded says why beside it, with
+   **Retry**.
 
 **Run all** runs geometry, mesh, assembly and the solve in turn, skipping
 the steps that are up to date, and ends with the picture coloured by the
@@ -175,8 +188,9 @@ reports) start folded.
 **Settings** (the gear in the top bar; Escape closes it) are kept in this
 browser, not in the case: the problem check while typing (on or off, and
 its delay), the playback speed, whether a run's newest snapshot is
-followed, the significant digits shown, the number of isolines, and the
-picture quality (lower is faster to pan and draw, higher is sharper). The Computation group
+followed, the significant digits shown, the number of isolines, the
+colour maps (for values of one sign: blue, orange or green; for both
+signs: blue–red or blue–orange), and the picture quality (lower is faster to pan and draw, higher is sharper). The Computation group
 (sequential or parallel assembly and linear solves) is shown disabled: the
 library runs sequentially for now.
 
@@ -188,8 +202,12 @@ probe at the centre. The toolbar turns layers on and off (boundary, mesh
 edges, Dirichlet nodes, isolines) and chooses the colouring: the
 smallest angle of each triangle, the field shown (the menu names it:
 `field: u`, `field: Dirichlet values`…), or **|∇|** of that field, one
-value per triangle. The legend names the field and its time; a field with
-one value says "constant: …". **Lock range** keeps the colour range for
+value per triangle. The legend names the field and its time, with round
+values under the colour bar; a field with one value says "constant: …".
+A result the case no longer matches is drawn greyed with an "Outdated"
+stamp. Click a boundary (or a region in the legend) to select it: its
+boundary condition opens in the Problem step (its row in the Geometry
+step). **Lock range** keeps the colour range for
 every snapshot and run until **Unlock** (its ends can be edited), so two
 runs can be compared by eye. **Line profile**: drag a line across the
 picture to plot the shown field along it (it follows the time bar);
@@ -201,19 +219,24 @@ its legend as a PNG named after the case and the shown time.
 **Probes.** Click or tap the picture to pin a probe (up to four). The list under
 the picture gives each probe's x, y and value; for a run in time a chart
 shows u(t) at every probe (computed on the server over all snapshots),
-with the shown time marked; click the chart to show that time. **✕**
-removes a probe.
+with the shown time marked; click the chart to show that time. The value
+of u in the list is the server's, in double. **✕** removes a probe. Every
+chart can be read with the keyboard (Tab to it, then the arrow keys) and
+offers **Download data (CSV)**.
 
 The page keeps the snapshots around the shown one, not all of them: a
 long run with a large mesh does not fill the browser's memory. When you
 jump far, the picture shows the nearest loaded snapshot for a moment
 ("loading t = ..."). Each browser tab has its own run: two tabs do not
-replace or stop each other's solve.
+replace or stop each other's solve. A reload of the tab shows its run
+again if the server still has it, with the probes and the picture's
+settings it had. While the server works for another tab (or a long
+step), the top bar says what it is busy with.
 
 The page has one, dark, theme. On a phone, the steps stay at the top and
 the picture with its time bar stays under them while the panel scrolls;
-drag the bar under the picture to make it taller or shorter (the browser
-remembers it).
+drag the bar under the picture to make it taller or shorter, or fold the
+picture away with **▴** (the browser remembers both).
 
 ## Cases
 
@@ -221,11 +244,12 @@ Everything you set up is one **case**: a JSON file with the geometry
 (SVG and mesh texts included), the mesh settings, the problem and the
 assembly time. **Save case** downloads it under the name of the file or
 example it was opened from (`case.json` for a new case), and **Open
-case…** loads one; "unsaved changes" next to Save shows that the case
-changed since it was opened or saved. The browser also keeps the current
-case between visits. The **Examples** menu opens the cases in
-`app/examples/`. After **New**, **Open case…** or **Examples**, **Restore
-previous case** in the top bar brings back the case they replaced (until
+case…** loads one (both in the **Case** menu, which names the case);
+"unsaved" next to it shows that the case changed since it was opened or
+saved. The browser also keeps the current case between visits. The
+examples at the end of the **Case** menu open the cases in
+`app/examples/`. After **New case**, **Open case…** or an example,
+**Restore previous case** in the menu brings back the case they replaced (until
 the next replacement). An example or file that is still loading never
 replaces a case you started or opened meanwhile. When
 parts of an opened case had to be replaced by defaults, a notice above
