@@ -474,8 +474,8 @@ Json Session::keep_reference(const Json &request, const std::string &client) {
   const std::scoped_lock lock(mutex_);
   static constexpr std::string_view known[] = {"job"};
   const auto job = solve_request([&] { return request_job(request, known); });
-  RunManager::Client &owner = state_->runs.client(client_name(client));
   const Run &run = state_->runs.run_of(client_name(client), job);
+  RunManager::Client &owner = *state_->runs.find(client_name(client));
   if (run.state != RunState::done)
     throw StageError("solve", "not_ready",
                      std::format("the run {} is {}; only a run that is done "
@@ -498,7 +498,8 @@ Json Session::keep_reference(const Json &request, const std::string &client) {
 Json Session::clear_reference(const std::string &client) {
   const std::scoped_lock lock(mutex_);
   // Dropped under the mutex: the run holds expressions.
-  state_->runs.client(client_name(client)).reference.reset();
+  if (RunManager::Client *owner = state_->runs.find(client_name(client)))
+    owner->reference.reset();
   Json out = Json::object();
   out["reference"] = nullptr;
   return out;
@@ -518,7 +519,7 @@ Json Session::compare(const Json &request, const std::string &client) {
     return request_job(request, known);
   });
   const Run &run = state_->runs.run_of(client_name(client), job);
-  auto reference = state_->runs.client(client_name(client)).reference;
+  auto reference = state_->runs.find(client_name(client))->reference;
   return staged("compare", [&] {
     return Comparison(run, request, std::move(reference)).summary();
   });
@@ -532,7 +533,7 @@ std::string Session::compare_difference(const Json &request,
                      request_count(request, "snapshot"));
   });
   const Run &run = state_->runs.run_of(client_name(client), job);
-  auto reference = state_->runs.client(client_name(client)).reference;
+  auto reference = state_->runs.find(client_name(client))->reference;
   return staged("compare", [&] {
     return Comparison(run, request, std::move(reference))
         .difference_float32(snapshot);
@@ -591,9 +592,11 @@ ExportedFile Session::export_file(const Json &case_json, std::string_view kind,
   std::shared_ptr<const Run> run;
   if (info->needs == ExportNeeds::done_run ||
       info->needs == ExportNeeds::case_only) {
-    const auto &owner = state_->runs.client(client_name(context.client));
-    if (owner.run && owner.run->key == solve_key(case_json))
-      run = owner.run;
+    const RunManager::Client *owner =
+        state_->runs.find(client_name(context.client));
+    if (owner != nullptr && owner->run &&
+        owner->run->key == solve_key(case_json))
+      run = owner->run;
     if (info->needs == ExportNeeds::done_run) {
       if (!run)
         throw StageError("export", "not_ready",

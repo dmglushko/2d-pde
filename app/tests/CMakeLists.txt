@@ -17,6 +17,10 @@ target_compile_definitions(app_solve
 
 pde2d_app_add_test(app_runs runs.cpp pde2d_app_core)
 
+pde2d_app_add_test(app_compare compare.cpp pde2d_app_core)
+
+pde2d_app_add_test(app_exports exports.cpp pde2d_app_core)
+
 pde2d_app_add_test(app_server server.cpp pde2d_app_server)
 target_include_directories(app_server SYSTEM
   PRIVATE ${PROJECT_SOURCE_DIR}/app/third_party/cpp-httplib)
@@ -33,6 +37,18 @@ foreach(example IN LISTS example_cases)
     COMMAND pde2d_app --run ${example}
             --output ${CMAKE_CURRENT_BINARY_DIR}/run_${stem})
 endforeach()
+
+# --set on the command line: a finer mesh of an example runs, and a path
+# that does not exist fails naming it.
+add_test(NAME app_run_set
+  COMMAND pde2d_app --run ${PROJECT_SOURCE_DIR}/app/examples/poisson_rectangle.json
+          --set mesh.spec.max_edge_length.relative=0.08
+          --set mesh.refiner.options.min_angle_degrees=28)
+add_test(NAME app_run_set_missing
+  COMMAND pde2d_app --run ${PROJECT_SOURCE_DIR}/app/examples/poisson_rectangle.json
+          --set mesh.nothing.here=1)
+set_tests_properties(app_run_set_missing PROPERTIES
+  PASS_REGULAR_EXPRESSION "mesh.nothing.here: 'nothing' does not exist in mesh")
 
 # The page's pure modules (no browser), when Node.js is installed.
 find_program(PDE2D_NODE node)

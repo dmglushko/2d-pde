@@ -7,6 +7,7 @@
 
 #include "httplib.h"
 
+#include <chrono>
 #include <thread>
 
 #ifndef PDE2D_APP_WEB_DIR
@@ -42,6 +43,7 @@ public:
     client.set_read_timeout(120);
     return client;
   }
+  int port() const { return port_; }
 
 private:
   app::Server server_;
@@ -85,6 +87,13 @@ int main() {
          check(geometry["regions"].size() == 4, "regions");
          const Json mesh = post(client, "/api/mesh", case_json, 200);
          check(mesh["target_met"].get<bool>(), "target met");
+         const Json arrays_request = {{"mesh", mesh["mesh"]["id"]}};
+         const auto arrays = client.Post(
+             "/api/mesh/arrays", arrays_request.dump(), "application/json");
+         check(arrays && arrays->status == 200 &&
+                   arrays->body.size() ==
+                       mesh["mesh"]["arrays"]["bytes"].get<std::size_t>(),
+               "the mesh's arrays in binary");
          const Json problem = post(client, "/api/problem", case_json, 200);
          check(problem["ok"].get<bool>(), "problem ok");
          const Json assembly = post(client, "/api/assemble", case_json, 200);
@@ -191,6 +200,124 @@ int main() {
          httplib::Headers headers = {{"Host", "evil.example:80"}};
          const auto rebound = client.Get("/api/catalog", headers);
          check(rebound && rebound->status == 403, "Host checked");
+         // A POST that says it comes from another page is refused; from
+         // this server's own page it is served.
+         const std::string own =
+             "http://127.0.0.1:" + std::to_string(running.port());
+         const Json case_json = app::Session::default_case();
+         const auto foreign =
+             client.Post("/api/geometry", {{"Origin", "http://evil.example"}},
+                         case_json.dump(), "application/json");
+         check(foreign && foreign->status == 403, "Origin checked");
+         const auto same = client.Post("/api/geometry", {{"Origin", own}},
+                                       case_json.dump(), "application/json");
+         check(same && same->status == 200, "own Origin");
+       }},
+      {"a token is required when there is one",
+       [] {
+         app::ServerOptions options = test_options();
+         options.token = "s3cret";
+         const Running running(options);
+         auto client = running.client();
+         const auto missing = client.Get("/api/catalog");
+         check(missing && missing->status == 403, "no token");
+         check(Json::parse(missing->body)["error"]["message"]
+                       .get<std::string>()
+                       .find("token") != std::string::npos,
+               "says so");
+         const auto wrong =
+             client.Get("/api/catalog", {{"X-PDE2D-Token", "s3creT"}});
+         check(wrong && wrong->status == 403, "a wrong token");
+         const auto header =
+             client.Get("/api/catalog", {{"X-PDE2D-Token", "s3cret"}});
+         check(header && header->status == 200, "in the header");
+         const auto query = client.Get("/api/catalog?token=s3cret");
+         check(query && query->status == 200, "in the address");
+         const auto page = client.Get("/");
+         check(page && page->status == 200, "the page itself needs none");
+         // A host beyond this machine always has a token, made at random.
+         app::ServerOptions open = test_options();
+         open.host = "0.0.0.0";
+         const app::Server server(open);
+         check(server.token().size() == 32, "a random token");
+         check(app::Server(test_options()).token().empty(),
+               "none on loopback");
+       }},
+      {"too many waiting requests are answered 429",
+       [] {
+         app::ServerOptions options = test_options();
+         options.max_waiting = 0; // one request at a time
+         const Running running(options);
+         Json slow = app::Session::default_case();
+         slow["mesh"]["spec"]["max_edge_length"]["relative"] = 0.003;
+         std::thread first([&] {
+           auto client = running.client();
+           (void)client.Post("/api/mesh", slow.dump(), "application/json");
+         });
+         std::this_thread::sleep_for(std::chrono::milliseconds(300));
+         auto client = running.client();
+         const auto busy =
+             client.Post("/api/geometry", app::Session::default_case().dump(),
+                         "application/json");
+         first.join();
+         check(busy && busy->status == 429,
+               "busy: " + std::to_string(busy ? busy->status : 0));
+         check(Json::parse(busy->body)["error"]["kind"] == "busy", "kind");
+         const auto later =
+             client.Post("/api/geometry", app::Session::default_case().dump(),
+                         "application/json");
+         check(later && later->status == 200, "served once it is free");
+       }},
+      {"runs are per client, and exports wait for a done run",
+       [] {
+         const Running running;
+         auto client = running.client();
+         const Json case_json = app::Session::default_case();
+         const httplib::Headers a = {{"X-PDE2D-Client", "tab-a"}};
+         const httplib::Headers b = {{"X-PDE2D-Client", "tab-b"}};
+         const auto early = client.Post("/api/export/solution.csv", a,
+                                        case_json.dump(), "application/json");
+         check(early && early->status == 409, "not solved yet");
+         check(Json::parse(early->body)["error"]["kind"] == "not_ready",
+               "not ready");
+         const auto solved = client.Post("/api/solve", a, case_json.dump(),
+                                         "application/json");
+         check(solved && solved->status == 200, "solved");
+         const Json job = {{"job", Json::parse(solved->body)["job"]}};
+         const auto mine = client.Post("/api/solve/progress", a, job.dump(),
+                                       "application/json");
+         check(mine && mine->status == 200, "a's run for a");
+         const auto theirs = client.Post("/api/solve/progress", b, job.dump(),
+                                         "application/json");
+         check(theirs && theirs->status == 422, "not b's");
+         const auto bad =
+             client.Post("/api/solve/progress", {{"X-PDE2D-Client", "a b"}},
+                         job.dump(), "application/json");
+         check(bad && bad->status == 422, "a malformed client id");
+         // The CSV streams once the run is done.
+         const auto csv = client.Post("/api/export/solution.csv",
+                                      {{"X-PDE2D-Client", "tab-a"},
+                                       {"X-PDE2D-Case-Name", "my%20case.json"}},
+                                      case_json.dump(), "application/json");
+         check(csv && csv->status == 200, "exported");
+         check(csv->body.starts_with("# produced by pde2d_app"), "provenance");
+         check(csv->body.find("# case: my case.json\n") != std::string::npos,
+               "the case's name");
+         check(csv->body.find("\nx,y,u(t=0)\n") != std::string::npos,
+               "the table");
+       }},
+      {"an error names its field",
+       [] {
+         const Running running;
+         auto client = running.client();
+         Json case_json = app::Session::default_case();
+         case_json["mesh"]["refiner"]["options"]["min_angle_degrees"] = 50;
+         const Json error = post(client, "/api/mesh", case_json, 422)["error"];
+         check(error["path"] == "mesh.refiner.options.min_angle_degrees",
+               error.dump());
+         check(error["message"].get<std::string>().starts_with(
+                   "mesh.refiner.options.min_angle_degrees: "),
+               "readable");
        }},
   });
 }

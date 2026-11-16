@@ -103,8 +103,11 @@ public:
   };
 
   // The client `id`, made when it is new (dropping the least recently
-  // used client beyond max_clients); marks it used.
+  // used client beyond max_clients); marks it used. Only a solve makes a
+  // client.
   Client &client(const std::string &id);
+  // The client `id` if it is kept (marked used), or null.
+  Client *find(const std::string &id);
   // The client's current run if it is `job`, else a StageError.
   Run &run_of(const std::string &client, std::uint64_t job);
   // A running run after the one advanced last (round robin over clients),

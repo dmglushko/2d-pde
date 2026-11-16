@@ -258,14 +258,22 @@ RunManager::Client &RunManager::client(const std::string &id) {
   return found->second;
 }
 
+RunManager::Client *RunManager::find(const std::string &id) {
+  const auto found = clients_.find(id);
+  if (found == clients_.end())
+    return nullptr;
+  found->second.used = ++clock_;
+  return &found->second;
+}
+
 Run &RunManager::run_of(const std::string &client_id, std::uint64_t job) {
-  Client &owner = client(client_id);
-  if (!owner.run || owner.run->id != job)
+  Client *owner = find(client_id);
+  if (owner == nullptr || !owner->run || owner->run->id != job)
     throw StageError("solve", "input",
                      std::format("the run {} is no longer the current one "
                                  "(another solve replaced it)",
                                  job));
-  return *owner.run;
+  return *owner->run;
 }
 
 Run *RunManager::next_running() {
