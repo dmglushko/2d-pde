@@ -988,11 +988,17 @@ export function updateEditor(reason) {
     editor.working = null;
     closeRegionPopover();
   }
-  if (!editorActive() || !isDrawing()) {
-    if (editor.selection) editor.selection = null;
-    if (["rectangle", "circle", "polygon"].includes(editor.tool) && !isDrawing()) editor.tool = "select";
-    editor.polygon = null;
+  // The selection stays while another step is open; it goes with the
+  // drawing, or when an edit (an undo) removed what it named.
+  if (!isDrawing()) {
+    if (editor.selection) select(null);
+    if (["rectangle", "circle", "polygon"].includes(editor.tool)) editor.tool = "select";
   } else if (!D.selectionValid(geometrySection(), editor.selection)) select(null);
+  if (!editorActive()) {
+    editor.polygon = null;
+    editor.gesture = null;
+    editor.working = null;
+  }
   if (!editorActive()) closeRegionPopover();
   updateBar();
 }
