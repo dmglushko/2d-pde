@@ -34,6 +34,19 @@ import {
   SETTINGS_DEFAULTS,
   parseFolds,
   setDefaultDigits,
+  meshGrid,
+  locatePoint,
+  interpolateAt,
+  probeSeries,
+  nearestValuedNode,
+  freeProbeSlot,
+  isolineLevels,
+  isolines,
+  errorValues,
+  maxAbs,
+  valueRange,
+  niceTicks,
+  pictureName,
 } from "../web/js/core.js";
 
 const cases = [];
@@ -388,6 +401,116 @@ test("the significant digits setting is formatNumber's default", () => {
   assert.equal(formatNumber(Math.PI), "3.142");
   setDefaultDigits(1);
   assert.equal(formatNumber(Math.PI), "3.142", "out of range: unchanged");
+});
+
+
+// A 2 × 1 rectangle split into four triangles around its centre, as a
+// mesh view (flat arrays). Node 4 is the centre (1, 0.5).
+const square = {
+  nodes: [0, 0, 2, 0, 2, 1, 0, 1, 1, 0.5],
+  triangles: [0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4],
+};
+const linear = (f) => Array.from({ length: 5 }, (_, i) => f(square.nodes[2 * i], square.nodes[2 * i + 1]));
+
+test("a point is located and a P1 field interpolated exactly", () => {
+  const grid = meshGrid(square);
+  const values = linear((x, y) => 3 * x - 2 * y + 1);
+  for (const [x, y] of [[0.3, 0.2], [1.7, 0.9], [1, 0.5], [2, 1], [0.01, 0.99]]) {
+    const found = locatePoint(square, grid, x, y);
+    assert.ok(found, `(${x}, ${y}) is inside`);
+    assert.ok(Math.abs(interpolateAt(found, values) - (3 * x - 2 * y + 1)) < 1e-12, `value at (${x}, ${y})`);
+    assert.ok(Math.abs(found.weights.reduce((a, b) => a + b) - 1) < 1e-12, "weights sum to one");
+  }
+  assert.equal(locatePoint(square, grid, 2.5, 0.5), null, "outside");
+  assert.ok(Number.isNaN(interpolateAt(null, values)));
+  const holes = values.slice();
+  holes[4] = NaN;
+  assert.ok(Number.isNaN(interpolateAt(locatePoint(square, grid, 1, 0.4), holes)), "a missing value gives NaN");
+});
+
+test("a probe's series is its interpolant at every snapshot", () => {
+  const grid = meshGrid(square);
+  const found = locatePoint(square, grid, 0.5, 0.25);
+  const snapshots = [0, 1, 2].map((k) => Float32Array.from(linear((x, y) => k * (x + y))));
+  const series = probeSeries(found, snapshots);
+  assert.deepEqual([...series].map((v) => Math.round(v * 1e6) / 1e6), [0, 0.75, 1.5]);
+});
+
+test("the nearest node with a value, within a radius", () => {
+  const values = [NaN, 5, null, 7, NaN];
+  assert.equal(nearestValuedNode(square.nodes, values, 1.9, 0.1, 0.5), 1);
+  assert.equal(nearestValuedNode(square.nodes, values, 0.1, 0.9, 0.5), 3);
+  assert.equal(nearestValuedNode(square.nodes, values, 1, 0.5, 0.2), -1, "the centre has no value, the others are far");
+  assert.equal(nearestValuedNode(square.nodes, values, 0.05, 0.05, 0.5), -1, "node 0 has no value");
+  assert.equal(nearestValuedNode([0, 0, 2, 0], [1, 2], 1, 0, 1), 0, "a tie goes to the lower index");
+});
+
+test("probes keep their slot", () => {
+  assert.equal(freeProbeSlot([]), 0);
+  assert.equal(freeProbeSlot([{ slot: 0 }, { slot: 2 }]), 1);
+  assert.equal(freeProbeSlot([{ slot: 1 }, { slot: 0 }, { slot: 3 }, { slot: 2 }]), -1);
+});
+
+test("isoline levels lie inside the range", () => {
+  assert.deepEqual(isolineLevels(0, 1, 3), [0.25, 0.5, 0.75]);
+  assert.deepEqual(isolineLevels(1, 1, 5), [], "a constant field has none");
+  assert.deepEqual(isolineLevels(0, 1, 0), []);
+});
+
+test("marching triangles: the isoline of x = c is the segment x = c", () => {
+  const values = linear((x) => x);
+  const [segments] = isolines(square.nodes, square.triangles, values, [0.5]);
+  assert.equal(segments.length % 4, 0);
+  assert.ok(segments.length > 0);
+  for (let i = 0; i < segments.length; i += 2) {
+    assert.ok(Math.abs(segments[i] - 0.5) < 1e-12, `x = ${segments[i]}`);
+    assert.ok(segments[i + 1] >= -1e-12 && segments[i + 1] <= 1 + 1e-12, `y = ${segments[i + 1]}`);
+  }
+  // The segments cover y from 0 to 1 once: their lengths add up to 1.
+  let length = 0;
+  for (let i = 0; i < segments.length; i += 4) length += Math.hypot(segments[i + 2] - segments[i], segments[i + 3] - segments[i + 1]);
+  assert.ok(Math.abs(length - 1) < 1e-12, `length ${length}`);
+});
+
+test("marching triangles: a level through a node is drawn once", () => {
+  const values = linear((x) => x);
+  // x = 1 passes through the centre node: the line x = 1 from y = 0 to 1.
+  const [segments] = isolines(square.nodes, square.triangles, values, [1]);
+  let length = 0;
+  for (let i = 0; i < segments.length; i += 4) length += Math.hypot(segments[i + 2] - segments[i], segments[i + 3] - segments[i + 1]);
+  assert.ok(Math.abs(length - 1) < 1e-12, `length ${length}`);
+  const [none] = isolines(square.nodes, square.triangles, values, [5]);
+  assert.equal(none.length, 0, "outside the range: no segment");
+  const holes = values.slice();
+  holes[4] = NaN;
+  const [skipped] = isolines(square.nodes, square.triangles, holes, [0.5]);
+  assert.equal(skipped.length, 0, "triangles with a missing value are skipped");
+});
+
+test("errors against an exact solution and their norms", () => {
+  const error = errorValues(Float32Array.from([1, 2, 3, NaN]), [1, 2.5, 2, 4]);
+  assert.deepEqual([...error].slice(0, 3), [0, -0.5, 1]);
+  assert.ok(Number.isNaN(error[3]));
+  assert.equal(maxAbs(error), 1);
+  assert.equal(maxAbs([-3, 2]), 3);
+  assert.ok(Number.isNaN(maxAbs([NaN, null])));
+  assert.deepEqual(valueRange([3, NaN, -1, 2]), { min: -1, max: 3 });
+  assert.ok(Number.isNaN(valueRange([NaN]).min));
+});
+
+test("chart ticks are round and cover the range", () => {
+  assert.deepEqual(niceTicks(0, 1, 4), [0, 0.2, 0.4, 0.6, 0.8, 1]);
+  assert.deepEqual(niceTicks(-0.13, 0.97, 4), [-0.2, 0, 0.2, 0.4, 0.6, 0.8, 1]);
+  assert.deepEqual(niceTicks(0, 2.5, 5), [0, 0.5, 1, 1.5, 2, 2.5]);
+  const flat = niceTicks(3, 3, 4);
+  assert.ok(flat[0] <= 3 && flat.at(-1) >= 3, "a constant gets a range around it");
+  assert.deepEqual(niceTicks(NaN, 1), []);
+});
+
+test("picture names carry the case and the time", () => {
+  assert.equal(pictureName("heat_annulus.json", 0.25), "heat_annulus-t0.25.png");
+  assert.equal(pictureName("case.json"), "case.png");
+  assert.equal(pictureName("my case (2).json", 1 / 3), "my_case_2_-t0.333333.png");
 });
 
 let failed = 0;

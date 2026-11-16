@@ -481,6 +481,7 @@ export const SETTINGS_DEFAULTS = Object.freeze({
   followRun: true,
   digits: 4,
   pixelRatioCap: 2,
+  isolineCount: 10,
 });
 
 const SETTING_RANGES = {
@@ -488,6 +489,7 @@ const SETTING_RANGES = {
   playbackFps: [1, 60],
   digits: [2, 10],
   pixelRatioCap: [1, 4],
+  isolineCount: [2, 40],
 };
 
 // Settings as stored, made whole: a missing or malformed value takes its
@@ -519,4 +521,213 @@ export function parseFolds(text) {
   } catch {
     return Object.create(null);
   }
+}
+
+// --- finding points in a mesh ----------------------------------------------------
+
+// A uniform grid of triangle indices by bounding box, for finding the
+// triangle that holds a point. `mesh` is a mesh view (flat arrays).
+export function meshGrid(mesh) {
+  const n = mesh.nodes;
+  const t = mesh.triangles;
+  const count = t.length / 3;
+  if (count === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < n.length; i += 2) {
+    minX = Math.min(minX, n[i]);
+    maxX = Math.max(maxX, n[i]);
+    minY = Math.min(minY, n[i + 1]);
+    maxY = Math.max(maxY, n[i + 1]);
+  }
+  const side = Math.max(1, Math.round(Math.sqrt(count / 2)));
+  const cellW = (maxX - minX) / side || 1;
+  const cellH = (maxY - minY) / side || 1;
+  const cells = Array.from({ length: side * side }, () => []);
+  const cell = (v, min, size) => Math.max(0, Math.min(side - 1, Math.floor((v - min) / size)));
+  for (let k = 0; k < count; k++) {
+    const xs = [n[2 * t[3 * k]], n[2 * t[3 * k + 1]], n[2 * t[3 * k + 2]]];
+    const ys = [n[2 * t[3 * k] + 1], n[2 * t[3 * k + 1] + 1], n[2 * t[3 * k + 2] + 1]];
+    const i0 = cell(Math.min(...xs), minX, cellW);
+    const i1 = cell(Math.max(...xs), minX, cellW);
+    const j0 = cell(Math.min(...ys), minY, cellH);
+    const j1 = cell(Math.max(...ys), minY, cellH);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) cells[j * side + i].push(k);
+  }
+  return { minX, minY, maxX, maxY, side, cellW, cellH, cells };
+}
+
+// The triangle that holds (x, y) and the point's barycentric weights in
+// it: {triangle, nodes: [a, b, c], weights: [wa, wb, wc]}, or null
+// outside the mesh. The first triangle in index order wins on an edge.
+export function locatePoint(mesh, grid, x, y) {
+  if (!grid || x < grid.minX || x > grid.maxX || y < grid.minY || y > grid.maxY) return null;
+  const i = Math.min(grid.side - 1, Math.floor((x - grid.minX) / grid.cellW));
+  const j = Math.min(grid.side - 1, Math.floor((y - grid.minY) / grid.cellH));
+  const n = mesh.nodes;
+  const t = mesh.triangles;
+  for (const k of grid.cells[j * grid.side + i]) {
+    const a = t[3 * k];
+    const b = t[3 * k + 1];
+    const c = t[3 * k + 2];
+    const w = barycentric(x, y, n[2 * a], n[2 * a + 1], n[2 * b], n[2 * b + 1], n[2 * c], n[2 * c + 1]);
+    if (w && w[0] >= -1e-9 && w[1] >= -1e-9 && w[2] >= -1e-9) return { triangle: k, nodes: [a, b, c], weights: w };
+  }
+  return null;
+}
+
+// The P1 interpolant of nodal `values` at a located point (locatePoint),
+// or NaN when the point is outside or a value is missing.
+export function interpolateAt(found, values) {
+  if (!found) return NaN;
+  let sum = 0;
+  for (let k = 0; k < 3; k++) {
+    const v = values[found.nodes[k]];
+    if (v === null || !Number.isFinite(v)) return NaN;
+    sum += found.weights[k] * v;
+  }
+  return sum;
+}
+
+// A probe's value at every snapshot (one Float64Array, NaN outside).
+export function probeSeries(found, snapshots) {
+  const out = new Float64Array(snapshots.length);
+  for (let k = 0; k < snapshots.length; k++) out[k] = interpolateAt(found, snapshots[k]);
+  return out;
+}
+
+// The node nearest to (x, y) among those with a finite value, within
+// `radius` (world units), or -1. For fields given at some nodes only
+// (Dirichlet values, b), which the picture draws as dots.
+export function nearestValuedNode(nodes, values, x, y, radius) {
+  let best = -1;
+  let bestDistance = radius * radius;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v === null || !Number.isFinite(v)) continue;
+    const dx = nodes[2 * i] - x;
+    const dy = nodes[2 * i + 1] - y;
+    const d = dx * dx + dy * dy;
+    if (d <= bestDistance) {
+      // Ties go to the lower index (the loop runs in index order).
+      if (d < bestDistance || best < 0) best = i;
+      bestDistance = d;
+    }
+  }
+  return best;
+}
+
+// Probes pinned on the picture keep their slot (and so their colour)
+// while others come and go: the lowest free slot of `max`, or -1.
+export const MAX_PROBES = 4;
+export function freeProbeSlot(probes, max = MAX_PROBES) {
+  const taken = new Set(probes.map((p) => p.slot));
+  for (let slot = 0; slot < max; slot++) if (!taken.has(slot)) return slot;
+  return -1;
+}
+
+// --- isolines --------------------------------------------------------------------
+
+// `count` levels evenly inside [min, max] (not at the ends, where a level
+// would touch only single nodes). Empty for a constant field.
+export function isolineLevels(min, max, count) {
+  if (!(max > min) || !Number.isInteger(count) || count < 1) return [];
+  return Array.from({ length: count }, (_, k) => min + ((k + 1) * (max - min)) / (count + 1));
+}
+
+// Marching triangles on a P1 field: per level, the segments where the
+// linear interpolant equals it, as one Float64Array of x1, y1, x2, y2,
+// ... A node counts as above a level when its value is >= the level, so
+// a level through a node gives each segment once. Triangles with a
+// missing value are skipped.
+export function isolines(nodes, triangles, values, levels) {
+  return levels.map((level) => {
+    const out = [];
+    for (let k = 0; k < triangles.length; k += 3) {
+      const ids = [triangles[k], triangles[k + 1], triangles[k + 2]];
+      const v = ids.map((i) => values[i]);
+      if (!v.every((value) => value !== null && Number.isFinite(value))) continue;
+      const above = v.map((value) => value >= level);
+      const count = above.filter(Boolean).length;
+      if (count === 0 || count === 3) continue;
+      // Each edge whose ends lie on both sides has one crossing.
+      for (let e = 0; e < 3; e++) {
+        const p = e;
+        const q = (e + 1) % 3;
+        if (above[p] === above[q]) continue;
+        const s = (level - v[p]) / (v[q] - v[p]);
+        out.push(nodes[2 * ids[p]] + s * (nodes[2 * ids[q]] - nodes[2 * ids[p]]), nodes[2 * ids[p] + 1] + s * (nodes[2 * ids[q] + 1] - nodes[2 * ids[p] + 1]));
+      }
+    }
+    return Float64Array.from(out);
+  });
+}
+
+// --- comparing with an exact solution -----------------------------------------------
+
+// u − exact at every node (NaN where either has no finite value).
+export function errorValues(u, exact) {
+  const out = new Float32Array(u.length);
+  for (let i = 0; i < u.length; i++) {
+    const a = u[i];
+    const b = exact[i];
+    out[i] = a === null || b === null || !Number.isFinite(a) || !Number.isFinite(b) ? NaN : a - b;
+  }
+  return out;
+}
+
+// The largest |value| (the L∞ norm over the nodes), NaN when there is no
+// finite value.
+export function maxAbs(values) {
+  let best = NaN;
+  for (const v of values) {
+    if (v === null || !Number.isFinite(v)) continue;
+    const a = Math.abs(v);
+    if (!(a <= best)) best = a;
+  }
+  return best;
+}
+
+// The smallest and largest finite value of one snapshot ({min, max},
+// NaN when it has none).
+export function valueRange(values) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of values) {
+    if (v === null || !Number.isFinite(v)) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return min === Infinity ? { min: NaN, max: NaN } : { min, max };
+}
+
+// --- charts -----------------------------------------------------------------------
+
+// About `count` round tick values covering [min, max] (1, 2 or 5 times a
+// power of ten apart, the one nearest to an even split), from the first multiple at or below min to the
+// last at or above max.
+export function niceTicks(min, max, count = 4) {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
+  if (max === min) {
+    const pad = Math.abs(min) > 0 ? Math.abs(min) * 0.1 : 1;
+    return niceTicks(min - pad, max + pad, count);
+  }
+  const raw = (max - min) / Math.max(1, count);
+  const power = 10 ** Math.floor(Math.log10(raw));
+  const ratio = raw / power;
+  const step = (ratio < 1.5 ? 1 : ratio < 3 ? 2 : ratio < 7 ? 5 : 10) * power;
+  const first = Math.floor(min / step + 1e-9) * step;
+  const ticks = [];
+  for (let v = first; v <= max + step * (1 - 1e-9); v += step) ticks.push(Math.abs(v) < step * 1e-9 ? 0 : Number(v.toPrecision(12)));
+  return ticks;
+}
+
+// The file name of a saved picture: the case's name and, for a solution
+// in time, the shown time ("heat-t0.25.png").
+export function pictureName(caseName, t = null) {
+  const stem = String(caseName ?? "case").replace(/\.json$/i, "").replace(/[^\w.-]+/g, "_") || "case";
+  if (t === null || !Number.isFinite(t)) return `${stem}.png`;
+  return `${stem}-t${String(Number(t.toPrecision(6))).replace(/[^\w.-]+/g, "_")}.png`;
 }

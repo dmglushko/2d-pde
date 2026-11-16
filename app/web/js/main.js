@@ -3,15 +3,34 @@
 
 import { api, saveBlob } from "./api.js";
 import { caseChanged, runAll, runStage, scheduleProblemCheck, toast } from "./actions.js";
-import { STEPS, fileKind, formatNumber, normalizeCase, stageInfo } from "./core.js";
-import { h, readFileText, fill } from "./dom.js";
+import { currentComparison, recompareIfNeeded } from "./compare.js";
+import { MAX_PROBES, STEPS, fileKind, formatNumber, freeProbeSlot, getDefaultDigits, normalizeCase, pictureName, stageInfo } from "./core.js";
+import { fill, h, readFileText } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
 import { geometryPanel, loadDomainFile } from "./panels/geometry.js";
 import { meshPanel } from "./panels/mesh.js";
 import { problemPanel } from "./panels/problem.js";
 import { solvePanel } from "./panels/solve.js";
-import { onSettings, wireSettings } from "./settings.js";
-import { currentError, currentKey, freshResult, lastResult, markSaved, openStep, savedCase, setCase, setColorBy, stageStatus, store, subscribe } from "./state.js";
+import { dotClass } from "./panels/head.js";
+import { forgetChartSize, updateProbes } from "./probes.js";
+import { onSettings, settings, wireSettings } from "./settings.js";
+import {
+  currentError,
+  currentKey,
+  freshResult,
+  lastResult,
+  markSaved,
+  openStep,
+  savedCase,
+  setCase,
+  setColorBy,
+  setProbes,
+  setViewOption,
+  stageStatus,
+  store,
+  subscribe,
+} from "./state.js";
+import { timeSolution, updateTimebar, wireTimebar } from "./timebar.js";
 import { Viewer } from "./view.js";
 
 const panels = { geometry: geometryPanel, mesh: meshPanel, problem: problemPanel, assemble: assemblePanel, solve: solvePanel };
@@ -23,21 +42,48 @@ function element(id) {
   return document.getElementById(id);
 }
 
-// One tab and one panel per step of the stage registry.
+// One tab and one panel per step of the stage registry. The tabs take
+// the arrow keys, Home and End (the tablist pattern).
 function buildSteps() {
-  fill(
-    document.querySelector(".steps"),
-    STEPS.map((step) => h("button", { role: "tab", type: "button", dataset: { step }, onclick: () => openStep(step) }, h("span", { class: "dot" }), stageInfo(step).label)),
-  );
+  const tab = (step) =>
+    h(
+      "button",
+      {
+        role: "tab",
+        type: "button",
+        id: `tab-${step}`,
+        "aria-controls": `panel-${step}`,
+        dataset: { step },
+        onclick: () => openStep(step),
+      },
+      h("span", { class: "dot", "aria-hidden": "true" }),
+      h("span", { class: "tab-label" }, stageInfo(step).label),
+      h("span", { class: "visually-hidden dot-text" }),
+    );
+  const list = document.querySelector(".steps");
+  fill(list, STEPS.map(tab));
+  list.addEventListener("keydown", (event) => {
+    const i = STEPS.indexOf(store.step);
+    const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: STEPS.length - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    const step = STEPS[(next + STEPS.length) % STEPS.length];
+    openStep(step);
+    element(`tab-${step}`).focus();
+  });
   fill(
     document.querySelector(".panels"),
-    STEPS.map((step) => h("section", { id: `panel-${step}`, class: "panel", role: "tabpanel", hidden: true })),
+    STEPS.map((step) => h("section", { id: `panel-${step}`, class: "panel", role: "tabpanel", "aria-labelledby": `tab-${step}`, hidden: true })),
   );
 }
 
 function applyStep() {
   const step = store.step;
-  for (const button of document.querySelectorAll(".steps button")) button.setAttribute("aria-selected", String(button.dataset.step === step));
+  for (const button of document.querySelectorAll(".steps button")) {
+    const selected = button.dataset.step === step;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
   for (const name of STEPS) element(`panel-${name}`).hidden = name !== step;
   try {
     localStorage.setItem(STEP_KEY, step);
@@ -81,8 +127,9 @@ function updateDots() {
     const step = button.dataset.step;
     const s = step === "problem" ? problemStatus() : stageStatus(step);
     const dot = button.querySelector(".dot");
-    dot.className = `dot ${s === "none" ? "" : s === "stopped" ? "stale" : s}`.trim();
-    dot.title = DOT_TITLES[s];
+    dot.className = `dot ${dotClass(s)}`.trim();
+    button.title = DOT_TITLES[s];
+    button.querySelector(".dot-text").textContent = `, ${DOT_TITLES[s]}`;
   }
 }
 
@@ -96,16 +143,21 @@ function tick() {
   }
 }
 
-// The field the picture colours by: the solution snapshot or the last
-// field of the Assemble step, whichever came last, while it is up to date.
+// The field the picture colours by: the solution snapshot (or its error
+// against the exact solution, compare.js) or the last field of the
+// Assemble step, whichever came last, while it is up to date.
 function shownField() {
   const solved = freshResult("solve");
   if (store.fieldSource === "solve" && solved) {
     const i = Math.min(store.solveFrame, solved.times.length - 1);
-    return { label: `u at t = ${formatNumber(solved.times[i], 5)}`, values: solved.values[i], scale: solved.scale };
+    const t = formatNumber(solved.times[i], 5);
+    const comparison = currentComparison();
+    if (store.view.showError && comparison?.errors[i])
+      return { label: `u − exact at t = ${t}`, short: "u − exact", values: comparison.errors[i], scale: comparison.scale };
+    return { label: `u at t = ${t}`, short: "u", values: solved.values[i], scale: solved.scale };
   }
   const field = store.results.field;
-  return field && field.key === currentKey("field") ? field.data : null;
+  return field && field.key === currentKey("field") ? { ...field.data, short: "value", data: field.data } : null;
 }
 
 // The field shown keeps its identity while nothing about it changed, so
@@ -114,6 +166,8 @@ let shown = null;
 function stableField() {
   const next = shownField();
   if (next && shown && next.values === shown.values && next.scale === shown.scale && next.label === shown.label) return shown;
+  // The Assemble step's field keeps its identity while its data does.
+  if (next?.data && shown?.data === next.data) return shown;
   shown = next;
   return next;
 }
@@ -125,17 +179,53 @@ function updateViewer() {
   const mesh = meshResult?.mesh ?? null;
   const meshFresh = freshResult("mesh") !== null;
   element("color-by").value = store.view.colorBy;
+  const field = stableField();
+  element("layer-isolines").checked = store.view.isolines;
   const drawn = viewer.set({
     geometry,
     mesh,
     meshStale: mesh !== null && !meshFresh,
     dirichlet: assembled && freshResult("assemble") ? assembled.meshed_problem.dirichlet_nodes : null,
-    field: stableField(),
+    field,
     colorBy: store.view.colorBy,
-    layers: { geometry: element("layer-geometry").checked, mesh: element("layer-mesh").checked, dirichlet: element("layer-dirichlet").checked },
+    probes: store.probes,
+    layers: {
+      geometry: element("layer-geometry").checked,
+      mesh: element("layer-mesh").checked,
+      dirichlet: element("layer-dirichlet").checked,
+      isolines: store.view.isolines,
+      isolineCount: settings.isolineCount,
+    },
   });
   if (drawn) element("legend").replaceChildren(...viewer.legend());
   element("empty-view").hidden = Boolean(geometry || mesh);
+  updateTimebar();
+  const solution = timeSolution();
+  updateProbes(element("probes"), {
+    mesh: meshFresh ? mesh : null,
+    field: store.view.colorBy === "field" ? field : null,
+    solution,
+    frame: solution ? Math.min(store.solveFrame, solution.values.length - 1) : 0,
+    digits: getDefaultDigits() + 1,
+  });
+}
+
+// A click on the picture (or Enter) pins a probe there.
+function pinProbe(x, y) {
+  const slot = freeProbeSlot(store.probes);
+  if (slot < 0) {
+    toast(`Up to ${MAX_PROBES} probes: remove one first.`);
+    return;
+  }
+  setProbes([...store.probes, { slot, x, y }]);
+}
+
+async function savePicture() {
+  const solved = freshResult("solve");
+  const t = store.view.colorBy === "field" && store.fieldSource === "solve" && solved ? solved.times[Math.min(store.solveFrame, solved.times.length - 1)] : null;
+  const blob = await viewer.picture();
+  if (!blob) return toast("The picture could not be saved.");
+  saveBlob(blob, pictureName(store.caseName, t));
 }
 
 // The case's file name, whether it changed since, and the notice.
@@ -159,16 +249,22 @@ function updateCaseBar() {
 }
 
 function refresh(reason) {
-  if (reason === "frame") return updateViewer();
+  if (reason === "frame" || reason === "probes") {
+    updateViewer();
+    panels.solve.frame?.(element("panel-solve"));
+    return;
+  }
   if (reason === "step") {
     applyStep();
     return;
   }
-  if (reason === "progress") {
-    // A time run moved on: its panel, the dots and the picture.
+  if (reason === "progress" || reason === "compare") {
+    // A time run or a comparison moved on: its panel, the dots and the
+    // picture.
     panels.solve.update(element("panel-solve"));
     updateDots();
     updateViewer();
+    if (reason === "progress") recompareIfNeeded();
     return;
   }
   caseChanged();
@@ -182,6 +278,7 @@ function refresh(reason) {
   updateViewer();
   updateCaseBar();
   tick();
+  if (reason === "result") recompareIfNeeded();
 }
 
 // The case a New, Open or Examples replaced, while the toast offers it
@@ -268,7 +365,12 @@ async function start() {
     return;
   }
   element("version").textContent = `library ${store.catalog.library_version}`;
-  viewer = new Viewer(element("view"), element("tooltip"), element("view-status"));
+  viewer = new Viewer(element("view"), element("tooltip"), element("view-status"), { onPin: pinProbe });
+  wireTimebar(element("timebar"));
+  new ResizeObserver(() => {
+    forgetChartSize();
+    if (store.catalog) updateViewer();
+  }).observe(element("probes"));
 
   let step = "geometry";
   try {
@@ -283,6 +385,7 @@ async function start() {
   wireSettings(element("open-settings"), element("settings"));
   onSettings((key) => {
     if (key === "pixelRatioCap") viewer.resize();
+    else if (key === "isolineCount") updateViewer();
     // Digits and the playback speed show in the panels.
     else if (key === "digits" || key === "playbackFps") {
       buildPanels();
@@ -292,9 +395,12 @@ async function start() {
     }
   });
   element("color-by").addEventListener("change", (event) => setColorBy(event.target.value));
+  element("layer-isolines").addEventListener("change", (event) => setViewOption("isolines", event.target.checked));
   element("fit-view").addEventListener("click", () => viewer.fit());
+  element("save-picture").addEventListener("click", () => savePicture().catch((error) => toast(error.message)));
   element("new-case").addEventListener("click", () => loadCase(structuredClone(store.catalog.default_case), { message: "Started a new case." }));
   element("save-case").addEventListener("click", saveCase);
+  element("open-case-button").addEventListener("click", () => element("open-case").click());
   element("open-case").addEventListener("change", (event) => {
     const file = event.target.files[0];
     if (file) openFile(file);

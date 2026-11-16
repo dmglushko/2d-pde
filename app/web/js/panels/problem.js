@@ -4,10 +4,11 @@
 // coefficient depends on are shown next to the fields.
 
 import { applyPreset, scheduleProblemCheck } from "../actions.js";
-import { regionToken, renameParameter } from "../core.js";
-import { errorBox, foldable, h, fill, markLocal, numberHandler, revealFolded } from "../dom.js";
+import { renameParameter } from "../core.js";
+import { errorBox, fill, foldable, h, infoToggle, markLocal, numberHandler, regionSwatch, revealFolded } from "../dom.js";
 import { settings } from "../settings.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
+import { setStepStatus, stepHead } from "./head.js";
 
 // Every edit here changes only the problem section, so the other stages'
 // keys are not computed again. Typing is checked after a pause (the
@@ -41,8 +42,9 @@ function coefficientRow(field, object, path, placeholder = "0") {
       }),
     onchange: checkOnCommit,
   });
+  const term = h("small", {}, field.term ? `× ${field.term}` : "right side");
   return [
-    h("div", { class: "name" }, field.name, field.term ? h("small", {}, `× ${field.term}`) : h("small", {}, "right side")),
+    h("div", { class: "name" }, field.name, term),
     h("div", { class: "cell field", dataset: { path: `${path}.${field.name}`, coef: "" } }, input, h("div", { class: "facts" })),
   ];
 }
@@ -77,22 +79,19 @@ function presetSelect(presets) {
         if (preset) applyPreset(preset);
       },
     },
-    h("option", { value: "" }, "Preset…"),
+    h("option", { value: "" }, "Use a preset…"),
     presets.map((p) => h("option", { value: p.id, title: p.description }, p.label)),
   );
 }
 
 function equationSection(catalog, problem) {
   problem.equation ??= {};
+  const help = infoToggle(catalog.expression_help, "expressions");
+  const start = templateSelect("Start from…", catalog.equation_templates, (values) => edit((c) => (c.problem.equation = values), "structure"));
   return foldable(
-    {
-      id: "problem.equation",
-      title: "Equation",
-      kind: "section",
-      extras: [h("span", { class: "spacer" }), templateSelect("Start from…", catalog.equation_templates, (values) => edit((c) => (c.problem.equation = values), "structure"))],
-    },
+    { id: "problem.equation", title: "Equation", kind: "section", extras: [help.button, h("span", { class: "spacer" }), start], info: help.panel },
     h("div", { class: "form-line" }, catalog.equation_form),
-    h("div", { class: "coefficients", style: "margin-top:8px" }, catalog.equation_fields.map((f) => coefficientRow(f, problem.equation, "problem.equation"))),
+    h("div", { class: "coefficients" }, catalog.equation_fields.map((f) => coefficientRow(f, problem.equation, "problem.equation"))),
   );
 }
 
@@ -126,31 +125,69 @@ function parametersSection(problem) {
     },
     "Add",
   );
-  return foldable(
-    { id: "problem.parameters", title: "Parameters", kind: "section", extras: [h("span", { class: "spacer" }), add] },
-    h("p", { class: "note" }, "Named constants used in the expressions, such as k = 0.1."),
+  const row = ([name, value]) =>
     h(
       "div",
-      { class: "field", dataset: { path: "problem.parameters" } },
-      entries.map(([name, value]) =>
-        h(
-          "div",
-          { class: "row param-row", style: "margin:4px 0;flex-wrap:wrap" },
-          h("input", { type: "text", class: "expr", value: name, "aria-label": "Parameter name", style: "width:120px", onchange: (event) => rename(event.target, name) }),
-          "=",
-          h("input", {
-            type: "number",
-            step: "any",
-            value: String(value),
-            "aria-label": `Value of ${name}`,
-            style: "width:120px",
-            oninput: numberHandler((v) => edit((c) => (c.problem.parameters[name] = v))),
-            onchange: checkOnCommit,
-          }),
-          h("button", { type: "button", class: "icon", "aria-label": `Remove ${name}`, onclick: () => edit((c) => delete c.problem.parameters[name], "structure") }, "✕"),
-        ),
+      { class: "row param-row" },
+      h("input", {
+        type: "text",
+        class: "expr param-name",
+        value: name,
+        "aria-label": "Parameter name",
+        onchange: (event) => rename(event.target, name),
+      }),
+      "=",
+      h("input", {
+        type: "number",
+        step: "any",
+        class: "param-value",
+        value: String(value),
+        "aria-label": `Value of ${name}`,
+        oninput: numberHandler((v) => edit((c) => (c.problem.parameters[name] = v))),
+        onchange: checkOnCommit,
+      }),
+      h(
+        "button",
+        { type: "button", class: "icon", "aria-label": `Remove ${name}`, onclick: () => edit((c) => delete c.problem.parameters[name], "structure") },
+        "✕",
       ),
+    );
+  return foldable(
+    { id: "problem.parameters", title: "Parameters", kind: "section", extras: [h("span", { class: "spacer" }), add] },
+    h("div", { class: "field", dataset: { path: "problem.parameters" } }, entries.map(row)),
+  );
+}
+
+// One region's condition: a type template, its priority and the
+// coefficients.
+function conditionCard(catalog, conditions, region, index, count) {
+  const condition = conditions[region];
+  const path = `problem.boundary_conditions.${region}`;
+  const type = templateSelect("Type…", catalog.condition_templates, (values) =>
+    edit((c) => (c.problem.boundary_conditions[region] = { ...values, priority: condition.priority ?? 0 }), "structure"),
+  );
+  const priority = h("input", {
+    type: "number",
+    step: "1",
+    class: "priority-input",
+    value: String(condition.priority ?? 0),
+    "aria-label": `Priority of ${region}`,
+    oninput: numberHandler(
+      (v) => edit(() => (condition.priority = v)),
+      () => edit(() => delete condition.priority),
     ),
+    onchange: checkOnCommit,
+  });
+  return foldable(
+    {
+      id: `problem.condition.${region}`,
+      title: [regionSwatch(index), " ", region],
+      folded: count > 4,
+      extras: [h("span", { class: "chip", dataset: { kindOf: region } }, "…"), h("span", { class: "spacer" })],
+      attributes: { class: "field", dataset: { path } },
+    },
+    h("div", { class: "row condition-line" }, type, h("label", { class: "row inline-label" }, "priority", priority)),
+    h("div", { class: "coefficients" }, catalog.condition_fields.map((f) => coefficientRow(f, condition, path))),
   );
 }
 
@@ -162,53 +199,22 @@ function conditionsSection(catalog, problem) {
     const i = order.indexOf(name);
     return i < 0 ? order.length + regions.indexOf(name) : i;
   };
+  const help = infoToggle(catalog.condition_note, "boundary conditions");
   return foldable(
-    { id: "problem.conditions", title: "Boundary conditions", kind: "section" },
+    { id: "problem.conditions", title: "Boundary conditions", kind: "section", extras: [help.button], info: help.panel },
     h("div", { class: "form-line" }, catalog.condition_form),
-    h("p", { class: "note" }, catalog.condition_note),
     regions.length === 0 ? h("p", { class: "note" }, "The regions appear here once the geometry is read.") : null,
-    regions
-      .sort((a, b) => index(a) - index(b))
-      .map((region) => {
-        const condition = conditions[region];
-        const path = `problem.boundary_conditions.${region}`;
-        return foldable(
-          {
-            id: `problem.condition.${region}`,
-            title: [h("span", { class: "swatch", style: `background:var(${regionToken(index(region))})` }), " ", region],
-            folded: regions.length > 4,
-            extras: [h("span", { class: "chip", dataset: { kindOf: region } }, "…"), h("span", { class: "spacer" })],
-            attributes: { class: "field", dataset: { path } },
-          },
-          h(
-            "div",
-            { class: "row", style: "margin:8px 0" },
-            templateSelect("Type…", catalog.condition_templates, (values) => edit((c) => (c.problem.boundary_conditions[region] = { ...values, priority: condition.priority ?? 0 }), "structure")),
-            h("label", { class: "row", style: "gap:4px" }, "priority", h("input", {
-              type: "number",
-              step: "1",
-              value: String(condition.priority ?? 0),
-              style: "width:70px",
-              "aria-label": `Priority of ${region}`,
-              oninput: numberHandler(
-                (v) => edit(() => (condition.priority = v)),
-                () => edit(() => delete condition.priority),
-              ),
-              onchange: checkOnCommit,
-            })),
-          ),
-          h("div", { class: "coefficients" }, catalog.condition_fields.map((f) => coefficientRow(f, condition, path))),
-        );
-      }),
+    regions.sort((a, b) => index(a) - index(b)).map((region) => conditionCard(catalog, conditions, region, index(region), regions.length)),
   );
 }
 
 function initialSection(catalog, problem) {
   problem.initial ??= {};
+  const help = infoToggle(catalog.initial_note, "initial conditions");
+  const rows = catalog.initial_fields.map((f) => coefficientRow({ ...f, term: "" }, problem.initial, "problem.initial", "not given"));
   return foldable(
-    { id: "problem.initial", title: "Initial conditions", kind: "section" },
-    h("p", { class: "note" }, catalog.initial_note),
-    h("div", { class: "coefficients" }, catalog.initial_fields.map((f) => coefficientRow({ ...f, term: "" }, problem.initial, "problem.initial", "not given"))),
+    { id: "problem.initial", title: "Initial conditions", kind: "section", extras: [help.button], info: help.panel },
+    h("div", { class: "coefficients" }, rows),
   );
 }
 
@@ -218,20 +224,45 @@ function factChips(facts) {
   return depends.length ? [h("span", { class: "chip" }, `depends on ${depends.join(", ")}`)] : [h("span", { class: "chip" }, "constant")];
 }
 
+// The status line: checking, no errors, or how many.
+function checkStatus(check, fresh, error) {
+  if (error) return { status: "failed", text: "The check failed" };
+  if (store.busy.has("problem") || !fresh) return { status: "busy", text: "Checking…" };
+  if (!check.ok) return { status: "failed", text: `${check.errors.length} error${check.errors.length > 1 ? "s" : ""}` };
+  return { status: "done", text: "No errors" };
+}
+
+function summaryChips(check) {
+  const required = check.required_initial;
+  return h(
+    "div",
+    { class: "row chips" },
+    h("span", { class: "chip" }, `Time order ${check.time_order}`),
+    check.coefficients_depend_on_t ? h("span", { class: "chip" }, "coefficients depend on t") : null,
+    check.data_depends_on_t ? h("span", { class: "chip" }, "data depend on t") : null,
+    h("span", { class: "chip" }, required.length ? `needs initial ${required.join(" and ")}` : "stationary"),
+  );
+}
+
 export const problemPanel = {
   build(container) {
     const catalog = store.catalog.problem;
     const problem = (store.caseData.problem ??= {});
-    fill(container,
-      h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Problem"), h("span", { class: "spacer" }), catalog.presets?.length ? presetSelect(catalog.presets) : null),
-      h("p", { class: "lead" }, "One linear scalar equation in u(x, y, t). Every field takes an expression; an empty field is zero. A preset fills in a whole problem for the current geometry, with its solve settings."),
-      h("details", { class: "report" }, h("summary", {}, "What an expression may contain"), h("div", { class: "body note" }, catalog.expression_help)),
+    const head = stepHead("problem", catalog.presets?.length ? presetSelect(catalog.presets) : null);
+    fill(
+      container,
+      head,
       h("div", { id: "problem-summary", class: "result" }),
-      equationSection(catalog, problem),
-      parametersSection(problem),
-      conditionsSection(catalog, problem),
-      initialSection(catalog, problem),
+      h(
+        "div",
+        { class: "settings-part" },
+        equationSection(catalog, problem),
+        parametersSection(problem),
+        conditionsSection(catalog, problem),
+        initialSection(catalog, problem),
+      ),
     );
+    container.head = head;
     this.update(container, true);
   },
 
@@ -267,23 +298,12 @@ export const problemPanel = {
       chip.classList.toggle("bad", !kind && errors.has(`problem.boundary_conditions.${chip.dataset.kindOf}`));
     }
 
+    setStepStatus(container.head, "problem", checkStatus(check, fresh, error));
     const children = [];
     if (error) children.push(errorBox(error));
     if (old) children.push(errorBox(old, { outdated: true }));
-    if (!fresh && !error) children.push(h("div", { class: "row" }, h("span", { class: "chip" }, "Checking…")));
-    else if (check) {
-      const required = check.required_initial;
-      children.push(
-        h(
-          "div",
-          { class: "row" },
-          check.ok ? h("span", { class: "chip good" }, "✓ no errors") : h("span", { class: "chip bad" }, `✕ ${check.errors.length} error${check.errors.length > 1 ? "s" : ""}`),
-          h("span", { class: "chip" }, `time order ${check.time_order}`),
-          check.coefficients_depend_on_t ? h("span", { class: "chip" }, "coefficients depend on t") : null,
-          check.data_depends_on_t ? h("span", { class: "chip" }, "data depend on t") : null,
-          h("span", { class: "chip" }, required.length ? `needs initial ${required.join(" and ")}` : "stationary: no initial conditions"),
-        ),
-      );
+    if (fresh && !error) {
+      children.push(summaryChips(check));
       // Errors without a field of their own (the whole section).
       const unplaced = check.errors.filter((e) => !container.querySelector(`[data-path="${CSS.escape(e.path)}"]`));
       for (const e of unplaced) children.push(h("div", { class: "alert" }, `${e.path}: ${e.message}`));

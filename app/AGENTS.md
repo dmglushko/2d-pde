@@ -42,6 +42,8 @@ meshing) in the app or the page.
 1. `tools/format.sh --check` (C++ of the app included).
 2. `tools/test.sh`: the app's tests are `app_session`, `app_solve`, `app_runs`,
    `app_server`, `app_run_*` (every case in `examples/`), `app_web` and
-   `app_web_actions` (Node).
-3. For a page change, open it in a browser and use the changed step.
+   `app_web_actions` (Node), `app_browser` (headless Chrome, when
+   found; `app/tests/browser/run.sh --shots DIR` also saves screenshots).
+3. For a page change, add or extend a scenario in `tests/browser/`,
+   look at the screenshots and use the changed step.
 4. Update `docs/app.md` (and `README.md` if use changes).

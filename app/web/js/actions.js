@@ -329,7 +329,8 @@ export async function applyPreset(preset) {
   const before = { problem: structuredClone(store.caseData.problem), solve: structuredClone(store.caseData.solve) };
   let next;
   try {
-    next = await api.preset({ format: store.caseData.format, version: store.caseData.version, geometry: store.caseData.geometry, problem: store.caseData.problem, solve: store.caseData.solve }, preset.id);
+    const { format, version, geometry, problem, solve } = store.caseData;
+    next = await api.preset({ format, version, geometry, problem, solve }, preset.id);
   } catch (error) {
     toast(`The preset needs a geometry the library accepts: ${error.message}`);
     return false;

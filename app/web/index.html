@@ -3,10 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
     <title>pde2d</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 14 L8 2 L14 14 Z M5 8 L11 8 M8 14 L5 8 M8 14 L11 8' fill='none' stroke='%232a78d6' stroke-width='1.5'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 14 L8 2 L14 14 Z M5 8 L11 8 M8 14 L5 8 M8 14 L11 8' fill='none' stroke='%233987e5' stroke-width='1.5'/%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="style.css" />
     <script type="module" src="js/main.js"></script>
@@ -19,9 +20,8 @@
         <select id="examples" aria-label="Open an example">
           <option value="">Examples…</option>
         </select>
-        <label class="button"
-          >Open case…<input id="open-case" type="file" accept=".json,application/json" hidden
-        /></label>
+        <button id="open-case-button" type="button">Open case…</button>
+        <input id="open-case" type="file" accept=".json,application/json" tabindex="-1" hidden />
         <button id="save-case" type="button">Save case</button>
         <span id="unsaved" class="chip" hidden>unsaved changes</span>
         <button id="run-all" class="primary" type="button">Run all</button>
@@ -40,27 +40,40 @@
       </aside>
 
       <section class="viewer" aria-label="Picture">
-        <div class="viewer-toolbar">
-          <label><input type="checkbox" id="layer-geometry" checked /> Boundary</label>
-          <label><input type="checkbox" id="layer-mesh" checked /> Mesh edges</label>
-          <label><input type="checkbox" id="layer-dirichlet" /> Dirichlet nodes</label>
-          <label
-            >Colour
-            <select id="color-by">
-              <option value="none">none</option>
-              <option value="quality">smallest angle</option>
-              <option value="field">field</option>
-            </select>
-          </label>
-          <button id="fit-view" class="small" type="button">Fit</button>
-          <span class="status" id="view-status"></span>
+        <div class="viewer-main">
+          <div class="viewer-toolbar">
+            <label><input type="checkbox" id="layer-geometry" checked /> Boundary</label>
+            <label><input type="checkbox" id="layer-mesh" checked /> Edges</label>
+            <label title="Dirichlet nodes"><input type="checkbox" id="layer-dirichlet" /> Dirichlet</label>
+            <label><input type="checkbox" id="layer-isolines" /> Isolines</label>
+            <label
+              >Colour
+              <select id="color-by">
+                <option value="none">none</option>
+                <option value="quality">smallest angle</option>
+                <option value="field">field</option>
+              </select>
+            </label>
+            <button id="fit-view" class="small" type="button" title="Fit the picture (0)">Fit</button>
+            <button id="save-picture" class="small" type="button" title="Save the picture with its legend as PNG">Save picture</button>
+            <span class="status" id="view-status"></span>
+          </div>
+          <div class="canvas-wrap" id="canvas-wrap">
+            <canvas
+              id="view"
+              tabindex="0"
+              aria-label="Picture of the domain, the mesh and the field. Arrow keys pan, + and - zoom, 0 fits, Enter pins a probe at the centre."
+            ></canvas>
+            <div class="empty-view" id="empty-view">Choose a geometry, or drop an SVG, .msh or .pde2d file here.</div>
+            <div class="tooltip" id="tooltip" hidden></div>
+          </div>
+          <div class="timebar" id="timebar" hidden></div>
+          <div class="legend" id="legend"></div>
         </div>
-        <div class="canvas-wrap" id="canvas-wrap">
-          <canvas id="view" aria-label="Geometry and mesh"></canvas>
-          <div class="empty-view" id="empty-view">Choose a geometry, or drop an SVG, .msh or .pde2d file here.</div>
-          <div class="tooltip" id="tooltip" hidden></div>
+        <div class="viewer-extra" id="probes" hidden>
+          <div class="probe-list"></div>
+          <div class="probe-chart" hidden></div>
         </div>
-        <div class="legend" id="legend"></div>
       </section>
     </main>
 
@@ -69,7 +82,6 @@
         <h2 id="settings-title">Settings</h2>
         <button type="button" class="icon" data-close aria-label="Close settings">✕</button>
       </div>
-      <p class="note">Kept in this browser, not in the case.</p>
       <div class="settings-body"></div>
     </dialog>
 

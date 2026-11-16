@@ -1,6 +1,6 @@
 // Small DOM helpers and the forms built from catalog option specs.
 
-import { errorPath, formatNumber, parseFolds, parseNumberText } from "./core.js";
+import { errorPath, formatNumber, parseFolds, parseNumberText, regionToken } from "./core.js";
 
 // h("div", {class: "x", onclick: f}, child, "text", ...)
 export function h(tag, attributes = {}, ...children) {
@@ -76,9 +76,10 @@ let foldCount = 0;
 // the stored preference; `folded` is how it starts when nothing is
 // stored. kind "card" gives a .card, "section" a heading (h3) with the
 // body below. `extras` go into the header after the title (controls of
-// the section, which do not toggle it); `attributes` go on the outer
-// element.
-export function foldable({ id, title, folded = false, kind = "card", extras = [], attributes = {} }, ...children) {
+// the section, which do not toggle it); `info` (an info toggle's panel)
+// goes under the header, outside the body, so it shows also when folded;
+// `attributes` go on the outer element.
+export function foldable({ id, title, folded = false, kind = "card", extras = [], info = null, attributes = {} }, ...children) {
   const bodyId = `fold-${++foldCount}`;
   const shut = isFolded(id, folded);
   const button = h(
@@ -91,7 +92,7 @@ export function foldable({ id, title, folded = false, kind = "card", extras = []
   const body = h("div", { id: bodyId, class: "fold-body", hidden: shut }, children);
   const head = kind === "card" ? h("div", { class: "card-head" }, button, extras) : h("div", { class: "section-head" }, h("h3", {}, button), extras);
   const base = kind === "card" ? "card foldable" : "fold-section";
-  return h("div", { ...attributes, class: attributes.class ? `${base} ${attributes.class}` : base }, head, body);
+  return h("div", { ...attributes, class: attributes.class ? `${base} ${attributes.class}` : base }, head, info, body);
 }
 
 // Opens every folded section around `element` (an error marked inside
@@ -156,43 +157,95 @@ function numberInput(value, { integer = false, placeholder = "", label, path, on
   });
 }
 
+// A small "i" button that shows or hides `text` (a description the user
+// may want, not one printed under every field). The text is also the
+// button's tooltip. Returns {button, panel}: the caller puts the button
+// next to what it explains and the panel below it. Both are null without
+// a text.
+let infoCount = 0;
+export function infoToggle(text, about) {
+  if (!text) return { button: null, panel: null };
+  const id = `info-${++infoCount}`;
+  const panel = h("div", { id, class: "info-text", hidden: true }, text);
+  const button = h(
+    "button",
+    {
+      type: "button",
+      class: "info",
+      title: text,
+      "aria-label": `About ${about}`,
+      "aria-expanded": "false",
+      "aria-controls": id,
+    },
+    "i",
+  );
+  button.addEventListener("click", (event) => {
+    // Inside a fold header: show the text, do not fold.
+    event.stopPropagation();
+    const open = button.getAttribute("aria-expanded") !== "true";
+    button.setAttribute("aria-expanded", String(open));
+    panel.hidden = !open;
+  });
+  return { button, panel };
+}
+
+// A label with its info toggle: [label-row, info panel].
+export function labelWithInfo(label, description, tag = "div") {
+  const info = infoToggle(description, label);
+  return [h("div", { class: "label-row" }, h(tag, { class: "label" }, label), info.button), info.panel];
+}
+
+function lengthBoundInputs(spec, value, path, onChange) {
+  const bound = { absolute: null, relative: null, ...(value ?? spec.default ?? {}) };
+  const set = (key) => (v) => {
+    bound[key] = v;
+    onChange({ ...bound });
+  };
+  return h(
+    "div",
+    { class: "bound", dataset: { path } },
+    h("span", {}, "absolute"),
+    numberInput(bound.absolute, {
+      label: `${spec.label}, absolute`,
+      placeholder: "no bound",
+      path: `${path}.absolute`,
+      onChange: set("absolute"),
+    }),
+    h("span", {}, "× domain size"),
+    numberInput(bound.relative, {
+      label: `${spec.label}, relative`,
+      placeholder: "no bound",
+      path: `${path}.relative`,
+      onChange: set("relative"),
+    }),
+  );
+}
+
+function choiceInput(spec, value, path, onChange) {
+  const options = spec.choices.map((choice) =>
+    h("option", { value: choice, selected: choice === (value ?? spec.default) }, choice.replaceAll("_", " ")),
+  );
+  return h("select", { "aria-label": spec.label, dataset: { path }, onchange: (event) => onChange(event.target.value) }, options);
+}
+
 // One option of a component or a shape, as a form field. `value` is the
 // current value (null or undefined: the default); onChange(newValue).
+// The option's description is behind its info toggle.
 export function optionField(spec, value, path, onChange) {
-  const help = spec.description ? h("div", { class: "help" }, spec.description) : null;
-  const unit = spec.unit ? h("span", { class: "unit" }, spec.unit) : null;
   let input;
-  if (spec.kind === "choice") {
-    input = h(
-      "select",
-      { "aria-label": spec.label, dataset: { path }, onchange: (event) => onChange(event.target.value) },
-      spec.choices.map((choice) => h("option", { value: choice, selected: choice === (value ?? spec.default) }, choice.replaceAll("_", " "))),
-    );
-  } else if (spec.kind === "length_bound") {
-    const bound = { absolute: null, relative: null, ...(value ?? spec.default ?? {}) };
-    const set = (key) => (v) => {
-      bound[key] = v;
-      onChange({ ...bound });
-    };
-    input = h(
-      "div",
-      { class: "bound", dataset: { path } },
-      h("span", {}, "absolute"),
-      numberInput(bound.absolute, { label: `${spec.label}, absolute`, placeholder: "no bound", path: `${path}.absolute`, onChange: set("absolute") }),
-      h("span", {}, "× domain size"),
-      numberInput(bound.relative, { label: `${spec.label}, relative`, placeholder: "no bound", path: `${path}.relative`, onChange: set("relative") }),
-    );
-  } else {
-    const integer = spec.kind === "integer";
+  if (spec.kind === "choice") input = choiceInput(spec, value, path, onChange);
+  else if (spec.kind === "length_bound") input = lengthBoundInputs(spec, value, path, onChange);
+  else
     input = numberInput(value ?? spec.default, {
-      integer,
+      integer: spec.kind === "integer",
       label: spec.label,
       placeholder: `default ${formatNumber(spec.default)}`,
       path,
       onChange: (v) => onChange(v ?? spec.default),
     });
-  }
-  return h("div", { class: "field", dataset: { path } }, h("div", { class: "label" }, spec.label), h("div", { class: "inputs" }, input, unit), help);
+  const unit = spec.unit ? h("span", { class: "unit" }, spec.unit) : null;
+  const [labelRow, info] = labelWithInfo(spec.label, spec.description);
+  return h("div", { class: "field", dataset: { path } }, labelRow, h("div", { class: "inputs" }, input, unit), info);
 }
 
 // The options of a component: one field per spec, writing into `options`.
@@ -239,24 +292,24 @@ export function errorBox(error, { outdated = false, openProblem = null } = {}) {
   if (!error) return null;
   const kind = { input: "The input was refused", algorithm: "The algorithm could not finish", internal: "Something went wrong" }[error.kind] ?? "Error";
   const aboutProblem = ["problem", "meshed_problem"].includes(error.stage);
+  const title = h("span", { class: "stage" }, `${kind} (${error.stage})`, outdated ? h("span", { class: "chip" }, "for the previous input") : null);
   return h(
     "div",
     { class: outdated ? "alert outdated" : "alert", role: outdated ? null : "alert" },
-    h("span", { class: "stage" }, `${kind} (${error.stage})`, outdated ? h("span", { class: "chip" }, "for the previous input") : null),
+    title,
     error.message,
-    aboutProblem && openProblem ? h("div", { style: "margin-top:6px" }, h("button", { type: "button", class: "small", onclick: openProblem }, "Open the Problem step")) : null,
+    aboutProblem && openProblem
+      ? h("div", { class: "alert-actions" }, h("button", { type: "button", class: "small", onclick: openProblem }, "Open the Problem step"))
+      : null,
   );
-}
-
-// "Meshing… 3 s" while `stage` runs; main.js updates the seconds.
-export function busyNote(stage, text) {
-  return h("p", { class: "note busy-note", dataset: { elapsedStage: stage, label: text } }, `${text}…`);
 }
 
 // A small export button, disabled with a reason when the result it would
 // export is not the one shown as current.
-export function exportButton(label, action, { fresh, staleReason }) {
+// `about` is its tooltip while it is enabled.
+export function exportButton(label, action, { fresh, staleReason, about = null }) {
   const button = actionButton(label, action, { small: true });
+  if (about) button.title = about;
   if (!fresh) {
     button.disabled = true;
     button.title = staleReason;
@@ -265,35 +318,54 @@ export function exportButton(label, action, { fresh, staleReason }) {
 }
 
 // The reports of a run, one collapsible block per stage.
+function reportSummary(report) {
+  const count = report.messages.length;
+  return h(
+    "summary",
+    {},
+    h("strong", {}, report.stage),
+    count ? h("span", { class: "chip" }, `${count} message${count > 1 ? "s" : ""}`) : null,
+    h("span", { class: "time" }, `${formatNumber(report.time_ms, 3)} ms`),
+  );
+}
+
+function metricsTable(metrics) {
+  const rows = Object.entries(metrics).map(([name, value]) =>
+    h("tr", {}, h("td", {}, name.replaceAll("_", " ")), h("td", { class: "num" }, formatNumber(value, 6))),
+  );
+  return rows.length ? h("table", { class: "data" }, h("tbody", {}, rows)) : null;
+}
+
 export function reportsView(reports) {
   return reports.map((report) =>
     h(
       "details",
       { class: "report" },
-      h("summary", {}, h("strong", {}, report.stage), report.messages.length ? h("span", { class: "chip" }, `${report.messages.length} message${report.messages.length > 1 ? "s" : ""}`) : null, h("span", { class: "time" }, `${formatNumber(report.time_ms, 3)} ms`)),
+      reportSummary(report),
       h(
         "div",
         { class: "body" },
         report.messages.length ? h("ul", {}, report.messages.map((m) => h("li", {}, m))) : null,
-        Object.keys(report.metrics).length
-          ? h(
-              "table",
-              { class: "data" },
-              h("tbody", {}, Object.entries(report.metrics).map(([name, value]) => h("tr", {}, h("td", {}, name.replaceAll("_", " ")), h("td", { class: "num" }, formatNumber(value, 6))))),
-            )
-          : null,
+        metricsTable(report.metrics),
       ),
     ),
   );
 }
 
-export function stat(label, value) {
-  return h("div", { class: "stat" }, h("div", { class: "value" }, value), h("div", { class: "label" }, label));
+// The colour swatch of region `index` (style.css: .swatch.series-N).
+export function regionSwatch(index) {
+  return h("span", { class: `swatch ${regionToken(index).slice(2)}`, "aria-hidden": "true" });
+}
+
+// A figure of a result: its value over its label. `title` explains it.
+export function stat(label, value, title = null) {
+  return h("div", { class: "stat", title }, h("div", { class: "value" }, value), h("div", { class: "label" }, label));
 }
 
 // A button that shows a spinner while `action` runs.
 export function actionButton(label, action, { primary = false, small = false } = {}) {
-  const button = h("button", { type: "button", class: [primary ? "primary" : "", small ? "small" : ""].join(" ").trim() || null }, label);
+  const classes = [primary ? "primary" : "", small ? "small" : ""].join(" ").trim();
+  const button = h("button", { type: "button", class: classes || null }, label);
   button.addEventListener("click", async () => {
     button.disabled = true;
     const spinner = h("span", { class: "busy", "aria-hidden": "true" });
@@ -306,6 +378,25 @@ export function actionButton(label, action, { primary = false, small = false } =
     }
   });
   return button;
+}
+
+// A button that opens a file chooser (a hidden file input): a real
+// button, so it takes the focus and Enter or Space like any other.
+// onFile(file) gets the chosen file.
+export function fileButton(label, accept, onFile, { id = null, small = false } = {}) {
+  const input = h("input", {
+    type: "file",
+    accept,
+    hidden: true,
+    tabindex: "-1",
+    onchange: (event) => {
+      const file = event.target.files[0];
+      event.target.value = "";
+      if (file) onFile(file);
+    },
+  });
+  const button = h("button", { type: "button", id, class: small ? "small" : null, onclick: () => input.click() }, label);
+  return h("span", { class: "file-button" }, button, input);
 }
 
 // Reads a file chosen by the user as text.

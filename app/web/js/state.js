@@ -37,8 +37,13 @@ export const store = {
   // True once the user moved the slider during the current run: the
   // picture then stops following the newest snapshot.
   solveFrameChosen: false,
-  // The picture's settings: colorBy is "none", "quality" or "field".
-  view: { colorBy: "none" },
+  // The picture's settings: colorBy is "none", "quality" or "field";
+  // isolines draws the shown field's isolines; showError shows u − exact
+  // (compare.js) instead of u while a comparison is current.
+  view: { colorBy: "none", isolines: false, showError: false },
+  // The probes pinned on the picture: {slot (its colour), x, y}, at most
+  // MAX_PROBES. The viewer's, not the case's.
+  probes: [],
   // The open step.
   step: "geometry",
   // A notice about the loaded case (sections replaced by defaults), shown
@@ -56,7 +61,9 @@ export function subscribe(listener) {
 // changed), "structure" (a change that needs a form rebuilt, such as a new
 // component type), "result" (a stage started or finished), "frame"
 // (another snapshot of the solution is shown; only the picture changes),
-// "view" (a setting of the picture), "step" (another step was opened).
+// "view" (a setting of the picture), "step" (another step was opened),
+// "probes" (a probe was pinned or removed), "compare" (a comparison with
+// an exact solution moved on).
 export function notify(reason) {
   for (const listener of listeners) listener(reason);
 }
@@ -126,6 +133,18 @@ export function setColorBy(colorBy) {
   if (store.view.colorBy === colorBy) return;
   store.view.colorBy = colorBy;
   notify("view");
+}
+
+// One of the picture's switches (isolines, showError).
+export function setViewOption(name, value) {
+  if (store.view[name] === value) return;
+  store.view[name] = value;
+  notify("view");
+}
+
+export function setProbes(probes) {
+  store.probes = probes;
+  notify("probes");
 }
 
 // A stage's result, if it was built from the current case.

@@ -2,8 +2,23 @@
 // (smallest angle per triangle, or a field with linear interpolation), with
 // panning, zooming and a readout under the pointer.
 
-import { barycentric, fieldScale, formatNumber, getDefaultDigits, nodePositions, parseColor, rampTable, regionToken, triangleAngles, viewTransform } from "./core.js";
-import { h } from "./dom.js";
+import {
+  fieldScale,
+  formatNumber,
+  getDefaultDigits,
+  isolineLevels,
+  isolines,
+  locatePoint,
+  meshGrid,
+  nearestValuedNode,
+  nodePositions,
+  parseColor,
+  rampTable,
+  regionToken,
+  triangleAngles,
+  viewTransform,
+} from "./core.js";
+import { h, regionSwatch } from "./dom.js";
 import { settings } from "./settings.js";
 
 const QUALITY_MAX_DEGREES = 60;
@@ -11,8 +26,17 @@ const QUALITY_MAX_DEGREES = 60;
 // picture is drawn again once the gesture pauses this long.
 const SETTLE_MS = 120;
 
-// The colour tokens, read once per theme (getComputedStyle is not free).
-let tokens = new Map();
+// A press that moves less than this (CSS pixels) is a click: it pins a
+// probe instead of panning.
+const CLICK_SLOP = 4;
+// The readout of a dot field takes the nearest dot within this.
+const DOT_PICK_PX = 8;
+// Arrow keys pan by this, Shift + arrow by four times as much.
+const KEY_PAN_PX = 40;
+
+// The colour tokens, read once (getComputedStyle is not free). The page
+// has one, dark, theme.
+const tokens = new Map();
 function token(name) {
   let value = tokens.get(name);
   if (value === undefined) {
@@ -22,12 +46,15 @@ function token(name) {
   return value;
 }
 
-const sameLayers = (a = {}, b = {}) => a.geometry === b.geometry && a.mesh === b.mesh && a.dirichlet === b.dirichlet;
+const sameLayers = (a = {}, b = {}) =>
+  a.geometry === b.geometry && a.mesh === b.mesh && a.dirichlet === b.dirichlet && a.isolines === b.isolines && a.isolineCount === b.isolineCount;
 const sameField = (a, b) => a === b || (a && b && a.values === b.values && a.scale === b.scale && a.label === b.label);
 
 export class Viewer {
-  constructor(canvas, tooltip, status) {
+  // onPin(x, y): a click (or Enter) at a point of the picture.
+  constructor(canvas, tooltip, status, { onPin = null } = {}) {
     this.canvas = canvas;
+    this.onPin = onPin;
     this.tooltip = tooltip;
     this.status = status;
     this.context = canvas.getContext("2d");
@@ -44,31 +71,26 @@ export class Viewer {
     this.settleTimer = null;
 
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
-    const themeChanged = () => {
-      tokens = new Map();
-      this.tables = null;
-      this.qualityStyles = null;
-      this.draw();
-    };
-    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChanged);
-    new MutationObserver(themeChanged).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     this.listen();
   }
 
   // data: {geometry (view), mesh (mesh view), meshStale, regions (names),
   // dirichlet (node indices), field ({label, values, scale?}), colorBy,
-  // layers}. Draws only when something shown changed; returns whether it
-  // did (the legend changes only then).
+  // layers ({geometry, mesh, dirichlet, isolines, isolineCount}), probes}.
+  // Draws only when something shown changed; returns whether it did (the
+  // legend changes only then).
   set(data) {
     const previous = this.data;
-    const changed =
-      ["geometry", "mesh", "meshStale", "dirichlet", "colorBy"].some((k) => previous[k] !== data[k]) || !sameLayers(previous.layers, data.layers) || !sameField(previous.field, data.field);
+    const keys = ["geometry", "mesh", "meshStale", "dirichlet", "colorBy", "probes"];
+    const changed = keys.some((k) => previous[k] !== data[k]) || !sameLayers(previous.layers, data.layers) || !sameField(previous.field, data.field);
     if (!changed) return false;
     const meshChanged = data.mesh !== previous.mesh;
     const fieldChanged = !sameField(previous.field, data.field);
+    const linesChanged = previous.layers?.isolines !== data.layers?.isolines || previous.layers?.isolineCount !== data.layers?.isolineCount;
     this.data = data;
     if (meshChanged) this.prepareMesh();
     if (meshChanged || fieldChanged) this.prepareField();
+    if (meshChanged || fieldChanged || linesChanged) this.prepareIsolines();
     const box = this.boundingBox();
     const key = box ? JSON.stringify(box) : null;
     if (key && key !== this.fittedKey) {
@@ -82,7 +104,7 @@ export class Viewer {
   prepareMesh() {
     const mesh = this.data.mesh;
     this.angles = mesh ? triangleAngles(mesh) : null;
-    this.grid = mesh ? buildGrid(mesh) : null;
+    this.grid = mesh ? meshGrid(mesh) : null;
     // Triangles by their quality colour, so each colour is one path.
     this.qualityBuckets = null;
     if (mesh) {
@@ -99,6 +121,19 @@ export class Viewer {
     const mesh = this.data.mesh;
     this.fieldComplete = Boolean(field && mesh && field.values.length * 2 === mesh.nodes.length && Array.prototype.every.call(field.values, (v) => Number.isFinite(v)));
     this.positions = this.fieldComplete ? nodePositions(field.values, this.scaleOf(field.values)) : null;
+  }
+
+  // ... and the isolines of a complete field, at levels evenly inside its
+  // colour scale (the scale of every snapshot, for a solution).
+  prepareIsolines() {
+    this.isolines = null;
+    const { field, mesh, layers = {} } = this.data;
+    if (!layers.isolines || !this.fieldComplete) return;
+    const scale = this.scaleOf(field.values);
+    const low = scale.kind === "diverging" ? -scale.bound : scale.min;
+    const high = scale.kind === "diverging" ? scale.bound : scale.max;
+    const levels = isolineLevels(low, high, layers.isolineCount ?? 10);
+    this.isolines = { levels, segments: isolines(mesh.nodes, mesh.triangles, field.values, levels), positions: levels.map((v) => scale.position(v)) };
   }
 
   // The pixel ratio the picture is drawn at: the screen's, at most the
@@ -183,8 +218,10 @@ export class Viewer {
       else if (geometry?.kind === "curves") this.drawCurves(geometry);
       else if (geometry?.kind === "mesh_file") this.drawEdgeList(geometry);
     }
+    if (hasMesh && !meshStale && this.isolines) this.drawIsolines(colorBy === "field");
     if (hasMesh && !meshStale && colorBy === "field" && this.data.field && !this.fieldIsComplete()) this.drawFieldDots(mesh, this.data.field.values);
     if (hasMesh && !meshStale && layers.dirichlet && this.data.dirichlet) this.drawNodes(mesh, this.data.dirichlet);
+    if (this.data.probes?.length) this.drawProbes(this.data.probes);
     if (meshStale) note = "mesh outdated: run the Mesh step";
     this.status.textContent = note;
     this.keepFrame();
@@ -338,11 +375,14 @@ export class Viewer {
     return true;
   }
 
-  // The colour tables, once per theme.
+  // The colour tables, once: each ramp goes through a middle stop, so its
+  // middle is a clear colour, not a grey mix of the ends.
   colorTables() {
+    const ramp = (...names) => rampTable(names.map((name) => parseColor(token(name))));
     this.tables ??= {
-      sequential: rampTable([parseColor(token("--seq-low")), parseColor(token("--seq-high"))]),
-      diverging: rampTable([parseColor(token("--div-low")), parseColor(token("--div-mid")), parseColor(token("--div-high"))]),
+      sequential: ramp("--seq-low", "--seq-mid", "--seq-high"),
+      diverging: ramp("--div-low", "--div-mid", "--div-high"),
+      quality: ramp("--quality-good", "--quality-mid", "--quality-bad"),
     };
     return this.tables;
   }
@@ -355,11 +395,11 @@ export class Viewer {
     return this.colorTables().diverging;
   }
 
-  // Each triangle filled by its smallest angle: dark for small angles. One
-  // path per colour.
+  // Each triangle filled by its smallest angle: bright for small angles,
+  // which are the ones to look at. One path per colour.
   drawQuality(mesh) {
     const ctx = this.context;
-    const table = this.sequentialTable();
+    const table = this.colorTables().quality;
     const n = mesh.nodes;
     const t = mesh.triangles;
     const { x: ox, y: oy } = this.offset;
@@ -483,23 +523,170 @@ export class Viewer {
     }
   }
 
+  // Isolines: over the field's colours in one ink (lines in the field's
+  // own colours would vanish into it), else each in its level's colour of
+  // the same scale.
+  drawIsolines(overField) {
+    const ctx = this.context;
+    const { segments, positions } = this.isolines;
+    const table = this.fieldTable(this.scaleOf(this.data.field.values));
+    const { x: ox, y: oy } = this.offset;
+    const s = this.scale;
+    ctx.lineCap = "round";
+    segments.forEach((list, level) => {
+      if (list.length === 0) return;
+      ctx.beginPath();
+      for (let i = 0; i < list.length; i += 4) {
+        ctx.moveTo(ox + list[i] * s, oy - list[i + 1] * s);
+        ctx.lineTo(ox + list[i + 2] * s, oy - list[i + 3] * s);
+      }
+      if (overField) {
+        // A dark halo under a light line reads on every colour of a ramp.
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = token("--isoline-halo");
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = token("--isoline");
+      } else {
+        const k = 3 * Math.max(0, Math.min(255, Math.round(255 * positions[level])));
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = `rgb(${table[k]},${table[k + 1]},${table[k + 2]})`;
+      }
+      ctx.stroke();
+    });
+  }
+
+  // Each probe: a dot in its colour with a ring (readable on any field)
+  // and its name.
+  drawProbes(probes) {
+    const ctx = this.context;
+    ctx.font = `600 12px ${token("--font")}`;
+    ctx.textBaseline = "middle";
+    for (const probe of probes) {
+      const [px, py] = this.toScreen(probe.x, probe.y);
+      ctx.beginPath();
+      ctx.arc(px, py, 6, 0, 2 * Math.PI);
+      ctx.fillStyle = token(`--series-${probe.slot + 1}`);
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = token("--surface");
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px, py, 8, 0, 2 * Math.PI);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = token("--ink");
+      ctx.stroke();
+      const name = `P${probe.slot + 1}`;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = token("--surface");
+      ctx.strokeText(name, px + 11, py);
+      ctx.fillStyle = token("--ink");
+      ctx.fillText(name, px + 11, py);
+    }
+  }
+
   // --- the legend ------------------------------------------------------------
 
-  legend() {
-    const { geometry, mesh, meshStale, colorBy, field } = this.data;
-    const items = [];
-    const names = mesh && !meshStale ? mesh.region_names : (geometry?.regions ?? []).map((r) => r.name);
-    names.forEach((name, i) => items.push(h("span", { class: "item" }, h("span", { class: "swatch", style: `background:var(${regionToken(i)})` }), name)));
-    if (mesh && !meshStale && colorBy === "quality")
-      items.push(colorbar("smallest angle", this.sequentialTable(), `${QUALITY_MAX_DEGREES}°+`, "0°", true));
-    if (mesh && !meshStale && colorBy === "field" && field) {
+  // What the legend shows, as data (the page's legend and the saved
+  // picture draw it): regions, a colour bar, the Dirichlet nodes.
+  legendData() {
+    const { geometry, mesh, meshStale, colorBy, field, layers = {} } = this.data;
+    const current = mesh && !meshStale;
+    const names = current ? mesh.region_names : (geometry?.regions ?? []).map((r) => r.name);
+    let bar = null;
+    if (current && colorBy === "quality")
+      bar = { label: "smallest angle", table: this.colorTables().quality, low: "0°", high: `${QUALITY_MAX_DEGREES}°+`, reversed: true };
+    if (current && colorBy === "field" && field) {
       const scale = this.scaleOf(field.values);
-      if (scale.kind === "diverging") items.push(colorbar(field.label, this.divergingTable(), formatNumber(-scale.bound), formatNumber(scale.bound)));
-      else items.push(colorbar(field.label, this.sequentialTable(), formatNumber(scale.min), formatNumber(scale.max)));
+      const diverging = scale.kind === "diverging";
+      bar = {
+        label: field.label,
+        table: this.fieldTable(scale),
+        low: formatNumber(diverging ? -scale.bound : scale.min),
+        high: formatNumber(diverging ? scale.bound : scale.max),
+        reversed: false,
+      };
     }
-    if (this.data.layers?.dirichlet && this.data.dirichlet && mesh && !meshStale)
-      items.push(h("span", { class: "item" }, h("span", { class: "swatch", style: "background:var(--ink);border-radius:50%;width:7px;height:7px" }), "Dirichlet node"));
+    return { regions: names, bar, dirichlet: Boolean(layers.dirichlet && this.data.dirichlet && current) };
+  }
+
+  legend() {
+    const { regions, bar, dirichlet } = this.legendData();
+    const items = regions.map((name, i) => h("span", { class: "item" }, regionSwatch(i), name));
+    if (bar) items.push(colorbar(bar.label, bar.table, bar.low, bar.high, bar.reversed));
+    if (dirichlet) items.push(h("span", { class: "item" }, h("span", { class: "swatch node", "aria-hidden": "true" }), "Dirichlet node"));
     return items;
+  }
+
+  // The picture as it is shown, with its legend underneath, as a PNG blob.
+  async picture() {
+    this.draw();
+    const ratio = this.ratio;
+    const width = this.canvas.width;
+    const { regions, bar, dirichlet } = this.legendData();
+    const line = Math.round(22 * ratio);
+    const pad = Math.round(12 * ratio);
+    const out = document.createElement("canvas");
+    out.width = width;
+    // Legend rows are laid out first to know the height.
+    const ctx = out.getContext("2d");
+    const font = `${Math.round(13 * ratio)}px ${token("--font")}`;
+    ctx.font = font;
+    const entries = regions.map((name, i) => ({ name, color: token(regionToken(i)), round: false }));
+    if (dirichlet) entries.push({ name: "Dirichlet node", color: token("--ink"), round: true });
+    const rows = [[]];
+    let x = pad;
+    for (const entry of entries) {
+      const w = 18 * ratio + ctx.measureText(entry.name).width + 16 * ratio;
+      if (x + w > width - pad && rows.at(-1).length) {
+        rows.push([]);
+        x = pad;
+      }
+      rows.at(-1).push({ ...entry, x });
+      x += w;
+    }
+    const legendHeight = pad + rows.length * line + (bar ? line + 6 * ratio : 0) + pad;
+    out.height = this.canvas.height + legendHeight;
+    ctx.fillStyle = token("--surface");
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(this.canvas, 0, 0);
+    ctx.font = font;
+    ctx.textBaseline = "middle";
+    let y = this.canvas.height + pad + line / 2;
+    for (const row of rows) {
+      for (const entry of row) {
+        ctx.fillStyle = entry.color;
+        const size = 12 * ratio;
+        if (entry.round) {
+          ctx.beginPath();
+          ctx.arc(entry.x + size / 2, y, size / 3, 0, 2 * Math.PI);
+          ctx.fill();
+        } else ctx.fillRect(entry.x, y - size / 2, size, size);
+        ctx.fillStyle = token("--ink");
+        ctx.fillText(entry.name, entry.x + 18 * ratio, y);
+      }
+      y += line;
+    }
+    if (bar) {
+      let bx = pad;
+      ctx.fillStyle = token("--ink");
+      ctx.fillText(bar.label, bx, y);
+      bx += ctx.measureText(bar.label).width + 12 * ratio;
+      ctx.fillStyle = token("--ink-2");
+      ctx.fillText(bar.low, bx, y);
+      bx += ctx.measureText(bar.low).width + 8 * ratio;
+      const barWidth = Math.min(240 * ratio, Math.max(60 * ratio, width - bx - ctx.measureText(bar.high).width - pad - 8 * ratio));
+      for (let i = 0; i < barWidth; i++) {
+        const p = i / Math.max(1, barWidth - 1);
+        const k = 3 * Math.round(255 * (bar.reversed ? 1 - p : p));
+        ctx.fillStyle = `rgb(${bar.table[k]},${bar.table[k + 1]},${bar.table[k + 2]})`;
+        ctx.fillRect(bx + i, y - 5 * ratio, 1, 10 * ratio);
+      }
+      bx += barWidth + 8 * ratio;
+      ctx.fillStyle = token("--ink-2");
+      ctx.fillText(bar.high, bx, y);
+    }
+    return new Promise((resolve) => out.toBlob(resolve, "image/png"));
   }
 
   // --- interaction -----------------------------------------------------------
@@ -508,43 +695,82 @@ export class Viewer {
     const canvas = this.canvas;
     let drag = null;
     canvas.addEventListener("pointerdown", (event) => {
-      drag = { x: event.clientX, y: event.clientY, offset: { ...this.offset } };
+      drag = { x: event.clientX, y: event.clientY, offset: { ...this.offset }, moved: false };
       canvas.setPointerCapture(event.pointerId);
-      canvas.classList.add("dragging");
     });
     canvas.addEventListener("pointermove", (event) => {
       if (drag) {
-        this.offset = { x: drag.offset.x + event.clientX - drag.x, y: drag.offset.y + event.clientY - drag.y };
+        const dx = event.clientX - drag.x;
+        const dy = event.clientY - drag.y;
+        if (!drag.moved && Math.hypot(dx, dy) < CLICK_SLOP) return;
+        drag.moved = true;
+        canvas.classList.add("dragging");
+        this.offset = { x: drag.offset.x + dx, y: drag.offset.y + dy };
         this.tooltip.hidden = true;
         this.viewMoved();
       } else this.hover(event);
     });
-    const end = () => {
+    canvas.addEventListener("pointerup", (event) => {
+      const click = drag && !drag.moved;
       drag = null;
       canvas.classList.remove("dragging");
-    };
-    canvas.addEventListener("pointerup", end);
-    canvas.addEventListener("pointercancel", end);
+      if (click && event.button === 0) {
+        const rect = canvas.getBoundingClientRect();
+        this.pin(event.clientX - rect.left, event.clientY - rect.top);
+      }
+    });
+    canvas.addEventListener("pointercancel", () => {
+      drag = null;
+      canvas.classList.remove("dragging");
+    });
     canvas.addEventListener("pointerleave", () => (this.tooltip.hidden = true));
     canvas.addEventListener(
       "wheel",
       (event) => {
         event.preventDefault();
         const rect = canvas.getBoundingClientRect();
-        const px = event.clientX - rect.left;
-        const py = event.clientY - rect.top;
-        const [wx, wy] = this.toWorld(px, py);
         const factor = Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015));
-        this.scale *= factor;
-        this.offset = { x: px - wx * this.scale, y: py + wy * this.scale };
-        this.viewMoved();
+        this.zoomAt(event.clientX - rect.left, event.clientY - rect.top, factor);
         this.hover(event);
       },
       { passive: false },
     );
     canvas.addEventListener("dblclick", () => this.fit());
+    canvas.addEventListener("keydown", (event) => this.key(event));
   }
 
+  zoomAt(px, py, factor) {
+    const [wx, wy] = this.toWorld(px, py);
+    this.scale *= factor;
+    this.offset = { x: px - wx * this.scale, y: py + wy * this.scale };
+    this.viewMoved();
+  }
+
+  // Keyboard: arrows pan, + and - zoom about the centre, 0 fits, Enter
+  // pins a probe at the centre.
+  key(event) {
+    const { clientWidth: width, clientHeight: height } = this.canvas.parentElement;
+    const step = KEY_PAN_PX * (event.shiftKey ? 4 : 1);
+    const pan = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[event.key];
+    if (pan) {
+      this.offset = { x: this.offset.x + pan[0], y: this.offset.y + pan[1] };
+      this.viewMoved();
+    } else if (event.key === "+" || event.key === "=") this.zoomAt(width / 2, height / 2, 1.25);
+    else if (event.key === "-" || event.key === "_") this.zoomAt(width / 2, height / 2, 0.8);
+    else if (event.key === "0") this.fit();
+    else if (event.key === "Enter") this.pin(width / 2, height / 2);
+    else return;
+    event.preventDefault();
+  }
+
+  pin(px, py) {
+    if (!this.onPin || !this.data.mesh || this.data.meshStale) return;
+    const [x, y] = this.toWorld(px, py);
+    this.onPin(x, y);
+  }
+
+  // The readout under the pointer: coordinates, region, triangle and the
+  // field's value (for a dot field, the value of the nearest dot).
   hover(event) {
     const rect = this.canvas.getBoundingClientRect();
     const px = event.clientX - rect.left;
@@ -552,23 +778,27 @@ export class Viewer {
     const [x, y] = this.toWorld(px, py);
     const rows = [["x, y", `${formatNumber(x)}, ${formatNumber(y)}`]];
     const digits = getDefaultDigits();
-    const { mesh, meshStale, field, geometry } = this.data;
-    const region = this.regionNear(px, py);
-    if (region) rows.push(["region", region]);
-    if (mesh && !meshStale && this.grid) {
-      const found = locate(mesh, this.grid, x, y);
-      if (found) {
-        rows.push(["triangle", `${found.triangle} · smallest angle ${formatNumber(this.angles[found.triangle], Math.max(2, digits - 1))}°`]);
-        if (field && this.fieldIsComplete()) {
-          const [a, b, c] = [3 * found.triangle, 3 * found.triangle + 1, 3 * found.triangle + 2].map((k) => mesh.triangles[k]);
-          const v = found.weights[0] * field.values[a] + found.weights[1] * field.values[b] + found.weights[2] * field.values[c];
-          rows.push([field.label, formatNumber(v, digits + 2)]);
-        }
-      }
-    }
+    const { mesh, meshStale, field, geometry, colorBy } = this.data;
     if (!mesh && !geometry) {
       this.tooltip.hidden = true;
       return;
+    }
+    const region = this.regionNear(px, py);
+    if (region) rows.push(["region", region]);
+    if (mesh && !meshStale && this.grid) {
+      const found = locatePoint(mesh, this.grid, x, y);
+      if (found) {
+        const angle = formatNumber(this.angles[found.triangle], Math.max(2, digits - 1));
+        rows.push(["triangle", `${found.triangle} · smallest angle ${angle}°`]);
+        if (field && this.fieldIsComplete()) {
+          const v = found.weights.reduce((sum, w, k) => sum + w * field.values[found.nodes[k]], 0);
+          rows.push([field.label, formatNumber(v, digits + 2)]);
+        }
+      }
+      if (field && colorBy === "field" && !this.fieldIsComplete()) {
+        const node = nearestValuedNode(mesh.nodes, field.values, x, y, DOT_PICK_PX / this.scale);
+        if (node >= 0) rows.push([`${field.label} at node ${node}`, formatNumber(field.values[node], digits + 2)]);
+      }
     }
     this.tooltip.replaceChildren(...rows.map(([k, v]) => h("div", {}, h("span", { class: "key" }, `${k}: `), h("span", { class: "num" }, v))));
     this.tooltip.hidden = false;
@@ -626,47 +856,4 @@ function colorbar(label, table, low, high, reversed = false) {
   }
   context.putImageData(image, 0, 0);
   return h("span", { class: "colorbar" }, h("span", {}, label), h("span", { class: "num" }, low), canvas, h("span", { class: "num" }, high));
-}
-
-// A uniform grid of triangle indices by bounding box, for finding the
-// triangle under the pointer.
-function buildGrid(mesh) {
-  const n = mesh.nodes;
-  const t = mesh.triangles;
-  const count = t.length / 3;
-  if (count === 0) return null;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (let i = 0; i < n.length; i += 2) {
-    minX = Math.min(minX, n[i]);
-    maxX = Math.max(maxX, n[i]);
-    minY = Math.min(minY, n[i + 1]);
-    maxY = Math.max(maxY, n[i + 1]);
-  }
-  const side = Math.max(1, Math.round(Math.sqrt(count / 2)));
-  const cellW = (maxX - minX) / side || 1;
-  const cellH = (maxY - minY) / side || 1;
-  const cells = Array.from({ length: side * side }, () => []);
-  const cell = (v, min, size) => Math.max(0, Math.min(side - 1, Math.floor((v - min) / size)));
-  for (let k = 0; k < count; k++) {
-    const xs = [n[2 * t[3 * k]], n[2 * t[3 * k + 1]], n[2 * t[3 * k + 2]]];
-    const ys = [n[2 * t[3 * k] + 1], n[2 * t[3 * k + 1] + 1], n[2 * t[3 * k + 2] + 1]];
-    const i0 = cell(Math.min(...xs), minX, cellW), i1 = cell(Math.max(...xs), minX, cellW);
-    const j0 = cell(Math.min(...ys), minY, cellH), j1 = cell(Math.max(...ys), minY, cellH);
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) cells[j * side + i].push(k);
-  }
-  return { minX, minY, maxX, maxY, side, cellW, cellH, cells };
-}
-
-function locate(mesh, grid, x, y) {
-  if (!grid || x < grid.minX || x > grid.maxX || y < grid.minY || y > grid.maxY) return null;
-  const i = Math.min(grid.side - 1, Math.floor((x - grid.minX) / grid.cellW));
-  const j = Math.min(grid.side - 1, Math.floor((y - grid.minY) / grid.cellH));
-  const n = mesh.nodes;
-  const t = mesh.triangles;
-  for (const k of grid.cells[j * grid.side + i]) {
-    const [a, b, c] = [t[3 * k], t[3 * k + 1], t[3 * k + 2]];
-    const w = barycentric(x, y, n[2 * a], n[2 * a + 1], n[2 * b], n[2 * b + 1], n[2 * c], n[2 * c + 1]);
-    if (w && w[0] >= -1e-9 && w[1] >= -1e-9 && w[2] >= -1e-9) return { triangle: k, weights: w };
-  }
-  return null;
 }

@@ -4,7 +4,7 @@
 // can run in parallel (docs/library-requests.md, item 1).
 
 import { normalizeSettings, SETTINGS_DEFAULTS, setDefaultDigits } from "./core.js";
-import { h } from "./dom.js";
+import { h, infoToggle } from "./dom.js";
 
 const SETTINGS_KEY = "pde2d-app-settings";
 
@@ -40,8 +40,21 @@ export function setSetting(key, value) {
 
 // --- the dialog -------------------------------------------------------------------
 
+let controlCount = 0;
+
+// One setting: its label (tied to the control), the control and, behind
+// an info toggle, what it does.
 function row(label, help, control) {
-  return h("div", { class: "field setting" }, h("label", { class: "label" }, label, control), help ? h("div", { class: "help" }, help) : null);
+  const id = `setting-${++controlCount}`;
+  const input = control.matches?.("input, select") ? control : control.querySelector("input, select");
+  if (input) input.id = id;
+  const info = infoToggle(help, label);
+  return h(
+    "div",
+    { class: "field setting" },
+    h("div", { class: "setting-line" }, h("label", { class: "label", for: id }, label), info.button, h("span", { class: "spacer" }), control),
+    info.panel,
+  );
 }
 
 function checkbox(key) {
@@ -54,11 +67,11 @@ function number(key, { min, max, step, unit }) {
     { class: "inputs" },
     h("input", {
       type: "number",
+      class: "setting-number",
       min: String(min),
       max: String(max),
       step: String(step),
       value: String(settings[key]),
-      style: "width:90px",
       onchange: (e) => {
         setSetting(key, Number(e.target.value));
         e.target.value = String(settings[key]);
@@ -80,25 +93,25 @@ function computation(label) {
   const name = `computation-${label}`;
   return h(
     "div",
-    { class: "row", role: "radiogroup", "aria-label": label, "aria-disabled": "true" },
-    ["Sequential", "Parallel"].map((text, i) =>
-      h("label", { class: "chip", style: "padding:4px 10px" }, h("input", { type: "radio", name, disabled: true, checked: i === 0 }), text),
-    ),
+    { class: "row segmented", role: "radiogroup", "aria-label": label, "aria-disabled": "true" },
+    ["Sequential", "Parallel"].map((text, i) => h("label", { class: "choice" }, h("input", { type: "radio", name, disabled: true, checked: i === 0 }), text)),
   );
 }
 
 function content() {
   return [
+    h("p", { class: "note" }, "Kept in this browser, not in the case."),
     h("h3", {}, "Problem check"),
-    row("Check the problem while typing ", "Off: the problem is checked when a field is left or Enter is pressed.", checkbox("checkWhileTyping")),
-    row("Delay after the last key ", "The check runs after this pause in typing.", number("checkDelayMs", { min: 100, max: 3000, step: 50, unit: "ms" })),
+    row("Check while typing", "Off: the problem is checked when a field is left or Enter is pressed.", checkbox("checkWhileTyping")),
+    row("Delay after the last key", "The check runs after this pause in typing.", number("checkDelayMs", { min: 100, max: 3000, step: 50, unit: "ms" })),
     h("h3", {}, "Solution"),
-    row("Playback speed ", null, number("playbackFps", { min: 1, max: 60, step: 1, unit: "frames per second" })),
-    row("Follow the newest snapshot during a run ", "Moving the slider during a run stops following until the next run.", checkbox("followRun")),
+    row("Playback speed", null, number("playbackFps", { min: 1, max: 60, step: 1, unit: "frames/s" })),
+    row("Follow the newest snapshot", "During a run, the picture shows each new snapshot. Moving the time bar stops following until the next run.", checkbox("followRun")),
     h("h3", {}, "Numbers and picture"),
-    row("Significant digits ", "In tables, stats, labels and the readout under the pointer.", number("digits", { min: 2, max: 10, step: 1 })),
+    row("Significant digits", "In tables, figures, labels and the readout under the pointer.", number("digits", { min: 2, max: 10, step: 1 })),
+    row("Isolines", "How many isolines the Isolines layer draws, evenly inside the colour scale.", number("isolineCount", { min: 2, max: 40, step: 1 })),
     row(
-      "Picture quality ",
+      "Picture quality",
       "The pixel ratio the picture is drawn at, at most the screen's: lower is faster (panning, fields), higher is sharper.",
       choice("pixelRatioCap", [
         [1, "fast (1×)"],
@@ -108,13 +121,9 @@ function content() {
       ]),
     ),
     h("h3", {}, "Computation"),
-    row("Assembly ", null, computation("Assembly")),
-    row("Linear solves ", null, computation("Linear solves")),
-    h(
-      "p",
-      { class: "note" },
-      "The library runs sequentially for now. Parallel assembly and parallel linear solves are recorded as a library request (docs/library-requests.md, item 1); this setting becomes active when the library offers them.",
-    ),
+    row("Assembly", null, computation("Assembly")),
+    row("Linear solves", null, computation("Linear solves")),
+    h("p", { class: "note" }, "The library runs sequentially for now; parallel runs are a recorded library request (docs/library-requests.md, item 1)."),
   ];
 }
 

@@ -3,7 +3,7 @@
 // component's description, its declared traits and its options. The Mesh
 // and Solve steps build their cards from these.
 
-import { foldable, h, optionsForm } from "../dom.js";
+import { foldable, h, infoToggle, optionsForm } from "../dom.js";
 import { editCase } from "../state.js";
 
 export function defaultChoice(component) {
@@ -31,34 +31,49 @@ function traitChips(traits) {
   if (Array.isArray(traits.time_orders)) chips.push(`time order ${traits.time_orders.join(", ")}`);
   if (traits.symmetric_matrix === true) chips.push("needs a symmetric matrix");
   if (traits.symmetric_matrix === false) chips.push("any square matrix");
-  return chips.length ? h("div", { class: "row", style: "margin:4px 0" }, chips.map((text) => h("span", { class: "chip" }, text))) : null;
+  return chips.length ? h("div", { class: "row chips" }, chips.map((text) => h("span", { class: "chip" }, text))) : null;
 }
 
+// The chosen component's traits and options. Its description is behind
+// the info toggle of its card (componentInfo).
 export function componentBody(slot, choice, path) {
   if (!choice) return [];
   const component = slot.components.find((c) => c.type === choice.type);
   if (!component) return [h("div", { class: "error-text" }, `Unknown component ${choice.type}`)];
   choice.options ??= {};
-  return [
-    h("div", { class: "help" }, component.description),
-    traitChips(component.traits),
-    component.options.length ? h("div", { dataset: { path: `${path}.options` } }, optionsForm(component.options, choice.options, `${path}.options`, () => editCase(() => {}, "edit", { sections: [path.split(".")[0]] }))) : null,
-  ];
+  const section = path.split(".")[0];
+  const options = component.options.length
+    ? h(
+        "div",
+        { dataset: { path: `${path}.options` } },
+        optionsForm(component.options, choice.options, `${path}.options`, () => editCase(() => {}, "edit", { sections: [section] })),
+      )
+    : null;
+  return [traitChips(component.traits), options];
+}
+
+// The info toggle of a slot's card: what the slot is for and what the
+// chosen component does.
+export function componentInfo(slot, choice) {
+  const component = choice ? slot.components.find((c) => c.type === choice.type) : null;
+  const text = [slot.description, component?.description].filter(Boolean).join(" ");
+  return infoToggle(text, component?.label ?? slot.label);
 }
 
 // A card for a slot that holds one component (or none, when optional).
 // pick(next) stores the new choice in the case. It folds (the select
 // stays in its header); `folded`: how it starts for a new viewer.
 export function choiceCard(slot, choice, path, pick, { folded = false } = {}) {
+  const info = componentInfo(slot, choice);
   return foldable(
     {
       id: path,
       title: slot.label,
       folded,
-      extras: [h("span", { class: "spacer" }), componentSelect(slot, choice, path, pick, slot.cardinality === "optional")],
+      extras: [info.button, h("span", { class: "spacer" }), componentSelect(slot, choice, path, pick, slot.cardinality === "optional")],
+      info: info.panel,
       attributes: { class: "field", dataset: { path } },
     },
-    h("div", { class: "help" }, slot.description),
     componentBody(slot, choice, path),
   );
 }

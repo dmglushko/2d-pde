@@ -58,9 +58,9 @@ flowchart LR
 | `app/src/views.*` | meshes, reports and sparsity as JSON |
 | `app/src/session.*` | `Session`: the stages with their cache, solves as runs in chunks (`SessionOptions`, the background runner), `StageError`, the default case, presets, exports, `run` for the command line |
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`) and the command line |
-| `app/web/` | `index.html`, `style.css`, `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `settings.js` (preferences and their dialog), `dom.js` (forms from specs, foldable sections), `view.js` (the picture), `panels/*.js` (one per step, and `components.js`: the cards of component slots), `main.js` |
+| `app/web/` | `index.html`, `style.css` (one dark theme, every colour a token), `js/`: `core.js` (pure helpers, tested in Node), `api.js`, `state.js`, `actions.js`, `settings.js` (preferences and their dialog), `dom.js` (forms from specs, info toggles, foldable sections), `view.js` (the picture: layers, isolines, probes, keyboard, PNG export), `timebar.js` (the time bar under the picture), `probes.js` (the probe list and u(t)), `charts.js` (the SVG line chart), `compare.js` (comparison with an exact solution), `panels/*.js` (one per step, `head.js`: the head of every step, `components.js`: the cards of component slots), `main.js` |
 | `app/examples/` | example cases and an example SVG |
-| `app/tests/` | `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks against one call, stop and continue, every preset on a rectangle and an annulus), `server.cpp`, `web.test.mjs` (pure helpers, the stage registry), `web_actions.test.mjs` (overlapping requests, prerequisites, errors per input, the binary solve, following a run, Stop, presets, settings, debounced storage, with a mocked fetch) |
+| `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks against one call, stop and continue, every preset on a rectangle and an annulus), `server.cpp`, `web.test.mjs` (pure helpers, the stage registry), `web_actions.test.mjs` (overlapping requests, prerequisites, errors per input, the binary solve, following a run, Stop, presets, settings, debounced storage, with a mocked fetch) |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
 
 ## The case
@@ -215,8 +215,29 @@ problem and solve sections (not by `assembly`): the current run (see
 "Runs in chunks"). The page shows the
 solution in the picture as a field with one colour scale for every
 snapshot (from `min` to `max`), so a colour means the same value at
-every time; a slider and a player walk through the snapshots, changing
-only the picture.
+every time. The **time bar** under the picture (play or pause, a slider,
+the shown time with that snapshot's min and max) is the one control of
+the shown snapshot (`store.solveFrame`); during a run it also shows how
+far the run got.
+
+**Probes.** A click on the picture (or Enter with the picture focused)
+pins a probe, up to four; each keeps its colour slot while others come
+and go. The list under the picture gives x, y and the shown field's
+value there; for a run in time a line chart shows u(t) of every probe
+over all snapshots with the shown time marked (a click on it shows that
+snapshot). Values are interpolated page-side from the snapshot arrays
+with the barycentric weights of the probe's triangle (`core.js`:
+`meshGrid`, `locatePoint`, `interpolateAt`, `probeSeries`).
+
+**Comparing with an exact solution.** The Solve result takes an
+expression (kept in the case as `view.exact_solution`). The page asks
+`/api/field` (kind `expression`) for it at every snapshot's time, the
+shown one first, and subtracts it from u: max |u − exact| at the shown
+snapshot and over all, a chart of the largest error per snapshot for a
+run in time, and "Show u − exact in the picture" with one diverging
+scale over every snapshot. The expression is checked by the library;
+its error lands on the input. A new solution is compared again with the
+same text.
 
 ## Runs in chunks
 
@@ -264,7 +285,7 @@ snapshots so far, the last state, the combined report.
 
 The page (`actions.js`, `followRun`) polls the progress every 250 ms,
 fetches only the new snapshots by range and shows the newest unless the
-slider was moved during the run (or the setting is off). The colour scale
+time bar was moved during the run (or the setting is off). The colour scale
 is the range so far, so it can change while the run goes on. **Stop**
 keeps what arrived; the step's dot says "stopped before the end", and
 **Continue** solves again, which continues the run on the server. A change
@@ -347,9 +368,16 @@ is a reason; record the new choice here.
 - **Fields are drawn with exact linear interpolation** per pixel; values
   given at some nodes only (Dirichlet values, b) are drawn as dots.
 - **Colours** follow a fixed categorical order for regions (eight, then
-  one neutral colour), one hue light to dark for values of one sign, and
-  two hues around a neutral zero for values of both signs. There is a
-  light and a dark theme.
+  one neutral colour), one hue dark to light for values of one sign, and
+  two hues around a neutral zero for values of both signs.
+- **One dark theme** (2026-11-16, the owner's request; was: light and
+  dark from the system setting). Every colour is a token on `:root` with
+  `color-scheme: dark`; the contrasts are listed at the top of
+  `style.css` (text at least 5.5:1, control borders and status dots at
+  least 3.2:1). The field ramps and the smallest-angle colouring go
+  through a middle stop (dark blue, clear blue, pale blue): a two-stop
+  ramp from near-surface navy to pale blue had a grey, muddy middle where
+  most triangles and values sit.
 - **The browser keeps the current case** in local storage as a
   convenience; saving a case file is the reliable way to keep it.
 - **One double-click starts it** (`app/Start pde2d app.cmd`, 2026-11-15).
@@ -496,3 +524,64 @@ is a reason; record the new choice here.
 - **Fields are one column wide in the grid** (`.field` uses
   `minmax(0, 1fr)`): a long option name in a select no longer widens the
   panel on narrow screens.
+- **Few words on screen** (2026-11-16, the owner's request). No lead
+  paragraphs; descriptions of components, options, shapes and sections
+  sit behind a small "i" toggle (a real button with `aria-expanded`, its
+  text also the tooltip, `dom.js`: `infoToggle`); what stays printed is
+  what the user needs now: errors, warnings, a hint that changes what to
+  do. Plain labels: "min u", "max u", "Time order 1" (both orders only
+  when assembly's differs from the problem's), "‖b‖₂, right-hand side".
+- **Action and result first** (2026-11-16). Every step starts with a
+  head that stays at the top while its panel scrolls: the title, the
+  primary action (Solve becomes Stop during a run and Continue after a
+  stop; Problem's is its preset menu; Geometry is read on its own) and a
+  one-line status (running with the seconds, up to date, outdated,
+  failed, stopped), with "Next: <step>" once the result is up to date
+  (`panels/head.js`). The result follows; the settings come last, under
+  a "Settings" rule. A result of an earlier case is shown muted.
+- **Tabs always fit** (2026-11-16): five equal grid columns; in a sidebar
+  narrower than 410 px (a container query) the dot sits above the label.
+  The tabs take the arrow keys, Home and End.
+- **The time bar lives under the picture** (2026-11-16; was: a slider
+  and player in the Solve panel): what it controls is the picture, and at
+  phone width it stays next to it. There is one copy, so they cannot
+  disagree.
+- **Probes and charts are page-side** (2026-11-16): the snapshots are
+  already in the page as float32, so u(t) at a point is an interpolation,
+  not a request. Charts are hand-written SVG (`charts.js`, no library):
+  2 px lines, a hairline grid, round ticks, a marker at the shown time,
+  a crosshair with values, the probe list as the legend, end labels left
+  out where two would touch. Probe colours are series slots 1 to 4
+  (validated as a set on the dark surface).
+- **Dot fields read the nearest dot** (Dirichlet values, b): the readout
+  under the pointer gives the value of the nearest node with a value
+  within 8 px (`nearestValuedNode`).
+- **Isolines** (2026-11-16): marching triangles on the P1 field
+  (`core.js`: `isolines`), at levels evenly inside the colour scale
+  (count from Settings). Over the field's own colours they are drawn
+  light on a dark halo (lines in the field's colours would vanish);
+  without the colouring, each line takes its level's colour.
+- **The comparison asks the library per snapshot** (2026-11-16): one
+  `/api/field` request per snapshot time. The library keeps the
+  expression rules and its messages; the page only subtracts. It costs a
+  request per snapshot (fast for the usual 50 to 100; a run of 1000
+  snapshots takes a few seconds and shows its progress).
+- **Save picture** (2026-11-16) saves the canvas as drawn (at the
+  picture-quality pixel ratio) with the legend drawn underneath as a
+  PNG, named after the case and the shown time (`pictureName`).
+- **Keyboard** (2026-11-16): the picture is focusable (arrows pan, Shift
+  for larger steps, + and - zoom, 0 fits, Enter pins a probe at the
+  centre); file choosers are real buttons that open hidden inputs; every
+  control has a visible focus ring.
+- **Phone layout** (2026-11-16): below 860 px the tabs come first and
+  stay at the top, the picture with its toolbar, time bar and legend
+  stays under them (28% of the height), then the probes and the panel
+  scroll. On a short screen (a phone held sideways) nothing sticks.
+- **A real-browser test** (2026-11-16): `app/tests/browser/run.sh`
+  starts `pde2d_app` on a free port with the page and a harness, runs
+  each scenario in headless Chrome and fails on a failed check, a page
+  error or a scenario that does not finish. CTest runs it as
+  `app_browser` when Chrome is found (`PDE2D_CHROME`, Chrome or
+  Chromium on PATH, or the Windows Chrome from WSL, which reaches the
+  WSL port only after a moment: a page that did not load is tried
+  again). `--shots DIR` saves a screenshot per scenario.
