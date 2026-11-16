@@ -370,6 +370,13 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
         return session.solve_progress(job_request(body), client);
       },
       false);
+  // The client's run of a case, if it still has one (a reloaded page).
+  route(
+      "/api/solve/current",
+      [&session](const Json &body, const std::string &client) {
+        return session.current_run(body, client);
+      },
+      false);
   route(
       "/api/solve/stop",
       [&session, job_request](const Json &body, const std::string &client) {

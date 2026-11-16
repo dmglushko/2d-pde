@@ -91,6 +91,12 @@ public:
   // Throws StageError for a run that is not the client's current one
   // (kind "replaced" or "expired", RunManager::run_of). The run lock only.
   Json solve_progress(std::uint64_t job, const std::string &client = {});
+  // The client's current run of the case (the same geometry, mesh,
+  // problem and solve sections), as {"run": progress} or {"run": null}
+  // when the client has none (or a run of other inputs). Never starts or
+  // continues a run and never makes a client: a page that was reloaded
+  // finds its run again with it. The run lock only.
+  Json current_run(const Json &case_json, const std::string &client = {});
   // Stops the run after the chunk that is running; solve() with the same
   // inputs continues it. Returns its progress. The run lock only.
   Json stop_solve(std::uint64_t job, const std::string &client = {});

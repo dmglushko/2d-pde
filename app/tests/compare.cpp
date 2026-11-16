@@ -317,6 +317,28 @@ int main() {
                                       "b")["state"] == "done",
                "b kept");
        }},
+      {"a reloaded page finds its run of the case, and only that",
+       [] {
+         app::Session session;
+         check(session.current_run(laplace_case(), "a")["run"].is_null(),
+               "no run yet");
+         check(session.clients() == 0, "a lookup makes no client");
+         const Json a = session.solve(laplace_case(), "a");
+         const Json found = session.current_run(laplace_case(), "a");
+         check(found["run"]["job"] == a["job"], "the same run");
+         check(found["run"]["state"] == "done", "its progress");
+         check(session.current_run(laplace_case(), "b")["run"].is_null(),
+               "not another client's");
+         Json other = laplace_case();
+         other["mesh"]["spec"]["max_edge_length"]["relative"] = 0.1;
+         check(session.current_run(other, "a")["run"].is_null(),
+               "not for other inputs");
+         // The view section is not an input of the run.
+         Json viewed = laplace_case();
+         viewed["view"] = {{"exact_solution", "x"}};
+         check(session.current_run(viewed, "a")["run"]["job"] == a["job"],
+               "the view does not matter");
+       }},
       {"the mesh's arrays round trip in binary",
        [] {
          app::Session session;

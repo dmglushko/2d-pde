@@ -56,8 +56,7 @@ int main(int argc, char **argv) {
     const Json summary = read(args[3]);
     const Json &examples = checks.at("examples");
     if (!examples.contains(example)) {
-      std::cerr << "FAIL " << example << " has no entry in " << args[1]
-                << '\n';
+      std::cerr << "FAIL " << example << " has no entry in " << args[1] << '\n';
       return 1;
     }
     bool ok = summary.value("ok", false);

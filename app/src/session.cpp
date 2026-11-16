@@ -581,6 +581,19 @@ Json Session::solve_progress(std::uint64_t job, const std::string &client) {
                        options_.memory_budget);
 }
 
+Json Session::current_run(const Json &input, const std::string &client) {
+  // Reading the case is JSON only (the keys and migrations): no library.
+  const CaseInput read = read_case(input);
+  const std::string key = solve_key(read.json());
+  Json out = Json::object();
+  out["run"] = nullptr;
+  const std::scoped_lock book(run_lock_);
+  const RunManager::Client *owner = state_->runs.find(client_name(client));
+  if (owner != nullptr && owner->run && owner->run->key == key)
+    out["run"] = progress_json(*owner->run, options_.memory_budget);
+  return out;
+}
+
 Json Session::stop_solve(std::uint64_t job, const std::string &client) {
   const std::scoped_lock book(run_lock_);
   Run &current = state_->runs.run_of(client_name(client), job);
