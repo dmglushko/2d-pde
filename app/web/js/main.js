@@ -1,10 +1,16 @@
 // Wires the page: the catalog, the steps, the case file actions, undo
 // and redo, and the picture.
 
-import { api, saveBlob } from "./api.js";
-import { caseChanged, runAll, runStage, scheduleProblemCheck, toast } from "./actions.js";
-import { LABELS, comparisonValues, currentComparison, recompareIfNeeded } from "./compare.js";
-import { fill, guardButtons, h, readFileText } from "./dom.js";
+import { api, claimClientId, saveBlob } from "./api.js";
+import { caseChanged, reattachRun, runAll, runStage, runWithPrerequisites, scheduleProblemCheck, toast } from "./actions.js";
+import { wireCaseMenu } from "./case_menu.js";
+import { clearStudy } from "./refinement.js";
+import { watchServer } from "./server_status.js";
+import { setColorMaps } from "./view/tokens.js";
+import { recompareIfNeeded, retryDifference } from "./compare.js";
+import { currentDisplay } from "./display.js";
+import { plainError } from "./pure/requests.js";
+import { fill, guardButtons, h, readFileText, revealFolded } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
 import { geometryPanel, loadDomainFile, scheduleGeometry } from "./panels/geometry.js";
 import { dotClass, setInvalidNotice } from "./panels/head.js";
@@ -13,13 +19,15 @@ import { problemPanel } from "./panels/problem.js";
 import { solvePanel } from "./panels/solve.js";
 import { forgetChartSize, profileDrawn, updateProbes } from "./probes.js";
 import { fileKind, normalizeCase } from "./pure/case_model.js";
-import { formatNumber, getDefaultDigits, pictureName } from "./pure/format.js";
+import { getDefaultDigits, pictureName } from "./pure/format.js";
 import { MAX_PROBES, clampPictureHeight, freeProbeSlot } from "./pure/prefs.js";
-import { nearestLoaded } from "./pure/run_values.js";
 import { STEPS, stageInfo } from "./pure/stages.js";
 import { onSettings, settings, wireSettings } from "./settings.js";
-import { snapshotValues } from "./snapshots.js";
+import { retrySnapshots } from "./snapshots.js";
 import {
+  keptView,
+  restoreView,
+  setSelectedRegion,
   blockedReason,
   canRedo,
   canUndo,
@@ -164,55 +172,58 @@ function tick() {
 
 // --- the picture -------------------------------------------------------------
 
-// The field the picture colours by: the solution snapshot (or its
-// difference from the exact solution or the reference run, compare.js) or
-// the last field of the Assemble step, whichever came last, while it is up
-// to date. {name ("u", "u − exact", "Dirichlet values"), when ("at t =
-// 0.5"), label (both), values, scale}.
-function shownField() {
-  const solved = freshResult("solve");
-  if (store.fieldSource === "solve" && solved) {
-    const i = Math.min(store.solveFrame, solved.times.length - 1);
-    const t = formatNumber(solved.times[i], 5);
-    const kind = store.view.difference;
-    const comparison = kind ? currentComparison(kind) : null;
-    const difference = comparison ? comparisonValues(kind, i) : null;
-    const named = (name, when, values, scale) => ({ name, when, label: `${name} ${when}`, values, scale });
-    if (difference) return named(LABELS[kind], `at t = ${t}`, difference, comparison.scale);
-    // The page keeps some snapshots only (snapshots.js): until the shown
-    // one arrives, the nearest loaded one stands in, with its own time.
-    if (snapshotValues(solved, i)) return named("u", `at t = ${t}`, solved.values[i], solved.scale);
-    const near = nearestLoaded(solved.values, i);
-    if (near < 0) return null;
-    return named("u", `at t = ${formatNumber(solved.times[near], 5)} (loading t = ${t})`, solved.values[near], solved.scale);
-  }
-  const field = store.results.field;
-  if (!field || field.key !== currentKey("field")) return null;
-  const data = field.data;
-  const timeless = data.kind === "initial_u" || data.kind === "initial_u_t";
-  const when = timeless || !Number.isFinite(data.t) ? "" : `at t = ${formatNumber(data.t, 5)}`;
-  return { name: data.label, when, label: [data.label, when].filter(Boolean).join(" "), values: data.values, data };
-}
-
-// The field shown keeps its identity while nothing about it changed, so
-// the picture is not drawn again.
+// What the picture shows is resolved once per refresh (display.js); the
+// field drawn keeps its identity while nothing about it changed, so the
+// picture is not drawn again.
 let shown = null;
-function stableField() {
-  const next = shownField();
-  if (next && shown && next.values === shown.values && next.scale === shown.scale && next.label === shown.label) return shown;
+function drawnField(display) {
+  if (!display.values) return (shown = null);
+  const label = display.outdated ? `${display.label} (outdated)` : display.label;
+  const next = { name: display.name, when: display.when, label, values: display.values, scale: display.scale, data: display.data, outdated: display.outdated };
+  if (shown && shown.values === next.values && shown.scale === next.scale && shown.label === next.label && shown.outdated === next.outdated) return shown;
   // The Assemble step's field keeps its identity while its data does.
-  if (next?.data && shown?.data === next.data) return shown;
+  if (next.data && shown?.data === next.data && shown.outdated === next.outdated) return shown;
   shown = next;
   return next;
 }
 
-// The Colour menu names the field it would show.
-function updateColorMenu(field) {
+// The Colour menu names the quantity the picture would show.
+function updateColorMenu(display) {
   const menu = element("color-by");
   menu.value = store.view.colorBy;
-  const name = field?.name ?? null;
-  menu.querySelector('option[value="field"]').textContent = name ? `field: ${name}` : "field (none yet)";
+  const name = display.name;
+  menu.querySelector('option[value="field"]').textContent = name ? `field: ${name}${display.outdated ? " (outdated)" : ""}` : "field (none yet)";
   menu.querySelector('option[value="gradient"]').textContent = name ? `|∇| of ${name}` : "|∇| of the field";
+}
+
+// Over the picture: the "outdated" stamp of a result built for an earlier
+// case, and what is loading or failed (with Retry, or Solve again for a
+// result the server no longer has).
+function updateOverlay(display, colouring) {
+  const stamp = element("view-stamp");
+  stamp.hidden = !(colouring && display.values && display.outdated);
+  const overlay = element("view-overlay");
+  const failure = colouring ? display.failure : null;
+  const loading = colouring && !display.values && !failure ? display.loading : null;
+  const key = failure ? `f|${display.label}|${failure.error?.message}` : loading ? `l|${loading}` : "";
+  if (overlay.shown === key) return;
+  overlay.shown = key;
+  overlay.hidden = !key;
+  overlay.classList.toggle("failed", Boolean(failure));
+  if (!key) return fill(overlay);
+  if (loading) return fill(overlay, h("span", { class: "busy", "aria-hidden": "true" }), h("span", {}, loading));
+  const what = failure.retry === "difference" ? `${display.name} at this snapshot` : "this snapshot";
+  const plain = plainError(failure.error, what);
+  const retry = () => {
+    if (failure.retry === "difference") retryDifference(display.difference.requested, display.frame);
+    else retrySnapshots(freshResult("solve") ?? lastResult("solve"));
+  };
+  fill(
+    overlay,
+    h("span", {}, plain.text),
+    plain.action === "solve" ? h("button", { type: "button", class: "small", onclick: () => runWithPrerequisites("solve") }, "Solve again") : null,
+    plain.action === "retry" ? h("button", { type: "button", class: "small", onclick: retry }, "Retry") : null,
+  );
 }
 
 function updateViewer() {
@@ -221,8 +232,11 @@ function updateViewer() {
   const assembled = lastResult("assemble");
   const mesh = meshResult?.mesh ?? null;
   const meshFresh = freshResult("mesh") !== null;
-  const field = stableField();
-  updateColorMenu(field);
+  const display = currentDisplay();
+  const field = drawnField(display);
+  const colouring = store.view.colorBy === "field" || store.view.colorBy === "gradient";
+  updateColorMenu(display);
+  updateOverlay(display, colouring);
   element("layer-isolines").checked = store.view.isolines;
   const profiling = store.view.tool === "profile";
   element("profile-tool").setAttribute("aria-pressed", String(profiling));
@@ -238,6 +252,8 @@ function updateViewer() {
     tool: store.view.tool,
     probes: store.probes,
     profile: meshFresh ? store.profile : null,
+    selectedRegion: store.selectedRegion,
+    legendNote: colouring ? display.difference.note : null,
     layers: {
       geometry: element("layer-geometry").checked,
       mesh: element("layer-mesh").checked,
@@ -250,12 +266,12 @@ function updateViewer() {
   element("empty-view").hidden = Boolean(geometry || mesh);
   updateTimebar();
   const solution = timeSolution();
-  const colouring = store.view.colorBy === "field" || store.view.colorBy === "gradient";
   updateProbes(element("probes"), {
     mesh: meshFresh ? mesh : null,
     field: colouring ? field : null,
+    display: colouring ? display : null,
     solution,
-    frame: solution ? Math.min(store.solveFrame, solution.values.length - 1) : 0,
+    frame: display.frame,
     digits: getDefaultDigits() + 1,
   });
 }
@@ -330,6 +346,9 @@ function wireHeightHandle() {
 // undo and redo, and the notice.
 function updateCaseBar() {
   element("unsaved").hidden = !store.dirty;
+  element("unsaved").title = `${store.caseName} has changes that are not saved`;
+  // The case's name, unless it is the name every new case has.
+  element("case-name").textContent = store.caseName === "case.json" ? "" : `: ${store.caseName.replace(/\.json$/i, "")}`;
   element("save-case").title = `Save as ${store.caseName}`;
   const restore = element("restore-case");
   restore.hidden = !store.previousCase;
@@ -379,6 +398,10 @@ function refresh(reason) {
     applyStep();
     return;
   }
+  if (reason === "study") {
+    panels.solve.study?.(element("panel-solve"));
+    return;
+  }
   if (reason === "progress" || reason === "compare") {
     // A time run or a comparison moved on: its panel, the dots and the
     // picture.
@@ -393,6 +416,7 @@ function refresh(reason) {
   // (typing waits for the pause the settings say).
   const problem = stageStatus("problem");
   if (problem === "stale" || problem === "none") scheduleProblemCheck({ now: reason !== "edit" });
+  if (reason === "case") clearStudy();
   if (reason === "case" || reason === "structure") buildPanels();
   else for (const [name, panel] of Object.entries(panels)) panel.update(element(`panel-${name}`));
   updateDots();
@@ -418,7 +442,9 @@ function loadCase(input, { name = "case.json", dirty = false, offerRestore = tru
   store.notice = normalized.replaced.length ? { text: `Replaced by defaults when the case was read: ${normalized.replaced.join(", ")}.` } : null;
   store.previousCase = offerRestore ? replaced : null;
   for (const stage of Object.keys(store.results)) store.results[stage] = null;
-  setCase(normalized.caseData, { name, dirty: dirty || normalized.replaced.length > 0 });
+  // Normalizing is the page's own work: the notice says what it replaced,
+  // and the case stays as saved (or not) as it was.
+  setCase(normalized.caseData, { name, dirty });
   runStage("geometry");
   const text = message ?? `Opened ${name}.`;
   if (offerRestore && replaced) toast(`${text} The previous case can be restored from the top bar.`, { action: { label: "Restore it", run: restorePrevious } });
@@ -535,12 +561,77 @@ function wireHistory() {
   element("redo").addEventListener("click", () => history(true));
 }
 
+// --- boundary regions ------------------------------------------------------------
+
+// A boundary region chosen in the picture (a click on it) or its legend:
+// it is highlighted, and its condition opens in the Problem step (or its
+// row in the Geometry step, when that step is open).
+function selectRegion(name) {
+  setSelectedRegion(name);
+  if (store.step === "geometry") {
+    const row = [...document.querySelectorAll("#geometry-regions tr[data-region]")].find((r) => r.dataset.region === name);
+    for (const other of document.querySelectorAll("#geometry-regions tr.selected")) other.classList.remove("selected");
+    if (row) {
+      row.classList.add("selected");
+      revealFolded(row);
+      row.scrollIntoView({ block: "nearest" });
+      row.querySelector("button")?.focus({ preventScroll: true });
+    }
+    return;
+  }
+  openStep("problem");
+  const card = document.querySelector(`#panel-problem [data-path="${CSS.escape(`problem.boundary_conditions.${name}`)}"]`);
+  if (!card) return toast(`${name} has no condition yet: the geometry is read first.`);
+  const toggle = card.querySelector(":scope > .card-head .fold-toggle");
+  if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+  revealFolded(card);
+  for (const other of document.querySelectorAll("#panel-problem .selected-region")) other.classList.remove("selected-region");
+  card.classList.add("selected-region");
+  card.scrollIntoView({ block: "nearest" });
+  (card.querySelector("input.expr") ?? toggle)?.focus({ preventScroll: true });
+}
+
+// At phone width the picture can be folded away ("Hide picture"), so the
+// panel has the screen; kept in this browser.
+const COLLAPSE_KEY = "pde2d-app-picture-collapsed";
+function wireCollapse() {
+  const button = element("collapse-picture");
+  const apply = (collapsed) => {
+    document.querySelector(".viewer-main").classList.toggle("collapsed", collapsed);
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.textContent = collapsed ? "▾" : "▴";
+    const words = collapsed ? "Show the picture" : "Hide the picture";
+    button.setAttribute("aria-label", words);
+    button.title = words;
+    try {
+      localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
+    } catch {
+      // Not kept.
+    }
+  };
+  let collapsed = false;
+  try {
+    collapsed = localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    // Shown.
+  }
+  apply(collapsed);
+  button.addEventListener("click", () => {
+    apply(button.getAttribute("aria-expanded") === "true");
+    if (button.getAttribute("aria-expanded") === "true") viewer.resize();
+  });
+}
+
 // --- start -----------------------------------------------------------------------
 
 async function start() {
   buildSteps();
+  // The client id is settled (a duplicated tab takes a new one) while the
+  // catalog comes.
+  const claimed = claimClientId();
   try {
     store.catalog = await api.catalog();
+    await claimed;
   } catch (error) {
     fill(document.querySelector(".panels"), h("div", { class: "alert" }, error.message));
     return;
@@ -550,6 +641,7 @@ async function start() {
     onPin: pinProbe,
     onProfile: profileDrawn,
     onLock: (quantity, range) => setLockedRange(quantity, range),
+    onRegion: selectRegion,
   });
   wireTimebar(element("timebar"));
   new ResizeObserver(() => {
@@ -568,8 +660,15 @@ async function start() {
 
   for (const id of ["layer-geometry", "layer-mesh", "layer-dirichlet"]) element(id).addEventListener("change", updateViewer);
   wireSettings(element("open-settings"), element("settings"));
+  setColorMaps(settings.sequentialMap, settings.divergingMap);
   onSettings((key) => {
-    if (key === "pixelRatioCap") viewer.resize();
+    if (key === "sequentialMap" || key === "divergingMap") {
+      setColorMaps(settings.sequentialMap, settings.divergingMap);
+      viewer.prepareField();
+      viewer.prepareIsolines();
+      viewer.draw();
+      element("legend").replaceChildren(...viewer.legend());
+    } else if (key === "pixelRatioCap") viewer.resize();
     else if (key === "isolineCount") updateViewer();
     // Digits and the playback speed show in the panels.
     else if (key === "digits" || key === "playbackFps") {
@@ -610,22 +709,36 @@ async function start() {
   api
     .examples()
     .then((list) => {
-      for (const example of list) examples.append(h("option", { value: example.name, title: example.notes ?? "" }, example.name.replace(/\.json$/, "").replaceAll("_", " ")));
+      for (const example of list)
+        examples.append(
+          h(
+            "button",
+            { type: "button", role: "menuitem", dataset: { example: example.name }, title: example.notes ?? "", onclick: () => openExample(example.name) },
+            example.name.replace(/\.json$/, "").replaceAll("_", " "),
+          ),
+        );
     })
     .catch(() => {});
-  examples.addEventListener("change", () => {
-    const name = examples.value;
-    examples.value = "";
-    if (name) openExample(name);
-  });
+  wireCaseMenu(element("case-menu-button"), element("case-menu"));
+  wireCollapse();
   wireDrop();
   wireHistory();
   wireHeightHandle();
   setInterval(tick, 1000);
 
   subscribe(refresh);
+  watchServer(element("server-status"));
+  // A reload of this tab: the picture's state it had, and its run if the
+  // server still has it.
+  const view = keptView();
   const saved = savedCase();
   if (!saved || !loadCase(saved.caseData, { name: saved.name, dirty: saved.dirty, offerRestore: false })) loadCase(structuredClone(store.catalog.default_case), { offerRestore: false });
+  else {
+    restoreView(view);
+    reattachRun().then((found) => {
+      if (found) toast("This tab's run is shown again: the server still had it.");
+    });
+  }
 }
 
 start();

@@ -24,6 +24,12 @@ import { SETTINGS_DEFAULTS, clampPictureHeight, freeProbeSlot, normalizeSettings
 import { keptSnapshots, nearestLoaded, snapshotPlan, splitSnapshots, valueRange } from "../web/js/pure/run_values.js";
 import { LARGE_SOLUTION_BYTES, RUN_ALL, STAGES, STEPS, errorPath, errorPathOf, requestCase, solutionBytes, stageKey, stagesToRun, stepOfPath } from "../web/js/pure/stages.js";
 import { Tickets } from "../web/js/pure/tickets.js";
+import { displayKey, resolveDisplay } from "../web/js/pure/display.js";
+import { backoffDelay, isTransient, plainError, serverBusyText } from "../web/js/pure/requests.js";
+import { observedOrders, referenceSlope, studyLevels } from "../web/js/pure/study.js";
+import { bytesText, colorbarTicks, csvText, logTicks, seriesCsv } from "../web/js/pure/format.js";
+import { COLOR_MAPS, colorMapOf } from "../web/js/pure/color.js";
+import { serverRunBytes } from "../web/js/pure/stages.js";
 
 const cases = [];
 const test = (name, body) => cases.push([name, body]);
@@ -654,6 +660,178 @@ test("the page keeps the shown snapshot, its neighbours and a bounded number", (
   assert.equal(nearestLoaded(loaded(10, [2, 7]), 5), 7);
   assert.equal(nearestLoaded(loaded(10, [2, 8]), 4), 2);
   assert.equal(nearestLoaded(loaded(3, []), 1), -1);
+});
+
+// --- the resolved display (pure/display.js) ------------------------------------
+
+const solveData = (extra = {}) => ({ times: [0, 0.5, 1], values: [], scale: { kind: "sequential" }, ...extra });
+const u0 = new Float32Array([1, 2]);
+const u2 = new Float32Array([3, 4]);
+const d2 = new Float32Array([1e-3, -1e-3]);
+
+test("the display: u, its snapshot, the nearest stand-in while loading", () => {
+  const shown = resolveDisplay({ colorBy: "field", source: "solve", solve: { data: solveData(), fresh: true, frame: 2, snapshot: { values: u2, nearest: null, failure: null } } });
+  assert.equal(shown.kind, "solution");
+  assert.equal(shown.label, "u at t = 1");
+  assert.equal(shown.values, u2);
+  assert.equal(shown.outdated, false);
+  assert.equal(shown.loading, null);
+  assert.match(shown.precision, /float32/);
+  const loading = resolveDisplay({ colorBy: "field", source: "solve", solve: { data: solveData(), fresh: true, frame: 2, snapshot: { values: null, nearest: { index: 0, values: u0 }, failure: null } } });
+  assert.equal(loading.values, u0, "the nearest loaded snapshot stands in");
+  assert.equal(loading.label, "u at t = 0 (loading t = 1)");
+  assert.match(loading.loading, /Loading u at t = 1/);
+  const none = resolveDisplay({ colorBy: "field", source: "solve", solve: { data: solveData(), fresh: true, frame: 1, snapshot: { values: null, nearest: null, failure: null } } });
+  assert.equal(none.values, null);
+  assert.ok(none.loading, "never a silent empty picture");
+});
+
+test("the display: a failed snapshot is a failure with retry, never loading forever", () => {
+  const error = { kind: "network", message: "no answer" };
+  const failed = resolveDisplay({ colorBy: "field", source: "solve", solve: { data: solveData(), fresh: true, frame: 1, snapshot: { values: null, nearest: null, failure: error } } });
+  assert.equal(failed.failure.error, error);
+  assert.equal(failed.failure.retry, "snapshot");
+  assert.equal(failed.loading, null);
+});
+
+test("the display: a difference only while its comparison is current", () => {
+  const solve = { data: solveData(), fresh: true, frame: 2, snapshot: { values: u2, nearest: null, failure: null } };
+  const scale = { kind: "diverging" };
+  const current = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "current", scale, values: { values: d2, nearest: null, failure: null } } });
+  assert.equal(current.kind, "difference");
+  assert.equal(current.label, "u − exact at t = 1");
+  assert.equal(current.values, d2);
+  assert.equal(current.scale, scale);
+  assert.equal(current.difference.shown, true);
+  assert.match(current.precision, /double/);
+  // The reproduced case: the expression changed, the comparison is
+  // outdated, and u is drawn, labelled u, with the reason.
+  const outdated = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "outdated" } });
+  assert.equal(outdated.kind, "solution");
+  assert.equal(outdated.label, "u at t = 1");
+  assert.equal(outdated.values, u2);
+  assert.equal(outdated.difference.shown, false);
+  assert.equal(outdated.difference.state, "outdated");
+  assert.match(outdated.difference.note, /previous expression/);
+  for (const state of ["none", "busy", "failed"]) {
+    const other = resolveDisplay({ colorBy: "field", source: "solve", difference: "reference", solve, comparison: { kind: "reference", state } });
+    assert.equal(other.kind, "solution", state);
+    assert.match(other.difference.note, /u − reference/);
+  }
+  // A difference being fetched shows its nearest fetched one, said so; a
+  // failed one is a failure (never plain u in its place).
+  const near = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "current", scale, values: { values: null, nearest: { index: 0, values: d2 }, failure: null } } });
+  assert.equal(near.label, "u − exact at t = 0 (loading t = 1)");
+  const failed = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "current", scale, values: { values: null, nearest: null, failure: { kind: "busy" } } } });
+  assert.equal(failed.kind, "difference");
+  assert.equal(failed.values, null);
+  assert.equal(failed.failure.retry, "difference");
+});
+
+test("the display: an outdated result is marked, and draws no comparison", () => {
+  const solve = { data: solveData(), fresh: false, frame: 0, snapshot: { values: u0, nearest: null, failure: null } };
+  const shown = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "current", values: {} } });
+  assert.equal(shown.outdated, true);
+  assert.equal(shown.kind, "solution");
+  assert.equal(shown.difference.state, "stale");
+  const field = resolveDisplay({ colorBy: "field", source: "field", field: { data: { label: "Dirichlet values", kind: "dirichlet", t: 0, values: [1, 2] }, fresh: false } });
+  assert.equal(field.kind, "field");
+  assert.equal(field.label, "Dirichlet values at t = 0");
+  assert.equal(field.outdated, true);
+  const initial = resolveDisplay({ colorBy: "field", source: "field", field: { data: { label: "initial u", kind: "initial_u", t: 0, values: [1] }, fresh: true } });
+  assert.equal(initial.label, "initial u", "no time for an initial condition");
+  assert.equal(resolveDisplay({ colorBy: "none", source: "solve" }).kind, "none");
+  assert.notEqual(displayKey(shown), displayKey({ ...shown, outdated: false }));
+});
+
+// --- requests, ticks, data, colour maps, the study ---------------------------------
+
+test("failed requests: what is retried, after how long, in which words", () => {
+  assert.ok(isTransient({ kind: "busy" }) && isTransient({ kind: "network" }));
+  assert.ok(!isTransient({ kind: "expired" }) && !isTransient({ kind: "input" }) && !isTransient(null));
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 10].map((n) => backoffDelay(n)), [250, 500, 1000, 2000, 4000, 4000, 4000]);
+  assert.equal(backoffDelay(2, { base: 100, max: 300 }), 300);
+  const expired = plainError({ kind: "expired", message: "this server has no run 3 (it was restarted); solve again" });
+  assert.equal(expired.action, "solve");
+  assert.match(expired.text, /^The result is gone from the server: this server has no run 3/);
+  assert.equal(plainError({ kind: "replaced", message: "x" }).action, null);
+  assert.match(plainError({ kind: "memory", message: "too big" }).text, /no room.*Too big\./);
+  assert.equal(plainError({ kind: "network" }, "u at the probes").action, "retry");
+  assert.match(plainError({ kind: "network" }, "u at the probes").text, /u at the probes did not arrive/);
+  assert.equal(plainError({ kind: "input", message: "bad" }, "the snapshot").text, "The snapshot could not be loaded: Bad.");
+  assert.equal(serverBusyText({ busy: null }), null);
+  assert.equal(serverBusyText({ busy: { task: "mesh", yours: false, seconds: 12.7 } }), "server busy: meshing for another tab (12 s)");
+  assert.equal(serverBusyText({ busy: { task: "run", yours: true, seconds: 0.2 } }), "server busy: running a solve (0 s)");
+});
+
+test("colour bar ticks are round, inside the range, and include zero", () => {
+  const ticks = colorbarTicks(0.013, 0.987, 4);
+  assert.ok(ticks.length >= 3, JSON.stringify(ticks));
+  for (const t of ticks) {
+    assert.ok(t.value >= 0.013 && t.value <= 0.987);
+    assert.ok(Math.abs(t.position - (t.value - 0.013) / 0.974) < 1e-12);
+  }
+  assert.deepEqual(ticks.map((t) => t.text), ["0.2", "0.4", "0.6", "0.8"]);
+  const diverging = colorbarTicks(-3e-4, 3e-4, 4);
+  assert.ok(diverging.some((t) => t.value === 0 && Math.abs(t.position - 0.5) < 1e-12), "zero in the middle");
+  assert.equal(new Set(diverging.map((t) => t.text)).size, diverging.length, "distinct texts");
+  const close = colorbarTicks(1.0001, 1.0009, 4);
+  assert.equal(new Set(close.map((t) => t.text)).size, close.length, "as many digits as keep them apart");
+  assert.deepEqual(colorbarTicks(1, 1), []);
+  assert.deepEqual(colorbarTicks(NaN, 1), []);
+});
+
+test("logarithmic ticks", () => {
+  assert.deepEqual(logTicks(0.003, 0.5), [0.01, 0.1]);
+  assert.deepEqual(logTicks(0.02, 0.09), [0.02, 0.05]);
+  assert.deepEqual(logTicks(1e-6, 1e-2), [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]);
+  assert.deepEqual(logTicks(0, 1), []);
+});
+
+test("chart data as CSV, sizes in bytes", () => {
+  assert.equal(seriesCsv("t", [0, 0.5], [{ name: "P1", values: [1, NaN] }, { name: 'a "b"', values: [0.1 + 0.2, 2] }]), 't,P1,"a ""b"""\n0,1,0.30000000000000004\n0.5,,2\n');
+  assert.equal(csvText(["x"], [[null], ["a,b"]]), 'x\n\n"a,b"\n');
+  assert.equal(bytesText(512), "512 B");
+  assert.equal(bytesText(3.4 * 1024 * 1024), "3.4 MB");
+  assert.equal(bytesText(1024 ** 3), "1 GB");
+  assert.deepEqual(serverRunBytes({ mode: "time", time: { snapshots: 9 } }, { snapshot_bytes: 100, budget: 2000 }), { bytes: 1000, budget: 2000, share: 0.5 });
+  assert.equal(serverRunBytes({ mode: "static" }, { snapshot_bytes: 100, budget: 1000 }).bytes, 100);
+  assert.equal(serverRunBytes({ mode: "time", time: {} }, { snapshot_bytes: 1, budget: 1 }), null);
+  assert.equal(serverRunBytes({ mode: "static" }, null), null);
+});
+
+test("colour maps: a default per kind, chosen by name", () => {
+  for (const kind of ["sequential", "diverging"]) {
+    assert.ok(COLOR_MAPS[kind].length >= 2);
+    assert.equal(colorMapOf(kind, "no such map"), COLOR_MAPS[kind][0]);
+    for (const map of COLOR_MAPS[kind]) assert.equal(map.tokens.length, 3);
+  }
+  assert.equal(colorMapOf("sequential", "orange").id, "orange");
+  assert.equal(normalizeSettings({ sequentialMap: "orange" }).sequentialMap, "orange");
+  assert.equal(normalizeSettings({ sequentialMap: "rainbow" }).sequentialMap, "blue", "an unknown map is the default");
+  assert.equal(normalizeSettings({ divergingMap: 3 }).divergingMap, "blue-red");
+});
+
+test("a refinement study: levels and observed orders", () => {
+  assert.deepEqual(studyLevels({ absolute: null, relative: 0.08 }, 3), [
+    { key: "relative", value: 0.08 },
+    { key: "relative", value: 0.04 },
+    { key: "relative", value: 0.02 },
+  ]);
+  assert.deepEqual(studyLevels({ absolute: 0.5, relative: null }, 2), [
+    { key: "absolute", value: 0.5 },
+    { key: "absolute", value: 0.25 },
+  ]);
+  assert.equal(studyLevels({ absolute: null, relative: null }, 3), null);
+  // e = C h^2 exactly: order 2 between every pair of levels.
+  const rows = [0.2, 0.1, 0.05].map((h) => ({ h, e: 3 * h * h }));
+  const orders = observedOrders(rows, (r) => r.e);
+  assert.equal(orders[0], null);
+  for (const o of orders.slice(1)) assert.ok(Math.abs(o - 2) < 1e-12, String(o));
+  // A level whose mesh did not change, or a missing error, has none.
+  assert.deepEqual(observedOrders([{ h: 1, e: 1 }, { h: 1, e: 0.5 }, { h: 0.5, e: 0 }], (r) => r.e), [null, null, null]);
+  const slope = referenceSlope([1, 0.5, 0.25], 2, 1, 4);
+  assert.deepEqual(slope, [4, 1, 0.25]);
 });
 
 let failed = 0;

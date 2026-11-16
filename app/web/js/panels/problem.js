@@ -8,6 +8,7 @@ import { renameParameter, visibleCoefficients } from "../pure/case_model.js";
 import { errorBox, fill, foldable, h, infoToggle, markLocal, numberInput, regionSwatch, revealFolded } from "../dom.js";
 import { settings } from "../settings.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
+import { timeOrderWords } from "./assemble.js";
 import { setStepStatus, stepHead } from "./head.js";
 
 // Every edit here changes only the problem section, so the other stages'
@@ -281,10 +282,10 @@ function summaryChips(check) {
   return h(
     "div",
     { class: "row chips" },
-    h("span", { class: "chip" }, `Time order ${check.time_order}`),
+    h("span", { class: "chip" }, `Time order ${timeOrderWords(check.time_order)}`),
     check.coefficients_depend_on_t ? h("span", { class: "chip" }, "coefficients depend on t") : null,
     check.data_depends_on_t ? h("span", { class: "chip" }, "data depend on t") : null,
-    h("span", { class: "chip" }, required.length ? `needs initial ${required.join(" and ")}` : "stationary"),
+    required.length ? h("span", { class: "chip" }, `needs initial ${required.join(" and ")}`) : null,
   );
 }
 

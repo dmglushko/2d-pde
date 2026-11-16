@@ -1,0 +1,577 @@
+/* The picture and its charts: the viewer, the time bar, the legend and
+   colour bar, zoom buttons, the height handle, probes and charts. */
+
+/* --- viewer ------------------------------------------------------------- */
+
+.viewer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.viewer-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.viewer-toolbar {
+  display: flex;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+
+.viewer-toolbar label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink-2);
+  white-space: nowrap;
+  min-height: 28px;
+}
+
+.canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 280px;
+  background: var(--surface);
+}
+
+#view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+#view:focus-visible {
+  outline-offset: -3px;
+}
+
+#view.dragging {
+  cursor: grabbing;
+}
+
+.canvas-wrap.over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+.empty-view {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  pointer-events: none;
+  text-align: center;
+  padding: 16px;
+}
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 10px var(--shadow);
+  padding: 6px 8px;
+  font-size: 12.5px;
+  min-width: 140px;
+  z-index: 2;
+}
+
+.tooltip .key {
+  color: var(--ink-2);
+}
+
+.tooltip .num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The time bar under the picture. */
+.timebar {
+  display: flex;
+  align-items: center;
+  gap: 4px 12px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.timebar .play {
+  width: 32px;
+  min-height: 32px;
+  font-size: 12px;
+}
+
+.timebar input[type="range"] {
+  flex: 1 1 160px;
+  min-width: 120px;
+}
+
+.time-label {
+  display: flex;
+  gap: 4px 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-now {
+  min-width: 7.5em;
+  font-weight: 600;
+}
+
+.time-range {
+  color: var(--ink-2);
+}
+
+.time-run {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-basis: 100%;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.time-run progress {
+  flex: 1;
+  height: 6px;
+  accent-color: var(--accent);
+}
+
+.legend {
+  display: flex;
+  gap: 8px 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+  min-height: 40px;
+  font-size: 13px;
+}
+
+.chart-key {
+  display: flex;
+  gap: 4px 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--ink-2);
+  margin-bottom: 2px;
+}
+
+.chart-key .item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend .item {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.colorbar {
+  display: inline-flex;
+  gap: 6px 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.colorbar .bar-label {
+  font-weight: 550;
+}
+
+.colorbar .range-input {
+  width: 92px;
+  min-height: 28px;
+  padding: 2px 6px;
+}
+
+.colorbar canvas {
+  width: 160px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.colorbar .num {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  min-width: 4ch;
+}
+
+.colorbar > .num:first-of-type {
+  text-align: right;
+}
+
+/* Zoom in, out and fit, over the picture's top right corner. */
+.zoom-buttons {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 1;
+}
+
+.zoom-buttons button {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  font-size: 16px;
+  background: var(--surface-2);
+  box-shadow: 0 1px 4px var(--shadow);
+}
+
+/* The drag handle of the picture's height (phone width only). */
+.picture-handle {
+  display: none;
+}
+
+.status {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-left: auto;
+}
+
+/* --- probes and charts ------------------------------------------------- */
+
+.viewer-extra {
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+  padding: 8px 12px 10px;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.probes-table td,
+.probes-table th {
+  padding: 2px 6px;
+}
+
+.probe-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.probe-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--ink);
+}
+
+.probe-dot.s1 { background: var(--series-1); }
+.probe-dot.s2 { background: var(--series-2); }
+.probe-dot.s3 { background: var(--series-3); }
+.probe-dot.s4 { background: var(--series-4); }
+
+.probe-chart,
+.profile-chart {
+  margin-top: 8px;
+}
+
+.chart-title {
+  font-size: 12px;
+  color: var(--ink-2);
+  margin-bottom: 2px;
+}
+
+.chart {
+  position: relative;
+}
+
+.chart svg {
+  display: block;
+  max-width: 100%;
+}
+
+.chart .grid {
+  stroke: var(--hairline);
+  stroke-width: 1;
+}
+
+.chart .axis {
+  stroke: var(--axis);
+  stroke-width: 1;
+}
+
+.chart .tick {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart .end-label {
+  fill: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chart .line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart .marker {
+  stroke: var(--ink-2);
+  stroke-width: 1;
+}
+
+.chart .cross {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.chart .dot {
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.chart .hit {
+  fill: transparent;
+  cursor: pointer;
+}
+
+.chart .line.ink { stroke: var(--ink-2); }
+.key-line.ink { background: var(--ink-2); }
+.chart .line.s1 { stroke: var(--series-1); }
+.chart .line.s2 { stroke: var(--series-2); }
+.chart .line.s3 { stroke: var(--series-3); }
+.chart .line.s4 { stroke: var(--series-4); }
+.chart .dot.s1 { fill: var(--series-1); }
+.chart .dot.s2 { fill: var(--series-2); }
+.chart .dot.s3 { fill: var(--series-3); }
+.chart .dot.s4 { fill: var(--series-4); }
+
+.chart-tip {
+  position: absolute;
+  top: 4px;
+  pointer-events: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 10px var(--shadow);
+  padding: 4px 8px;
+  font-size: 12px;
+  z-index: 2;
+}
+
+.tip-head {
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tip-row .num {
+  margin-left: auto;
+  padding-left: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.key-line {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.key-line.s1 { background: var(--series-1); }
+.key-line.s2 { background: var(--series-2); }
+.key-line.s3 { background: var(--series-3); }
+.key-line.s4 { background: var(--series-4); }
+
+/* --- over the picture: outdated stamp, loading and failures ------------- */
+
+/* A result built for an earlier case is drawn greyed with this stamp. */
+.view-stamp {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  max-width: calc(100% - 80px);
+  padding: 4px 10px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* What is loading, or what failed (with Retry), at the picture's foot. */
+.view-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: calc(100% - 24px);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: 0 2px 10px var(--shadow);
+  font-size: 13px;
+  z-index: 2;
+}
+
+.view-overlay.failed {
+  border-color: var(--critical);
+}
+
+/* A failed request beside its chart or table, with Retry. */
+.inline-failure {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 6px 0;
+  padding: 4px 8px;
+  border-left: 3px solid var(--critical);
+  background: var(--critical-wash);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 13px;
+}
+
+/* --- the colour bar's ticks ---------------------------------------------- */
+
+.bar-scale {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 0;
+}
+
+/* The bar is 200 px; its ticks' SVG is 18 px wider on each side, for the
+   text of the end ticks (view/legend.js, BAR_WIDTH and BAR_PAD). */
+.bar-scale canvas.bar {
+  width: 200px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.bar-scale .ticks {
+  display: block;
+  overflow: visible;
+}
+
+.bar-scale .ticks text {
+  fill: var(--ink-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar-scale .ticks line {
+  stroke: var(--ink-2);
+  stroke-width: 1;
+}
+
+/* Why a comparison asked for is not drawn. */
+.legend-note {
+  flex-basis: 100%;
+  color: var(--warning);
+  font-size: 12.5px;
+}
+
+/* A region of the legend is a button: it selects the region. */
+.legend button.region-item {
+  min-height: 28px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: inherit;
+}
+
+.legend button.region-item:hover {
+  border-color: var(--control-border);
+}
+
+.legend button.region-item[aria-pressed="true"] {
+  border-color: var(--accent-text);
+  background: var(--accent-wash);
+}
+
+/* --- charts: focus, readout, data, reference lines ----------------------- */
+
+.chart-plot {
+  position: relative;
+  border-radius: var(--radius);
+}
+
+.chart-plot:focus-visible {
+  outline-offset: 0;
+}
+
+.chart-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chart-actions .link {
+  font-size: 12px;
+}
+
+.chart .line.ref {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.chart .line.ref-2 {
+  stroke-dasharray: 1 3;
+}
+
+.chart .dot.ref {
+  display: none;
+}
+
+.key-line.ref {
+  height: 0;
+  border-top: 1px dashed var(--muted);
+  background: none;
+}
+
+.key-line.ref-2 {
+  border-top-style: dotted;
+}
+
+.study-table td.study-order {
+  font-weight: 600;
+}
+
+.study-failed {
+  color: var(--critical);
+}

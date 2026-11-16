@@ -348,3 +348,43 @@ export function drawProfileLine(v, line) {
     haloText(ctx, name, x + 8, y - 10);
   }
 }
+
+// The boundary region the user selected (a click on it, or its legend
+// entry): drawn wider on a dark halo, in its own colour, so it stands out
+// on any field.
+export function drawSelectedRegion(v, mesh, geometry, name) {
+  const segments = [];
+  let index = -1;
+  if (mesh) {
+    index = mesh.region_names.indexOf(name);
+    const n = mesh.nodes;
+    const e = mesh.boundary_edges;
+    for (let i = 0; i < e.length; i += 3) if (e[i + 2] === index) segments.push([n[2 * e[i]], n[2 * e[i] + 1], n[2 * e[i + 1]], n[2 * e[i + 1] + 1]]);
+  } else if (geometry?.kind === "curves") {
+    index = geometry.regions.findIndex((r) => r.name === name);
+    for (const loop of geometry.loops)
+      for (const curve of loop.curves) {
+        if (curve.region !== name) continue;
+        const p = curve.points;
+        for (let i = 0; i + 3 < p.length; i += 2) segments.push([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+      }
+  } else if (geometry?.kind === "mesh_file") {
+    index = geometry.regions.findIndex((r) => r.name === name);
+    for (const [ax, ay, bx, by, region] of geometry.boundary_edges) if (region === index) segments.push([ax, ay, bx, by]);
+  }
+  if (index < 0 || segments.length === 0) return;
+  const ctx = v.context;
+  ctx.beginPath();
+  for (const [ax, ay, bx, by] of segments) {
+    ctx.moveTo(...v.toScreen(ax, ay));
+    ctx.lineTo(...v.toScreen(bx, by));
+  }
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 9;
+  ctx.strokeStyle = token("--isoline-halo");
+  ctx.stroke();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = token(regionToken(index));
+  ctx.stroke();
+}

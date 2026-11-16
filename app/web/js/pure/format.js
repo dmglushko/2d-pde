@@ -75,3 +75,73 @@ export function parseNumberText(text) {
 export function numberText(value) {
   return value === null || value === undefined ? "" : String(value);
 }
+
+// The ticks of a colour bar from `low` to `high`: round values inside the
+// range (niceTicks), each with its position in [0, 1] along the bar and
+// its text. Zero is always a tick of a range that spans it (the middle of
+// a diverging scale). The texts are as short as keeps them apart.
+export function colorbarTicks(low, high, count = 4) {
+  if (!Number.isFinite(low) || !Number.isFinite(high) || !(high > low)) return [];
+  const span = high - low;
+  const inside = niceTicks(low, high, count).filter((v) => v >= low - span * 1e-9 && v <= high + span * 1e-9);
+  if (low < 0 && high > 0 && !inside.includes(0)) inside.push(0);
+  inside.sort((a, b) => a - b);
+  let digits = 2;
+  const texts = () => inside.map((v) => formatNumber(v, digits));
+  while (digits < 8 && new Set(texts()).size < inside.length) digits++;
+  const shown = texts();
+  return inside.map((value, i) => ({ value, position: Math.max(0, Math.min(1, (value - low) / span)), text: shown[i] }));
+}
+
+// Ticks of a logarithmic axis over [min, max] (both > 0): the powers of
+// ten inside it, and when there are fewer than two, 1, 2 and 5 times them.
+export function logTicks(min, max) {
+  if (!(min > 0) || !(max > 0) || !Number.isFinite(min) || !Number.isFinite(max)) return [];
+  const [lo, hi] = min <= max ? [min, max] : [max, min];
+  const first = Math.floor(Math.log10(lo));
+  const last = Math.ceil(Math.log10(hi));
+  const within = (v) => v >= lo * (1 - 1e-9) && v <= hi * (1 + 1e-9);
+  const powers = [];
+  for (let e = first; e <= last; e++) powers.push(Number((10 ** e).toPrecision(12)));
+  const decades = powers.filter(within);
+  if (decades.length >= 2) return decades;
+  const fine = [];
+  for (const p of powers) for (const m of [1, 2, 5]) fine.push(Number((m * p).toPrecision(12)));
+  const shown = fine.filter(within);
+  return shown.length >= 2 ? shown : [lo, hi];
+}
+
+// A CSV text from a header and rows: numbers in full precision (the
+// shortest text that reads back as the same double), an empty cell for a
+// missing or non-finite value, text cells quoted when they need it.
+export function csvText(header, rows) {
+  const cell = (v) => {
+    if (typeof v === "number") return Number.isFinite(v) ? String(v) : "";
+    if (v === null || v === undefined) return "";
+    const text = String(v);
+    return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  };
+  return [header, ...rows].map((row) => row.map(cell).join(",")).join("\n") + "\n";
+}
+
+// The CSV of a chart: its x values (named `xName`) and one column per
+// series.
+export function seriesCsv(xName, xs, series) {
+  const rows = Array.from(xs, (x, k) => [x, ...series.map((s) => s.values[k])]);
+  return csvText([xName, ...series.map((s) => s.name)], rows);
+}
+
+// A size in bytes for people: "512 B", "3.4 MB", "1 GB" (powers of 1024,
+// as the server's --memory-budget).
+export function bytesText(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "–";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const text = unit === 0 ? String(Math.round(value)) : String(Number(value.toPrecision(value >= 100 ? 3 : 2)));
+  return `${text} ${units[unit]}`;
+}

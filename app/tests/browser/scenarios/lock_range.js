@@ -1,8 +1,8 @@
 // The picture after a solve: field colours in its pixels, the legend
 // names the field, the colour range locks and stays locked for the next
 // solve, |∇u| and the line profile, zoom buttons.
-export default async ({ q, qa, tab, click, select, type, until, idle, text, check, pixels, pointer, panel, button }) => {
-  select(q("#examples"), "poisson_rectangle.json");
+export default async ({ example, q, qa, tab, click, select, type, until, idle, text, check, pixels, pointer, panel, button }) => {
+  example("poisson_rectangle.json");
   await until(() => text(q("#toast")).includes("Opened"), "the example");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   click(q("#run-all"));

@@ -13,7 +13,8 @@ globalThis.localStorage = {
   },
   removeItem: (key) => storage.delete(key),
 };
-const { applyPreset, caseChanged, followedRun, runAll, runStage, runWithPrerequisites, scheduleProblemCheck, showField, stopRun } = await import("../web/js/actions.js");
+const { applyPreset, caseChanged, followedRun, reattachRun, runAll, runStage, runWithPrerequisites, scheduleProblemCheck, showField, stopRun } = await import("../web/js/actions.js");
+const { loadAround, retrySnapshots, snapshotState, snapshotValues } = await import("../web/js/snapshots.js");
 const { applyRegionEdit } = await import("../web/js/pure/case_model.js");
 const { stageKey } = await import("../web/js/pure/stages.js");
 const { settings, setSetting } = await import("../web/js/settings.js");
@@ -23,13 +24,15 @@ const { blockedReason, canRedo, canUndo, currentError, currentKey, editCase, flu
 // an ArrayBuffer, fail(error, status) with an error body.
 const pending = [];
 globalThis.fetch = (path, options) =>
-  new Promise((resolve) =>
+  new Promise((resolve, reject) =>
     pending.push({
       path,
       headers: options.headers,
-      body: JSON.parse(options.body),
+      body: options.body === undefined ? null : JSON.parse(options.body),
       answer: (data) => resolve({ ok: true, json: async () => data, arrayBuffer: async () => data }),
       fail: (error, status = 422) => resolve({ ok: false, status, statusText: "", json: async () => ({ error }) }),
+      // No answer at all (the server is gone).
+      drop: () => reject(new TypeError("Failed to fetch")),
     }),
   );
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -517,6 +520,88 @@ test("invalid number fields block every run", async () => {
   setInvalid("a", { label: "A" });
   setCase(fullCase());
   assert.equal(blockedReason(), null, "a new case has no invalid fields");
+});
+
+
+test("the conditions the page adds after a geometry leave the case as saved", async () => {
+  setCase(structuredClone(rectangle), { dirty: false });
+  const run = runStage("geometry");
+  (await next("/api/geometry")).answer(geometryView("bottom", "left"));
+  assert.equal(await run, true);
+  assert.deepEqual(Object.keys(store.caseData.problem.boundary_conditions).sort(), ["bottom", "left"], "synced");
+  assert.equal(store.dirty, false, "no unsaved changes from the page's own edit");
+  assert.equal(canUndo(), false, "and no undo step");
+  editCase((c) => (c.problem.boundary_conditions.left.g = "3"), "edit", { sections: ["problem"] });
+  assert.equal(store.dirty, true, "the user's edit is one");
+});
+
+test("a progress poll refused as busy, or unanswered, is tried again and the run followed on", async () => {
+  start();
+  const run = runStage("solve");
+  (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1]));
+  (await next("/api/solve/progress")).fail({ stage: "request", kind: "busy", message: "busy" }, 429);
+  await sleep(5);
+  assert.match(store.runNotice, /busy.*Trying again in 1 s/);
+  assert.equal(followedRun()?.job, 3, "still followed");
+  (await next("/api/solve/progress")).drop();
+  await sleep(5);
+  assert.match(store.runNotice, /does not answer/);
+  (await next("/api/solve/progress")).answer(timeRun("done", 2, 1));
+  assert.equal(await run, true);
+  assert.equal(store.runNotice, null, "the notice goes once it answers");
+  assert.equal(stageStatus("solve"), "done");
+});
+
+test("a run that is gone ends the following with its reason", async () => {
+  start();
+  const run = runStage("solve");
+  (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1]));
+  (await next("/api/solve/progress")).fail({ stage: "solve", kind: "expired", message: "the run 3 was dropped to make room" }, 410);
+  assert.equal(await run, false);
+  assert.equal(currentError("solve").kind, "expired");
+  assert.equal(followedRun(), null);
+  assert.equal(store.results.solve.data.values.length, 2, "what arrived stays");
+});
+
+test("a reloaded tab finds its run on the server and shows it", async () => {
+  start();
+  fresh("geometry", geometryView("left"));
+  fresh("mesh", { mesh: { id: 5, nodes: new Float64Array(4) }, stats: { nodes: 2 } });
+  const found = reattachRun();
+  const current = await next("/api/solve/current");
+  assert.ok(current.body.solve, "asked with the solve's sections");
+  current.answer({ run: timeRun("done", 2, 1) });
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1]));
+  assert.equal(await found, true);
+  assert.equal(store.results.solve.data.job, 3);
+  assert.equal(stageStatus("solve"), "done");
+  assert.equal(store.fieldSource, "solve");
+  // None on the server: nothing is shown.
+  start();
+  const none = reattachRun();
+  (await next("/api/solve/current")).answer({ run: null });
+  assert.equal(await none, false);
+  assert.equal(store.results.solve, null);
+});
+
+test("a failed snapshot is not asked again until Retry", async () => {
+  start();
+  const data = { job: 3, layout: layout(3), values: [null, null, null], times: [0, 0.5, 1] };
+  const loading = loadAround(data, 1);
+  (await next("/api/solve/values")).fail({ stage: "solve", kind: "expired", message: "gone" }, 410);
+  assert.equal(await loading, false);
+  assert.equal(snapshotState(data, 1).failure.kind, "expired");
+  assert.equal(snapshotValues(data, 1), null);
+  await sleep(5);
+  assert.equal(pending.length, 0, "no new request while it failed");
+  retrySnapshots(data);
+  assert.equal(snapshotValues(data, 1), null);
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1, 2, 2]));
+  await sleep(5);
+  assert.ok(snapshotState(data, 1).values instanceof Float32Array);
+  assert.equal(snapshotState(data, 1).failure, null);
 });
 
 test("undo and redo of case edits; typing in one field is one step", () => {

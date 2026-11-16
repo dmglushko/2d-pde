@@ -37,6 +37,15 @@ all=(
   "two_tabs 1440 900 solve"
   "lock_range 1440 900 solve"
   "reference 1440 900 solve"
+  "display_state 1440 900 solve"
+  "domain_file 1280 800 geometry"
+  "failures 1440 900 solve"
+  "reload 1440 900 solve"
+  "unsaved 1280 800 geometry"
+  "region_click 1280 800 problem"
+  "study 1440 900 solve"
+  "case_menu 1280 800 geometry"
+  "phone_menu 390 844 solve"
 )
 
 chrome="${PDE2D_CHROME:-}"

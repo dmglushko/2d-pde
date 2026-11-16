@@ -8,9 +8,13 @@
 
 import { exportFile, followedRun, runWithPrerequisites, stopRun, toast } from "../actions.js";
 import { lineChart } from "../charts.js";
-import { LABELS, clearComparison, compare, compareWith, comparisons, currentComparison, forgetReference, isOutdated, keepReference } from "../compare.js";
-import { formatNumber } from "../pure/format.js";
-import { LARGE_SOLUTION_BYTES, solutionBytes } from "../pure/stages.js";
+import { LABELS, clearComparison, compare, compareWith, comparisons, currentComparison, forgetReference, keepReference } from "../compare.js";
+import { comparisonControls, currentDisplay } from "../display.js";
+import { runStudy, stopStudy, study, studyOrders } from "../refinement.js";
+import { bytesText, formatNumber } from "../pure/format.js";
+import { isTransient, plainError } from "../pure/requests.js";
+import { LARGE_SOLUTION_BYTES, serverRunBytes, solutionBytes } from "../pure/stages.js";
+import { referenceSlope } from "../pure/study.js";
 import { actionButton, errorBox, exportButton, fill, foldable, h, infoToggle, markError, optionsForm, reportsView, stat, warningChip } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, notify, openStep, outdatedError, setViewOption, store } from "../state.js";
 import { showFrame } from "../timebar.js";
@@ -21,18 +25,32 @@ import { setStepStatus, stepHead } from "./head.js";
 const solve = () => runWithPrerequisites("solve");
 const openProblem = () => openStep("problem");
 
-// A warning when the values of a run would be large (from the fresh
-// mesh); nothing otherwise.
+// Above this share of the server's memory budget for runs, the Solve
+// step says what a run will keep there before it is started.
+const LARGE_SERVER_SHARE = 0.25;
+
+// A warning when a run would be large, from the fresh mesh: what it keeps
+// on the server against the server's budget (the server refuses a run
+// that does not fit), and what the page holds of it; nothing otherwise.
 function sizeWarning() {
-  const nodes = freshResult("mesh")?.stats?.nodes;
+  const mesh = freshResult("mesh");
+  const nodes = mesh?.stats?.nodes;
+  const server = serverRunBytes(store.caseData.solve, mesh?.memory);
+  const lines = [];
+  if (server && server.share >= LARGE_SERVER_SHARE) {
+    const share = `${Math.round(100 * server.share)}%`;
+    lines.push(
+      server.share > 1
+        ? `This run would keep about ${bytesText(server.bytes)} on the server, more than its whole memory budget for runs (${bytesText(server.budget)}): it will be refused. Keep fewer snapshots or use a coarser mesh.`
+        : `This run will keep about ${bytesText(server.bytes)} on the server: ${share} of its memory budget for runs (${bytesText(server.budget)}). Other tabs' finished runs may be dropped to make room.`,
+    );
+  }
   const bytes = solutionBytes(store.caseData.solve, nodes);
-  if (bytes === null || bytes <= LARGE_SOLUTION_BYTES) return null;
-  const megabytes = Math.round(bytes / (1024 * 1024));
-  return h(
-    "div",
-    { class: "notice" },
-    `The solution will take about ${formatNumber(megabytes)} MB in this page (${formatNumber(nodes)} nodes × ${formatNumber(bytes / 4 / nodes)} times). Fewer snapshots or a coarser mesh make it smaller.`,
-  );
+  if (bytes !== null && bytes > LARGE_SOLUTION_BYTES)
+    lines.push(
+      `The page holds up to ${bytesText(bytes)} of it as float32 (${formatNumber(nodes)} nodes × ${formatNumber(bytes / 4 / nodes)} times), loading snapshots as they are shown.`,
+    );
+  return lines.length ? h("div", { class: "notice", dataset: { path: "solve.time.snapshots" } }, lines.map((line) => h("p", {}, line))) : null;
 }
 
 // The figures of a run. Linear iterations are left out when there were
@@ -74,11 +92,13 @@ function headStatus(result, fresh, running) {
     const span = result.t1 - result.t0;
     const bar = h("progress", { max: "1", value: String(span > 0 ? Math.max(0, Math.min(1, (result.t - result.t0) / span)) : 0), "aria-label": "Run progress" });
     const steps = result.reports?.[0]?.metrics?.steps ?? 0;
+    // A progress poll that is being tried again says so (actions.js).
+    const notice = store.runNotice ? h("div", { class: "inline-failure", role: "status" }, store.runNotice) : null;
     return {
       status: "busy",
       text: `Running: t = ${formatNumber(result.t, 5)} of ${formatNumber(result.t1)}`,
       detail: `${formatNumber(steps)} steps · ${result.values.length} of ${result.snapshots_total} snapshots`,
-      extra: bar,
+      extra: notice ? h("div", {}, bar, notice) : bar,
     };
   }
   if (fresh && result.state === "stopped") return { status: "stopped", text: `Stopped at t = ${formatNumber(result.t, 5)}` };
@@ -92,6 +112,7 @@ function headStatus(result, fresh, running) {
 const EXPORTS = [
   ["solution.csv", "Export .csv", "One row per mesh node: x, y and u at every kept time, in full precision."],
   ["solution.vtk", "Export .vtk", "The mesh and u at every kept time, for ParaView or VisIt (VTK legacy)."],
+  ["solution-vtk.zip", "Export VTK series", "One VTK file per snapshot and a .vtk.series manifest in a zip: ParaView plays it at the snapshots' times."],
   ["provenance.json", "Export provenance", "The whole case, the app and library versions and this run: what made the results."],
 ];
 
@@ -117,16 +138,22 @@ const largest = (values) => {
 
 // What the figures are, said next to them.
 const NOTES = {
-  exact: "Nodal error u − exact, in double: not the solver's residual ‖b − A U‖.",
-  reference: "u − reference at the nodes, at the same times, in double.",
+  exact: "Nodal error u − exact, computed on the server in double: not the solver's residual ‖b − A U‖.",
+  reference: "u − reference at the nodes, at the same times, computed on the server in double.",
 };
-const FLOAT_NOTE = "The picture is float32: below about 1e−7 × |u| it shows rounding.";
+const FLOAT_NOTE = "Only the picture is float32 (the difference is computed in double, then drawn): below about 1e−7 × |u| it shows rounding.";
 
-// The checkbox that shows u − other in the picture.
+// The checkbox that asks for u − other in the picture, and beside it why
+// the picture does not draw it when it does not (display.js).
 function differenceBox(kind) {
   const id = `show-${kind}`;
   const box = h("input", { type: "checkbox", id, onchange: (event) => setViewOption("difference", event.target.checked ? kind : null) });
-  return h("label", { class: "row inline-label", for: id }, box, `Show ${LABELS[kind]} in the picture`);
+  return h(
+    "div",
+    { class: "difference-line" },
+    h("label", { class: "row inline-label", for: id }, box, `Show ${LABELS[kind]} in the picture`),
+    h("p", { class: "note difference-note", hidden: true }),
+  );
 }
 
 function compareSection(result) {
@@ -219,15 +246,23 @@ function referenceSection(result, fresh) {
 // time the chart per snapshot. An exact-solution comparison made for
 // another expression is shown greyed, marked "for the previous
 // expression".
-function updateComparison(section, kind, result, frame) {
+function updateComparison(section, kind, result, frame, display) {
   const slot = section.querySelector(".compare-result");
   if (!slot) return;
   const c = currentComparison(kind);
   const box = section.querySelector(`#show-${kind}`);
-  const outdated = isOutdated(kind);
+  const controls = comparisonControls(kind, display);
+  const outdated = controls.state === "outdated";
   if (box) {
-    box.disabled = !c || c.done === 0 || outdated;
-    box.checked = store.view.difference === kind && !box.disabled;
+    // The user's choice, as asked; the note says when the picture cannot
+    // draw it (an outdated or missing comparison is never drawn).
+    const requested = store.view.difference === kind;
+    box.disabled = !c && !requested;
+    box.checked = requested;
+    const note = section.querySelector(".difference-note");
+    const text = requested && !controls.shown ? display.difference.note : null;
+    note.hidden = !text;
+    note.textContent = text ?? "";
   }
   section.classList.toggle("outdated-comparison", outdated);
   // The library's message about the expression lands on its input; a
@@ -235,8 +270,12 @@ function updateComparison(section, kind, result, frame) {
   const error = comparisons[kind].result === result ? comparisons[kind].error : null;
   if (section.shownError !== error) {
     section.shownError = error;
-    // The figures of the failed attempt go either way.
-    if (kind !== "exact" || !markError(section, error)) fill(slot, error ? errorBox(error) : null);
+    // The figures of the failed attempt go either way. A failure that may
+    // pass (the server busy or not answering) offers to try again.
+    const again = () => compare(kind, comparisons[kind].against);
+    const retry = error && isTransient(error) ? h("div", { class: "inline-failure", role: "status" }, plainError(error, "the comparison").text, actionButton("Retry", again, { small: true })) : null;
+    if (retry) fill(slot, retry);
+    else if (kind !== "exact" || !markError(section, error)) fill(slot, error ? errorBox(error) : null);
     else fill(slot);
     const chart = section.querySelector(".compare-chart");
     if (error && chart) {
@@ -255,7 +294,9 @@ function updateComparison(section, kind, result, frame) {
   const at = result.mode === "time" ? `At t = ${formatNumber(result.times[frame], 5)}` : null;
   fill(
     slot,
-    outdated ? h("div", { class: "row" }, h("span", { class: "chip" }, "for the previous expression"), h("span", { class: "note" }, "Compare again to update.")) : null,
+    outdated
+      ? h("div", { class: "row" }, h("span", { class: "chip" }, kind === "exact" ? "for the previous expression" : "for the previous reference run"), h("span", { class: "note" }, "Compare again to update."))
+      : null,
     h(
       "div",
       { class: "stats" },
@@ -284,6 +325,7 @@ function updateComparison(section, kind, result, frame) {
       width: Math.max(200, chartSlot.clientWidth || 340),
       onPick: showFrame,
       label: kind === "exact" ? "The error against the exact solution per snapshot: max, RMS and lumped L2" : "The largest difference from the reference per snapshot",
+      csvName: kind === "exact" ? "error-per-snapshot.csv" : "reference-difference.csv",
     });
     chartSlot.chart = { comparison: c, done: c.done, chart };
     const key =
@@ -299,10 +341,132 @@ function updateComparison(section, kind, result, frame) {
 }
 
 function updateComparisons(container) {
+  updateStudy(container);
   const result = freshResult("solve");
   if (!result) return;
   const frame = Math.min(store.solveFrame, result.values.length - 1);
-  for (const section of container.querySelectorAll(".comparison")) updateComparison(section, section.dataset.kind, result, frame);
+  const display = currentDisplay();
+  for (const section of container.querySelectorAll(".comparison")) updateComparison(section, section.dataset.kind, result, frame, display);
+}
+
+// A run's error: a run that is gone (expired) or replaced is said in
+// plain words, a gone one with "Solve again"; others are the library's.
+function runErrorBox(error) {
+  if (error.kind !== "expired" && error.kind !== "replaced") return errorBox(error, { openProblem });
+  const plain = plainError(error);
+  return h(
+    "div",
+    { class: "alert", role: "alert" },
+    h("span", { class: "stage" }, error.kind === "expired" ? "The result is gone" : "Replaced"),
+    plain.text,
+    plain.action === "solve" ? h("div", { class: "alert-actions" }, actionButton("Solve again", solve, { small: true, guarded: true })) : null,
+  );
+}
+
+// --- the refinement study ---------------------------------------------------------
+
+const STUDY_LEVELS = [3, 4, 5];
+
+// The study's controls, table and chart (refinement.js). It is offered
+// with an exact solution in the case; it stays while it runs, whatever
+// the solve result does meanwhile.
+function updateStudy(container) {
+  const slot = container.querySelector("#solve-study");
+  if (!slot) return;
+  const expression = (store.caseData.view?.exact_solution ?? "").trim();
+  const offered = study.running || study.rows.length > 0 || study.message || (expression && freshResult("solve")?.state === "done");
+  const key = JSON.stringify([offered, study.running, study.stopping, study.rows.length, study.message, expression !== ""]);
+  if (slot.shown === key) return;
+  slot.shown = key;
+  if (!offered) return fill(slot);
+  const levels = h(
+    "select",
+    { "aria-label": "Number of levels", disabled: study.running },
+    STUDY_LEVELS.map((n) => h("option", { value: String(n), selected: n === (study.levels || 3) }, `${n} levels`)),
+  );
+  const start = actionButton("Run study", () => runStudy(Number(levels.value)), { small: true, guarded: true });
+  start.disabled = study.running || !expression;
+  if (!expression) start.title = "Write an exact solution above first.";
+  const stop = actionButton(study.stopping ? "Stopping…" : "Stop study", stopStudy, { small: true });
+  stop.disabled = study.stopping;
+  const info = infoToggle(
+    "Solves the case on meshes whose max edge length is halved level by level (the setting of the Mesh step, put back at the end), compares each solution with the exact solution on the server in double, and gives the observed order log(e₁/e₂) / log(h₁/h₂) between levels, with h the longest edge. P1 elements give about h² in L2 for a smooth solution; a corner singularity gives less.",
+    "the refinement study",
+  );
+  const rows = study.rows;
+  const orders = studyOrders(rows);
+  const order = (v) => (v === null ? "–" : formatNumber(v, 3));
+  const table = rows.length
+    ? h(
+        "table",
+        { class: "data study-table" },
+        h(
+          "thead",
+          {},
+          h("tr", {}, h("th", { class: "num" }, "h"), h("th", { class: "num" }, "Nodes"), h("th", { class: "num" }, "max error"), h("th", { class: "num" }, "order"), h("th", { class: "num" }, "L2 error"), h("th", { class: "num" }, "order")),
+        ),
+        h(
+          "tbody",
+          {},
+          rows.map((r, i) =>
+            h(
+              "tr",
+              {},
+              h("td", { class: "num" }, formatNumber(r.h, 3)),
+              h("td", { class: "num" }, formatNumber(r.nodes)),
+              h("td", { class: "num" }, formatNumber(r.max, 3)),
+              h("td", { class: "num study-order", dataset: { norm: "max" } }, order(orders[i].max)),
+              h("td", { class: "num" }, formatNumber(r.l2, 3)),
+              h("td", { class: "num study-order", dataset: { norm: "l2" } }, order(orders[i].l2)),
+            ),
+          ),
+        ),
+      )
+    : null;
+  let chart = null;
+  if (rows.length >= 2) {
+    const hs = rows.map((r) => r.h);
+    const anchor = rows[0];
+    const series = [
+      { name: "max error", cls: "s1", values: rows.map((r) => r.max) },
+      { name: "L2 error", cls: "s2", values: rows.map((r) => r.l2) },
+      { name: "h¹", cls: "ref", values: referenceSlope(hs, 1, anchor.h, anchor.l2) },
+      { name: "h²", cls: "ref ref-2", values: referenceSlope(hs, 2, anchor.h, anchor.l2) },
+    ];
+    chart = h(
+      "div",
+      { class: "study-chart" },
+      h("div", { class: "chart-title" }, "Error against h (log–log)"),
+      h(
+        "div",
+        { class: "chart-key" },
+        series.map((s) => h("span", { class: "item" }, h("span", { class: `key-line ${s.cls}`, "aria-hidden": "true" }), s.name)),
+      ),
+      lineChart({
+        times: hs,
+        series,
+        current: null,
+        log: true,
+        xName: "h",
+        width: Math.max(220, slot.clientWidth || 340),
+        height: 180,
+        label: "The largest nodal and lumped L2 errors against the longest edge h, on log–log axes, with reference slopes h¹ and h² through the first L2 point",
+        csvName: "refinement-study.csv",
+        endLabels: false,
+      }),
+    );
+  }
+  fill(
+    slot,
+    foldable(
+      { id: "solve.study", title: "Refinement study", kind: "section", extras: [info.button], info: info.panel, attributes: { class: "study" } },
+      h("div", { class: "row" }, levels, study.running ? stop : start),
+      study.running ? h("p", { class: "note", role: "status" }, `Level ${rows.length + 1} of ${study.levels}…`) : null,
+      study.message ? h("p", { class: study.failed ? "note study-failed" : "note", role: "status" }, study.message) : null,
+      table,
+      chart,
+    ),
+  );
 }
 
 // --- the settings ---------------------------------------------------------------
@@ -374,7 +538,7 @@ export const solvePanel = {
     const solveButton = actionButton("Solve", solve, { primary: true, guarded: true });
     const stopButton = actionButton("Stop", stopRun);
     const head = stepHead("solve", solveButton, stopButton);
-    fill(container, head, h("div", { class: "result", id: "solve-result" }), settingsPart(section, solveCase, mode));
+    fill(container, head, h("div", { class: "result", id: "solve-result" }), h("div", { id: "solve-study" }), settingsPart(section, solveCase, mode));
     Object.assign(container, { head, solveButton, stopButton });
     this.update(container);
   },
@@ -430,7 +594,7 @@ export const solvePanel = {
     const compared = fresh && !running && result.values.length > 0;
     fill(
       slot,
-      error && !placed ? errorBox(error, { openProblem }) : null,
+      error && !placed ? runErrorBox(error) : null,
       old ? errorBox(old, { outdated: true }) : null,
       result && !running ? warningChip(result.reports, "solve.reports") : null,
       result ? h("div", { class: "stats", id: "solve-stats" }, resultStats(result)) : null,
@@ -446,5 +610,10 @@ export const solvePanel = {
   // Another snapshot is shown: the comparisons' figures follow it.
   frame(container) {
     updateComparisons(container);
+  },
+
+  // The refinement study moved on.
+  study(container) {
+    updateStudy(container);
   },
 };

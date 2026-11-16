@@ -7,20 +7,26 @@
 // snapshot.
 
 import { api } from "./api.js";
-import { keptSnapshots, snapshotPlan } from "./pure/run_values.js";
+import { keptSnapshots, nearestLoaded, snapshotPlan } from "./pure/run_values.js";
 import { notify } from "./state.js";
 
 // The fetch going on per result, so one runs at a time.
 const loading = new WeakMap();
+// The last failed fetch per result (an ApiError): no new fetch starts
+// until retrySnapshots, so a failing server is not asked on every redraw.
+const failures = new WeakMap();
 
 // Makes snapshot `k` of `data` (a solve result with `job`, `layout` and
-// `values`) and its neighbours loaded. Resolves when they are; notifies
-// "frame" when it fetched something (the picture shows it then).
+// `values`) and its neighbours loaded. Resolves true when they are, false
+// when the fetch failed (the failure is kept: snapshotState); notifies
+// "frame" when it fetched or failed (the picture shows it then).
 export async function loadAround(data, k) {
+  if (failures.has(data)) return false;
   for (;;) {
     const running = loading.get(data);
     if (!running) break;
-    await running;
+    // Its failure is kept (failures) and said by the one that started it.
+    await running.catch(() => {});
   }
   const plan = snapshotPlan(data.values, k, { kept: keptSnapshots(data.layout?.nodes) });
   for (const i of plan.evict) data.values[i] = null;
@@ -33,12 +39,17 @@ export async function loadAround(data, k) {
     });
   })();
   loading.set(data, task);
+  let ok = true;
   try {
     await task;
+  } catch (error) {
+    failures.set(data, error);
+    ok = false;
   } finally {
     loading.delete(data);
   }
   notify("frame");
+  return ok;
 }
 
 // Snapshot `k` if it is loaded; otherwise starts loading it and returns
@@ -46,8 +57,23 @@ export async function loadAround(data, k) {
 export function snapshotValues(data, k) {
   const values = data.values[k];
   if (values) return values;
-  loadAround(data, k).catch(() => {});
+  loadAround(data, k);
   return null;
+}
+
+// What the picture can show of snapshot `k` (pure/display.js): its
+// values, else the nearest loaded one, and the failure of the last fetch.
+export function snapshotState(data, k) {
+  const values = snapshotValues(data, k);
+  const near = values ? -1 : nearestLoaded(data.values, k);
+  return { values, nearest: near >= 0 ? { index: near, values: data.values[near] } : null, failure: failures.get(data) ?? null };
+}
+
+// Forgets the failure of `data`'s last fetch, so the next one is tried;
+// `quiet`: without notifying (the caller fetches at once).
+export function retrySnapshots(data, { quiet = false } = {}) {
+  if (!failures.delete(data) || quiet) return;
+  notify("frame");
 }
 
 // Gives the result room for its ready snapshots (null until loaded).

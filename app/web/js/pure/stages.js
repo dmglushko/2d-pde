@@ -85,3 +85,21 @@ export function stepOfPath(path) {
   const section = String(path ?? "").split(/[.[]/)[0];
   return { mesh: "mesh", problem: "problem", assembly: "assemble", solve: "solve", view: "solve" }[section] ?? "geometry";
 }
+
+// What a run of the solve section keeps on the server, from the mesh's
+// answer (`memory`: {snapshot_bytes, budget}): {bytes, budget, share}
+// with share = bytes / budget, or null when it cannot be told. A time run
+// keeps snapshots + 1 snapshots, a static one 1.
+export function serverRunBytes(solveSection, memory) {
+  const perSnapshot = memory?.snapshot_bytes;
+  const budget = memory?.budget;
+  if (!Number.isFinite(perSnapshot) || !(budget > 0) || !solveSection) return null;
+  let count = 1;
+  if (solveSection.mode !== "static") {
+    const snapshots = solveSection.time?.snapshots;
+    if (!Number.isInteger(snapshots) || snapshots < 1) return null;
+    count = snapshots + 1;
+  }
+  const bytes = perSnapshot * count;
+  return { bytes, budget, share: bytes / budget };
+}

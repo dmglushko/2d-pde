@@ -88,7 +88,27 @@
           document.body.append(other);
         });
       }
+      // Reloads the page in the frame (the same tab: its sessionStorage
+      // stays) and resolves with its new document and window.
+      function reloadPage() {
+        return new Promise((resolve) => {
+          frame.addEventListener(
+            "load",
+            () => {
+              watch(frame.contentWindow);
+              const d = frame.contentDocument;
+              resolve({ d, w: frame.contentWindow, q: (s) => d.querySelector(s), qa: (s) => [...d.querySelectorAll(s)] });
+            },
+            { once: true },
+          );
+          frame.contentWindow.location.reload();
+        });
+      }
+      let started = false;
       frame.onload = async () => {
+        // A reload of the frame (reloadPage) does not start the scenario again.
+        if (started) return;
+        started = true;
         const d = frame.contentDocument;
         const w = frame.contentWindow;
         watch(w);
@@ -107,6 +127,8 @@
           element.dispatchEvent(new w.Event("input", { bubbles: true }));
         };
         const text = (element) => (element?.innerText ?? "").replace(/\s+/g, " ").trim();
+        // Opens an example from the case menu (its item, data-example).
+        const example = (name) => click(q(`[data-example="${name}"]`));
         const check = (name, ok, detail = "") => log(`${ok ? "PASS" : "FAIL"} ${name}${ok || !detail ? "" : `: ${detail}`}`);
         const key = (target, k, extra = {}) => target.dispatchEvent(new w.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...extra }));
         // A pointer event on the picture at (fx, fy), fractions of its size.
@@ -131,9 +153,9 @@
             }
           return { colours: colours.size, hash };
         };
-        const ctx = { d, w, q, qa, click, tab, button, panel, select, type, text, until, sleep, log, check, idle: (ms) => idle(w, ms), openPage, key, pointer, pixels, nextFrame: () => nextFrame(w) };
+        const ctx = { d, w, q, qa, click, example, tab, button, panel, select, type, text, until, sleep, log, check, idle: (ms) => idle(w, ms), openPage, key, pointer, pixels, nextFrame: () => nextFrame(w), reloadPage };
         try {
-          await until(() => q("#geometry-summary .stats"), "the geometry");
+          await until(() => q("#geometry-summary .stats") && q("[data-example]"), "the geometry and the examples");
           const scenario = (await import(`./scenarios/${params.get("s")}.js`)).default;
           await scenario(ctx);
           log("DONE");

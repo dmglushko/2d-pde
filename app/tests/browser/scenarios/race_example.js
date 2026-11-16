@@ -1,7 +1,7 @@
 // An example still loading never replaces a case started meanwhile, and a
 // preset's answer never overwrites an edit made after it was asked for.
-export default async ({ q, tab, select, click, type, until, idle, text, check }) => {
-  select(q("#examples"), "wave_square.json");
+export default async ({ example, q, tab, select, click, type, until, idle, text, check }) => {
+  example("wave_square.json");
   click(q("#new-case"));
   await idle();
   await until(() => q("#geometry-summary .stats"), "the geometry");

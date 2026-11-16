@@ -1,33 +1,25 @@
 // The time bar under the picture: play or pause, a slider over the
 // snapshots and the shown time with that snapshot's smallest and largest
-// value. It is the one control of the shown snapshot (store.solveFrame).
-// During a run it shows how far the run got.
+// value of u (the server's, in double: snapshot_min and snapshot_max of
+// the progress). It is the one control of the shown snapshot
+// (store.solveFrame). During a run it shows how far the run got.
 
 import { followedRun } from "./actions.js";
+import { drawnSolve } from "./display.js";
 import { formatNumber } from "./pure/format.js";
-import { valueRange } from "./pure/run_values.js";
 import { h } from "./dom.js";
 import { settings } from "./settings.js";
-import { freshResult, notify, store } from "./state.js";
+import { notify, store } from "./state.js";
 
 let elements = null;
 let playTimer = null;
 let shownResult = null;
-// Per snapshot array: its range (computed once).
-const ranges = new WeakMap();
 
-function rangeOf(values) {
-  let range = ranges.get(values);
-  if (!range) {
-    range = valueRange(values);
-    ranges.set(values, range);
-  }
-  return range;
-}
-
-// The time solution the bar walks through, or null.
+// The time solution the bar walks through (the one the picture draws,
+// outdated or not), or null.
 export function timeSolution() {
-  const result = freshResult("solve");
+  const drawn = drawnSolve();
+  const result = drawn?.data;
   return result && result.mode === "time" && result.values.length > 0 && store.fieldSource === "solve" ? result : null;
 }
 
@@ -113,9 +105,12 @@ export function updateTimebar() {
   elements.slider.value = String(i);
   elements.slider.setAttribute("aria-valuetext", `t = ${formatNumber(result.times[i], 5)}`);
   elements.time.textContent = `t = ${formatNumber(result.times[i], 5)}`;
-  // A snapshot the page has not loaded yet (snapshots.js) has no range.
-  const range = result.values[i] ? rangeOf(result.values[i]) : null;
-  elements.range.textContent = range ? `min ${formatNumber(range.min)} · max ${formatNumber(range.max)}` : "loading…";
+  // The server's range of u at this snapshot, in double (null where a
+  // snapshot has no finite value).
+  const min = result.snapshot_min?.[i];
+  const max = result.snapshot_max?.[i];
+  const known = i < (result.snapshot_min?.length ?? 0);
+  elements.range.textContent = !known ? "" : Number.isFinite(min) && Number.isFinite(max) ? `u: min ${formatNumber(min)} · max ${formatNumber(max)}` : "u: no finite value";
   const running = Boolean(followedRun()) && result.state === "running";
   elements.run.hidden = !running;
   if (running) {

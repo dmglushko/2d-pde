@@ -4,6 +4,7 @@
 // can run in parallel (docs/library-requests.md, item 1).
 
 import { parseNumberText, setDefaultDigits } from "./pure/format.js";
+import { COLOR_MAPS } from "./pure/color.js";
 import { normalizeSettings, SETTINGS_DEFAULTS } from "./pure/prefs.js";
 import { h, infoToggle } from "./dom.js";
 
@@ -114,6 +115,16 @@ function content() {
     h("h3", {}, "Numbers and picture"),
     row("Significant digits", "In tables, figures, labels and the readout under the pointer.", number("digits", { min: 2, max: 10, step: 1 })),
     row("Isolines", "How many isolines the Isolines layer draws, evenly inside the colour scale.", number("isolineCount", { min: 2, max: 40, step: 1 })),
+    row(
+      "Colours of one sign",
+      "The colour map of a field whose values all have one sign: one hue, dark for the lowest values, light for the highest.",
+      choice("sequentialMap", COLOR_MAPS.sequential.map((m, i) => [m.id, i === 0 ? `${m.label} (default)` : m.label])),
+    ),
+    row(
+      "Colours of both signs",
+      "The colour map of a field with values of both signs (a difference, an error): two hues, grey at zero.",
+      choice("divergingMap", COLOR_MAPS.diverging.map((m, i) => [m.id, i === 0 ? `${m.label} (default)` : m.label])),
+    ),
     row(
       "Picture quality",
       "The pixel ratio the picture is drawn at, at most the screen's: lower is faster (panning, fields), higher is sharper.",

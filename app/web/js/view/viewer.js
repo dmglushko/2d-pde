@@ -17,6 +17,9 @@ const SETTLE_MS = 120;
 // Edges over a field's colours are drawn at this opacity (of the
 // --mesh-edge token's): the colours are what is read there.
 const EDGES_OVER_FIELD = 0.45;
+// A field built for an earlier case is drawn at this opacity over the
+// surface: greyed, never as current.
+const OUTDATED_ALPHA = 0.4;
 
 const sameLayers = (a = {}, b = {}) =>
   a.geometry === b.geometry && a.mesh === b.mesh && a.dirichlet === b.dirichlet && a.isolines === b.isolines && a.isolineCount === b.isolineCount;
@@ -25,7 +28,8 @@ const sameField = (a, b) => a === b || (a && b && a.values === b.values && a.sca
 export class Viewer {
   // callbacks: onPin(x, y) for a click (or Enter) at a point;
   // onProfile({from, to}) for a line drawn with the profile tool;
-  // onLock(quantity, {low, high} or null) from the legend's range lock.
+  // onLock(quantity, {low, high} or null) from the legend's range lock;
+  // onRegion(name) for a click on a boundary region (or its legend entry).
   constructor(canvas, tooltip, status, callbacks = {}) {
     this.canvas = canvas;
     this.callbacks = callbacks;
@@ -54,11 +58,13 @@ export class Viewer {
   // indices), field ({name, when, label, values, scale?}), colorBy,
   // locked ({field, gradient}: {low, high} or null), tool, layers
   // ({geometry, mesh, dirichlet, isolines, isolineCount}), probes,
-  // profile}. Draws only when something shown changed; returns whether it
+  // profile, selectedRegion (a region name or null), legendNote (why a
+  // comparison the user asked for is not drawn, or null)}. A field with
+  // `outdated` is drawn greyed. Draws only when something shown changed; returns whether it
   // did (the legend changes only then).
   set(data) {
     const previous = this.data;
-    const keys = ["geometry", "mesh", "meshStale", "dirichlet", "colorBy", "probes", "profile", "locked", "tool"];
+    const keys = ["geometry", "mesh", "meshStale", "dirichlet", "colorBy", "probes", "profile", "locked", "tool", "selectedRegion", "legendNote"];
     const changed = keys.some((k) => previous[k] !== data[k]) || !sameLayers(previous.layers, data.layers) || !sameField(previous.field, data.field);
     if (!changed) return false;
     const meshChanged = data.mesh !== previous.mesh;
@@ -197,7 +203,7 @@ export class Viewer {
   // read: edges go fainter).
   colouredByField() {
     const { colorBy, field } = this.data;
-    return Boolean(field) && (colorBy === "field" || (colorBy === "gradient" && this.gradients));
+    return Boolean(field) && !field.outdated && (colorBy === "field" || (colorBy === "gradient" && this.gradients));
   }
 
   draw() {
@@ -213,14 +219,19 @@ export class Viewer {
     const { geometry, mesh, meshStale, layers: shown = {}, colorBy, field } = this.data;
     const hasMesh = mesh && mesh.triangles.length > 0;
     const current = hasMesh && !meshStale;
+    // A field built for an earlier case is drawn greyed (an "outdated"
+    // stamp is over the picture, main.js), on the mesh it was built on.
+    const fieldShown = hasMesh && Boolean(field) && (current || field.outdated);
     let note = "";
 
-    if (geometry?.kind === "curves" && !current) layers.fillGeometry(this, geometry);
-    if (current) {
-      if (colorBy === "quality") layers.drawQuality(this, mesh);
+    if (geometry?.kind === "curves" && !current && !fieldShown) layers.fillGeometry(this, geometry);
+    if (current && colorBy === "quality") layers.drawQuality(this, mesh);
+    if (fieldShown) {
+      ctx.globalAlpha = field.outdated ? OUTDATED_ALPHA : 1;
       if (colorBy === "field" && this.positions) layers.rasterField(this, mesh, this.positions, tableOf(this.shownScale));
       if (colorBy === "gradient" && this.gradientBuckets) layers.fillBuckets(this, mesh, this.gradientBuckets, tableOf(this.shownScale));
-      if (colorBy === "gradient" && field && !this.gradients) note = "|∇| needs a value at every node";
+      ctx.globalAlpha = 1;
+      if (colorBy === "gradient" && !this.gradients) note = "|∇| needs a value at every node";
     }
     if (hasMesh && shown.mesh) {
       const alpha = meshStale ? 0.35 : this.colouredByField() ? EDGES_OVER_FIELD : 1;
@@ -231,13 +242,14 @@ export class Viewer {
       else if (geometry?.kind === "curves") layers.drawCurves(this, geometry);
       else if (geometry?.kind === "mesh_file") layers.drawEdgeList(this, geometry);
     }
-    if (current && this.isolines) layers.drawIsolines(this, this.isolines, tableOf(this.isolines.scale), colorBy === "field");
-    if (current && colorBy === "field" && field && !this.fieldComplete) layers.drawFieldDots(this, mesh, field.values, this.shownScale, tableOf(this.shownScale));
+    if (this.data.selectedRegion) layers.drawSelectedRegion(this, current ? mesh : null, geometry, this.data.selectedRegion);
+    if (fieldShown && this.isolines) layers.drawIsolines(this, this.isolines, tableOf(this.isolines.scale), colorBy === "field");
+    if (fieldShown && colorBy === "field" && !this.fieldComplete) layers.drawFieldDots(this, mesh, field.values, this.shownScale, tableOf(this.shownScale));
     if (current && shown.dirichlet && this.data.dirichlet) layers.drawNodes(this, mesh, this.data.dirichlet);
     if (this.data.probes?.length) layers.drawProbes(this, this.data.probes);
     const line = this.draft ?? this.data.profile;
     if (line) layers.drawProfileLine(this, line);
-    if (meshStale) note = "mesh outdated: run the Mesh step";
+    if (meshStale) note = fieldShown ? "outdated: run again to update" : "mesh outdated: run the Mesh step";
     if (this.data.tool === "profile" && !note) note = "drag across the picture to draw the profile line";
     this.status.textContent = note;
     this.keepFrame();
@@ -294,7 +306,7 @@ export class Viewer {
   // The legend's elements (regions, the colour bar with its range lock,
   // the Dirichlet nodes).
   legend() {
-    return legendNodes(this.legendData(), this.callbacks.onLock);
+    return legendNodes(this.legendData(), this.callbacks.onLock, this.callbacks.onRegion);
   }
 
   // The picture as it is shown, with its legend underneath, as a PNG blob.

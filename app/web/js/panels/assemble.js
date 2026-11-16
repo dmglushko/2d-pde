@@ -105,10 +105,17 @@ function symmetryText(op) {
   return "no";
 }
 
-const OPERATOR_NAMES = { mass: "M2 (u_tt)", damping: "B = M1 − D (u_t)", stiffness: "A (u)" };
+// Each operator in plain words, with its formula as the tooltip (and for
+// screen readers).
+const OPERATOR_NAMES = {
+  mass: ["Mass (u_tt terms)", "M2: the matrix that multiplies U''"],
+  damping: ["Damping (u_t terms)", "B = M1 − D: the matrix that multiplies U'"],
+  stiffness: ["Stiffness (u terms)", "A: the matrix that multiplies U"],
+};
 
 function operatorRow(name, op) {
-  const label = OPERATOR_NAMES[name] ?? name;
+  const [plain, formula] = OPERATOR_NAMES[name] ?? [name, null];
+  const label = formula ? h("span", { class: "term", title: formula }, plain, h("span", { class: "visually-hidden" }, `, ${formula}`)) : plain;
   if (op.always_zero) return h("tr", {}, h("td", {}, label), h("td", { colspan: 3, class: "muted-cell" }, "zero"));
   return h(
     "tr",
@@ -126,9 +133,15 @@ function operatorsTable(operators) {
   return h("table", { class: "data" }, h("thead", {}, head), h("tbody", {}, rows));
 }
 
-// "1" when assembly's time order is the problem's, else both.
+// A time order in words: "0 · stationary", "1 · first order" (u_t),
+// "2 · second order" (u_tt).
+export function timeOrderWords(order) {
+  return { 0: "0 · stationary", 1: "1 · first order", 2: "2 · second order" }[order] ?? String(order);
+}
+
+// The assembled time order in words, and the problem's when it differs.
 export function timeOrderText(assembled, written) {
-  return assembled === written ? String(assembled) : `${assembled} (problem: ${written})`;
+  return assembled === written ? timeOrderWords(assembled) : `${timeOrderWords(assembled)} (problem: ${written})`;
 }
 
 const EXPORTS = [

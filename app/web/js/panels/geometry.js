@@ -6,7 +6,7 @@ import { exportFile, runStage, toast } from "../actions.js";
 import { applyRegionEdit, fileKind, undoRegionEdit } from "../pure/case_model.js";
 import { formatNumber, parseNumberText } from "../pure/format.js";
 import { errorBox, exportButton, fileButton, fill, foldable, h, infoToggle, labelWithInfo, markError, optionsForm, readFileText, regionSwatch, stat } from "../dom.js";
-import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
+import { currentError, editCase, freshResult, lastResult, outdatedError, requestTicket, sectionRevision, store } from "../state.js";
 import { setStepStatus, stepHead } from "./head.js";
 
 let geometryTimer = null;
@@ -25,15 +25,28 @@ function setGeometry(geometry) {
 }
 
 // Loads a dropped or chosen file as the domain (SVG or mesh file).
+// Reading a file takes a while: it takes a ticket of the "open" kind with
+// the geometry's revision, so a case opened, another file chosen or the
+// geometry edited meanwhile wins, and the late text is dropped. Returns
+// whether the file became the geometry.
 export async function loadDomainFile(file) {
   const kind = fileKind(file.name);
   if (kind !== "svg" && kind !== "gmsh" && kind !== "pde2d") {
     toast(`${file.name}: choose an .svg, .msh or .pde2d file`);
-    return;
+    return false;
   }
-  const text = await readFileText(file);
+  const ticket = requestTicket("open", () => sectionRevision("geometry"));
+  let text;
+  try {
+    text = await readFileText(file);
+  } catch {
+    if (ticket.live()) toast(`${file.name} could not be read.`);
+    return false;
+  }
+  if (!ticket.holds()) return false;
   if (kind === "svg") setGeometry({ source: "svg", name: file.name, svg: text, region_edits: [] });
   else setGeometry({ source: "mesh_file", format: kind, name: file.name, text, region_edits: [] });
+  return true;
 }
 
 const SOURCES = [
@@ -201,7 +214,7 @@ function regionRow(region, i, names, canEdit, canSplit) {
   };
   const row = h(
     "tr",
-    {},
+    { dataset: { region: region.name }, class: store.selectedRegion === region.name ? "selected" : null },
     h("td", {}, regionSwatch(i)),
     h("td", {}, region.name),
     h("td", { class: "num" }, formatNumber(region.length)),

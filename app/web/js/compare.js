@@ -27,6 +27,9 @@ const empty = () => ({
   busy: false,
   error: null,
   scale: null,
+  // failures[k]: the error of the last fetch of difference k (no new
+  // fetch until retryDifference).
+  failures: [],
 });
 
 // One comparison per kind ("exact", "reference"): `result` is the solve
@@ -45,12 +48,25 @@ export function currentComparison(kind) {
   return result && c.result === result ? c : null;
 }
 
-// True when the exact-solution comparison shown was made for another
-// expression than the case's now.
+// True when the comparison shown was made for something else than what
+// the case has now: another expression, or another reference run.
 export function isOutdated(kind) {
   const c = currentComparison(kind);
-  if (!c || kind !== "exact") return false;
-  return c.against.exact !== (store.caseData.view?.exact_solution ?? "").trim();
+  if (!c?.against) return false;
+  if (kind === "exact") return c.against.exact !== (store.caseData.view?.exact_solution ?? "").trim();
+  return store.reference?.job !== c.against.reference;
+}
+
+// The state of the comparison of `kind` for the current solution, as the
+// picture and the controls read it (pure/display.js): "none", "busy",
+// "failed", "outdated" or "current".
+export function comparisonState(kind) {
+  const c = currentComparison(kind);
+  if (!c) return "none";
+  if (c.busy) return "busy";
+  if (c.error) return "failed";
+  if (isOutdated(kind)) return "outdated";
+  return c.summary && c.done > 0 ? "current" : "none";
 }
 
 const figures = (snapshots, key) => Float64Array.from(snapshots, (s) => (s && Number.isFinite(s[key]) ? s[key] : NaN));
@@ -100,14 +116,15 @@ export async function compare(kind, against) {
 export const compareWith = (text) => compare("exact", { exact: text });
 
 // u − other at snapshot k when it has arrived; otherwise starts fetching
-// it and returns null (the picture is drawn again once it is here).
+// it (unless its last fetch failed) and returns null (the picture is
+// drawn again once it is here).
 const fetching = new Set();
 export function comparisonValues(kind, k) {
   const c = currentComparison(kind);
   if (!c || !c.summary || c.error) return null;
   if (c.errors[k]) return c.errors[k];
   const id = `${kind}:${k}`;
-  if (!c.summary.snapshots[k] || fetching.has(id)) return null;
+  if (!c.summary.snapshots[k] || fetching.has(id) || c.failures[k]) return null;
   const ticket = requestTicket(`difference-${kind}`, () => comparisons[kind], { exclusive: false });
   fetching.add(id);
   api
@@ -117,9 +134,36 @@ export function comparisonValues(kind, k) {
       c.errors[k] = values;
       notify("compare");
     })
-    .catch(() => {})
+    .catch((error) => {
+      if (!ticket.holds()) return;
+      c.failures[k] = error;
+      notify("compare");
+    })
     .finally(() => fetching.delete(id));
   return null;
+}
+
+// What the picture can show of u − other at snapshot k (pure/display.js):
+// its values, else the nearest fetched one, and the last fetch's failure.
+export function differenceState(kind, k) {
+  const c = currentComparison(kind);
+  const values = comparisonValues(kind, k);
+  if (!c) return { values: null, nearest: null, failure: null };
+  let near = -1;
+  if (!values)
+    for (let d = 1; d < c.errors.length && near < 0; d++) {
+      if (c.errors[k - d]) near = k - d;
+      else if (c.errors[k + d]) near = k + d;
+    }
+  return { values, nearest: near >= 0 ? { index: near, values: c.errors[near] } : null, failure: c.failures[k] ?? null };
+}
+
+// Tries difference k of `kind` again after a failed fetch.
+export function retryDifference(kind, k) {
+  const c = currentComparison(kind);
+  if (!c) return;
+  c.failures[k] = null;
+  notify("compare");
 }
 
 // Forgets the comparison of `kind` (another solution, the text cleared,

@@ -9,26 +9,36 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 14 L8 2 L14 14 Z M5 8 L11 8 M8 14 L5 8 M8 14 L11 8' fill='none' stroke='%233987e5' stroke-width='1.5'/%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/panels.css" />
+    <link rel="stylesheet" href="css/picture.css" />
+    <link rel="stylesheet" href="css/layout.css" />
     <script type="module" src="js/main.js"></script>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">pde2d <small id="version"></small></div>
       <div class="case-actions">
-        <div class="history-buttons" role="group" aria-label="Undo and redo">
-          <button id="undo" class="icon" type="button" aria-label="Undo" title="Undo the last case edit (Ctrl+Z)" disabled>↶</button>
-          <button id="redo" class="icon" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
+        <div class="case-menu">
+          <button id="case-menu-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="case-menu">
+            Case<span class="case-name" id="case-name"></span><span class="menu-caret" aria-hidden="true">▾</span>
+          </button>
+          <div id="case-menu" class="menu" role="menu" aria-labelledby="case-menu-button" hidden>
+            <button id="new-case" type="button" role="menuitem">New case</button>
+            <button id="open-case-button" type="button" role="menuitem">Open case…</button>
+            <button id="save-case" type="button" role="menuitem">Save case</button>
+            <button id="restore-case" type="button" role="menuitem" hidden>Restore previous case</button>
+            <div class="menu-separator" role="separator"></div>
+            <button id="undo" type="button" role="menuitem" aria-keyshortcuts="Control+Z" disabled>Undo <kbd aria-hidden="true">Ctrl+Z</kbd></button>
+            <button id="redo" type="button" role="menuitem" aria-keyshortcuts="Control+Shift+Z" disabled>Redo <kbd aria-hidden="true">Ctrl+Shift+Z</kbd></button>
+            <div class="menu-separator" role="separator"></div>
+            <div class="menu-heading" id="examples-heading">Examples</div>
+            <div id="examples" role="group" aria-labelledby="examples-heading"></div>
+          </div>
         </div>
-        <button id="new-case" type="button">New</button>
-        <select id="examples" aria-label="Open an example">
-          <option value="">Examples…</option>
-        </select>
-        <button id="open-case-button" type="button">Open case…</button>
         <input id="open-case" type="file" accept=".json,application/json" tabindex="-1" hidden />
-        <button id="save-case" type="button">Save case</button>
-        <span id="unsaved" class="chip" hidden>unsaved changes</span>
-        <button id="restore-case" type="button" hidden>Restore previous case</button>
+        <span id="unsaved" class="chip" hidden>unsaved</span>
+        <span id="server-status" class="server-status" role="status" hidden></span>
         <button id="run-all" class="primary" type="button">Run all</button>
         <button id="open-settings" class="icon" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog">⚙</button>
       </div>
@@ -60,8 +70,9 @@
                 <option value="gradient">|∇| of the field</option>
               </select>
             </label>
-            <button id="profile-tool" class="small" type="button" aria-pressed="false" title="Drag across the picture to plot the shown field along a line">Line profile</button>
+            <button id="profile-tool" class="small" type="button" aria-pressed="false" title="Drag across the picture to plot the shown field along a line"><span class="wide-only">Line profile</span><span class="phone-only">Profile</span></button>
             <button id="save-picture" class="small" type="button" title="Save the picture with its legend as PNG">Save<span class="wide-only"> picture</span></button>
+            <button id="collapse-picture" class="icon phone-only" type="button" aria-expanded="true" aria-controls="canvas-wrap" aria-label="Hide the picture" title="Hide the picture">▴</button>
             <span class="status" id="view-status"></span>
           </div>
           <div class="canvas-wrap" id="canvas-wrap">
@@ -72,6 +83,8 @@
             ></canvas>
             <div class="empty-view" id="empty-view">Choose a geometry, or drop an SVG, .msh or .pde2d file here.</div>
             <div class="tooltip" id="tooltip" hidden></div>
+            <div class="view-stamp" id="view-stamp" hidden>Outdated: the case changed since this result</div>
+            <div class="view-overlay" id="view-overlay" role="status" hidden></div>
             <div class="zoom-buttons" role="group" aria-label="Zoom">
               <button id="zoom-in" class="icon" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
               <button id="zoom-out" class="icon" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>

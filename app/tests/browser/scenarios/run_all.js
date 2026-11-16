@@ -1,6 +1,6 @@
 // Run all on an example ends with the solution in the picture.
-export default async ({ q, qa, click, select, until, text, check }) => {
-  select(q("#examples"), "poisson_rectangle.json");
+export default async ({ example, q, qa, click, select, until, text, check }) => {
+  example("poisson_rectangle.json");
   await until(() => text(q("#toast")).includes("Opened"), "the example");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   click(q("#run-all"));

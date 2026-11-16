@@ -1,0 +1,1032 @@
+/* Panels and forms: controls, the step heads, forms, results,
+   warnings, the toast, foldable sections and the settings dialog. */
+
+/* --- controls ------------------------------------------------------------ */
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover {
+  background: var(--surface-3);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button:disabled:hover {
+  background: var(--surface-2);
+}
+
+button.primary {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+button.primary:hover {
+  background: var(--accent);
+}
+
+button.small {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 13px;
+}
+
+button.icon {
+  min-height: 28px;
+  min-width: 28px;
+  padding: 2px 6px;
+}
+
+/* A button that reads as a link (Next: …, Remove all). */
+button.link {
+  min-height: 24px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font-size: 13px;
+}
+
+button.link:hover {
+  background: none;
+  text-decoration: underline;
+}
+
+/* The info toggle: a small round "i" next to what it explains (24 px,
+   with a larger invisible target on touch screens). */
+button.info {
+  position: relative;
+  min-height: 24px;
+  min-width: 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border-color: var(--control-border);
+  background: none;
+  color: var(--muted);
+  font: italic 600 12px/1 Georgia, serif;
+  flex: none;
+}
+
+@media (pointer: coarse) {
+  button.info::after,
+  button.icon::after {
+    content: "";
+    position: absolute;
+    inset: -10px;
+  }
+  button.icon {
+    position: relative;
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .zoom-buttons button.icon {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+button[aria-pressed="true"] {
+  background: var(--accent-wash);
+  border-color: var(--accent-text);
+}
+
+button.info:hover,
+button.info[aria-expanded="true"] {
+  color: var(--ink);
+  border-color: var(--ink-2);
+  background: var(--surface-3);
+}
+
+.info-text {
+  color: var(--ink-2);
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin: 4px 0;
+  max-width: 65ch;
+}
+
+select,
+input[type="text"],
+textarea {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--page);
+  min-width: 0;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+textarea {
+  font-family: var(--mono);
+  font-size: 13px;
+  resize: vertical;
+  width: 100%;
+}
+
+input.expr {
+  font-family: var(--mono);
+  font-size: 13px;
+  width: 100%;
+}
+
+.file-button {
+  display: inline-flex;
+}
+
+/* A choice of a few options: radio buttons drawn as one segmented row. */
+.segmented {
+  gap: 0;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.segmented .choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  color: var(--ink-2);
+  border-right: 1px solid var(--control-border);
+}
+
+.segmented .choice:last-child {
+  border-right: 0;
+}
+
+.segmented .choice:has(input:checked) {
+  background: var(--accent-wash);
+  color: var(--ink);
+}
+
+.segmented .choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}
+
+.segmented .choice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmented[aria-disabled="true"] .choice {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* --- the head of a step: action and status, kept in view --------------- */
+
+.step-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--surface);
+  padding: 12px 0 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.step-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.step-title h2 {
+  font-size: 16px;
+  margin: 0;
+  margin-right: auto;
+}
+
+.step-actions select {
+  max-width: 200px;
+}
+
+.step-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.step-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 8px;
+  min-height: 24px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.step-status .detail {
+  color: var(--muted);
+}
+
+.step-status .detail::before {
+  content: "· ";
+}
+
+.status-extra {
+  flex-basis: 100%;
+  display: flex;
+}
+
+.status-extra progress {
+  flex: 1;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
+/* A result built for an earlier case: shown, but muted. */
+.outdated-result .stats,
+.outdated-result table {
+  opacity: 0.55;
+}
+
+.settings-part {
+  margin-top: 8px;
+}
+
+.panel h3.part-title {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.panel h3 {
+  font-size: 12px;
+  margin: 20px 0 8px;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 4px 0 0;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row.chips {
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.actions-row {
+  margin-top: 12px;
+}
+
+.inline-label {
+  gap: 6px;
+  color: var(--ink-2);
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* --- forms -------------------------------------------------------------- */
+
+.field {
+  display: grid;
+  /* One column that never grows past the panel (a long option name in a
+     select would otherwise set its width). */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin: 10px 0;
+}
+
+.label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field > label,
+.field > .label,
+.label-row .label {
+  font-weight: 550;
+  font-size: 13px;
+}
+
+.field .unit {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.field .inputs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.field .inputs input.number {
+  width: 120px;
+}
+
+input.number {
+  font-variant-numeric: tabular-nums;
+}
+
+.bound {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.bound input {
+  width: 100%;
+}
+
+.bound span {
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.invalid,
+.invalid input,
+.invalid select,
+input.local-invalid {
+  border-color: var(--critical) !important;
+}
+
+/* A check of an earlier problem: shown, but not as current. */
+.checking .facts,
+.checking [data-error],
+.checking [data-kind-of] {
+  opacity: 0.5;
+}
+.checking .invalid,
+.checking .invalid input {
+  border-color: var(--hairline) !important;
+}
+
+.error-text {
+  color: var(--critical);
+  font-size: 12.5px;
+  margin-top: 2px;
+  white-space: pre-wrap;
+}
+
+.card {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 8px 0;
+  background: var(--surface);
+}
+
+.card-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.card-head .title {
+  font-weight: 600;
+}
+
+/* A long component name is shown whole: the select goes to a line of its
+   own when it does not fit beside the title. */
+.card-head {
+  flex-wrap: wrap;
+}
+
+.card-head select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.swatch {
+  display: inline-block;
+  vertical-align: middle;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.swatch.series-1 { background: var(--series-1); }
+.swatch.series-2 { background: var(--series-2); }
+.swatch.series-3 { background: var(--series-3); }
+.swatch.series-4 { background: var(--series-4); }
+.swatch.series-5 { background: var(--series-5); }
+.swatch.series-6 { background: var(--series-6); }
+.swatch.series-7 { background: var(--series-7); }
+.swatch.series-8 { background: var(--series-8); }
+.swatch.series-other { background: var(--series-other); }
+
+.swatch.node {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.chip.good {
+  color: var(--good);
+}
+
+.chip.bad {
+  color: var(--critical);
+  background: var(--critical-wash);
+}
+
+.coefficients {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 6px 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.coefficients .name {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.coefficients .name small {
+  display: block;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 11.5px;
+}
+
+.coefficients .cell {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+
+.facts {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.param-row {
+  margin: 4px 0;
+}
+
+.param-name,
+.param-value {
+  width: 120px;
+}
+
+input.expr.param-name {
+  width: 120px;
+}
+
+.priority-input {
+  width: 72px;
+}
+
+.condition-line {
+  margin: 8px 0;
+}
+
+.edit-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.edit-line + .edit-line {
+  margin-top: 6px;
+}
+
+.name-input.wide {
+  width: 130px;
+}
+
+.name-input.narrow {
+  width: 100px;
+}
+
+.fraction-input {
+  width: 80px;
+}
+
+.time-input {
+  width: 110px;
+}
+
+.editor-cell {
+  padding: 0 !important;
+  border-bottom: 0 !important;
+}
+
+.form-line {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.source-form {
+  margin-top: 12px;
+}
+
+.drop {
+  border: 1.5px dashed var(--axis);
+  border-radius: var(--radius);
+  padding: 12px;
+  color: var(--ink-2);
+}
+
+.drop-name {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* --- results ------------------------------------------------------------ */
+
+.result {
+  margin-top: 8px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.stat {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  min-width: 0;
+}
+
+.stat .value {
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.stat .label {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+table.data th,
+table.data td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+table.data th {
+  color: var(--ink-2);
+  font-weight: 550;
+}
+
+table.data td.num,
+table.data th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+table.data .chip {
+  margin-left: 6px;
+}
+
+.muted-cell {
+  color: var(--muted);
+}
+
+details.report {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  margin: 6px 0;
+  background: var(--surface);
+}
+
+details.report summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+details.report summary .time {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+details.report .body {
+  padding: 0 10px 8px;
+}
+
+details.report ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.alert {
+  border-left: 3px solid var(--critical);
+  background: var(--critical-wash);
+  padding: 8px 10px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 10px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.alert .stage {
+  font-weight: 600;
+  display: block;
+}
+
+.alert-actions {
+  margin-top: 6px;
+}
+
+/* An error produced for an earlier input. */
+.alert.outdated {
+  border-left-color: var(--axis);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.alert.outdated .chip {
+  margin-left: 6px;
+  font-weight: normal;
+}
+
+.case-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 16px;
+}
+.case-notice > span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.notice {
+  border-left: 3px solid var(--warning);
+  background: var(--surface-2);
+  padding: 8px 10px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 10px 0;
+}
+
+canvas.spy {
+  width: 100%;
+  max-width: 260px;
+  aspect-ratio: 1;
+  image-rendering: pixelated;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+.compare-line {
+  flex-wrap: nowrap;
+}
+
+.compare-chart {
+  margin-top: 8px;
+}
+
+/* Warnings of a result, visible without unfolding the reports. */
+.warning-chip {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  margin: 8px 0;
+  padding: 4px 10px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: left;
+  white-space: normal;
+  font-size: 13px;
+}
+
+.warning-chip .warning-count {
+  font-weight: 600;
+  flex: none;
+}
+
+.warning-chip .warning-first {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.warning-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--warning);
+  color: var(--page);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+/* Number fields that hold text: said in every step's head. */
+.invalid-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--critical);
+  background: var(--critical-wash);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 13px;
+}
+
+.invalid-notice .warning-mark {
+  background: var(--critical);
+}
+
+/* Coefficients not in use wait behind "Show all coefficients". */
+.coefficients:not(.showing-all) > [data-optional] {
+  display: none;
+}
+
+.show-all-row {
+  margin-top: 6px;
+}
+
+/* A comparison made for the previous expression: shown, greyed. */
+.outdated-comparison .compare-result .stats,
+.outdated-comparison .compare-chart {
+  opacity: 0.5;
+}
+
+/* --- toast, spinner ---------------------------------------------------- */
+
+/* Over the foot of the sidebar (wide screens): never over the picture,
+   its time bar, its charts or the step's head and actions. The sidebar is
+   at least 340 px wide. */
+.toast {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  max-width: min(308px, calc(100vw - 32px));
+  background: var(--ink);
+  color: var(--page);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: none;
+}
+
+.toast.show.has-action {
+  pointer-events: auto;
+}
+
+.toast button {
+  margin-left: 8px;
+  color: var(--ink);
+}
+
+.busy {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .busy,
+  .dot.busy {
+    animation: none;
+  }
+  .toast {
+    transition: none;
+  }
+  .fold-toggle .chevron {
+    transition: none;
+  }
+}
+
+/* --- foldable sections -------------------------------------------------- */
+
+/* The title of a section or card is the button that folds it. */
+button.fold-toggle {
+  min-height: 28px;
+  padding: 2px 4px 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  white-space: normal;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+button.fold-toggle:hover {
+  background: none;
+  color: var(--accent-text);
+}
+
+.fold-toggle .chevron {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.12s ease;
+  flex: none;
+}
+
+.fold-toggle[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.section-head h3 {
+  margin: 4px 0;
+}
+
+.fold-body[hidden] {
+  display: none;
+}
+
+/* --- settings ------------------------------------------------------------ */
+
+dialog.settings {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 12px 18px 16px;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+dialog.settings::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+dialog.settings h3 {
+  font-size: 12px;
+  margin: 18px 0 4px;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.setting-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.setting-number {
+  width: 90px;
+}
+
+/* --- the selected boundary region, comparisons that are not drawn ------- */
+
+#geometry-regions tr.selected td {
+  background: var(--accent-wash);
+}
+
+.card.selected-region {
+  border-color: var(--accent-text);
+  box-shadow: 0 0 0 1px var(--accent-text);
+}
+
+.difference-note {
+  margin: 2px 0 0;
+  color: var(--warning);
+}
+
+/* An expert term in plain words, its formula in the tooltip. */
+.term {
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 3px;
+  cursor: help;
+}

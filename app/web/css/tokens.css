@@ -1,0 +1,111 @@
+/* pde2d app: one dark theme. Every colour is a token here; components
+   use the tokens only. Series colours follow the dataviz reference
+   palette (dark steps, fixed order, never cycled); the field ramps go
+   through a middle stop so their middle is a clear colour. Contrast on
+   --surface: --ink 14.8:1, --ink-2 9.5:1, --muted 6.2:1 (5.5:1 on
+   --surface-2), --accent-text 8:1, --critical 5.9:1, white on
+   --accent-strong 5.9:1, control borders and status dots >= 3.3:1. */
+
+:root {
+  color-scheme: dark;
+  --page: #0f1012;
+  --surface: #17181b;
+  --surface-2: #212327;
+  --surface-3: #2b2e33;
+  --ink: #eceae6;
+  --ink-2: #c0beb6;
+  --muted: #9b998f;
+  --hairline: #2d3035;
+  --axis: #464950;
+  --border: rgba(255, 255, 255, 0.1);
+  --control-border: #666a72;
+  --accent: #3987e5;
+  --accent-strong: #2563b8;
+  --accent-text: #7fb2ef;
+  --accent-ink: #ffffff;
+  --accent-wash: rgba(57, 135, 229, 0.14);
+  --good: #5fcf78;
+  --good-mark: #0ca30c;
+  --warning: #fab219;
+  --critical: #ef6b6b;
+  --critical-wash: #3a1d1f;
+  --mesh-edge: rgba(236, 234, 230, 0.26);
+  --geometry-fill: rgba(57, 135, 229, 0.1);
+  --isoline: rgba(255, 255, 255, 0.9);
+  --isoline-halo: rgba(0, 0, 0, 0.55);
+  --shadow: rgba(0, 0, 0, 0.45);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #0ca30c;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --series-other: #898781;
+  --seq-low: #142a47;
+  --seq-mid: #2a78d6;
+  --seq-high: #d4e6fc;
+  --div-low: #6da7ec;
+  --div-mid: #3a3b3f;
+  --div-high: #ef7a7a;
+  --div-orange-high: #f0924f;
+  --seq-orange-low: #3a1a0b;
+  --seq-orange-mid: #d95926;
+  --seq-orange-high: #fbd8c4;
+  --seq-green-low: #0b2f24;
+  --seq-green-mid: #199e70;
+  --seq-green-high: #c6efdd;
+  --quality-good: #1b3150;
+  --quality-mid: #2f7fe0;
+  --quality-bad: #dbeafd;
+  --radius: 6px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --tabs-height: 52px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.45 var(--font);
+  display: flex;
+  flex-direction: column;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Every control shows where the keyboard is. */
+:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}

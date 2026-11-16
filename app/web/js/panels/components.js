@@ -11,10 +11,12 @@ export function defaultChoice(component) {
 }
 
 export function componentSelect(slot, choice, path, onPick, allowNone) {
+  const chosen = slot.components.find((c) => c.type === choice?.type);
   return h(
     "select",
     {
       "aria-label": slot.label,
+      title: chosen ? chosen.label : "none",
       dataset: { path: `${path}.type` },
       onchange: (event) => onPick(event.target.value === "" ? null : defaultChoice(slot.components.find((c) => c.type === event.target.value))),
     },

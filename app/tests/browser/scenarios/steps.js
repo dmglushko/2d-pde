@@ -1,7 +1,7 @@
 // Every step: its head (title, status) on top; a Next link once its
 // result is up to date; the Problem step's status; no inline styles.
-export default async ({ q, qa, tab, click, select, until, text, check }) => {
-  select(q("#examples"), "heat_annulus.json");
+export default async ({ example, q, qa, tab, click, select, until, text, check }) => {
+  example("heat_annulus.json");
   await until(() => text(q("#toast")).includes("heat_annulus"), "the heat case");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   click(q("#run-all"));

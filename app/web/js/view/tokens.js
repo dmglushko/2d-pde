@@ -1,8 +1,8 @@
-// The colour tokens of style.css, read once (getComputedStyle is not
+// The colour tokens of css/tokens.css, read once (getComputedStyle is not
 // free; the page has one, dark, theme), and the colour tables made from
 // them.
 
-import { parseColor, rampTable } from "../pure/color.js";
+import { colorMapOf, parseColor, rampTable } from "../pure/color.js";
 
 const tokens = new Map();
 
@@ -16,14 +16,21 @@ export function token(name) {
 }
 
 // Each ramp goes through a middle stop, so its middle is a clear colour,
-// not a grey mix of the ends.
+// not a grey mix of the ends. The field maps are the viewer's choice
+// (settings: sequentialMap, divergingMap; pure/color.js, COLOR_MAPS).
 let tables = null;
+let maps = { sequential: "blue", diverging: "blue-red" };
+export function setColorMaps(sequential, diverging) {
+  if (maps.sequential === sequential && maps.diverging === diverging) return;
+  maps = { sequential, diverging };
+  tables = null;
+}
 export function colorTables() {
-  const ramp = (...names) => rampTable(names.map((name) => parseColor(token(name))));
+  const ramp = (names) => rampTable(names.map((name) => parseColor(token(name))));
   tables ??= {
-    sequential: ramp("--seq-low", "--seq-mid", "--seq-high"),
-    diverging: ramp("--div-low", "--div-mid", "--div-high"),
-    quality: ramp("--quality-good", "--quality-mid", "--quality-bad"),
+    sequential: ramp(colorMapOf("sequential", maps.sequential).tokens),
+    diverging: ramp(colorMapOf("diverging", maps.diverging).tokens),
+    quality: ramp(["--quality-good", "--quality-mid", "--quality-bad"]),
   };
   return tables;
 }

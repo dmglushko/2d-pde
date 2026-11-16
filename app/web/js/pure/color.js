@@ -91,6 +91,30 @@ export function lockedScale(low, high) {
   return { kind, locked: true, min: low, max: high, low, high, bound: Math.max(-low, high), position: (v) => (v - low) / (high - low) };
 }
 
+// The colour maps a field can be drawn with, per scale kind: each goes
+// through three colour tokens (css/tokens.css) in OKLab. Sequential maps
+// are one hue, dark (low, near the surface) to light; diverging ones two
+// hues with a neutral grey middle. The first of each is the default; the
+// choice is the viewer's (settings.js), not the case's.
+export const COLOR_MAPS = Object.freeze({
+  sequential: [
+    { id: "blue", label: "Blue", tokens: ["--seq-low", "--seq-mid", "--seq-high"] },
+    { id: "orange", label: "Orange", tokens: ["--seq-orange-low", "--seq-orange-mid", "--seq-orange-high"] },
+    { id: "green", label: "Green", tokens: ["--seq-green-low", "--seq-green-mid", "--seq-green-high"] },
+  ],
+  diverging: [
+    { id: "blue-red", label: "Blue – red", tokens: ["--div-low", "--div-mid", "--div-high"] },
+    { id: "blue-orange", label: "Blue – orange", tokens: ["--div-low", "--div-mid", "--div-orange-high"] },
+  ],
+});
+
+// The map of `kind` ("sequential" or "diverging") called `id`, else the
+// kind's default.
+export function colorMapOf(kind, id) {
+  const maps = COLOR_MAPS[kind];
+  return maps.find((m) => m.id === id) ?? maps[0];
+}
+
 export const SERIES_SLOTS = 8;
 
 // The colour token of region i: the categorical slots in their fixed

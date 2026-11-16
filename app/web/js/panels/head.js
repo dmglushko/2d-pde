@@ -1,7 +1,7 @@
 // The head of every step's panel: its title, its primary action and a
 // one-line status (running with the seconds, up to date, outdated,
 // failed), with a "Next" link once the result is up to date. It stays at
-// the top of the panel while the panel scrolls (style.css, .step-head).
+// the top of the panel while the panel scrolls (css/panels.css, .step-head).
 
 import { STEPS, stageInfo, stepOfPath } from "../pure/stages.js";
 import { h, fill, revealFolded } from "../dom.js";

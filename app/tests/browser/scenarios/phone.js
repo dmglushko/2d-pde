@@ -1,7 +1,7 @@
 // At phone width: no horizontal scroll, the tabs fit and come first, the
 // picture follows, then the panel.
-export default async ({ d, w, q, qa, click, select, until, nextFrame, text, check, pointer }) => {
-  select(q("#examples"), "heat_annulus.json");
+export default async ({ example, d, w, q, qa, click, select, until, nextFrame, text, check, pointer }) => {
+  example("heat_annulus.json");
   await until(() => text(q("#toast")).includes("heat_annulus"), "the heat case");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   click(q("#run-all"));
@@ -52,4 +52,16 @@ export default async ({ d, w, q, qa, click, select, until, nextFrame, text, chec
   await until(() => view() !== start, "the pinch to zoom");
   check("a pinch zooms the picture", true);
   check("a pinch pins no probe", d.querySelectorAll(".probes-table tbody tr").length === 0);
+  // The top bar is one row: the case's actions are in its menu.
+  const bar = q(".topbar").getBoundingClientRect();
+  check("the top bar is one row", bar.height < 64, String(bar.height));
+  const middles = qa(".topbar .brand, .case-actions > *").filter((e) => e.offsetParent).map((e) => { const r = e.getBoundingClientRect(); return r.top + r.height / 2; });
+  check("its controls sit on one line", Math.max(...middles) - Math.min(...middles) < 6, middles.map(Math.round).join(","));
+  // The picture can be folded away and back.
+  const collapse = q("#collapse-picture");
+  check("the collapse control is shown", collapse.getBoundingClientRect().width > 0);
+  click(collapse);
+  check("the picture folds away", q("#canvas-wrap").getBoundingClientRect().height === 0 && collapse.getAttribute("aria-expanded") === "false");
+  click(collapse);
+  check("and comes back", q("#canvas-wrap").getBoundingClientRect().height > 100 && collapse.getAttribute("aria-expanded") === "true");
 };

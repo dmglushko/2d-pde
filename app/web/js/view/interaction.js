@@ -1,5 +1,5 @@
 // The picture's interaction: one pointer pans (a press that does not
-// move pins a probe; with the profile tool it draws the profile's line),
+// move selects the boundary region under it, or else pins a probe; with the profile tool it draws the profile's line),
 // two pointers pinch to zoom and pan together, the wheel zooms, the keys
 // pan, zoom, fit and pin; the readout under the pointer.
 
@@ -109,7 +109,13 @@ export function listen(v) {
       v.callbacks.onProfile?.(line);
       return;
     }
-    if (!ended.moved && event.button === 0) pin(v, ended.x, ended.y);
+    if (!ended.moved && event.button === 0) {
+      // On a boundary (within a few pixels) a click selects its region;
+      // elsewhere it pins a probe.
+      const region = v.callbacks.onRegion ? regionNear(v, ended.x, ended.y) : null;
+      if (region) v.callbacks.onRegion(region);
+      else pin(v, ended.x, ended.y);
+    }
   };
   canvas.addEventListener("pointerup", (event) => release(event, false));
   canvas.addEventListener("pointercancel", (event) => release(event, true));

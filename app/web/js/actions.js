@@ -5,7 +5,8 @@ import { reconcileConditions } from "./pure/case_model.js";
 import { fieldScale } from "./pure/color.js";
 import { RUN_ALL, STAGES, requestCase, stageInfo, stagesToRun } from "./pure/stages.js";
 import { settings } from "./settings.js";
-import { growSnapshots, loadAround } from "./snapshots.js";
+import { backoffDelay, isTransient, plainError } from "./pure/requests.js";
+import { growSnapshots, loadAround, retrySnapshots } from "./snapshots.js";
 import {
   blockedReason,
   currentError,
@@ -77,15 +78,18 @@ const calls = {
   field: (caseData, field) => api.field(caseData, field),
   // The summary, then the newest snapshot and its neighbours (the page
   // keeps some snapshots only, snapshots.js).
-  solve: async (caseData) => {
-    const summary = await api.solve(caseData);
-    summary.layout = summary.values;
-    summary.values = [];
-    growSnapshots(summary, summary.layout.snapshots);
-    if (summary.values.length > 0) await loadAround(summary, summary.values.length - 1);
-    return summary;
-  },
+  solve: async (caseData) => solveData(await api.solve(caseData)),
 };
+
+// A run's progress made into the page's solve result: its values are
+// loaded on demand (snapshots.js), the newest first.
+async function solveData(summary) {
+  summary.layout = summary.values;
+  summary.values = [];
+  growSnapshots(summary, summary.layout.snapshots);
+  if (summary.values.length > 0) await loadAround(summary, summary.values.length - 1);
+  return summary;
+}
 for (const stage of STAGES) if (!calls[stage.call]) throw new Error(`no call for ${stage.id}`);
 
 // Requests overlap (a slow mesh, a quick edit, a new case). Each run of a
@@ -109,8 +113,9 @@ function solveScale(data) {
 
 // Runs one stage for the current case. Returns true when it worked, false
 // when it failed, and null when a newer run or another case superseded it
-// (its answer is then dropped).
-async function run(stage, field) {
+// (its answer is then dropped). `found`: for the solve, the progress of a
+// run the server already has (reattachRun): it is followed, not started.
+async function run(stage, field, found = null) {
   const ticket = requestTicket(stage, () => currentKey(stage));
   const key = ticket.key;
   const caseData = structuredClone(requestCase(store.caseData, stage));
@@ -120,7 +125,7 @@ async function run(stage, field) {
   store.busySince[stage] = globalThis.performance?.now() ?? Date.now();
   notify("result");
   try {
-    const data = await calls[stageInfo(stage).call](caseData, field);
+    const data = found ? await solveData(found) : await calls[stageInfo(stage).call](caseData, field);
     if (!current()) return null;
     // A check of a problem that was edited since is not worth showing: a
     // newer one is on its way.
@@ -130,7 +135,8 @@ async function run(stage, field) {
       store.solveFrame = data.times.length - 1;
       store.solveFrameChosen = false;
       store.fieldSource = "solve";
-      store.view.colorBy = "field";
+      // A reattached run keeps the colouring this tab had (restoreView).
+      if (!(found && store.view.colorBy === "gradient")) store.view.colorBy = "field";
     }
     if (stage === "field") {
       store.fieldSource = "field";
@@ -169,15 +175,46 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Follows a time run until it is done, fails or is stopped: polls its
 // progress, fetches the new snapshots and shows the newest (unless the
-// user chose one with the slider, or the setting is off). Returns true
-// when done, false when it failed, null when it was stopped or replaced.
+// user chose one with the slider, or the setting is off). A poll the
+// server refused for the moment (busy) or that got no answer is tried
+// again after a growing pause (pure/requests.js, backoffDelay), and the
+// Solve step says so (store.runNotice); a run that was replaced or is gone
+// ends the following with its plain message. Returns true when done,
+// false when it failed, null when it was stopped or replaced.
 async function followRun(run, data) {
   const live = () => following === run && run.ticket.live();
+  let attempt = 0;
   while (live()) {
-    await wait(POLL_MS);
+    await wait(attempt === 0 ? POLL_MS : backoffDelay(attempt - 1));
     if (!live()) return null;
-    const progress = await api.solveProgress(run.job);
+    let progress;
+    try {
+      progress = await api.solveProgress(run.job);
+    } catch (error) {
+      if (!live()) return null;
+      if (isTransient(error)) {
+        const delay = backoffDelay(attempt);
+        attempt += 1;
+        store.runNotice = `${plainError(error, "the run's progress").text} Trying again in ${Math.max(1, Math.round(delay / 1000))} s; the run goes on on the server.`;
+        notify("progress");
+        continue;
+      }
+      following = null;
+      store.runNotice = null;
+      const failure = error instanceof ApiError ? error : new ApiError({ stage: "solve", message: String(error) });
+      failure.key = run.key;
+      store.errors.solve = failure;
+      data.state = "stopped";
+      return false;
+    }
     if (!live()) return null;
+    if (attempt > 0 || store.runNotice) {
+      attempt = 0;
+      store.runNotice = null;
+      // The server answers again: snapshots that failed meanwhile are
+      // tried again.
+      retrySnapshots(data, { quiet: true });
+    }
     const values = data.values;
     const layout = progress.values;
     Object.assign(data, progress, { values, layout });
@@ -203,6 +240,29 @@ async function followRun(run, data) {
     return progress.state === "done" ? true : null;
   }
   return null;
+}
+
+// After a reload of the tab (the same client id, api.js): the server may
+// still have this client's run of the case. If it does, the page shows it
+// (and follows it while it runs) instead of nothing; the mesh is fetched
+// first, since the solution is drawn on it. A run that is gone, or one of
+// other inputs, shows nothing. Returns true when a run was found.
+export async function reattachRun() {
+  const ticket = requestTicket("solve", () => currentKey("solve"));
+  let answer;
+  try {
+    answer = await api.currentRun(structuredClone(requestCase(store.caseData, "solve")));
+  } catch {
+    return false;
+  }
+  const progress = answer?.run;
+  if (!progress || progress.state === "failed" || !ticket.holds()) return false;
+  if (!isFresh("mesh")) {
+    for (const id of stagesToRun("mesh", isFresh)) if ((await run(id)) !== true) return false;
+  }
+  // A solve started meanwhile wins.
+  if (!ticket.holds() || !ticket.newest()) return false;
+  return (await run("solve", undefined, progress)) === true;
 }
 
 function stopFollowing() {
@@ -314,13 +374,14 @@ function syncConditions(geometryView, key) {
   const next = reconcileConditions(store.caseData, regions, store.catalog.problem.default_condition);
   const same = JSON.stringify([next.problem, next.view]) === JSON.stringify([store.caseData.problem, store.caseData.view]);
   if (same) return;
+  // The page's own edit: the case stays as saved (or not) as it was.
   editCase(
     (c) => {
       c.problem = next.problem;
       c.view = next.view;
     },
     "structure",
-    { sections: ["problem", "view"], record: false },
+    { sections: ["problem", "view"], automatic: true },
   );
 }
 

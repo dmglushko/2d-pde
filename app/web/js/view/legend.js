@@ -3,7 +3,7 @@
 // picture, which draws the same legend under the canvas.
 
 import { regionToken } from "../pure/color.js";
-import { formatNumber, getDefaultDigits, numberText, parseNumberText } from "../pure/format.js";
+import { colorbarTicks, formatNumber, getDefaultDigits, numberText, parseNumberText } from "../pure/format.js";
 import { h, regionSwatch } from "../dom.js";
 import { QUALITY_MAX_DEGREES } from "./layers.js";
 import { colorTables, tableOf, token } from "./tokens.js";
@@ -18,13 +18,14 @@ export function gradientName(name) {
 // reversed} or, for a field that has one value, {label, constant}) and
 // whether the Dirichlet nodes are drawn.
 export function legendData(v) {
-  const { geometry, mesh, meshStale, colorBy, field, layers = {} } = v.data;
+  const { geometry, mesh, meshStale, colorBy, field, layers = {}, selectedRegion = null, legendNote = null } = v.data;
   const current = mesh && !meshStale;
   const regions = current ? mesh.region_names : (geometry?.regions ?? []).map((r) => r.name);
   let bar = null;
   if (current && colorBy === "quality") bar = { label: "smallest angle", table: colorTables().quality, low: "0°", high: `${QUALITY_MAX_DEGREES}°+`, reversed: true };
   const scale = v.shownScale;
-  if (current && field && scale && (colorBy === "field" || colorBy === "gradient")) {
+  const fieldShown = mesh && field && (current || field.outdated);
+  if (fieldShown && scale && (colorBy === "field" || colorBy === "gradient")) {
     const label = colorBy === "gradient" ? [gradientName(field.name), field.when].filter(Boolean).join(" ") : field.label;
     if (scale.kind === "constant") bar = { label, constant: formatNumber(scale.min, getDefaultDigits() + 2) };
     else if (scale.kind !== "empty")
@@ -38,13 +39,21 @@ export function legendData(v) {
         highValue: scale.high,
         locked: Boolean(scale.locked),
         reversed: false,
+        outdated: Boolean(field.outdated),
+        ticks: colorbarTicks(scale.low, scale.high, 4),
       };
   }
-  return { regions, bar, dirichlet: Boolean(layers.dirichlet && v.data.dirichlet && current) };
+  return { regions, bar, dirichlet: Boolean(layers.dirichlet && v.data.dirichlet && current), selectedRegion, note: legendNote };
 }
 
+// The colour bar's width (narrower at phone width) and the room beside
+// it for the end ticks' text (CSS pixels; css/picture.css and
+// css/layout.css, .bar-scale canvas.bar, use the same widths).
+const BAR_PAD = 18;
+const barWidth = () => (globalThis.matchMedia?.("(max-width: 860px)").matches ? 128 : 200);
+
 function barCanvas(table, reversed) {
-  const canvas = h("canvas", { width: 256, height: 1, "aria-hidden": "true" });
+  const canvas = h("canvas", { class: "bar", width: 256, height: 1, "aria-hidden": "true" });
   const context = canvas.getContext("2d");
   const image = context.createImageData(256, 1);
   for (let i = 0; i < 256; i++) {
@@ -86,11 +95,42 @@ function lockInputs(bar, onLock) {
   return [low, high];
 }
 
+// The bar with round ticks under it (pure/format.js, colorbarTicks); a
+// bar without ticks (the smallest angle) names its ends beside it.
+function scaleBar(bar) {
+  const canvas = barCanvas(bar.table, bar.reversed);
+  if (!bar.ticks?.length) return [h("span", { class: "num" }, bar.low), canvas, h("span", { class: "num" }, bar.high)];
+  // The ticks are an SVG under the bar (positions as attributes: the page
+  // has no inline styles), BAR_PAD wider on each side for the end labels.
+  const BAR_WIDTH = barWidth();
+  const width = BAR_WIDTH + 2 * BAR_PAD;
+  const ns = "http://www.w3.org/2000/svg";
+  const ticks = document.createElementNS(ns, "svg");
+  for (const [name, value] of Object.entries({ class: "ticks", width, height: 16, viewBox: `0 0 ${width} 16`, "aria-hidden": "true" })) ticks.setAttribute(name, String(value));
+  for (const t of bar.ticks) {
+    const x = BAR_PAD + t.position * BAR_WIDTH;
+    const mark = document.createElementNS(ns, "line");
+    for (const [name, value] of Object.entries({ x1: x, x2: x, y1: 0, y2: 3 })) mark.setAttribute(name, String(value));
+    const label = document.createElementNS(ns, "text");
+    for (const [name, value] of Object.entries({ x, y: 14, "text-anchor": "middle" })) label.setAttribute(name, String(value));
+    label.textContent = t.text;
+    ticks.append(mark, label);
+  }
+  return [
+    h(
+      "span",
+      { class: "bar-scale", role: "img", "aria-label": `Colour scale from ${bar.low} to ${bar.high}`, title: `From ${bar.low} to ${bar.high}` },
+      canvas,
+      ticks,
+    ),
+  ];
+}
+
 function colorbar(bar, onLock) {
   const label = h("span", { class: "bar-label" }, bar.label);
   if (bar.constant !== undefined) return h("span", { class: "colorbar" }, label, h("span", { class: "num" }, `constant: ${bar.constant}`));
-  const canvas = barCanvas(bar.table, bar.reversed);
-  if (!bar.quantity || !onLock) return h("span", { class: "colorbar" }, label, h("span", { class: "num" }, bar.low), canvas, h("span", { class: "num" }, bar.high));
+  const canvas = scaleBar(bar);
+  if (!bar.quantity || !onLock) return h("span", { class: "colorbar" }, label, canvas);
   if (bar.locked) {
     const [low, high] = lockInputs(bar, onLock);
     const unlock = h("button", { type: "button", class: "small", title: "Colour each field by its own range again", onclick: () => onLock(bar.quantity, null) }, "Unlock");
@@ -106,13 +146,25 @@ function colorbar(bar, onLock) {
     },
     "Lock range",
   );
-  return h("span", { class: "colorbar" }, label, h("span", { class: "num" }, bar.low), canvas, h("span", { class: "num" }, bar.high), lock);
+  return h("span", { class: "colorbar" }, label, canvas, lock);
 }
 
-export function legendNodes({ regions, bar, dirichlet }, onLock) {
-  const items = regions.map((name, i) => h("span", { class: "item" }, regionSwatch(i), name));
+// The legend's items. A region is a button: it selects the region (as a
+// click on its boundary does) and opens its condition (onRegion).
+export function legendNodes({ regions, bar, dirichlet, selectedRegion, note }, onLock, onRegion) {
+  const items = regions.map((name, i) =>
+    onRegion
+      ? h(
+          "button",
+          { type: "button", class: "item region-item", "aria-pressed": String(name === selectedRegion), title: `Select ${name} and edit its boundary condition`, onclick: () => onRegion(name) },
+          regionSwatch(i),
+          name,
+        )
+      : h("span", { class: "item" }, regionSwatch(i), name),
+  );
   if (bar) items.push(colorbar(bar, onLock));
   if (dirichlet) items.push(h("span", { class: "item" }, h("span", { class: "swatch node", "aria-hidden": "true" }), "Dirichlet node"));
+  if (note) items.push(h("span", { class: "legend-note" }, note));
   return items;
 }
 
@@ -142,7 +194,7 @@ export function picture(v) {
     rows.at(-1).push({ ...entry, x });
     x += w;
   }
-  const legendHeight = pad + rows.length * line + (bar ? line + 6 * ratio : 0) + pad;
+  const legendHeight = pad + rows.length * line + (bar ? line + 16 * ratio : 0) + pad;
   out.height = v.canvas.height + legendHeight;
   ctx.fillStyle = token("--surface");
   ctx.fillRect(0, 0, out.width, out.height);
@@ -172,8 +224,11 @@ export function picture(v) {
     ctx.fillStyle = token("--ink-2");
     if (bar.constant !== undefined) ctx.fillText(`constant: ${bar.constant}`, bx, y);
     else {
-      ctx.fillText(bar.low, bx, y);
-      bx += ctx.measureText(bar.low).width + 8 * ratio;
+      const ticks = bar.ticks ?? [];
+      if (!ticks.length) {
+        ctx.fillText(bar.low, bx, y);
+        bx += ctx.measureText(bar.low).width + 8 * ratio;
+      }
       const barWidth = Math.min(240 * ratio, Math.max(60 * ratio, width - bx - ctx.measureText(bar.high).width - pad - 8 * ratio));
       for (let i = 0; i < barWidth; i++) {
         const p = i / Math.max(1, barWidth - 1);
@@ -181,9 +236,18 @@ export function picture(v) {
         ctx.fillStyle = `rgb(${bar.table[k]},${bar.table[k + 1]},${bar.table[k + 2]})`;
         ctx.fillRect(bx + i, y - 5 * ratio, 1, 10 * ratio);
       }
-      bx += barWidth + 8 * ratio;
       ctx.fillStyle = token("--ink-2");
-      ctx.fillText(bar.high, bx, y);
+      if (ticks.length) {
+        ctx.save();
+        ctx.font = `${Math.round(11 * ratio)}px ${token("--font")}`;
+        ctx.textAlign = "center";
+        for (const t of ticks) {
+          const tx = bx + t.position * (barWidth - 1);
+          ctx.fillRect(tx, y + 5 * ratio, 1, 3 * ratio);
+          ctx.fillText(t.text, tx, y + 14 * ratio);
+        }
+        ctx.restore();
+      } else ctx.fillText(bar.high, bx + barWidth + 8 * ratio, y);
     }
   }
   return new Promise((resolve) => out.toBlob(resolve, "image/png"));

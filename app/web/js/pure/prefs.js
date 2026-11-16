@@ -12,7 +12,17 @@ export const SETTINGS_DEFAULTS = Object.freeze({
   digits: 4,
   pixelRatioCap: 2,
   isolineCount: 10,
+  // The colour maps of fields (pure/color.js, COLOR_MAPS): one for values
+  // of one sign, one for values of both signs.
+  sequentialMap: "blue",
+  divergingMap: "blue-red",
 });
+
+// The choices of a setting that is one of a list of names.
+const SETTING_CHOICES = {
+  sequentialMap: ["blue", "orange", "green"],
+  divergingMap: ["blue-red", "blue-orange"],
+};
 
 const SETTING_RANGES = {
   checkDelayMs: [100, 3000],
@@ -31,6 +41,8 @@ export function normalizeSettings(input) {
     const value = input[key];
     if (typeof fallback === "boolean") {
       if (typeof value === "boolean") out[key] = value;
+    } else if (typeof fallback === "string") {
+      if (SETTING_CHOICES[key].includes(value)) out[key] = value;
     } else if (typeof value === "number" && Number.isFinite(value)) {
       const [low, high] = SETTING_RANGES[key];
       const clamped = Math.min(high, Math.max(low, value));

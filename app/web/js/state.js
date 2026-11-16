@@ -53,6 +53,9 @@ export const store = {
   probes: [],
   // The line of the line profile ({from: [x, y], to: [x, y]}) or null.
   profile: null,
+  // The boundary region selected in the picture or its legend (a name),
+  // drawn highlighted; null for none.
+  selectedRegion: null,
   // The client's reference run on the server ({job, mode, times,
   // mesh_id}) or null.
   reference: null,
@@ -127,6 +130,8 @@ export function setCase(caseData, { name = store.caseName, dirty = false } = {})
   for (const stage of Object.keys(store.errors)) store.errors[stage] = null;
   store.invalid.clear();
   store.profile = null;
+  store.selectedRegion = null;
+  keepView();
   history.clear();
   forgetKeys(null);
   bumpRevisions(null);
@@ -145,12 +150,16 @@ export function setInputGroup(group) {
 // `sections`: the case sections the edit changes (their keys are
 // computed again); by default every section. `record: false` leaves it
 // out of undo (a consequence of another edit, such as the conditions
-// following the regions of a new geometry).
-export function editCase(mutate, reason = "edit", { sections = null, record = true } = {}) {
+// following the regions of a new geometry). `automatic: true` is an edit
+// the page makes by itself, not the user (the conditions that follow a
+// geometry, a refinement study's mesh levels): it leaves the case as
+// saved or not as it was, and is never an undo step.
+export function editCase(mutate, reason = "edit", { sections = null, record = true, automatic = false } = {}) {
+  if (automatic) record = false;
   const names = sections ?? Object.keys(store.caseData);
   const before = record ? textsOf(names) : null;
   mutate(store.caseData);
-  store.dirty = true;
+  if (!automatic) store.dirty = true;
   const touched = sections ?? [...new Set([...names, ...Object.keys(store.caseData)])];
   forgetKeys(touched);
   bumpRevisions(touched);
@@ -289,6 +298,7 @@ export function openStep(step) {
 export function setColorBy(colorBy) {
   if (store.view.colorBy === colorBy) return;
   store.view.colorBy = colorBy;
+  keepView();
   notify("view");
 }
 
@@ -296,6 +306,7 @@ export function setColorBy(colorBy) {
 export function setViewOption(name, value) {
   if (store.view[name] === value) return;
   store.view[name] = value;
+  keepView();
   notify("view");
 }
 
@@ -303,17 +314,73 @@ export function setViewOption(name, value) {
 // {low, high}, or frees it (null).
 export function setLockedRange(quantity, range) {
   store.view.locked = { ...store.view.locked, [quantity]: range };
+  keepView();
   notify("view");
 }
 
 export function setProbes(probes) {
   store.probes = probes;
+  keepView();
   notify("probes");
 }
 
 export function setProfile(profile) {
   store.profile = profile;
+  keepView();
   notify("probes");
+}
+
+// Selects a boundary region (highlighted in the picture), or none.
+export function setSelectedRegion(name) {
+  if (store.selectedRegion === name) return;
+  store.selectedRegion = name;
+  notify("view");
+}
+
+// --- the picture's state in this tab --------------------------------------------
+
+// The probes, the profile line, the locked ranges and the colour choice
+// are the viewer's, not the case's: they are kept in this tab's
+// sessionStorage (a reload of the tab finds them; another tab, or a saved
+// case, does not carry them), and dropped when another case replaces this
+// one.
+const VIEW_KEY = "pde2d-app-view";
+
+function keepView() {
+  try {
+    const { colorBy, isolines, difference, locked } = store.view;
+    globalThis.sessionStorage?.setItem(VIEW_KEY, JSON.stringify({ colorBy, isolines, difference, locked, probes: store.probes, profile: store.profile }));
+  } catch {
+    // Not kept: the picture starts plain after a reload.
+  }
+}
+
+// The picture's state kept in this tab, as stored (read before the case
+// is loaded: loading a case keeps the state it starts with).
+export function keptView() {
+  try {
+    return JSON.parse(globalThis.sessionStorage?.getItem(VIEW_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+// Puts back the picture's state kept in this tab (after a reload), as far
+// as it reads back whole; returns whether anything was.
+export function restoreView(kept) {
+  if (!kept || typeof kept !== "object") return false;
+  const point = (p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
+  const range = (r) => (r && Number.isFinite(r.low) && Number.isFinite(r.high) && r.low < r.high ? { low: r.low, high: r.high } : null);
+  if (["none", "quality", "field", "gradient"].includes(kept.colorBy)) store.view.colorBy = kept.colorBy;
+  store.view.isolines = kept.isolines === true;
+  store.view.difference = ["exact", "reference"].includes(kept.difference) ? kept.difference : null;
+  store.view.locked = { field: range(kept.locked?.field), gradient: range(kept.locked?.gradient) };
+  if (Array.isArray(kept.probes))
+    store.probes = kept.probes.filter((p) => Number.isInteger(p?.slot) && p.slot >= 0 && p.slot < 4 && Number.isFinite(p.x) && Number.isFinite(p.y)).slice(0, 4);
+  store.profile = kept.profile && point(kept.profile.from) && point(kept.profile.to) ? { from: kept.profile.from, to: kept.profile.to } : null;
+  keepView();
+  notify("view");
+  return true;
 }
 
 // --- results -------------------------------------------------------------------------

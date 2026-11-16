@@ -406,7 +406,7 @@ function openReports(from, foldId) {
   toggle.focus({ preventScroll: true });
 }
 
-// The colour swatch of region `index` (style.css: .swatch.series-N).
+// The colour swatch of region `index` (css/panels.css: .swatch.series-N).
 export function regionSwatch(index) {
   return h("span", { class: `swatch ${regionToken(index).slice(2)}`, "aria-hidden": "true" });
 }
