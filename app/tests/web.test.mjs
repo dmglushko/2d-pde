@@ -1,7 +1,18 @@
 // Tests of the page's pure helpers (app/web/js/core.js), without a
 // browser. Run by CTest as app_web when Node.js is installed.
 import assert from "node:assert/strict";
-import { applyRegionEdit, fileKind, normalizeCase, reconcileConditions, renameParameter, undoRegionEdit, visibleCoefficients } from "../web/js/pure/case_model.js";
+import {
+  applyDrawingChange,
+  applyRegionEdit,
+  fileKind,
+  normalizeCase,
+  reconcileConditions,
+  renameParameter,
+  replaceLastRegionEdit,
+  undoRegionEdit,
+  visibleCoefficients,
+} from "../web/js/pure/case_model.js";
+import * as drawingModel from "../web/js/pure/drawing.js";
 import { fieldScale, lockedScale, nodePositions, oklabToRgb, rampTable, regionToken, rgbToOklab } from "../web/js/pure/color.js";
 import { formatNumber, niceTicks, numberText, parseNumberText, pictureName, setDefaultDigits } from "../web/js/pure/format.js";
 import { History } from "../web/js/pure/history.js";
@@ -832,6 +843,245 @@ test("a refinement study: levels and observed orders", () => {
   assert.deepEqual(observedOrders([{ h: 1, e: 1 }, { h: 1, e: 0.5 }, { h: 0.5, e: 0 }], (r) => r.e), [null, null, null]);
   const slope = referenceSlope([1, 0.5, 0.25], 2, 1, 4);
   assert.deepEqual(slope, [4, 1, 0.25]);
+});
+
+// --- the drawing editor (pure/drawing.js) ---------------------------------------
+
+const D = drawingModel;
+const close = (a, b, tolerance = 1e-12) => Math.abs(a - b) <= tolerance;
+const closePoint = (p, q, tolerance = 1e-12) => close(p[0], q[0], tolerance) && close(p[1], q[1], tolerance);
+// The square [0, 2]² with its sides named, counterclockwise.
+const drawnSquare = () => {
+  const d = D.blankDrawing(2, 2);
+  return D.moveLoop(d, 0, [1, 1]);
+};
+
+test("drawing curves: points, derivatives and samples of every kind", () => {
+  const a = [0, 0];
+  const b = [2, 0];
+  assert.deepEqual(D.pointAt({ kind: "line", start: a, end: b }, 0.25), [0.5, 0]);
+  const q = { kind: "quadratic", start: a, end: b, control: [1, 2] };
+  assert.deepEqual(D.pointAt(q, 0.5), [1, 1]);
+  const c = { kind: "cubic", start: a, end: b, control1: [0, 1], control2: [2, 1] };
+  assert.deepEqual(D.pointAt(c, 0.5), [1, 0.75]);
+  const arc = { kind: "arc", center: [1, 0], radius_x: 1, radius_y: 1, rotation: 0, start_angle: Math.PI, sweep_angle: -Math.PI, start: a, end: b };
+  assert.ok(closePoint(D.pointAt(arc, 0.5), [1, 1]), "an arc clockwise over the top");
+  // The derivative against a difference quotient.
+  for (const curve of [q, c, arc]) {
+    const h = 1e-6;
+    const d = D.derivativeAt(curve, 0.3);
+    const p1 = D.pointAt(curve, 0.3 + h);
+    const p0 = D.pointAt(curve, 0.3 - h);
+    assert.ok(closePoint(d, [(p1[0] - p0[0]) / (2 * h), (p1[1] - p0[1]) / (2 * h)], 1e-6), curve.kind);
+  }
+  // A Bezier's samples end exactly on its vertices.
+  const samples = D.sampleCurve({ ...c, end: [0.1 + 0.2, 0] });
+  assert.equal(samples.length, 2 * (D.CURVE_SAMPLES + 1));
+  assert.equal(samples[samples.length - 2], 0.1 + 0.2);
+  assert.deepEqual(D.sampleCurve({ kind: "line", start: a, end: b }), [0, 0, 2, 0]);
+});
+
+test("drawing: the nearest point of a curve, and hit testing", () => {
+  const arc = { kind: "arc", center: [0, 0], radius_x: 1, radius_y: 1, rotation: 0, start_angle: 0, sweep_angle: Math.PI, start: [1, 0], end: [-1, 0] };
+  const found = D.nearestOnCurve(arc, [0, 2]);
+  assert.ok(close(found.t, 0.5, 1e-9) && closePoint(found.point, [0, 1], 1e-9) && close(found.distance, 1, 1e-9), JSON.stringify(found));
+  const line = D.nearestOnCurve({ kind: "line", start: [0, 0], end: [4, 0] }, [1, 3]);
+  assert.deepEqual([line.t, line.point, line.distance], [0.25, [1, 0], 3]);
+  const d = drawnSquare();
+  // A vertex wins over its edges; an edge has its parameter.
+  assert.deepEqual(D.hitTest(d, [2.05, 0.02], 0.1), { type: "vertex", loop: 0, vertex: 1, point: [2, 0] });
+  const edge = D.hitTest(d, [1, 2.04], 0.1);
+  assert.equal(edge.type, "edge");
+  assert.equal(edge.edge, 2);
+  assert.ok(close(edge.t, 0.5));
+  assert.equal(D.hitTest(d, [1, 1], 0.1), null, "nothing in the middle");
+  // A selected edge shows its handles first: the bend handle of a line,
+  // and its loop's move handle.
+  const selected = [{ loop: 0, edge: 0 }];
+  assert.equal(D.hitTest(d, [1, 0.03], 0.1, selected).type, "bend");
+  assert.equal(D.hitTest(d, [1, 1.02], 0.1, selected).type, "move");
+  const curved = D.setEdgeKind(d, 0, 0, "cubic");
+  const handles = D.edgeHandles(curved, 0, 0);
+  assert.deepEqual(handles.map((h) => h.which), ["control1", "control2"]);
+  assert.equal(D.hitTest(curved, handles[1].point, 0.1, selected).which, "control2");
+});
+
+test("drawing: snapping to the grid and to corners", () => {
+  assert.equal(D.gridStep(2.236), 0.05);
+  assert.equal(D.gridStep(100), 2);
+  assert.equal(D.gridStep(0.3), 0.01);
+  assert.deepEqual(D.snapToGrid([0.31, -0.29], 0.1), [0.3, -0.3]);
+  assert.deepEqual(D.snapToGrid([7.4, 2.6], 5), [5, 5]);
+  assert.deepEqual(D.snapToGrid([0.123, 4], null), [0.123, 4]);
+  const d = drawnSquare();
+  // Near a corner: exactly the corner, on the edge pointed at.
+  const corner = D.drawingSplitPoint(d, [1.97, 0.01], 0.05);
+  assert.deepEqual(corner, { loop: 0, edge: 0, t: 1, vertex: 1, point: [2, 0], region: "bottom" });
+  const right = D.drawingSplitPoint(d, [2.03, 0.04], 0.05);
+  assert.deepEqual([right.edge, right.t, right.vertex, right.region], [1, 0, 1, "right"]);
+  const inside = D.drawingSplitPoint(d, [0.5, -0.1], 0.05);
+  assert.deepEqual([inside.edge, inside.vertex, inside.region], [0, null, "bottom"]);
+  assert.ok(close(inside.t, 0.25));
+  // The server's view: curves sampled, a mesh file's edges.
+  const view = { kind: "curves", loops: [{ curves: [{ region: "a", points: [0, 0, 1, 0] }, { region: "b", points: [1, 0, 1, 1, 0, 0] }] }] };
+  assert.deepEqual(D.viewSplitPoint(view, [0.98, 0.01], 0.05), { point: [1, 0], region: "a", corner: true });
+  assert.deepEqual(D.viewSplitPoint(view, [0.5, 0.01], 0.05), { point: [0.5, 0], region: "a", corner: false });
+  const meshView = { kind: "mesh_file", regions: [{ name: "r" }], boundary_edges: [[0, 0, 1, 0, 0]] };
+  assert.deepEqual(D.viewSplitPoint(meshView, [0.7, 0.2], 0.01), { point: [1, 0], region: "r", corner: true });
+});
+
+test("drawing: arcs through three points and arcs that follow their ends", () => {
+  const arc = D.arcThrough([1, 0], [0, 1], [-1, 0]);
+  assert.ok(closePoint(arc.center, [0, 0]) && close(arc.radius_x, 1) && close(arc.sweep_angle, Math.PI), JSON.stringify(arc));
+  const cw = D.arcThrough([1, 0], [0, -1], [-1, 0]);
+  assert.ok(close(cw.sweep_angle, -Math.PI), "clockwise through the bottom");
+  const big = D.arcThrough([1, 0], [-1, 0], [0, 1]);
+  assert.ok(close(big.sweep_angle, -1.5 * Math.PI), "three quarters, through the far side");
+  assert.equal(D.arcThrough([0, 0], [1, 1e-14], [2, 0]), null, "a straight line has no arc");
+  // Moving an end: the arc is scaled and turned with its chord, its ends
+  // land on the new ends.
+  const curve = { ...arc, start: [1, 0], end: [-1, 0] };
+  const moved = D.followEnds(curve, [1, 0], [-1, 0], [1, 0], [1, 4]);
+  assert.ok(closePoint(D.pointAt(moved, 0), [1, 0]) && closePoint(D.pointAt(moved, 1), [1, 4]), JSON.stringify(moved));
+  assert.ok(close(moved.radius_x, 2) && close(moved.radius_y, 2));
+  // A closed arc turns and scales about its centre.
+  const circle = D.circleLoop([0, 0], 1, "c").edges[0];
+  const grown = D.followEnds(circle, [1, 0], [1, 0], [0, 2], [0, 2]);
+  assert.ok(close(grown.radius_x, 2) && closePoint(D.pointAt(grown, 0), [0, 2]) && closePoint(grown.center, [0, 0]));
+});
+
+test("drawing edits: move, bend, kinds, insert and delete vertices", () => {
+  const d = drawnSquare();
+  // Dragging a vertex moves both of its edges (they take their ends from
+  // it); the original is not changed.
+  const moved = D.moveVertex(d, 0, 2, [3, 3]);
+  assert.deepEqual(moved.loops[0].vertices[2], [3, 3]);
+  assert.deepEqual(d.loops[0].vertices[2], [2, 2]);
+  // An arc next to it follows; a cubic's handle moves with its vertex.
+  let arcs = D.setEdgeKind(d, 0, 1, "arc");
+  const bulge = D.pointAt(D.edgeCurve(arcs.loops[0], 1), 0.5);
+  assert.ok(closePoint(bulge, [2.5, 1]), `outward by a quarter: ${bulge}`);
+  arcs = D.moveVertex(arcs, 0, 2, [2, 4]);
+  const followed = D.edgeCurve(arcs.loops[0], 1);
+  assert.ok(closePoint(D.pointAt(followed, 1), [2, 4]) && closePoint(D.pointAt(followed, 0), [2, 0]));
+  const cubic = D.setEdgeKind(d, 0, 1, "cubic");
+  const before = cubic.loops[0].edges[1].control2;
+  const after = D.moveVertex(cubic, 0, 2, [2.5, 2]).loops[0].edges[1].control2;
+  assert.deepEqual(after, [before[0] + 0.5, before[1]]);
+  // Bending a line makes the arc through the dragged point.
+  const bent = D.bendEdge(d, 0, 0, [1, -0.5]);
+  assert.ok(closePoint(D.pointAt(D.edgeCurve(bent.loops[0], 0), 0.5), [1, -0.5]));
+  assert.equal(D.bendEdge(d, 0, 0, [1, 0]), d, "a straight drag changes nothing");
+  // Kinds: a quadratic as a cubic is the same curve.
+  const quad = D.setEdgeKind(d, 0, 0, "quadratic");
+  const asCubic = D.setEdgeKind(quad, 0, 0, "cubic");
+  for (const t of [0.2, 0.5, 0.9]) assert.ok(closePoint(D.pointAt(D.edgeCurve(quad.loops[0], 0), t), D.pointAt(D.edgeCurve(asCubic.loops[0], 0), t)));
+  assert.equal(D.setEdgeKind(asCubic, 0, 0, "line").loops[0].edges[0].kind, "line");
+  const circle = { source: "drawing", loops: [D.circleLoop([0, 0], 1, "c")] };
+  assert.throws(() => D.setEdgeKind(circle, 0, 0, "line"), /full circle/);
+  const grown = D.bendEdge(circle, 0, 0, [-3, 0]);
+  assert.ok(close(grown.loops[0].edges[0].radius_x, 3) && closePoint(grown.loops[0].vertices[0], [3, 0]));
+  // Inserting a vertex splits the curve exactly where it was.
+  for (const kind of ["line", "arc", "quadratic", "cubic"]) {
+    const shaped = kind === "line" ? d : D.setEdgeKind(d, 0, 0, kind);
+    const curve = D.edgeCurve(shaped.loops[0], 0);
+    const { drawing: split, vertex } = D.insertVertex(shaped, 0, 0, 0.3);
+    assert.equal(vertex, 1);
+    assert.equal(split.loops[0].vertices.length, 5);
+    assert.ok(closePoint(split.loops[0].vertices[1], D.pointAt(curve, 0.3)), kind);
+    for (const [t, piece, u] of [
+      [0.15, 0, 0.5],
+      [0.65, 1, 0.5],
+    ])
+      assert.ok(closePoint(D.pointAt(curve, t), D.pointAt(D.edgeCurve(split.loops[0], piece), u)), `${kind} keeps its shape`);
+    assert.equal(split.loops[0].edges[1].region, "bottom");
+  }
+  // Deleting a vertex joins its edges with a line; three stay.
+  const fewer = D.deleteVertex(D.insertVertex(d, 0, 0, 0.5).drawing, 0, 1);
+  assert.deepEqual(fewer, d);
+  assert.throws(() => D.deleteVertex(D.deleteVertex(d, 0, 0), 0, 0), /three vertices/);
+});
+
+test("drawing edits: regions, loops and a split at a point", () => {
+  const d = drawnSquare();
+  assert.deepEqual(D.drawingRegions(d), ["bottom", "right", "top", "left"]);
+  assert.equal(D.uniqueName(["a", "a_2"], "a"), "a_3");
+  assert.equal(D.uniqueName(["a", "a_2"], "a_2"), "a_3");
+  assert.equal(D.uniqueName(["a"], "b"), "b");
+  const walls = D.assignRegion(d, [{ loop: 0, edge: 1 }, { loop: 0, edge: 3 }], "walls");
+  assert.deepEqual(D.drawingRegions(walls), ["bottom", "walls", "top"]);
+  assert.deepEqual(D.drawingRegions(D.renameRegion(walls, "walls", "top")), ["bottom", "top"]);
+  // A split inside an edge inserts a vertex; the edge's run is cut there.
+  const split = D.splitRegion(d, 0, 0, 0.25, "bottom", "bottom_2");
+  assert.deepEqual(split.loops[0].vertices[1], [0.5, 0]);
+  assert.deepEqual(split.loops[0].edges.map((e) => e.region), ["bottom", "bottom_2", "right", "top", "left"]);
+  // At a vertex inside a run of two edges: no new vertex.
+  const merged = D.renameRegion(d, "right", "bottom");
+  const atCorner = D.splitRegion(merged, 0, 0, 1, "floor", "wall");
+  assert.deepEqual(atCorner.loops[0].edges.map((e) => e.region), ["floor", "wall", "top", "left"]);
+  assert.equal(atCorner.loops[0].vertices.length, 4);
+  // At an end of the run there is nothing to split.
+  assert.equal(D.splitRegion(d, 0, 0, 1, "a", "b"), null);
+  assert.equal(D.splitRegion(d, 0, 1, 0, "a", "b"), null);
+  // A whole loop starts at vertex 0.
+  const ring = D.renameRegion(D.renameRegion(D.renameRegion(d, "right", "bottom"), "top", "bottom"), "left", "bottom");
+  const lid = D.splitRegion(ring, 0, 2, 0, "rest", "lid");
+  assert.deepEqual(lid.loops[0].edges.map((e) => e.region), ["rest", "rest", "lid", "lid"]);
+  assert.equal(D.splitRegion(ring, 0, 0, 0, "a", "b"), null, "vertex 0 is its end");
+  // New loops: inside the square a hole, outside another piece.
+  assert.equal(D.newLoopRegion(d, [1, 1]), "hole");
+  assert.equal(D.newLoopRegion(d, [5, 5]), "boundary");
+  const holed = D.addLoop(d, D.circleLoop([1, 1], 0.4, "hole"));
+  assert.equal(D.newLoopRegion(holed, [1.1, 1]), "boundary", "inside the hole is outside the domain");
+  assert.equal(D.newLoopRegion(holed, [0.2, 0.2]), "hole_2");
+  const rect = D.rectangleLoop([3, 2], [1, 0], "r");
+  assert.deepEqual(rect.vertices, [[1, 0], [3, 0], [3, 2], [1, 2]]);
+  assert.deepEqual(D.polygonLoop([[0, 0], [1, 0], [0, 1]], "t").edges.length, 3);
+  const moved = D.moveLoop(holed, 1, [0.5, 0]);
+  assert.deepEqual(moved.loops[1].edges[0].center, [1.5, 1]);
+  assert.deepEqual(moved.loops[1].vertices[0], [1.9, 1]);
+  assert.equal(D.deleteLoop(holed, 1).loops.length, 1);
+  assert.throws(() => D.deleteLoop(d, 0), /one loop/);
+  const box = D.drawingBounds(holed);
+  assert.deepEqual(box, { min: [0, 0], max: [2, 2] });
+  // Errors' paths name the place; selections are checked against edits.
+  assert.deepEqual(D.drawingErrorTarget("geometry.loops[1].edges[3]"), { loop: 1, edge: 3 });
+  assert.deepEqual(D.drawingErrorTarget("geometry.loops[0].vertices[2][1]"), { loop: 0, vertex: 2 });
+  assert.deepEqual(D.drawingErrorTarget("geometry.loops[2]"), { loop: 2 });
+  assert.equal(D.drawingErrorTarget("geometry.svg"), null);
+  assert.ok(D.selectionValid(d, { loop: 0, vertex: 3 }));
+  assert.ok(!D.selectionValid(d, { loop: 0, vertex: 4 }));
+  assert.ok(!D.selectionValid(d, { edges: [{ loop: 1, edge: 0 }] }));
+});
+
+test("conditions follow a drawing's region changes and a replaced split", () => {
+  const base = { geometry: drawnSquare(), problem: { boundary_conditions: { bottom: { g: "1" }, top: { g: "2" } } } };
+  const geometry = D.renameRegion(base.geometry, "bottom", "floor");
+  const renamed = applyDrawingChange(base, geometry, { op: "rename", from: "bottom", to: "floor" });
+  assert.deepEqual({ ...renamed.problem.boundary_conditions }, { top: { g: "2" }, floor: { g: "1" } });
+  assert.equal(renamed.geometry.loops[0].edges[0].region, "floor");
+  assert.equal(renamed.view, undefined, "no edit record for a drawing");
+  const split = applyDrawingChange(base, base.geometry, { op: "split", region: "top", first: "top", second: "lid" });
+  assert.deepEqual(split.problem.boundary_conditions.lid, { g: "2" });
+  // A shape's split renamed right after: the edit is replaced, and the
+  // conditions go to the new names.
+  const shape = { geometry: { source: "shape", region_edits: [] }, problem: { boundary_conditions: { top: { g: "2" } } } };
+  const once = applyRegionEdit(shape, { op: "split", region: "top", fraction: 0.5, first: "top", second: "top_2" });
+  const named = replaceLastRegionEdit(once, { op: "split", region: "top", fraction: 0.5, first: "top", second: "inlet" });
+  assert.deepEqual(named.geometry.region_edits, [{ op: "split", region: "top", fraction: 0.5, first: "top", second: "inlet" }]);
+  assert.deepEqual({ ...named.problem.boundary_conditions }, { top: { g: "2" }, inlet: { g: "2" } });
+  // A mesh file's split at a node moves conditions as a split does.
+  const node = applyRegionEdit(shape, { op: "split_at_node", region: "top", node: 4, first: "a", second: "b" });
+  assert.deepEqual(Object.keys(node.problem.boundary_conditions), ["a", "b"]);
+  // A drawing case reads back; one without loops gets a blank one.
+  const defaults = { geometry: { source: "shape", shape: "rectangle" }, mesh: { spec: {}, discretizer: { type: "x" }, triangulator: { type: "y" }, refiner: null, improvers: [] }, problem: {}, assembly: { t: 0 }, solve: { mode: "static", linear_solver: { type: "z" }, static: {}, time: { method: { type: "m" }, step: { type: "s" } } } };
+  const read = normalizeCase({ format: "pde2d-app-case", geometry: drawnSquare() }, defaults);
+  assert.deepEqual(read.caseData.geometry, drawnSquare());
+  assert.ok(!read.replaced.includes("geometry.loops"));
+  const empty = normalizeCase({ format: "pde2d-app-case", geometry: { source: "drawing", loops: [] } }, defaults);
+  assert.ok(empty.replaced.includes("geometry.loops"));
+  assert.equal(empty.caseData.geometry.loops[0].vertices.length, 4);
+  assert.equal(empty.caseData.geometry.region_edits, undefined);
 });
 
 let failed = 0;

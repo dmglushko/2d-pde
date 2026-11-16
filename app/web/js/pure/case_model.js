@@ -15,9 +15,49 @@ function dictionary(source) {
 // The names a region edit touches: the regions it removes or creates.
 function touchedNames(edit) {
   if (edit.op === "rename") return [edit.from, edit.to];
-  if (edit.op === "split") return [edit.region, edit.first, edit.second];
+  if (edit.op === "split" || edit.op === "split_at_node") return [edit.region, edit.first, edit.second];
   if (edit.op === "merge") return [edit.source];
   return [];
+}
+
+// The conditions (a dictionary) as they follow a region edit: a rename
+// gives the new name the old name's condition, a split gives both halves
+// the condition of the whole, a merge removes the source's (the target
+// keeps its own).
+function followEdit(conditions, edit) {
+  const move = (from, ...to) => {
+    if (!Object.hasOwn(conditions, from)) return;
+    const condition = conditions[from];
+    delete conditions[from];
+    for (const name of to) conditions[name] = structuredClone(condition);
+  };
+  if (edit.op === "rename") move(edit.from, edit.to);
+  else if (edit.op === "split" || edit.op === "split_at_node") move(edit.region, edit.first, edit.second);
+  else if (edit.op === "merge") move(edit.source);
+}
+
+// A drawing changed by a region change that is not a region edit of the
+// case (a drawing has none: its edges carry their regions): the case with
+// `geometry` as its geometry and the conditions moved as the edit would
+// move them (rename, merge, split as in applyRegionEdit). The edit is
+// not recorded; undo restores both sections (state.js). Returns a new
+// case.
+export function applyDrawingChange(caseData, geometry, edit = null) {
+  const next = structuredClone(caseData);
+  next.geometry = structuredClone(geometry);
+  if (edit) {
+    const problem = (next.problem ??= {});
+    const conditions = dictionary(problem.boundary_conditions);
+    followEdit(conditions, edit);
+    problem.boundary_conditions = conditions;
+  }
+  return next;
+}
+
+// The last region edit replaced by `edit` (its conditions restored, then
+// moved by the new one): a split's names changed right after the split.
+export function replaceLastRegionEdit(caseData, edit) {
+  return applyRegionEdit(undoRegionEdit(caseData), edit);
 }
 
 // Adds a region edit to the case and moves the boundary conditions with
@@ -38,15 +78,7 @@ export function applyRegionEdit(caseData, edit) {
   const conditions = dictionary(problem.boundary_conditions);
   const before = Object.create(null);
   for (const name of touchedNames(edit)) before[name] = Object.hasOwn(conditions, name) ? conditions[name] : null;
-  const move = (from, ...to) => {
-    if (!Object.hasOwn(conditions, from)) return;
-    const condition = conditions[from];
-    delete conditions[from];
-    for (const name of to) conditions[name] = structuredClone(condition);
-  };
-  if (edit.op === "rename") move(edit.from, edit.to);
-  else if (edit.op === "split") move(edit.region, edit.first, edit.second);
-  else if (edit.op === "merge") move(edit.source);
+  followEdit(conditions, edit);
   edits.push(edit);
   undo.push({ before });
   problem.boundary_conditions = conditions;
@@ -111,6 +143,17 @@ export function reconcileConditions(caseData, regions, defaultCondition) {
   return next;
 }
 
+// A 2 x 1 rectangle, the loops of a blank drawing.
+function blankLoops() {
+  const v = [
+    [-1, -0.5],
+    [1, -0.5],
+    [1, 0.5],
+    [-1, 0.5],
+  ];
+  return [{ vertices: v, edges: ["bottom", "right", "top", "left"].map((region) => ({ kind: "line", region })) }];
+}
+
 // A case as the page can show it: the format is checked, and a section
 // that is missing or of the wrong type is replaced by the default's (also
 // the parts of the mesh section the forms need). Everything else is left
@@ -132,7 +175,7 @@ export function normalizeCase(input, defaults) {
   // A component choice: {"type": text, "options": object}.
   const isChoice = (value) => isObject(value) && isString(value.type) && optional(isObject)(value.options);
 
-  const sources = ["shape", "svg", "mesh_file"];
+  const sources = ["shape", "svg", "mesh_file", "drawing"];
   ensure(caseData, "geometry", (g) => isObject(g) && sources.includes(g.source), defaults.geometry, "geometry");
   const geometry = caseData.geometry;
   if (geometry.source === "shape") {
@@ -141,7 +184,12 @@ export function normalizeCase(input, defaults) {
   }
   if (geometry.source === "svg") ensure(geometry, "svg", optional(isString), "", "geometry.svg");
   if (geometry.source === "mesh_file") ensure(geometry, "text", optional(isString), "", "geometry.text");
-  ensure(geometry, "region_edits", optional(isList(isObject)), [], "geometry.region_edits");
+  if (geometry.source === "drawing") {
+    // The editor needs loops of vertices and edges; their values are the
+    // server's to check.
+    const isLoop = (loop) => isObject(loop) && Array.isArray(loop.vertices) && Array.isArray(loop.edges) && loop.edges.every(isObject);
+    ensure(geometry, "loops", (loops) => Array.isArray(loops) && loops.length > 0 && loops.every(isLoop), blankLoops(), "geometry.loops");
+  } else ensure(geometry, "region_edits", optional(isList(isObject)), [], "geometry.region_edits");
 
   ensure(caseData, "mesh", isObject, defaults.mesh, "mesh");
   ensure(caseData.mesh, "spec", isObject, defaults.mesh.spec, "mesh.spec");
