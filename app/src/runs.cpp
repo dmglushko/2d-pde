@@ -162,8 +162,7 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
   made->settings = run_settings(case_json);
   made->started = std::chrono::system_clock::now();
   made->parameters = staged("problem", [&] {
-    return read_parameters(
-        member(member(case_json, "problem"), "parameters"));
+    return read_parameters(member(member(case_json, "problem"), "parameters"));
   });
   made->setup = staged(
       "solve", [&] { return build_solve_setup(member(case_json, "solve")); });

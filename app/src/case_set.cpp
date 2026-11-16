@@ -89,10 +89,10 @@ void set_case_value(Json &case_json, std::string_view path,
       if (!node->is_array())
         throw PathError(std::string(path), parent + " is not a list");
       if (index >= node->size())
-        throw PathError(std::string(path),
-                        parent + " has " + std::to_string(node->size()) +
-                            " items, so there is no [" +
-                            std::to_string(index) + "]");
+        throw PathError(std::string(path), parent + " has " +
+                                               std::to_string(node->size()) +
+                                               " items, so there is no [" +
+                                               std::to_string(index) + "]");
       node = &(*node)[index];
     }
   }

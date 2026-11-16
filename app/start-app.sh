@@ -50,16 +50,50 @@ if answers; then
   exit 0
 fi
 
-if [[ ! -f "$build_dir/CMakeCache.txt" ]]; then
+# Configures the build, its output also in the log (for the checks below).
+log="$build_dir/configure.log"
+configure() {
+  mkdir -p "$build_dir"
+  cmake -S . -B "$build_dir" "${generator[@]}" "$@" 2>&1 | tee "$log"
+  return "${PIPESTATUS[0]}"
+}
+
+# A configure that failed leaves a cache without build files: configure
+# again then.
+if [[ ! -f "$build_dir/CMakeCache.txt" ||
+      ( ! -f "$build_dir/build.ninja" && ! -f "$build_dir/Makefile" ) ]]; then
   echo "First start: configuring the build in $build_dir."
   generator=()
-  if command -v ninja > /dev/null; then
+  if command -v ninja > /dev/null && [[ ! -f "$build_dir/CMakeCache.txt" ]]; then
     generator=(-G Ninja)
   fi
-  cmake -S . -B "$build_dir" "${generator[@]}" ||
-    fail "configuring failed. Configure once by hand, for example
+  if ! configure; then
+    # SymEngine installed by hand under ~/.local/opt is not found on its
+    # own: retry with the newest one there.
+    symengine="$(ls -d "$HOME"/.local/opt/symengine*/lib/cmake/symengine 2> /dev/null | sort -V | tail -n 1)"
+    if grep -qi "symengine" "$log" && [[ -n "$symengine" ]]; then
+      echo
+      echo "Configuring again with SymEngine from $symengine."
+      configure -DSymEngine_DIR="$symengine"
+    fi
+  fi
+  if [[ ! -f "$build_dir/build.ninja" && ! -f "$build_dir/Makefile" ]]; then
+    if grep -q "nlohmann_json" "$log"; then
+      fail "nlohmann/json is missing; the app needs it. Install it, for example
+  sudo apt install nlohmann-json3-dev
+and start again."
+    fi
+    if grep -qi "symengine" "$log"; then
+      fail "SymEngine 0.14 was not found. Install it (see the root README) or
+give its directory once by hand, for example
   tools/test.sh -DSymEngine_DIR=\$HOME/.local/opt/symengine-0.14/lib/cmake/symengine
 and start again."
+    fi
+    fail "configuring failed (the messages above, also in $log). Configure once
+by hand, for example
+  tools/test.sh -DSymEngine_DIR=\$HOME/.local/opt/symengine-0.14/lib/cmake/symengine
+and start again."
+  fi
 fi
 echo "Building the app (only what changed)..."
 cmake --build "$build_dir" --target pde2d_app -j "$jobs" ||

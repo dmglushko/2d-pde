@@ -57,8 +57,7 @@ Json moving_case(int snapshots) {
   return case_json;
 }
 
-template <class F>
-app::StageError stage_error(F &&f) {
+template <class F> app::StageError stage_error(F &&f) {
   try {
     f();
   } catch (const app::StageError &error) {
@@ -170,7 +169,8 @@ int main() {
          const Json mesh = app::test_support::mesh_view(session, second);
          double largest = 0.0;
          for (std::size_t i = 0; i < mesh["nodes"].size(); i += 2)
-           largest = std::max(largest, std::abs(mesh["nodes"][i].get<double>()));
+           largest =
+               std::max(largest, std::abs(mesh["nodes"][i].get<double>()));
          near(result["max_abs"].get<double>(), largest, 1e-12, "max |x|");
          check(result["against"]["reference"] == run["job"], "against");
 
@@ -189,9 +189,8 @@ int main() {
 
          // Without a reference, a clear message.
          (void)session.clear_reference();
-         check(std::string(stage_error([&] {
-                             (void)session.compare(refused);
-                           }).what())
+         check(std::string(
+                   stage_error([&] { (void)session.compare(refused); }).what())
                        .find("no reference") != std::string::npos,
                "no reference");
        }},
@@ -224,8 +223,8 @@ int main() {
          request["reference"] = true;
          Json result;
          for (int i = 0; i < 400; ++i) {
-           if (session.solve_progress(run["job"].get<std::uint64_t>())[
-                   "state"] == "done")
+           if (session.solve_progress(
+                   run["job"].get<std::uint64_t>())["state"] == "done")
              break;
            std::this_thread::sleep_for(std::chrono::milliseconds(10));
          }
@@ -260,8 +259,8 @@ int main() {
       {"the point locator finds every triangle's centroid",
        [] {
          app::Session session;
-         const Json mesh =
-             app::test_support::mesh_view(session, app::Session::default_case());
+         const Json mesh = app::test_support::mesh_view(
+             session, app::Session::default_case());
          mesh::Mesh plain;
          for (std::size_t i = 0; i < mesh["nodes"].size(); i += 2)
            plain.nodes.push_back({mesh["nodes"][i].get<double>(),
@@ -274,13 +273,15 @@ int main() {
          const app::PointLocator locator(plain);
          for (std::size_t t = 0; t < plain.triangles.size(); ++t) {
            const auto &n = plain.triangles[t].nodes;
-           const geometry::Point c{
-               (plain.nodes[n[0]].x + plain.nodes[n[1]].x +
-                plain.nodes[n[2]].x) / 3,
-               (plain.nodes[n[0]].y + plain.nodes[n[1]].y +
-                plain.nodes[n[2]].y) / 3};
+           const geometry::Point c{(plain.nodes[n[0]].x + plain.nodes[n[1]].x +
+                                    plain.nodes[n[2]].x) /
+                                       3,
+                                   (plain.nodes[n[0]].y + plain.nodes[n[1]].y +
+                                    plain.nodes[n[2]].y) /
+                                       3};
            const auto found = locator.locate(c);
-           check(found && found->triangle == t, "triangle " + std::to_string(t));
+           check(found && found->triangle == t,
+                 "triangle " + std::to_string(t));
            for (const double w : found->weights)
              near(w, 1.0 / 3.0, 1e-9, "centroid weights");
          }
@@ -295,11 +296,11 @@ int main() {
          const Json b = session.solve(other, "b");
          check(a["job"] != b["job"], "two runs");
          // Each client still has its own run.
-         check(session.solve_progress(a["job"].get<std::uint64_t>(), "a")[
-                   "state"] == "done",
+         check(session.solve_progress(a["job"].get<std::uint64_t>(),
+                                      "a")["state"] == "done",
                "a's run");
-         check(session.solve_progress(b["job"].get<std::uint64_t>(), "b")[
-                   "state"] == "done",
+         check(session.solve_progress(b["job"].get<std::uint64_t>(),
+                                      "b")["state"] == "done",
                "b's run");
          // Not the other's.
          (void)stage_error([&] {
@@ -312,8 +313,8 @@ int main() {
          (void)stage_error([&] {
            (void)session.solve_progress(a["job"].get<std::uint64_t>(), "a");
          });
-         check(session.solve_progress(b["job"].get<std::uint64_t>(), "b")[
-                   "state"] == "done",
+         check(session.solve_progress(b["job"].get<std::uint64_t>(),
+                                      "b")["state"] == "done",
                "b kept");
        }},
       {"the mesh's arrays round trip in binary",
@@ -348,8 +349,9 @@ int main() {
                  "a region tag");
          Json unknown = Json::object();
          unknown["mesh"] = 999;
-         check(stage_error([&] { (void)session.mesh_arrays(unknown); })
-                       .path() == "mesh",
+         check(stage_error([&] {
+                 (void)session.mesh_arrays(unknown);
+               }).path() == "mesh",
                "an unknown mesh");
        }},
   });

@@ -24,8 +24,7 @@ Json number_or_null(double value) {
 
 // Two snapshot times are the same when they differ by rounding only.
 bool same_time(double a, double b) {
-  return std::abs(a - b) <=
-         1e-12 * std::max({1.0, std::abs(a), std::abs(b)});
+  return std::abs(a - b) <= 1e-12 * std::max({1.0, std::abs(a), std::abs(b)});
 }
 
 } // namespace
@@ -70,7 +69,8 @@ DifferenceStats difference_stats(std::span<const double> u,
     squares += d * d;
     weighted += weights[i] * d * d;
   }
-  out.rms = u.empty() ? 0.0 : std::sqrt(squares / static_cast<double>(u.size()));
+  out.rms =
+      u.empty() ? 0.0 : std::sqrt(squares / static_cast<double>(u.size()));
   out.l2 = std::sqrt(weighted);
   return out;
 }
@@ -86,19 +86,16 @@ Comparison::Comparison(const Run &run, const Json &request,
                     "true");
   if (!exact.is_null()) {
     text_ = require_string(exact, "exact");
-    exact_.emplace(at_path("exact",
-                           [&] {
-                             return fem::CompiledExpression(
-                                 fem::Expression(text_), run.parameters);
-                           }));
+    exact_.emplace(at_path("exact", [&] {
+      return fem::CompiledExpression(fem::Expression(text_), run.parameters);
+    }));
     return;
   }
   if (against_reference != Json(true))
     throw PathError("reference", "expected true");
   if (!reference)
-    throw PathError("reference",
-                    "no reference run is kept (keep one with "
-                    "/api/solve/reference)");
+    throw PathError("reference", "no reference run is kept (keep one with "
+                                 "/api/solve/reference)");
   // The same mesh object, so node i is the same point in both.
   if (reference->meshed->mesh() != run.meshed->mesh())
     throw PathError(
@@ -181,9 +178,8 @@ Json Comparison::summary() const {
 
 std::string Comparison::difference_float32(std::size_t k) const {
   if (k >= run_.solutions->size())
-    throw PathError("snapshot",
-                    std::format("snapshot {} is not ready ({} are)", k,
-                                run_.solutions->size()));
+    throw PathError("snapshot", std::format("snapshot {} is not ready ({} are)",
+                                            k, run_.solutions->size()));
   const auto values = other(k);
   if (!values)
     throw PathError("snapshot",

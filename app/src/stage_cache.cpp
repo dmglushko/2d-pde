@@ -99,8 +99,7 @@ StageCache::meshed(const Json &case_json) {
     const fem::Problem problem = staged(
         "problem", [&] { return build_problem(member(case_json, "problem")); });
     meshed_ = staged("meshed_problem", [&] {
-      return std::make_shared<const fem::MeshedProblem>(outcome->mesh,
-                                                        problem);
+      return std::make_shared<const fem::MeshedProblem>(outcome->mesh, problem);
     });
     meshed_key_ = std::move(key);
   }

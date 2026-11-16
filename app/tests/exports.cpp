@@ -138,8 +138,7 @@ int main() {
          check(pde2d.find("pde2d_app") == std::string::npos, "unchanged");
 
          const Json provenance = Json::parse(
-             session.export_file(case_json, "provenance.json", context)
-                 .text());
+             session.export_file(case_json, "provenance.json", context).text());
          check(provenance["format"] == "pde2d-app-provenance", "format");
          check(provenance["case"] == case_json, "the full case");
          check(provenance["case_name"] == "study.json", "the name");
@@ -150,9 +149,9 @@ int main() {
          // Without a run of the case, provenance has none.
          Json other = case_json;
          other["solve"]["time"]["snapshots"] = 4;
-         check(Json::parse(session.export_file(other, "provenance.json").text())
-                   ["run"]
-                       .is_null(),
+         check(Json::parse(
+                   session.export_file(other, "provenance.json").text())["run"]
+                   .is_null(),
                "no run");
        }},
       {"the VTK file has the mesh and one array per snapshot",
@@ -271,8 +270,7 @@ int main() {
          Json case_json = app::Session::default_case();
          app::apply_set_argument(case_json,
                                  "mesh.spec.max_edge_length.relative=0.02");
-         check(case_json["mesh"]["spec"]["max_edge_length"]["relative"] ==
-                   0.02,
+         check(case_json["mesh"]["spec"]["max_edge_length"]["relative"] == 0.02,
                "a number");
          app::apply_set_argument(
              case_json,

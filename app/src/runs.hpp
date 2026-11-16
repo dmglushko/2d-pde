@@ -52,9 +52,9 @@ struct Run {
   std::string key; // solve_key of the case it was made from
   RunState state = RunState::running;
   std::shared_ptr<const fem::MeshedProblem> meshed;
-  std::uint64_t mesh_id = 0;   // the StageCache's id of its mesh
-  fem::Parameters parameters;  // the problem's, for comparisons
-  Json settings;               // the sections it was made from
+  std::uint64_t mesh_id = 0;  // the StageCache's id of its mesh
+  fem::Parameters parameters; // the problem's, for comparisons
+  Json settings;              // the sections it was made from
   std::chrono::system_clock::time_point started;
   SolveSetup setup;
   // The snapshot times of a time run; the kept solutions are the first

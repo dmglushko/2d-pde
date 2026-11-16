@@ -671,7 +671,21 @@ Json Session::run(const Json &case_json) {
       if (solved["state"] == "running")
         solved = finish_run(solved["job"].get<std::uint64_t>(),
                             std::string(local_client));
+      const Json job = solved["job"];
       out["solve"] = std::move(solved);
+      // With an exact solution in the case (view.exact_solution), the
+      // error of the run against it, for convergence studies.
+      const Json &exact = member(member(case_json, "view"), "exact_solution");
+      if (exact.is_string() && !exact.get<std::string>().empty()) {
+        Json request = Json::object();
+        request["job"] = job;
+        request["exact"] = exact;
+        Json comparison = compare(request);
+        comparison.erase("snapshots");
+        comparison["nodes"] = out["mesh"]["stats"]["nodes"];
+        comparison["longest_edge"] = out["mesh"]["longest_edge"];
+        out["comparison"] = std::move(comparison);
+      }
     }
     out["ok"] = true;
   } catch (const StageError &error) {

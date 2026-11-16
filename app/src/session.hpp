@@ -119,8 +119,11 @@ public:
                            const ExportContext &context = {});
 
   // Runs every stage the case allows, for the command line: geometry,
-  // mesh, problem check, assembly, solve. Stops at the first failing stage and
-  // reports it under "error". "ok" is true when every stage ran.
+  // mesh, problem check, assembly, solve, and with view.exact_solution in
+  // the case, the comparison with it ("comparison": max_abs, max_rms,
+  // max_l2 over the snapshots, nodes, longest_edge). Stops at the first
+  // failing stage and reports it under "error". "ok" is true when every
+  // stage ran.
   Json run(const Json &case_json);
 
   // How many clients the session keeps now.

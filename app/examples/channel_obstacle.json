@@ -1,0 +1,106 @@
+{
+  "format": "pde2d-app-case",
+  "version": 1,
+  "notes": "Steady convection-diffusion in a 4 x 1 channel drawn as an SVG: a heated round obstacle (u = 1) in a flow with the parabolic profile v_x = 6 U y (1 - y) (mean speed U), -k (u_xx + u_yy) + v_x u_x = 0. Cold fluid enters (u = 0), the walls are insulated and the outlet lets the heat leave (u_n = 0). The warm wake stretches downstream; raise U or lower k for a longer, thinner one (a finer mesh is needed when the cell Peclet number v h / k passes about 2).",
+  "geometry": {
+    "source": "svg",
+    "name": "channel_obstacle.svg",
+    "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.1 -1.1 4.2 1.2\">\n  <!-- A 4 x 1 channel, 0 < y < 1 in the app (SVG's y points down and the\n       app flips it), with a round obstacle at (1, 0.5). -->\n  <path id=\"inlet\" d=\"M 0 0 L 0 -1\" fill=\"none\" stroke=\"#2a78d6\" stroke-width=\"0.02\"/>\n  <path data-region=\"wall\" d=\"M 0 -1 L 4 -1\" fill=\"none\" stroke=\"#898781\" stroke-width=\"0.02\"/>\n  <path id=\"outlet\" d=\"M 4 -1 L 4 0\" fill=\"none\" stroke=\"#eb6834\" stroke-width=\"0.02\"/>\n  <path data-region=\"wall\" d=\"M 4 0 L 0 0\" fill=\"none\" stroke=\"#898781\" stroke-width=\"0.02\"/>\n  <path id=\"obstacle\" d=\"M 1.2 -0.5 A 0.2 0.2 0 1 0 0.8 -0.5 A 0.2 0.2 0 1 0 1.2 -0.5 Z\" fill=\"none\" stroke=\"#1baf7a\" stroke-width=\"0.02\"/>\n</svg>\n",
+    "region_edits": []
+  },
+  "mesh": {
+    "spec": {
+      "max_edge_length": {
+        "absolute": null,
+        "relative": 0.015
+      }
+    },
+    "discretizer": {
+      "type": "chord_length",
+      "options": {
+        "max_curve_deviation": {
+          "absolute": null,
+          "relative": 0.001
+        },
+        "corner_angle_degrees": 30
+      }
+    },
+    "triangulator": {
+      "type": "cdt",
+      "options": {}
+    },
+    "refiner": {
+      "type": "ruppert",
+      "options": {
+        "min_angle_degrees": 25
+      }
+    },
+    "improvers": [
+      {
+        "type": "delaunay_flips",
+        "options": {
+          "use": "local_and_final"
+        }
+      }
+    ]
+  },
+  "problem": {
+    "equation": {
+      "a_xx": "-k",
+      "a_yy": "-k",
+      "b_x": "6*U*y*(1 - y)",
+      "f": "0"
+    },
+    "parameters": {
+      "k": 0.05,
+      "U": 1.0
+    },
+    "boundary_conditions": {
+      "inlet": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "wall": {
+        "beta_n": "1",
+        "g": "0"
+      },
+      "outlet": {
+        "beta_n": "1",
+        "g": "0"
+      },
+      "obstacle": {
+        "alpha": "1",
+        "g": "1"
+      }
+    },
+    "initial": {}
+  },
+  "assembly": {
+    "t": 0.0
+  },
+  "solve": {
+    "mode": "static",
+    "linear_solver": {
+      "type": "sparse_lu",
+      "options": {}
+    },
+    "static": {
+      "t": 0.0
+    },
+    "time": {
+      "t0": 0.0,
+      "t1": 1.0,
+      "snapshots": 50,
+      "method": {
+        "type": "implicit_euler",
+        "options": {}
+      },
+      "step": {
+        "type": "fixed_step",
+        "options": {
+          "dt": 0.01
+        }
+      }
+    }
+  }
+}

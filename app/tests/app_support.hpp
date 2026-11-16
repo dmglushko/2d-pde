@@ -17,16 +17,16 @@ namespace pde2d::app::test_support {
 inline std::uint32_t read_uint32(std::string_view bytes, std::size_t at) {
   std::uint32_t value = 0;
   for (int byte = 3; byte >= 0; --byte)
-    value = (value << 8) |
-            static_cast<unsigned char>(bytes[at + static_cast<std::size_t>(byte)]);
+    value = (value << 8) | static_cast<unsigned char>(
+                               bytes[at + static_cast<std::size_t>(byte)]);
   return value;
 }
 
 inline double read_float64(std::string_view bytes, std::size_t at) {
   std::uint64_t value = 0;
   for (int byte = 7; byte >= 0; --byte)
-    value = (value << 8) |
-            static_cast<unsigned char>(bytes[at + static_cast<std::size_t>(byte)]);
+    value = (value << 8) | static_cast<unsigned char>(
+                               bytes[at + static_cast<std::size_t>(byte)]);
   return std::bit_cast<double>(value);
 }
 
@@ -52,7 +52,8 @@ inline Json decode_mesh(const Json &summary, std::string_view bytes) {
   {
     const Json &p = part("nodes");
     for (std::size_t i = 0; i < p["count"].get<std::size_t>(); ++i)
-      nodes.push_back(read_float64(bytes, p["offset"].get<std::size_t>() + 8 * i));
+      nodes.push_back(
+          read_float64(bytes, p["offset"].get<std::size_t>() + 8 * i));
   }
   Json triangles = Json::array();
   {

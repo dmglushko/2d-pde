@@ -46,10 +46,9 @@ std::vector<std::string> provenance_lines(const Json &provenance) {
     lines.push_back("case: " + provenance["case_name"].get<std::string>());
   lines.push_back("exported: " + provenance["exported"].get<std::string>());
   if (const Json &run = provenance["run"]; run.is_object())
-    lines.push_back(std::format("run: {} ({}, started {})",
-                                run["id"].get<std::uint64_t>(),
-                                run["state"].get<std::string>(),
-                                run["started"].get<std::string>()));
+    lines.push_back(std::format(
+        "run: {} ({}, started {})", run["id"].get<std::uint64_t>(),
+        run["state"].get<std::string>(), run["started"].get<std::string>()));
   lines.push_back("settings: " + provenance["settings"].dump());
   return lines;
 }
@@ -147,7 +146,8 @@ ExportedFile write_operator(const ExportInfo &info, const ExportInputs &in) {
       out += std::format("{}\n", value);
     return text_file(info, std::move(out));
   }
-  const auto [op, what] = [&]() -> std::pair<const fem::Operator *, const char *> {
+  const auto [op,
+              what] = [&]() -> std::pair<const fem::Operator *, const char *> {
     switch (info.kind) {
     case ExportKind::stiffness_mtx:
       return {&assembled.stiffness(), "stiffness A"};
@@ -206,9 +206,10 @@ ExportedFile write_solution_vtk(const ExportInfo &info,
                                 const ExportInputs &in) {
   auto mesh = in.run->meshed->mesh();
   auto solutions = in.run->solutions;
-  std::string title = std::format(
-      "pde2d_app {} (library {}), run {}, exported {}", app_version(),
-      library_version(), in.run->id, in.provenance["exported"].get<std::string>());
+  std::string title =
+      std::format("pde2d_app {} (library {}), run {}, exported {}",
+                  app_version(), library_version(), in.run->id,
+                  in.provenance["exported"].get<std::string>());
   if (in.provenance["case_name"].is_string())
     title += ", case " + in.provenance["case_name"].get<std::string>();
   for (char &c : title)

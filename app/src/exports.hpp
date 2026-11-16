@@ -46,11 +46,11 @@ enum class ExportKind {
 
 // What a kind needs before it can be written.
 enum class ExportNeeds {
-  domain,      // the geometry stage
-  mesh,        // the mesh stage
-  assembly,    // the assembled system at assembly.t
-  done_run,    // a run of the case that is done (never computed here)
-  case_only,   // the case, and the run when one of the case is done
+  domain,    // the geometry stage
+  mesh,      // the mesh stage
+  assembly,  // the assembled system at assembly.t
+  done_run,  // a run of the case that is done (never computed here)
+  case_only, // the case, and the run when one of the case is done
 };
 
 // What the writers get; only what the kind needs is set.

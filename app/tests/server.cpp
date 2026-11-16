@@ -153,7 +153,7 @@ int main() {
          const Running running;
          auto client = running.client();
          const Json list = Json::parse(client.Get("/api/examples")->body);
-         check(list.size() == 4, "four examples");
+         check(list.size() == 6, "six examples");
          const std::string name = list[0]["name"].get<std::string>();
          const auto example = client.Get("/api/examples/" + name);
          check(example && example->status == 200, "served");
@@ -240,8 +240,7 @@ int main() {
          open.host = "0.0.0.0";
          const app::Server server(open);
          check(server.token().size() == 32, "a random token");
-         check(app::Server(test_options()).token().empty(),
-               "none on loopback");
+         check(app::Server(test_options()).token().empty(), "none on loopback");
        }},
       {"too many waiting requests are answered 429",
        [] {
@@ -280,8 +279,8 @@ int main() {
          check(early && early->status == 409, "not solved yet");
          check(Json::parse(early->body)["error"]["kind"] == "not_ready",
                "not ready");
-         const auto solved = client.Post("/api/solve", a, case_json.dump(),
-                                         "application/json");
+         const auto solved =
+             client.Post("/api/solve", a, case_json.dump(), "application/json");
          check(solved && solved->status == 200, "solved");
          const Json job = {{"job", Json::parse(solved->body)["job"]}};
          const auto mine = client.Post("/api/solve/progress", a, job.dump(),
