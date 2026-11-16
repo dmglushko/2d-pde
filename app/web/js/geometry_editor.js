@@ -12,9 +12,10 @@
 import { api } from "./api.js";
 import { scheduleGeometry, toast } from "./actions.js";
 import { h } from "./dom.js";
-import { applyDrawingChange, applyRegionEdit, replaceLastRegionEdit } from "./pure/case_model.js";
+import { applyDrawingChange, applyRegionEdit, renameRegionByEdit } from "./pure/case_model.js";
 import * as D from "./pure/drawing.js";
 import { regionToken } from "./pure/color.js";
+import { formatNumber } from "./pure/format.js";
 import { requestCase } from "./pure/stages.js";
 import { closeRegionPopover, openRegionPopover } from "./region_popover.js";
 import { currentError, editCase, freshResult, lastResult, requestTicket, sectionRevision, setInputGroup, setSelectedRegion, store } from "./state.js";
@@ -58,6 +59,8 @@ const editor = {
   // The pointer in world coordinates (the polygon's rubber band).
   pointer: null,
   listeners: new Set(),
+  // The live region that says what is selected (keyboard users).
+  status: null,
 };
 
 // --- what is shown -----------------------------------------------------------------
@@ -103,11 +106,47 @@ function emit(kind, detail = null) {
 function select(selection) {
   editor.selection = selection;
   emit("selection");
+  announce();
   redraw();
+}
+
+// Says the selection (and a vertex's coordinates) in the live region.
+function announce() {
+  if (!editor.status) return;
+  const drawing = isDrawing() ? geometrySection() : null;
+  editor.status.textContent = drawing ? D.describeSelection(drawing, editor.selection, (x) => formatNumber(x, 10)) : "";
 }
 
 function redraw() {
   editor.viewer?.requestOverlay();
+}
+
+// Ends the gesture in progress without changing the case (Escape, a
+// cancelled pointer, the geometry changed from elsewhere): the drawing
+// and the inspector's fields show the case's drawing again. Returns
+// whether there was one.
+function cancelGesture() {
+  if (!editor.gesture && !editor.working) return false;
+  editor.gesture = null;
+  editor.working = null;
+  emit("selection");
+  redraw();
+  return true;
+}
+
+// A gesture belongs to the geometry it started on: an undo, a redo or any
+// other change of the geometry section meanwhile ends it, so releasing
+// the pointer never puts back a drawing the change replaced.
+function gestureCurrent() {
+  if (editor.gesture && editor.gesture.revision !== sectionRevision("geometry")) {
+    cancelGesture();
+    return false;
+  }
+  return Boolean(editor.gesture);
+}
+
+function startGesture(gesture) {
+  editor.gesture = { ...gesture, revision: sectionRevision("geometry") };
 }
 
 function reach(event) {
@@ -175,11 +214,7 @@ export function renameRegion(from, to) {
     }
     commit(D.renameRegion(geometrySection(), from, name), { op: "rename", from, to: name });
   } else {
-    const edits = geometrySection().region_edits ?? [];
-    const last = edits[edits.length - 1];
-    const split = last && (last.op === "split" || last.op === "split_at_node") && (last.first === from || last.second === from);
-    if (split) replaceCase(replaceLastRegionEdit(store.caseData, { ...last, first: last.first === from ? name : last.first, second: last.second === from ? name : last.second }));
-    else replaceCase(applyRegionEdit(store.caseData, { op: "rename", from, to: name }));
+    replaceCase(renameRegionByEdit(store.caseData, from, name));
   }
   if (store.selectedRegion === from) setSelectedRegion(name);
   return true;
@@ -287,6 +322,37 @@ export function assignRegion(edges, name) {
   const stays = D.drawingRegions(next).includes(from[0]);
   const edit = isNew && from.length === 1 ? (stays ? { op: "split", region: from[0], first: from[0], second: region } : { op: "rename", from: from[0], to: region }) : null;
   commit(next, edit);
+}
+
+// The edge split at a typed fraction of its length, the part after the
+// new vertex in region `name` (a new name copies the condition of the
+// edge's region, as a split; an existing one merges it there).
+export function splitEdgeTyped(l, e, fraction, name) {
+  const region = String(name ?? "").trim();
+  const drawing = geometrySection();
+  const old = drawing.loops[l].edges[e].region;
+  if (region === "") return toast("The new part needs a region name.");
+  try {
+    const next = D.splitEdgeAt(drawing, l, e, fraction, region);
+    const isNew = !D.drawingRegions(drawing).includes(region);
+    commit(next, isNew ? { op: "split", region: old, first: old, second: region } : null);
+    select({ edges: [{ loop: l, edge: e + 1 }] });
+  } catch (error) {
+    toast(`${error.message.charAt(0).toUpperCase()}${error.message.slice(1)}.`);
+  }
+}
+
+// Selects the first edge of `region` (the region table's typed split in
+// a drawing); returns whether there is one.
+export function selectEdges(region) {
+  const drawing = geometrySection();
+  for (const [l, loop] of D.loopsOf(drawing).entries())
+    for (const [e, edge] of D.edgesOf(loop).entries())
+      if (edge?.region === region) {
+        select({ edges: [{ loop: l, edge: e }] });
+        return true;
+      }
+  return false;
 }
 
 export function insertMidVertex(l, e) {
@@ -423,18 +489,18 @@ function pointerdown(v, p, event) {
     const [mx, my] = v.toScreen(...marker.point);
     if (Math.hypot(mx - p.x, my - p.y) > 3 * (event.pointerType === "touch" ? TOUCH_REACH_PX : REACH_PX)) return false;
     editor.marker = marker;
-    editor.gesture = { kind: "split", screen: p, moved: false };
+    startGesture({ kind: "split", screen: p, moved: false });
     redraw();
     return true;
   }
   if (!isDrawing()) return false;
   const drawing = geometrySection();
   if (editor.tool === "rectangle" || editor.tool === "circle") {
-    editor.gesture = { kind: editor.tool, start: snapped(at), end: snapped(at), screen: p };
+    startGesture({ kind: editor.tool, start: snapped(at), end: snapped(at), screen: p });
     return true;
   }
   if (editor.tool === "polygon") {
-    editor.gesture = { kind: "polygon", screen: p };
+    startGesture({ kind: "polygon", screen: p });
     return true;
   }
   const hit = D.hitTest(drawing, at, reach(event), selectedEdges());
@@ -442,25 +508,25 @@ function pointerdown(v, p, event) {
   const base = drawing;
   if (hit.type === "vertex") {
     select({ loop: hit.loop, vertex: hit.vertex });
-    editor.gesture = { kind: "vertex", loop: hit.loop, vertex: hit.vertex, start: at, origin: hit.point, base, screen: p, moved: false };
+    startGesture({ kind: "vertex", loop: hit.loop, vertex: hit.vertex, start: at, origin: hit.point, base, screen: p, moved: false });
   } else if (hit.type === "control" || hit.type === "bend") {
-    editor.gesture = { kind: hit.type, loop: hit.loop, edge: hit.edge, which: hit.which, start: at, origin: hit.point, base, screen: p, moved: false };
+    startGesture({ kind: hit.type, loop: hit.loop, edge: hit.edge, which: hit.which, start: at, origin: hit.point, base, screen: p, moved: false });
   } else if (hit.type === "move") {
-    editor.gesture = { kind: "move", loop: hit.loop, start: at, base, screen: p, moved: false };
+    startGesture({ kind: "move", loop: hit.loop, start: at, base, screen: p, moved: false });
   } else if (hit.type === "edge") {
     const ref = { loop: hit.loop, edge: hit.edge };
     const has = selectedEdges().some((s) => s.loop === ref.loop && s.edge === ref.edge);
     if (event.shiftKey) select({ edges: has ? selectedEdges().filter((s) => !(s.loop === ref.loop && s.edge === ref.edge)) : [...selectedEdges(), ref] });
     else if (!has) select({ edges: [ref] });
     // Dragging an outline moves its loop.
-    editor.gesture = { kind: "move", loop: hit.loop, start: at, base, screen: p, moved: false, fromEdge: true };
+    startGesture({ kind: "move", loop: hit.loop, start: at, base, screen: p, moved: false, fromEdge: true });
   }
   return true;
 }
 
 function pointermove(v, p, event) {
+  if (!gestureCurrent()) return;
   const gesture = editor.gesture;
-  if (!gesture) return;
   const at = world(v, p);
   editor.pointer = at;
   if (!gesture.moved && Math.hypot(p.x - gesture.screen.x, p.y - gesture.screen.y) < CLICK_SLOP) return;
@@ -484,13 +550,10 @@ function pointermove(v, p, event) {
 }
 
 function pointerup(v, p, event, cancelled) {
+  if (!gestureCurrent()) return;
+  if (cancelled) return void cancelGesture();
   const gesture = editor.gesture;
   editor.gesture = null;
-  if (!gesture) return;
-  if (cancelled) {
-    editor.working = null;
-    return redraw();
-  }
   const at = world(v, p);
   if (gesture.kind === "split") {
     if (!gesture.moved && editor.marker) splitAtMarker(editor.marker, p);
@@ -623,16 +686,15 @@ function dblclick(v, p, event) {
 // Keys on the picture: Escape cancels (a gesture, a polygon, a tool, the
 // selection); Delete removes the selected vertex (or the loop of the
 // selected edges); the arrows nudge the selected vertex (a grid step, or
-// a pixel; Shift: ten); Enter closes a polygon; V, S, R, C, P pick a
-// tool, G the grid.
+// a pixel; Shift: ten); ] and [ select the next and previous vertex or
+// edge of the loop, L and Shift+L the next and previous loop; Enter
+// closes a polygon; V, S, R, C, P pick a tool, G the grid.
 function key(v, event) {
   if (!editorActive() || event.ctrlKey || event.metaKey || event.altKey) return false;
   if (event.key === "Escape") {
     closeRegionPopover();
-    if (editor.gesture) {
-      editor.gesture = null;
-      editor.working = null;
-    } else if (editor.polygon) editor.polygon = null;
+    if (cancelGesture()) return true;
+    if (editor.polygon) editor.polygon = null;
     else if (editor.tool !== "select") setTool("select");
     else if (editor.selection) select(null);
     else return false;
@@ -663,7 +725,8 @@ function key(v, event) {
   const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[event.key];
   if (arrow && isDrawing() && selection?.vertex !== undefined) {
     const step = (editor.grid ? gridStepNow() : 1 / v.scale) * (event.shiftKey ? 10 : 1);
-    const vertex = geometrySection().loops[selection.loop].vertices[selection.vertex];
+    const vertex = D.verticesOf(D.loopsOf(geometrySection())[selection.loop])[selection.vertex];
+    if (!D.isPoint(vertex)) return true;
     const point = [vertex[0] + arrow[0] * step, vertex[1] + arrow[1] * step];
     // Nudges of one vertex are one undo step until the picture loses
     // the focus.
@@ -674,6 +737,20 @@ function key(v, event) {
       setInputGroup(null);
     }
     emit("selection");
+    announce();
+    return true;
+  }
+  // Selecting without a pointer: ] and [ step through the selected
+  // loop's vertices and edges (vertex 0, edge 0, vertex 1, ...), L and
+  // Shift+L through the loops.
+  if (isDrawing() && editor.tool === "select" && (event.key === "]" || event.key === "[")) {
+    const next = D.stepSelection(geometrySection(), editor.selection, event.key === "]" ? 1 : -1);
+    if (next) select(next);
+    return true;
+  }
+  if (isDrawing() && editor.tool === "select" && event.key.toLowerCase() === "l") {
+    const next = D.stepLoop(geometrySection(), editor.selection, event.shiftKey ? -1 : 1);
+    if (next) select(next);
     return true;
   }
   if (event.shiftKey) return false;
@@ -741,14 +818,21 @@ function drawDrawing(v, ctx) {
   for (const name of D.drawingRegions(drawing)) if (!names.includes(name)) names.push(name);
   const error = currentError("geometry");
   const bad = error ? D.drawingErrorTarget(error.path) : null;
-  const samples = drawing.loops.map((loop) => loop.edges.map((_, e) => D.sampleCurve(D.edgeCurve(loop, e))));
+  // An incomplete edge (a case read from a file) is not drawn: the
+  // server's error names it.
+  const samples = D.loopsOf(drawing).map((loop) =>
+    D.edgesOf(loop).map((_, e) => {
+      const curve = D.edgeCurve(loop, e);
+      return curve ? D.sampleCurve(curve) : null;
+    }),
+  );
   // The fill (evenodd: holes stay empty), where the viewer would fill.
   if (v.fillWanted) {
     ctx.beginPath();
     for (const loop of samples) {
       let first = true;
       for (const points of loop)
-        for (let i = 0; i < points.length; i += 2) {
+        for (let i = 0; points && i < points.length; i += 2) {
           const [x, y] = v.toScreen(points[i], points[i + 1]);
           if (first) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
@@ -765,6 +849,7 @@ function drawDrawing(v, ctx) {
   ctx.lineJoin = "round";
   samples.forEach((loop, l) =>
     loop.forEach((points, e) => {
+      if (!points) return;
       const id = `${l}:${e}`;
       const region = drawing.loops[l].edges[e].region;
       const isBad = bad && bad.loop === l && (bad.edge === undefined || bad.edge === e);
@@ -849,8 +934,9 @@ function drawDrawing(v, ctx) {
 
 function drawVertices(v, ctx, drawing, bad, interactive) {
   const selection = editor.selection;
-  drawing.loops.forEach((loop, l) =>
-    loop.vertices.forEach((point, k) => {
+  D.loopsOf(drawing).forEach((loop, l) =>
+    D.verticesOf(loop).forEach((point, k) => {
+      if (!D.isPoint(point)) return;
       const [x, y] = v.toScreen(...point);
       const isSelected = selection?.vertex === k && selection.loop === l;
       const isHover = interactive && editor.hover?.type === "vertex" && editor.hover.loop === l && editor.hover.vertex === k;
@@ -962,6 +1048,8 @@ function draw(v) {
 export function initEditor(viewer, wrap) {
   editor.viewer = viewer;
   editor.bar = buildBar(wrap);
+  editor.status = h("div", { id: "editor-status", class: "visually-hidden", role: "status", "aria-live": "polite" });
+  wrap.append(editor.status);
   viewer.setOverlay({
     draw,
     ownsGeometry,
@@ -996,9 +1084,8 @@ export function updateEditor(reason) {
   } else if (!D.selectionValid(geometrySection(), editor.selection)) select(null);
   if (!editorActive()) {
     editor.polygon = null;
-    editor.gesture = null;
-    editor.working = null;
-  }
+    cancelGesture();
+  } else gestureCurrent();
   if (!editorActive()) closeRegionPopover();
   updateBar();
 }

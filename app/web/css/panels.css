@@ -1079,3 +1079,13 @@ dialog.settings h3 {
 .muted {
   color: var(--muted);
 }
+
+.split-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.split-row .name-input {
+  width: 9em;
+}

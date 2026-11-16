@@ -85,6 +85,33 @@ export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, 
   check("the hole stays", savedCase().geometry.loops.length === 2);
   await idle();
 
+  // Escape in the middle of a drag: the drawing and its fields go back.
+  const xField = () => q('#drawing-selection input[aria-label="x"]');
+  pointer("pointerdown", 1, 0.5);
+  await until(() => xField(), "the vertex selected again");
+  for (const s of [0.5, 1]) pointer("pointermove", 1 + 0.3 * s, 0.5);
+  check("the field follows the drag", Math.abs(Number(xField().value) - 1.3) < 1e-9, xField().value);
+  key(canvas, "Escape");
+  check("Escape puts the field back", xField().value === "1", xField().value);
+  pointer("pointermove", 1.4, 0.5);
+  pointer("pointerup", 1.4, 0.5);
+  check("and the drawing", savedCase().geometry.loops[0].vertices[2].join(",") === "1,0.5", JSON.stringify(savedCase().geometry.loops[0].vertices[2]));
+  // An undo in the middle of a drag (here of the hole) ends the drag:
+  // releasing it does not bring the undone drawing back.
+  pointer("pointerdown", 1, 0.5);
+  for (const s of [0.5, 1]) pointer("pointermove", 1 + 0.3 * s, 0.5);
+  key(d.body, "z", { ctrlKey: true });
+  await until(() => savedCase().geometry.loops.length === 1, "the hole undone");
+  pointer("pointermove", 1.4, 0.5);
+  pointer("pointerup", 1.4, 0.5);
+  await idle();
+  const after = savedCase().geometry;
+  check("a release after an undo changes nothing", after.loops.length === 1 && after.loops[0].vertices[2].join(",") === "1,0.5", JSON.stringify(after.loops));
+  check("the field shows the drawing", xField() === null || xField().value === "1", xField()?.value);
+  key(d.body, "z", { ctrlKey: true, shiftKey: true });
+  await until(() => savedCase().geometry.loops.length === 2, "the hole redone");
+  await idle();
+
   // Split the top by a click on it: the drawing gets a vertex there and
   // the names are offered right away.
   tool("split");
@@ -104,6 +131,31 @@ export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, 
   check("the top is two regions", regions().includes("top") && regions().includes("inlet"), regions().join(","));
   const conditions = savedCase().problem.boundary_conditions;
   check("the new part has the top's condition", JSON.stringify(conditions.inlet) === JSON.stringify(conditions.top), JSON.stringify(conditions));
+
+  // Without a pointer: ] and [ select vertices and edges, L the loops;
+  // the live region says what is selected; the selected edge splits at a
+  // typed fraction.
+  const status = () => text(q("#editor-status"));
+  key(canvas, "Escape");
+  key(canvas, "Escape");
+  key(canvas, "]");
+  check("] selects the first vertex", status() === "Loop 0, vertex 0: x -1, y -0.5", status());
+  check("its fields are shown", xField()?.value === "-1", xField()?.value);
+  key(canvas, "]");
+  check("] then its edge", status() === "Loop 0, edge 0: line, region bottom", status());
+  key(canvas, "[");
+  key(canvas, "]");
+  const fraction = q('#drawing-selection .split-row input[aria-label^="Split at"]');
+  type(fraction, "0.25");
+  [...qa("#drawing-selection button")].find((b) => b.textContent === "Split").click();
+  await until(() => savedCase().geometry.loops[0].edges.some((e) => e.region === "bottom_2"), "the typed split");
+  const typed = savedCase();
+  check("the typed split adds a vertex at a quarter", typed.geometry.loops[0].vertices[1].join(",") === "-0.5,-0.5", JSON.stringify(typed.geometry.loops[0].vertices));
+  check("the part after it is the new region, with the condition", typed.geometry.loops[0].edges[1].region === "bottom_2" && JSON.stringify(typed.problem.boundary_conditions.bottom_2) === JSON.stringify(typed.problem.boundary_conditions.bottom));
+  check("the new part is selected and said", status() === "Loop 0, edge 1: line, region bottom_2", status());
+  key(canvas, "l");
+  check("L selects the next loop", status().startsWith("Loop 1, vertex 0"), status());
+  await idle();
 
   // A corner splits exactly there: the right side and the bottom merged
   // in a shape, split at their corner through the server.
@@ -128,15 +180,35 @@ export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, 
   key(q(".region-pop input"), "Escape");
   await idle();
   await until(() => regions().includes("bottom_2"), "the split read");
-  check("a corner split keeps the four lines", text(q("#geometry-summary")).length > 0 && regions().length === 4, regions().join(","));
+  const view = await (await w.fetch("/api/geometry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(savedCase()) })).json();
+  check("a corner split keeps the four lines", view.loops[0].curves.length === 4 && view.loops[0].curves.every((c) => c.kind === "line"), JSON.stringify(view.loops[0].curves.map((c) => c.region)));
+
+  // A condition set after the split survives a rename of the part.
+  tab("problem");
+  const g = () => q('[data-path="problem.boundary_conditions.bottom_2.g"] input');
+  await until(() => g(), "the new part's condition");
+  type(g(), "5");
+  g().dispatchEvent(new w.Event("change", { bubbles: true }));
+  await until(() => savedCase().problem.boundary_conditions.bottom_2.g === "5", "g = 5");
+  tab("geometry");
+  q('#geometry-regions tr[data-region="bottom_2"] button').click();
+  const renameTo = q('#geometry-regions input[aria-label="New name"]');
+  renameTo.value = "outlet";
+  [...qa("#geometry-regions button")].find((b) => b.textContent === "Apply" && b.closest(".edit-line")?.textContent.includes("Rename")).click();
+  await until(() => savedCase().problem.boundary_conditions.outlet, "the renamed part");
+  const renamed = savedCase();
+  check("the renamed part keeps its edited condition", renamed.problem.boundary_conditions.outlet.g === "5", JSON.stringify(renamed.problem.boundary_conditions));
+  check("the split took the name", renamed.geometry.region_edits.length === 2 && renamed.geometry.region_edits[1].second === "outlet", JSON.stringify(renamed.geometry.region_edits));
+  await idle();
+  await until(() => regions().includes("outlet"), "the rename read");
 
   // Edit as drawing: the shape's curves with their edits become a drawing.
   [...qa("#panel-geometry button")].find((b) => b.textContent === "Edit as drawing").click();
   await until(() => savedCase().geometry.source === "drawing", "the drawing");
   const converted = savedCase().geometry;
-  check("the edited shape is a drawing with its regions", converted.loops[0].edges.map((e) => e.region).join(",") === "bottom,bottom_2,top,left", converted.loops[0].edges.map((e) => e.region).join(","));
+  check("the edited shape is a drawing with its regions", converted.loops[0].edges.map((e) => e.region).join(",") === "bottom,outlet,top,left", converted.loops[0].edges.map((e) => e.region).join(","));
   await idle();
-  check("its regions read the same", regions().join(",") === "bottom,bottom_2,top,left", regions().join(","));
+  check("its regions read the same", regions().join(",") === "bottom,outlet,top,left", regions().join(","));
 
   // A reload finds the drawing and its tools again.
   savedCase();

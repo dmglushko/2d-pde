@@ -17,10 +17,12 @@ import {
   renameRegion,
   setEdgeKind,
   setTool,
+  selectEdges,
   setVertex,
+  splitEdgeTyped,
 } from "../geometry_editor.js";
 import { applyRegionEdit, fileKind, undoRegionEdit } from "../pure/case_model.js";
-import { blankDrawing, drawingRegions } from "../pure/drawing.js";
+import { blankDrawing, drawingRegions, edgesOf, isPoint, loopsOf, uniqueName, verticesOf } from "../pure/drawing.js";
 import { formatNumber, parseNumberText } from "../pure/format.js";
 import { actionButton, errorBox, exportButton, fileButton, fill, foldable, h, infoToggle, labelWithInfo, markError, numberInput, optionsForm, readFileText, regionSwatch, stat } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, requestTicket, sectionRevision, store } from "../state.js";
@@ -214,8 +216,8 @@ function renderInspector(slot) {
   if (!selection || drawing?.source !== "drawing") return fill(slot);
   if (selection.vertex !== undefined) {
     const { loop: l, vertex: v } = selection;
-    const point = drawing.loops[l]?.vertices[v];
-    if (!point) return fill(slot);
+    const point = verticesOf(loopsOf(drawing)[l])[v];
+    if (!isPoint(point)) return fill(slot);
     const coordinate = (axis, label) =>
       numberInput({
         value: point[axis],
@@ -246,7 +248,7 @@ function renderInspector(slot) {
     );
   }
   slot.coordinates = null;
-  const edges = selection.edges.filter((s) => drawing.loops[s.loop]?.edges[s.edge]);
+  const edges = selection.edges.filter((s) => edgesOf(loopsOf(drawing)[s.loop])[s.edge]);
   if (edges.length === 0) return fill(slot);
   const first = edges[0];
   const edge = drawing.loops[first.loop].edges[first.edge];
@@ -262,7 +264,16 @@ function renderInspector(slot) {
   });
   const loops = [...new Set(edges.map((s) => s.loop))];
   const single = edges.length === 1;
-  const closed = drawing.loops[first.loop].vertices.length === 1;
+  const closed = verticesOf(drawing.loops[first.loop]).length === 1;
+  // The keyboard's split: at a typed fraction of the edge's length, the
+  // part after it in a new (or another) region.
+  const at = numberInput({ value: 0.5, label: "Split at this fraction of the edge's length", className: "fraction-input", onNumber: () => {} });
+  const name = h("input", { type: "text", class: "name-input", list: listId, value: uniqueName(regions, `${edge.region}_2`), "aria-label": "Region of the part after the split", spellcheck: false, autocomplete: "off" });
+  const split = () => {
+    const parsed = parseNumberText(at.value);
+    if (parsed.kind !== "number") return toast(`The fraction: ${parsed.kind === "empty" ? "a value is needed" : parsed.reason}.`);
+    splitEdgeTyped(first.loop, first.edge, parsed.value, name.value);
+  };
   const kinds = single
     ? h(
         "div",
@@ -298,6 +309,7 @@ function renderInspector(slot) {
         single && !closed ? h("button", { type: "button", class: "small", onclick: () => insertMidVertex(first.loop, first.edge) }, "Add vertex") : null,
         loops.length === 1 && drawing.loops.length > 1 ? h("button", { type: "button", class: "small", onclick: () => deleteLoopAt(loops[0]) }, "Delete loop") : null,
       ),
+      single ? h("div", { class: "row split-row" }, h("label", {}, "Split at", at), h("label", {}, "then", name), h("button", { type: "button", class: "small", onclick: split }, "Split")) : null,
     ),
   );
 }
@@ -343,6 +355,8 @@ function regionEditor(region, regions, source) {
   const second = text(`${region}_b`, "Second name", "narrow");
   const splitInfo = infoToggle("Measured along the boundary (domain on the left) from the start of the region. Or split it on the picture: the split tool, then a click on the boundary.", "splitting");
   const fractionSplit = source === "shape" || source === "svg";
+  // A mesh file splits at a boundary node (its number in the file).
+  const node = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", value: "", placeholder: "node", "aria-label": "Node", class: "number fraction-input" });
   return h(
     "div",
     { class: "card" },
@@ -356,7 +370,22 @@ function regionEditor(region, regions, source) {
         })
       : null,
     fractionSplit ? splitInfo.panel : null,
-    h("div", { class: "row edit-line" }, h("button", { type: "button", class: "small", onclick: () => setTool("split") }, "Split on the picture…")),
+    source === "mesh_file"
+      ? editLine("Split at node", [node, "into", first, second], () => {
+          const number = Number(node.value.trim());
+          if (node.value.trim() === "" || !Number.isInteger(number) || number < 0) return toast("The node: a whole number from 0 (its number in the mesh file).");
+          addEdit({ op: "split_at_node", region, node: number, first: first.value.trim(), second: second.value.trim() });
+        })
+      : null,
+    h(
+      "div",
+      { class: "row edit-line" },
+      h("button", { type: "button", class: "small", onclick: () => setTool("split") }, "Split on the picture…"),
+      // In a drawing: its first edge selected, with the typed split.
+      source === "drawing"
+        ? h("button", { type: "button", class: "small", onclick: () => selectEdges(region) && document.querySelector("#drawing-selection .split-row input")?.focus() }, "Split at a typed place…")
+        : null,
+    ),
   );
 }
 

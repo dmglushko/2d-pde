@@ -114,7 +114,11 @@ field, Ctrl+Z undoes the whole edit of the field.
    region (an existing name or a new one: the way to split a region in a
    drawing), **Add vertex** and **Delete loop**. Double-click an edge to
    add a vertex there; a selected vertex has x and y fields, the arrow
-   keys nudge it (Shift: ten steps) and Delete removes it. The tools add a
+   keys nudge it (Shift: ten steps) and Delete removes it. Without a
+   mouse: with the picture focused, `]` and `[` step through the
+   vertices and edges of a loop and L through the loops (a screen reader
+   hears what is selected), and a selected edge can be split at a typed
+   fraction of its length (**Split at … then [region] Split**). The tools add a
    rectangle (drag), a circle (drag from its centre) or a polygon (click
    its corners, close on the first or with Enter); inside the domain a new
    loop is a hole, outside it another piece. The grid button (**G**)

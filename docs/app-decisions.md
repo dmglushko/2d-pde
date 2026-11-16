@@ -978,3 +978,44 @@ guess).
   drag, a split by a click with its name typed, a corner split of a
   merged shape region through the server (fraction exactly 2/3), Edit as
   drawing, and a reload.
+
+### Review fixes (the same day)
+
+- **A split part renamed keeps its condition.** Renaming a part right
+  after its split rewrote the split through `undoRegionEdit`, which put
+  back the conditions from before the split: a condition set on the new
+  part in between was lost. `renameRegionByEdit` now rewrites the split
+  and then gives both parts the conditions they have at that moment
+  (`from`'s under the new name); the split's undo record is unchanged,
+  so undoing it still restores what was there before.
+- **Gestures are bound to the geometry's revision.** An undo (or any
+  change of the geometry) during a drag used to be overwritten when the
+  pointer was released (the drag's copy was committed). Now a gesture
+  records `sectionRevision("geometry")` when it starts and ends without
+  a change when that revision moves; Escape, a cancelled pointer and a
+  moved revision share one cancel path, which also redraws the
+  inspector from the case (its x and y showed the dragged values).
+- **Keyboard selection and typed splits.** `]`/`[` step through a loop's
+  vertices and edges, L/Shift+L through loops; a live region says the
+  selection and a vertex's coordinates. A drawing's edge splits at a
+  typed fraction of its length (arc length: exact for lines and circular
+  arcs, from 512 chords otherwise; the drawing is the case, so the
+  inserted vertex is simply where it lands); a mesh file's region at a
+  typed node; shapes and SVGs keep their typed fraction. Why: selecting
+  and splitting must not need a pointer.
+- **Incomplete drawings are kept, not replaced.** A drawing read back
+  with a loop without vertices or a Bézier without controls passed
+  normalization and then threw while drawing. Normalization now keeps a
+  drawing as it is (it used to replace some malformed ones with a blank
+  rectangle, losing the user's input), and every function of
+  `pure/drawing.js` that draws, hits or selects skips incomplete parts
+  (`edgeCurve` returns null, `loopsOf`/`verticesOf`/`edgesOf` give lists);
+  the server's error names what is missing.
+- Tests: Node (the split rename with an edited condition, also for
+  `split_at_node`; keyboard stepping, the live region's words, typed
+  splits by arc length; incomplete drawings never throw), browser
+  (Escape and an undo during a drag, keyboard selection and a typed
+  split, a renamed split part's condition, the corner split checked by
+  its curves; `drawing_incomplete`: an incomplete drawing after a
+  reload), C++ (the locator on a region across the loop's start and on
+  holes the library turned).

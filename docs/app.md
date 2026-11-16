@@ -588,7 +588,17 @@ second name selected; Enter applies).
   region edit `split` (or `split_at_node` with the node for a mesh file)
   through `applyRegionEdit`, so the conditions follow and undo works as
   for every region edit. Renaming a part right after its split replaces
-  the split's name in that edit instead of adding a rename.
+  the split's name in that edit instead of adding a rename
+  (`renameRegionByEdit`); both parts keep the conditions they have then
+  (one may have been edited since the split), and undoing the split still
+  restores the conditions from before it.
+- **Typed splits** (no pointer needed): a shape's or an SVG's region at
+  a fraction of its length (the region table's Edit), a mesh file's at a
+  node number, a drawing's selected edge at a fraction of the edge's
+  length (the inspector: a vertex is inserted there and the part after
+  it gets the region typed; a new name takes the old region's
+  condition). "Split at a typed place…" in a drawing's region table
+  selects the region's first edge and focuses that field.
 - **Drawings** are split in the page (the drawing is the case): at a
   vertex the edges are retagged; inside an edge the edge is split there
   exactly (`splitCurve`: a line at its point, de Casteljau for Béziers,
@@ -621,7 +631,11 @@ edges.
   the drawing at the start of the drag, so nothing accumulates) and
   draws it; the case changes once, when the pointer is released
   (`editCase`, "edit": one undo step), and the server reads the geometry
-  250 ms after (`scheduleGeometry`). The view holds still while a
+  250 ms after (`scheduleGeometry`). A gesture belongs to the geometry's
+  revision it started on: an undo, a redo or any other change of the
+  geometry meanwhile ends it, and so do Escape and a cancelled pointer;
+  an ended gesture changes nothing, and the inspector shows the case's
+  values again. The view holds still while a
   drawing is edited (a new bounding box does not refit it).
 - A click selects a vertex or an edge (Shift+click adds edges); a click
   beside the drawing clears the selection. A double-click on an edge adds
@@ -629,7 +643,18 @@ edges.
   vertex (a grid step, or a pixel; Shift: ten; the nudges of one vertex
   are one undo step until the picture loses the focus), Delete removes
   it (or the loop of the selected edges), Escape cancels a drag, a
-  polygon, a tool, then the selection.
+  polygon, a tool, then the selection. **Without a pointer**: `]` and
+  `[` select the next and previous element of the selected loop (vertex
+  0, edge 0, vertex 1, ...; from nothing, loop 0), L and Shift+L the
+  next and previous loop's vertex 0 (loops without one are passed over).
+  A live region (`#editor-status`) says the selection: "Loop 0, vertex 2:
+  x 1, y 0.5", "Loop 0, edge 1: arc, region right".
+- **An incomplete drawing** (read from a file or storage: a loop without
+  vertices, a Bézier without its controls, a vertex that is not a point)
+  is kept as it is: normalization does not replace it, the editor draws,
+  hits and selects only the complete parts (`edgeCurve` is null for an
+  incomplete edge; edits on one say it is incomplete), and the server's
+  error says what is missing, at its path.
 - The tools: a rectangle (drag corner to corner), a circle (drag from
   the centre; one vertex and a full arc), a polygon (click the corners,
   close on the first or with Enter; Backspace removes the last). A new

@@ -8,6 +8,7 @@ import {
   normalizeCase,
   reconcileConditions,
   renameParameter,
+  renameRegionByEdit,
   replaceLastRegionEdit,
   undoRegionEdit,
   visibleCoefficients,
@@ -1078,10 +1079,129 @@ test("conditions follow a drawing's region changes and a replaced split", () => 
   const read = normalizeCase({ format: "pde2d-app-case", geometry: drawnSquare() }, defaults);
   assert.deepEqual(read.caseData.geometry, drawnSquare());
   assert.ok(!read.replaced.includes("geometry.loops"));
-  const empty = normalizeCase({ format: "pde2d-app-case", geometry: { source: "drawing", loops: [] } }, defaults);
-  assert.ok(empty.replaced.includes("geometry.loops"));
-  assert.equal(empty.caseData.geometry.loops[0].vertices.length, 4);
-  assert.equal(empty.caseData.geometry.region_edits, undefined);
+  // An incomplete drawing is kept as it is (the server names what is
+  // missing).
+  for (const geometry of [{ source: "drawing", loops: [] }, { source: "drawing" }, { source: "drawing", loops: [{ vertices: [], edges: [{ kind: "line", region: "a" }] }] }]) {
+    const kept = normalizeCase({ format: "pde2d-app-case", geometry }, defaults);
+    assert.deepEqual(kept.caseData.geometry, geometry);
+    assert.ok(!kept.replaced.some((path) => path.startsWith("geometry")), kept.replaced.join(","));
+  }
+});
+
+test("renaming a split part keeps the conditions edited since the split", () => {
+  for (const op of ["split", "split_at_node"]) {
+    const start = { geometry: { source: "shape", region_edits: [] }, problem: { boundary_conditions: { bottom: { alpha: "1", g: "0" }, top: { g: "2" } } } };
+    const where = op === "split" ? { fraction: 0.5 } : { node: 7 };
+    let c = applyRegionEdit(start, { op, region: "bottom", ...where, first: "bottom", second: "bottom_2" });
+    // The user sets the new part's condition, then renames it.
+    c.problem.boundary_conditions.bottom_2 = { alpha: "1", g: "5" };
+    c = renameRegionByEdit(c, "bottom_2", "inlet");
+    assert.deepEqual(c.geometry.region_edits, [{ op, region: "bottom", ...where, first: "bottom", second: "inlet" }], "the split takes the name");
+    assert.deepEqual({ ...c.problem.boundary_conditions }, { bottom: { alpha: "1", g: "0" }, top: { g: "2" }, inlet: { alpha: "1", g: "5" } }, op);
+    // The kept part renamed too: its own condition, also edited.
+    c.problem.boundary_conditions.bottom = { g: "9" };
+    c = renameRegionByEdit(c, "bottom", "floor");
+    assert.equal(c.geometry.region_edits.length, 1);
+    assert.deepEqual(c.problem.boundary_conditions.floor, { g: "9" });
+    assert.deepEqual(c.problem.boundary_conditions.inlet, { alpha: "1", g: "5" });
+    // Undoing the split still restores the condition from before it.
+    const undone = undoRegionEdit(c);
+    assert.deepEqual({ ...undone.problem.boundary_conditions }, { bottom: { alpha: "1", g: "0" }, top: { g: "2" } }, `${op} undone`);
+  }
+  // Another region, or a name the split used: a plain rename edit.
+  const start = { geometry: { source: "shape", region_edits: [] }, problem: { boundary_conditions: { a: { g: "1" }, b: { g: "3" } } } };
+  const split = applyRegionEdit(start, { op: "split", region: "a", fraction: 0.5, first: "a", second: "a_2" });
+  const other = renameRegionByEdit(split, "b", "c");
+  assert.equal(other.geometry.region_edits.length, 2);
+  assert.deepEqual(other.problem.boundary_conditions.c, { g: "3" });
+});
+
+test("drawing: keyboard selection, its words, and a split at a typed fraction", () => {
+  const d = D.addLoop(drawnSquare(), D.circleLoop([1, 1], 0.4, "hole"));
+  // ] from nothing: vertex 0 of loop 0, then edge 0, vertex 1, ...; [ back.
+  let sel = D.stepSelection(d, null, 1);
+  assert.deepEqual(sel, { loop: 0, vertex: 0 });
+  sel = D.stepSelection(d, sel, 1);
+  assert.deepEqual(sel, { edges: [{ loop: 0, edge: 0 }] });
+  assert.deepEqual(D.stepSelection(d, sel, 1), { loop: 0, vertex: 1 });
+  assert.deepEqual(D.stepSelection(d, { loop: 0, vertex: 0 }, -1), { edges: [{ loop: 0, edge: 3 }] }, "wraps around");
+  assert.deepEqual(D.stepSelection(d, null, -1), { edges: [{ loop: 0, edge: 3 }] });
+  assert.deepEqual(D.stepLoop(d, sel, 1), { loop: 1, vertex: 0 });
+  assert.deepEqual(D.stepLoop(d, { loop: 1, vertex: 0 }, 1), { loop: 0, vertex: 0 });
+  assert.deepEqual(D.stepLoop(d, null, -1), { loop: 1, vertex: 0 });
+  assert.deepEqual(D.stepSelection(d, { loop: 1, vertex: 0 }, 1), { edges: [{ loop: 1, edge: 0 }] });
+  assert.equal(D.describeSelection(d, { loop: 0, vertex: 2 }), "Loop 0, vertex 2: x 2, y 2");
+  assert.equal(D.describeSelection(d, { edges: [{ loop: 1, edge: 0 }] }), "Loop 1, edge 0: arc, region hole");
+  assert.equal(D.describeSelection(d, { edges: [{ loop: 0, edge: 0 }, { loop: 0, edge: 1 }] }), "2 edges selected");
+  assert.equal(D.describeSelection(d, null), "Nothing selected");
+  // A typed split: a vertex at that fraction of the length, the rest named.
+  const split = D.splitEdgeAt(d, 0, 0, 0.25, "inlet");
+  assert.deepEqual(split.loops[0].vertices[1], [0.5, 0]);
+  assert.deepEqual(split.loops[0].edges.map((e) => e.region), ["bottom", "inlet", "right", "top", "left"]);
+  assert.throws(() => D.splitEdgeAt(d, 0, 0, 1, "x"), /strictly between/);
+  // The fraction is of the length, also on a curve whose t is not uniform.
+  const curved = D.setEdgeKind(drawnSquare(), 0, 0, "quadratic");
+  const curve = D.edgeCurve(curved.loops[0], 0);
+  const t = D.parameterAtLengthFraction(curve, 0.3);
+  const length = (a, b, n = 2000) => {
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      const p = D.pointAt(curve, a + ((b - a) * i) / n);
+      const q = D.pointAt(curve, a + ((b - a) * (i + 1)) / n);
+      sum += Math.hypot(q[0] - p[0], q[1] - p[1]);
+    }
+    return sum;
+  };
+  assert.ok(Math.abs(length(0, t) / length(0, 1) - 0.3) < 1e-4, String(t));
+  assert.equal(D.parameterAtLengthFraction({ kind: "line", start: [0, 0], end: [1, 0] }, 0.3), 0.3);
+  // On a full circle the split gives two arcs.
+  const ring = D.splitEdgeAt(d, 1, 0, 0.5, "hole_2");
+  assert.equal(ring.loops[1].vertices.length, 2);
+  assert.ok(closePoint(ring.loops[1].vertices[1], [0.6, 1]));
+});
+
+test("drawing: incomplete parts are skipped, never thrown on", () => {
+  const broken = {
+    source: "drawing",
+    loops: [
+      { vertices: [], edges: [{ kind: "line", region: "a" }] },
+      { vertices: [[0, 0], [2, 0], [2, 2], [0, 2]], edges: [{ kind: "line", region: "b" }, { kind: "quadratic", region: "c" }, { kind: "cubic", region: "d", control1: [1, 3] }, { kind: "arc", region: "e", center: [1, 1] }] },
+      { vertices: [[5, 5], "x", [6, 6]], edges: [{ kind: "line", region: "f" }, null, { kind: "spline", region: "g" }] },
+      "not a loop",
+    ],
+  };
+  // Only the complete edge (b) is a curve.
+  assert.equal(D.edgeCurve(broken.loops[0], 0), null);
+  assert.ok(D.edgeCurve(broken.loops[1], 0));
+  for (const e of [1, 2, 3]) assert.equal(D.edgeCurve(broken.loops[1], e), null, `edge ${e}`);
+  assert.equal(D.edgeCurve(broken.loops[2], 0), null, "a bad vertex");
+  assert.deepEqual(D.drawingBounds(broken), { min: [0, 0], max: [2, 0] });
+  assert.deepEqual(D.drawingRegions(broken), ["a", "b", "c", "d", "e", "f", "g"]);
+  assert.equal(D.nearestEdge(broken, [1, 0.1]).edge, 0);
+  assert.equal(D.hitTest(broken, [1, 1.95], 0.1), null, "an incomplete edge is not hit");
+  assert.equal(D.hitTest(broken, [5, 5], 0.1).type, "vertex");
+  assert.equal(D.drawingSplitPoint(broken, [1, 0.01], 0.05).region, "b");
+  assert.doesNotThrow(() => D.newLoopRegion(broken, [1, 1]));
+  assert.deepEqual(D.edgeHandles(broken, 1, 1), []);
+  assert.ok(!D.selectionValid(broken, { loop: 2, vertex: 1 }));
+  assert.equal(D.describeSelection(broken, { loop: 2, vertex: 1 }), "Nothing selected");
+  assert.equal(D.stepSelection(broken, null, 1), null, "loop 0 has no vertices");
+  assert.deepEqual(D.stepSelection(broken, { loop: 1, vertex: 0 }, 1), { edges: [{ loop: 1, edge: 0 }] });
+  assert.deepEqual(D.stepLoop(broken, { loop: 1, vertex: 0 }, 1), { loop: 2, vertex: 0 }, "loop 3 is not one");
+  assert.deepEqual(D.stepLoop(broken, { loop: 2, vertex: 0 }, 1), { loop: 1, vertex: 0 }, "loop 0 has no vertex");
+  assert.equal(D.stepLoop({ loops: [{ vertices: [] }] }, null, 1), null);
+  // A vertex next to an incomplete edge still moves; the edge stays.
+  const moved = D.moveVertex(broken, 1, 2, [3, 3]);
+  assert.deepEqual(moved.loops[1].vertices[2], [3, 3]);
+  assert.deepEqual(moved.loops[1].edges[2], broken.loops[1].edges[2]);
+  assert.throws(() => D.setEdgeKind(broken, 1, 1, "line"), /incomplete/);
+  assert.throws(() => D.insertVertex(broken, 1, 3, 0.5), /incomplete/);
+  // A drawing without loops: nothing to draw, a loop can be added.
+  for (const empty of [{ source: "drawing" }, { source: "drawing", loops: "x" }]) {
+    assert.equal(D.drawingBounds(empty), null);
+    assert.equal(D.nearestEdge(empty, [0, 0]), null);
+    assert.equal(D.addLoop(empty, D.circleLoop([0, 0], 1, "c")).loops.length, 1);
+  }
 });
 
 let failed = 0;

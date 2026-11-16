@@ -25,14 +25,63 @@ const dot = (a, b) => a[0] * b[0] + a[1] * b[1];
 const lerp = (a, b, t) => [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
 const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
+// --- well-formed parts -------------------------------------------------------
+//
+// A drawing read from a file may be incomplete (a loop without vertices,
+// a Bezier without its controls): the server says what is wrong, with its
+// path; until it is fixed the page draws and edits the parts that are
+// complete and skips the others, leaving the case as it is.
+
+export const isPoint = (p) => Array.isArray(p) && p.length === 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]);
+const isObjectValue = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+// The loops of a drawing, its vertices and edges: lists, empty when the
+// case has something else there.
+export function loopsOf(drawing) {
+  return Array.isArray(drawing?.loops) ? drawing.loops : [];
+}
+export function verticesOf(loop) {
+  return Array.isArray(loop?.vertices) ? loop.vertices : [];
+}
+export function edgesOf(loop) {
+  return Array.isArray(loop?.edges) ? loop.edges : [];
+}
+
+function completeEdge(edge) {
+  if (!isObjectValue(edge)) return false;
+  if (edge.kind === "line") return true;
+  if (edge.kind === "quadratic") return isPoint(edge.control);
+  if (edge.kind === "cubic") return isPoint(edge.control1) && isPoint(edge.control2);
+  if (edge.kind === "arc")
+    return (
+      isPoint(edge.center) &&
+      ["radius_x", "radius_y", "start_angle", "sweep_angle"].every((key) => Number.isFinite(edge[key])) &&
+      (edge.rotation === undefined || edge.rotation === null || Number.isFinite(edge.rotation))
+    );
+  return false;
+}
+
 // --- curves ------------------------------------------------------------------
 
 // The curve of edge `e` of `loop`: {kind, start, end, ...} with the ends
-// taken from the vertices (an arc keeps its own).
+// taken from the vertices (an arc keeps its own); null when the edge or
+// its vertices are incomplete.
 export function edgeCurve(loop, e) {
-  const n = loop.vertices.length;
-  const edge = loop.edges[e];
-  return { ...edge, start: loop.vertices[e], end: loop.vertices[(e + 1) % n] };
+  const vertices = verticesOf(loop);
+  const edge = edgesOf(loop)[e];
+  const n = vertices.length;
+  if (n === 0 || e >= n || !completeEdge(edge)) return null;
+  const start = vertices[e];
+  const end = vertices[(e + 1) % n];
+  if (!isPoint(start) || !isPoint(end)) return null;
+  return { ...edge, start, end };
+}
+
+// The curve of an edge an edit works on; throws when it is incomplete.
+function requireCurve(loop, l, e) {
+  const curve = edgeCurve(loop, e);
+  if (!curve) throw new Error(`loop ${l}, edge ${e} is incomplete: the Geometry step says what is missing`);
+  return curve;
 }
 
 export function pointAt(curve, t) {
@@ -266,8 +315,10 @@ function complexDivide(p, q) {
 // containment and the fill.
 export function loopPolygon(loop) {
   const out = [];
-  for (let e = 0; e < loop.edges.length; e++) {
-    const points = sampleCurve(edgeCurve(loop, e));
+  for (let e = 0; e < edgesOf(loop).length; e++) {
+    const curve = edgeCurve(loop, e);
+    if (!curve) continue;
+    const points = sampleCurve(curve);
     for (let i = 0; i + 2 < points.length; i += 2) out.push([points[i], points[i + 1]]);
   }
   return out;
@@ -295,10 +346,12 @@ export function insidePolygon(polygon, p) {
 export function drawingBounds(drawing, loops = null) {
   let min = [Infinity, Infinity];
   let max = [-Infinity, -Infinity];
-  drawing.loops.forEach((loop, l) => {
+  loopsOf(drawing).forEach((loop, l) => {
     if (loops && !loops.includes(l)) return;
-    for (let e = 0; e < loop.edges.length; e++) {
-      const points = sampleCurve(edgeCurve(loop, e));
+    for (let e = 0; e < edgesOf(loop).length; e++) {
+      const curve = edgeCurve(loop, e);
+      if (!curve) continue;
+      const points = sampleCurve(curve);
       for (let i = 0; i < points.length; i += 2) {
         min = [Math.min(min[0], points[i]), Math.min(min[1], points[i + 1])];
         max = [Math.max(max[0], points[i]), Math.max(max[1], points[i + 1])];
@@ -313,7 +366,7 @@ export function drawingBounds(drawing, loops = null) {
 // The region names in order of first appearance.
 export function drawingRegions(drawing) {
   const names = [];
-  for (const loop of drawing.loops) for (const edge of loop.edges) if (!names.includes(edge.region)) names.push(edge.region);
+  for (const loop of loopsOf(drawing)) for (const edge of edgesOf(loop)) if (typeof edge?.region === "string" && !names.includes(edge.region)) names.push(edge.region);
   return names;
 }
 
@@ -353,7 +406,11 @@ export function snapToGrid(p, step) {
 // Every vertex: [{loop, vertex, point}].
 function vertexList(drawing) {
   const out = [];
-  drawing.loops.forEach((loop, l) => loop.vertices.forEach((point, v) => out.push({ loop: l, vertex: v, point })));
+  loopsOf(drawing).forEach((loop, l) =>
+    verticesOf(loop).forEach((point, v) => {
+      if (isPoint(point)) out.push({ loop: l, vertex: v, point });
+    }),
+  );
   return out;
 }
 
@@ -361,8 +418,9 @@ function vertexList(drawing) {
 // handle at its middle (lines and arcs; dragging it makes a circular arc
 // through it). [{type, loop, edge, which, point}]
 export function edgeHandles(drawing, l, e) {
-  const loop = drawing.loops[l];
+  const loop = loopsOf(drawing)[l];
   const curve = edgeCurve(loop, e);
+  if (!curve) return [];
   if (curve.kind === "quadratic") return [{ type: "control", loop: l, edge: e, which: "control", point: curve.control }];
   if (curve.kind === "cubic")
     return [
@@ -392,13 +450,13 @@ export function hitTest(drawing, p, tolerance, selectedEdges = []) {
     }
     return best;
   };
-  const handles = selectedEdges.filter((s) => drawing.loops[s.loop]?.edges[s.edge]).flatMap((s) => edgeHandles(drawing, s.loop, s.edge));
+  const handles = selectedEdges.filter((s) => edgesOf(loopsOf(drawing)[s.loop])[s.edge]).flatMap((s) => edgeHandles(drawing, s.loop, s.edge));
   const handle = nearest(handles);
   if (handle) return handle;
   const vertex = nearest(vertexList(drawing).map((v) => ({ type: "vertex", ...v })));
   if (vertex) return vertex;
   const loops = [...new Set(selectedEdges.map((s) => s.loop))];
-  if (loops.length === 1 && drawing.loops[loops[0]]) {
+  if (loops.length === 1 && loopsOf(drawing)[loops[0]]) {
     const point = moveHandle(drawing, loops[0]);
     if (point && distance(point, p) <= tolerance) return { type: "move", loop: loops[0], point };
   }
@@ -409,9 +467,11 @@ export function hitTest(drawing, p, tolerance, selectedEdges = []) {
 // The edge nearest to p: {type: "edge", loop, edge, t, point, distance}.
 export function nearestEdge(drawing, p) {
   let best = null;
-  drawing.loops.forEach((loop, l) => {
-    for (let e = 0; e < loop.edges.length; e++) {
-      const found = nearestOnCurve(edgeCurve(loop, e), p);
+  loopsOf(drawing).forEach((loop, l) => {
+    for (let e = 0; e < edgesOf(loop).length; e++) {
+      const curve = edgeCurve(loop, e);
+      if (!curve) continue;
+      const found = nearestOnCurve(curve, p);
       if (!best || found.distance < best.distance) best = { type: "edge", loop: l, edge: e, ...found };
     }
   });
@@ -430,18 +490,21 @@ export function drawingSplitPoint(drawing, p, snap) {
   const n = loop.vertices.length;
   let best = null;
   let bestD = snap;
-  drawing.loops.forEach((other, l) =>
-    other.vertices.forEach((point, v) => {
-      const d = distance(point, p);
-      if (d <= bestD) [best, bestD] = [{ loop: l, vertex: v, point }, d];
-    }),
-  );
+  // Only a vertex that starts or ends a complete edge.
+  for (const { loop: l, vertex: v, point } of vertexList(drawing)) {
+    const other = drawing.loops[l];
+    const used = edgeCurve(other, v) || edgeCurve(other, (v + other.vertices.length - 1) % other.vertices.length);
+    const d = distance(point, p);
+    if (used && d <= bestD) [best, bestD] = [{ loop: l, vertex: v, point }, d];
+  }
   if (best) {
     if (best.loop === edge.loop && best.vertex === edge.edge) return { loop: edge.loop, edge: edge.edge, t: 0, vertex: best.vertex, point: best.point, region: loop.edges[edge.edge].region };
     if (best.loop === edge.loop && best.vertex === (edge.edge + 1) % n)
       return { loop: edge.loop, edge: edge.edge, t: 1, vertex: best.vertex, point: best.point, region: loop.edges[edge.edge].region };
     const other = drawing.loops[best.loop];
-    return { loop: best.loop, edge: best.vertex, t: 0, vertex: best.vertex, point: best.point, region: other.edges[best.vertex].region };
+    if (edgeCurve(other, best.vertex)) return { loop: best.loop, edge: best.vertex, t: 0, vertex: best.vertex, point: best.point, region: other.edges[best.vertex].region };
+    const before = (best.vertex + other.vertices.length - 1) % other.vertices.length;
+    return { loop: best.loop, edge: before, t: 1, vertex: best.vertex, point: best.point, region: other.edges[before].region };
   }
   return { loop: edge.loop, edge: edge.edge, t: edge.t, vertex: null, point: edge.point, region: loop.edges[edge.edge].region };
 }
@@ -515,12 +578,14 @@ export function moveVertex(drawing, l, v, p) {
   const old = loop.vertices[v];
   const delta = sub(p, old);
   const before = (v + n - 1) % n;
-  const oldVertices = loop.vertices.map((q) => q.slice());
+  const oldVertices = loop.vertices.map((q) => (Array.isArray(q) ? q.slice() : q));
   loop.vertices[v] = [p[0], p[1]];
   for (const e of new Set([before, v])) {
     const edge = loop.edges[e];
     const a = oldVertices[e];
     const b = oldVertices[(e + 1) % n];
+    // An incomplete neighbour stays as it is (the server names it).
+    if (!edgeCurve({ vertices: oldVertices, edges: loop.edges }, e)) continue;
     if (edge.kind === "arc") loop.edges[e] = { ...followEnds(edge, a, b, loop.vertices[e], loop.vertices[(e + 1) % n]), region: edge.region };
     if (edge.kind === "cubic") {
       if (e === v) edge.control1 = add(edge.control1, delta);
@@ -544,7 +609,7 @@ export function moveControl(drawing, l, e, which, p) {
 export function bendEdge(drawing, l, e, p) {
   const next = clone(drawing);
   const loop = next.loops[l];
-  const curve = edgeCurve(loop, e);
+  const curve = requireCurve(loop, l, e);
   const region = loop.edges[e].region;
   if (loop.vertices.length === 1 && curve.kind === "arc") {
     const middle = pointAt(curve, 0.5);
@@ -571,7 +636,7 @@ export function bendEdge(drawing, l, e, p) {
 export function setEdgeKind(drawing, l, e, kind) {
   const next = clone(drawing);
   const loop = next.loops[l];
-  const curve = edgeCurve(loop, e);
+  const curve = requireCurve(loop, l, e);
   const region = loop.edges[e].region;
   if (curve.kind === kind) return drawing;
   if (loop.vertices.length === 1) throw new Error("a full circle stays an arc: a loop of one vertex has no other edge");
@@ -608,7 +673,7 @@ export function insertVertex(drawing, l, e, t) {
   const next = clone(drawing);
   const loop = next.loops[l];
   const region = loop.edges[e].region;
-  const [first, second] = splitCurve(edgeCurve(loop, e), t);
+  const [first, second] = splitCurve(requireCurve(loop, l, e), t);
   loop.vertices.splice(e + 1, 0, second.start.slice());
   loop.edges.splice(e, 1, edgeData(first, region), edgeData(second, region));
   return { drawing: next, vertex: e + 1 };
@@ -641,8 +706,86 @@ export function assignRegion(drawing, edges, name) {
 // `to` exists).
 export function renameRegion(drawing, from, to) {
   const next = clone(drawing);
-  for (const loop of next.loops) for (const edge of loop.edges) if (edge.region === from) edge.region = to;
+  for (const loop of loopsOf(next)) for (const edge of edgesOf(loop)) if (edge?.region === from) edge.region = to;
   return next;
+}
+
+// The parameter t at a fraction (0..1) of a curve's length: exact for a
+// line and a circular arc (uniform in t), else from 512 chords.
+export function parameterAtLengthFraction(curve, fraction) {
+  const f = Math.max(0, Math.min(1, fraction));
+  if (curve.kind === "line" || (curve.kind === "arc" && curve.radius_x === curve.radius_y)) return f;
+  const pieces = 512;
+  const lengths = [0];
+  let previous = pointAt(curve, 0);
+  for (let i = 1; i <= pieces; i++) {
+    const point = pointAt(curve, i / pieces);
+    lengths.push(lengths[i - 1] + distance(previous, point));
+    previous = point;
+  }
+  const target = f * lengths[pieces];
+  let i = 1;
+  while (i < pieces && lengths[i] < target) i++;
+  const span = lengths[i] - lengths[i - 1];
+  return (i - 1 + (span > 0 ? (target - lengths[i - 1]) / span : 0)) / pieces;
+}
+
+// Edge e split at a typed fraction of its length (strictly between 0 and
+// 1): a vertex is inserted there and the second part named `name` (the
+// keyboard's way to split a region in a drawing). Throws for a fraction
+// outside (0, 1).
+export function splitEdgeAt(drawing, l, e, fraction, name) {
+  if (!(fraction > 0 && fraction < 1)) throw new Error("the fraction must be strictly between 0 and 1");
+  const t = parameterAtLengthFraction(requireCurve(drawing.loops[l], l, e), fraction);
+  const { drawing: next, vertex } = insertVertex(drawing, l, e, t);
+  next.loops[l].edges[vertex].region = name;
+  return next;
+}
+
+// The elements of a loop in keyboard order: vertex 0, edge 0, vertex 1,
+// edge 1, ... The selection `step` places after (+1) or before (-1)
+// `selection` in its loop: from nothing, the first (or last) element of
+// loop 0. A selection of several edges counts as its first.
+export function stepSelection(drawing, selection, step) {
+  const loops = loopsOf(drawing);
+  if (loops.length === 0) return null;
+  let l = 0;
+  let k = step > 0 ? -1 : 0;
+  if (selection?.vertex !== undefined) [l, k] = [selection.loop, 2 * selection.vertex];
+  else if (selection?.edges?.length) [l, k] = [selection.edges[0].loop, 2 * selection.edges[0].edge + 1];
+  const count = 2 * verticesOf(loops[l]).length;
+  if (count === 0) return null;
+  const next = (((k + step) % count) + count) % count;
+  return next % 2 === 0 ? { loop: l, vertex: next / 2 } : { edges: [{ loop: l, edge: (next - 1) / 2 }] };
+}
+
+// The next (+1) or previous (-1) loop's vertex 0 (loops without one are
+// passed over); null when no loop has one.
+export function stepLoop(drawing, selection, step) {
+  const n = loopsOf(drawing).length;
+  if (n === 0) return null;
+  const loops = loopsOf(drawing);
+  let current = selection?.vertex !== undefined ? selection.loop : selection?.edges?.length ? selection.edges[0].loop : step > 0 ? -1 : 0;
+  // A loop without a vertex to select is passed over.
+  for (let tries = 0; tries < n; tries++) {
+    current = (((current + step) % n) + n) % n;
+    if (isPoint(verticesOf(loops[current])[0])) return { loop: current, vertex: 0 };
+  }
+  return null;
+}
+
+// The selection in words, for the live region: "Loop 0, vertex 2: x 1,
+// y 0.5", "Loop 0, edge 1: arc, region right", "3 edges selected".
+export function describeSelection(drawing, selection, format = String) {
+  if (!selection) return "Nothing selected";
+  if (selection.vertex !== undefined) {
+    const p = verticesOf(loopsOf(drawing)[selection.loop])[selection.vertex];
+    return isPoint(p) ? `Loop ${selection.loop}, vertex ${selection.vertex}: x ${format(p[0])}, y ${format(p[1])}` : "Nothing selected";
+  }
+  const edges = selection.edges ?? [];
+  if (edges.length !== 1) return `${edges.length} edges selected`;
+  const edge = edgesOf(loopsOf(drawing)[edges[0].loop])[edges[0].edge];
+  return isObjectValue(edge) ? `Loop ${edges[0].loop}, edge ${edges[0].edge}: ${edge.kind}, region ${edge.region}` : "Nothing selected";
 }
 
 // The region of edge `e` of loop `l` split at a point of that edge (t,
@@ -707,13 +850,13 @@ export function polygonLoop(points, region) {
 // point is inside an odd number of loops, else "boundary" (or ...).
 export function newLoopRegion(drawing, point) {
   let depth = 0;
-  for (const loop of drawing.loops) if (insidePolygon(loopPolygon(loop), point)) depth++;
+  for (const loop of loopsOf(drawing)) if (insidePolygon(loopPolygon(loop), point)) depth++;
   return uniqueName(drawingRegions(drawing), depth % 2 === 1 ? "hole" : "boundary");
 }
 
 export function addLoop(drawing, loop) {
   const next = clone(drawing);
-  next.loops.push(structuredClone(loop));
+  next.loops = [...loopsOf(next), structuredClone(loop)];
   return next;
 }
 
@@ -759,6 +902,6 @@ export function drawingErrorTarget(path) {
 // Whether a selection still names parts of the drawing.
 export function selectionValid(drawing, selection) {
   if (!selection) return true;
-  if (selection.vertex !== undefined) return Boolean(drawing.loops[selection.loop]?.vertices[selection.vertex]);
-  return (selection.edges ?? []).every((s) => Boolean(drawing.loops[s.loop]?.edges[s.edge]));
+  if (selection.vertex !== undefined) return isPoint(verticesOf(loopsOf(drawing)[selection.loop])[selection.vertex]);
+  return (selection.edges ?? []).every((s) => isObjectValue(edgesOf(loopsOf(drawing)[s.loop])[s.edge]));
 }

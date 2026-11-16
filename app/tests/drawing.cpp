@@ -521,6 +521,115 @@ int main() {
                    std::string::npos,
                two.dump());
        }},
+      {"locate: a region that wraps around the loop's start",
+       [] {
+         // The rectangle's loop is bottom, right, top, left: bottom merged
+         // into left is one region from the left side's start, across the
+         // loop's start, to the bottom's end.
+         Json section = {{"source", "shape"},
+                         {"shape", "rectangle"},
+                         {"options", Json::object()},
+                         {"region_edits", Json::array({{{"op", "merge"},
+                                                        {"source", "bottom"},
+                                                        {"target", "left"}}})}};
+         const app::Domain domain = app::build_domain(section);
+         // The middle of the bottom: the left side (1) and half the bottom
+         // (1) of the region's 3.
+         const Json middle = app::locate_boundary(domain, {0.0, -0.52}, 0.01);
+         check(middle["region"] == "left" && !middle["corner"].get<bool>(),
+               middle.dump());
+         near(middle["fraction"].get<double>(), 2.0 / 3, 1e-12,
+              "bottom's middle");
+         // The loop's start, a corner inside the region: exactly a third.
+         const Json corner =
+             app::locate_boundary(domain, {-0.996, -0.497}, 0.01);
+         check(corner["corner"].get<bool>() &&
+                   corner["point"] == point(-1, -0.5) &&
+                   corner["splittable"].get<bool>(),
+               corner.dump());
+         check(std::abs(corner["fraction"].get<double>() - 1.0 / 3) < 1e-15,
+               corner.dump());
+         section["region_edits"].push_back({{"op", "split"},
+                                            {"region", "left"},
+                                            {"fraction", corner["fraction"]},
+                                            {"first", "side"},
+                                            {"second", "floor"}});
+         const app::Domain split = app::build_domain(section);
+         const auto &curves = split.geometry->loops()[0].curves;
+         check(curves.size() == 4, "no curve was cut");
+         check(curves[0].region == "floor" && curves[3].region == "side",
+               curves[0].region + ", " + curves[3].region);
+         // The middle of the bottom splits there.
+         section["region_edits"][1]["fraction"] = middle["fraction"];
+         const app::Domain cut = app::build_domain(section);
+         const auto &pieces = cut.geometry->loops()[0].curves;
+         check(pieces.size() == 5, "the bottom is cut");
+         const geometry::Point end = geometry::end_point(pieces[0].curve);
+         near(end.x, 0.0, 1e-12, "at the located point");
+         check(end.y == -0.5, "on the bottom");
+       }},
+      {"locate: a point on a hole (a loop the library turned)",
+       [] {
+         // The annulus' inner circle runs clockwise after normalization.
+         Json annulus = {{"source", "shape"},
+                         {"shape", "annulus"},
+                         {"options", Json::object()}};
+         const app::Domain ring = app::build_domain(annulus);
+         const Json at = app::locate_boundary(ring, {0.0, 0.45}, 0.01);
+         check(at["region"] == "inner" && at["loop"] == 1, at.dump());
+         near(at["point"][1].get<double>(), 0.4, 1e-12, "on the hole");
+         annulus["region_edits"] = Json::array({{{"op", "split"},
+                                                 {"region", "inner"},
+                                                 {"fraction", at["fraction"]},
+                                                 {"first", "inner"},
+                                                 {"second", "lid"}}});
+         const app::Domain split = app::build_domain(annulus);
+         const geometry::Point end =
+             geometry::end_point(split.geometry->loops()[1].curves[0].curve);
+         near(end.x, 0.0, 1e-10, "the split lands on the point (x)");
+         near(end.y, 0.4, 1e-10, "the split lands on the point (y)");
+         // A square hole drawn counterclockwise, one region over its four
+         // lines: the library turns it; a corner of it splits exactly.
+         Json loop =
+             polygon({{0.5, 0.5}, {1.5, 0.5}, {1.5, 1.5}, {0.5, 1.5}}, "hole");
+         Json section = drawing(Json::array({square_loop(), loop}));
+         const app::Domain drawn = app::build_domain(section);
+         check(drawn.geometry->depth(1) == 1, "a hole");
+         double area = 0;
+         for (const auto &curve : drawn.geometry->loops()[1].curves) {
+           const geometry::Point p = geometry::start_point(curve.curve);
+           const geometry::Point q = geometry::end_point(curve.curve);
+           area += p.x * q.y - q.x * p.y;
+         }
+         check(area < 0, "the library turned it clockwise");
+         const Json corner = app::locate_boundary(drawn, {1.503, 1.497}, 0.01);
+         check(corner["region"] == "hole" && corner["corner"].get<bool>() &&
+                   corner["point"] == point(1.5, 1.5) &&
+                   corner["splittable"].get<bool>(),
+               corner.dump());
+         // The drawing's split is the page's; the fraction is the
+         // library's, checked here on the same curves as a shape would be.
+         geometry::CurveGeometry geometry = *drawn.geometry;
+         geometry.split_region("hole", corner["fraction"].get<double>(), "hole",
+                               "hole_2");
+         const auto &hole = geometry.loops()[1].curves;
+         check(hole.size() == 4, "no curve of the hole was cut");
+         std::size_t first = 0;
+         for (const auto &curve : hole)
+           first += curve.region == "hole" ? 1 : 0;
+         check(first > 0 && first < 4, "both parts have lines");
+         // The whole loop starts at its first curve: the parts change at
+         // the corner and at that start, and nowhere else.
+         const geometry::Point start = geometry::start_point(hole[0].curve);
+         for (std::size_t c = 0; c < hole.size(); ++c)
+           if (hole[c].region != hole[(c + 1) % hole.size()].region) {
+             const geometry::Point change = geometry::end_point(hole[c].curve);
+             check(change == geometry::Point{1.5, 1.5} || change == start,
+                   "a change at the corner or the loop's start");
+           }
+         check(hole[0].region == "hole" && hole[3].region == "hole_2",
+               "from the start to the corner, then to the end");
+       }},
       {"locate through the session",
        [] {
          app::Session session;
