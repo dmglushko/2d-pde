@@ -42,3 +42,29 @@ if(PDE2D_NODE)
   add_test(NAME app_web_actions
     COMMAND ${PDE2D_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/web_actions.test.mjs)
 endif()
+
+# The page in a real browser (headless Chrome), when one is found: the
+# PDE2D_CHROME environment variable, else google-chrome or chromium on
+# PATH, else the Windows Chrome seen from WSL. Needs python3 for the log.
+set(PDE2D_CHROME_PATH "$ENV{PDE2D_CHROME}")
+if(NOT PDE2D_CHROME_PATH)
+  find_program(PDE2D_CHROME_PROGRAM
+    NAMES google-chrome google-chrome-stable chromium chromium-browser)
+  if(PDE2D_CHROME_PROGRAM)
+    set(PDE2D_CHROME_PATH "${PDE2D_CHROME_PROGRAM}")
+  elseif(EXISTS "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe")
+    set(PDE2D_CHROME_PATH
+        "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe")
+  endif()
+endif()
+find_program(PDE2D_PYTHON3 python3)
+find_program(PDE2D_BASH bash)
+if(PDE2D_CHROME_PATH AND PDE2D_PYTHON3 AND PDE2D_BASH)
+  add_test(NAME app_browser
+    COMMAND ${PDE2D_BASH} ${CMAKE_CURRENT_SOURCE_DIR}/browser/run.sh
+            --app $<TARGET_FILE:pde2d_app>)
+  set_tests_properties(app_browser PROPERTIES
+    ENVIRONMENT "PDE2D_CHROME=${PDE2D_CHROME_PATH}"
+    TIMEOUT 900
+    RUN_SERIAL TRUE)
+endif()

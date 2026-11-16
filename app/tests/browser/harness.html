@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>pde2d browser test</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+      }
+      iframe {
+        border: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- The runner (run.sh) loads this page with ?s=<scenario>&w=<width>
+         and reads the log from the DOM: PASS/FAIL lines, then DONE. -->
+    <pre id="log" hidden></pre>
+    <script type="module">
+      const logElement = document.getElementById("log");
+      const log = (line) => (logElement.textContent += line + "\n");
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      async function until(condition, what, ms = 20000) {
+        const start = performance.now();
+        while (performance.now() - start < ms) {
+          try {
+            const value = condition();
+            if (value) return value;
+          } catch {
+            // Not there yet.
+          }
+          await sleep(50);
+        }
+        throw new Error(`timeout waiting for ${what}`);
+      }
+      const params = new URLSearchParams(location.search);
+      try {
+        localStorage.clear();
+      } catch {
+        // A fresh profile anyway.
+      }
+      const frame = document.createElement("iframe");
+      frame.src = "index.html";
+      if (params.get("w")) frame.style.width = `${params.get("w")}px`;
+      document.body.append(frame);
+      frame.onload = async () => {
+        const d = frame.contentDocument;
+        const w = frame.contentWindow;
+        w.addEventListener("error", (e) => log(`FAIL page error: ${e.message} ${e.filename}:${e.lineno}`));
+        w.addEventListener("unhandledrejection", (e) => log(`FAIL page rejection: ${e.reason?.stack ?? e.reason}`));
+        const q = (selector) => d.querySelector(selector);
+        const qa = (selector) => [...d.querySelectorAll(selector)];
+        const click = (element) => element.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+        const tab = (name) => click(q(`.steps button[data-step="${name}"]`));
+        const button = (text, root = d) => [...root.querySelectorAll("button")].find((b) => b.textContent.trim() === text);
+        const panel = (name) => q(`#panel-${name}`);
+        const select = (element, value) => {
+          element.value = value;
+          element.dispatchEvent(new w.Event("change", { bubbles: true }));
+        };
+        const type = (element, value) => {
+          element.value = value;
+          element.dispatchEvent(new w.Event("input", { bubbles: true }));
+        };
+        const text = (element) => (element?.innerText ?? "").replace(/\s+/g, " ").trim();
+        const check = (name, ok, detail = "") => log(`${ok ? "PASS" : "FAIL"} ${name}${ok || !detail ? "" : `: ${detail}`}`);
+        const ctx = { d, w, q, qa, click, tab, button, panel, select, type, text, until, sleep, log, check };
+        try {
+          await until(() => q("#geometry-summary .stats"), "the geometry");
+          const scenario = (await import(`./scenarios/${params.get("s")}.js`)).default;
+          await scenario(ctx);
+          log("DONE");
+        } catch (error) {
+          log(`FAIL ${error.message}\n${error.stack}`);
+        }
+        if (params.get("tab")) tab(params.get("tab"));
+      };
+    </script>
+  </body>
+</html>
