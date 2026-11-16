@@ -22,7 +22,8 @@ double squared(geometry::Point a, geometry::Point b) {
 
 // The parameter of the point of `curve` nearest to `p`: the best of
 // `samples` + 1 points, refined by golden-section search between its
-// neighbours (the distance is unimodal there for these curves), then Newton's method.
+// neighbours (the distance is unimodal there for these curves), then Newton's
+// method.
 double nearest_parameter(const geometry::Curve &curve, geometry::Point p) {
   int best = 0;
   double best_distance = std::numeric_limits<double>::infinity();
@@ -62,8 +63,8 @@ double nearest_parameter(const geometry::Curve &curve, geometry::Point p) {
   for (int k = 0; k < 4; ++k) {
     const geometry::Point d = curve.point_at(t) - p;
     const geometry::Point d1 = curve.derivative_at(t);
-    const double slope = geometry::dot(d1, d1) +
-                         geometry::dot(d, curve.second_derivative_at(t));
+    const double slope =
+        geometry::dot(d1, d1) + geometry::dot(d, curve.second_derivative_at(t));
     if (!(slope > 0))
       break;
     t = std::clamp(t - geometry::dot(d, d1) / slope, 0.0, 1.0);
@@ -107,7 +108,8 @@ std::optional<double> region_fraction(const geometry::CurveGeometry &geometry,
   std::size_t start = 0;
   if (total_count < n)
     for (std::size_t i = 0; i < n; ++i)
-      if (curves[i].region == region && curves[(i + n - 1) % n].region != region) {
+      if (curves[i].region == region &&
+          curves[(i + n - 1) % n].region != region) {
         start = i;
         break;
       }
@@ -160,8 +162,8 @@ Json locate_on_curves(const geometry::CurveGeometry &geometry,
   double corner_distance = snap;
   for (std::size_t l = 0; l < loops.size(); ++l)
     for (std::size_t c = 0; c < loops[l].curves.size(); ++c) {
-      const double d =
-          geometry::distance(geometry::start_point(loops[l].curves[c].curve), p);
+      const double d = geometry::distance(
+          geometry::start_point(loops[l].curves[c].curve), p);
       if (d > corner_distance)
         continue;
       corner = true;

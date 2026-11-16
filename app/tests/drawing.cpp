@@ -59,15 +59,14 @@ Json polygon(const std::vector<std::pair<double, double>> &points,
 // A full circle: one vertex, one arc.
 Json circle(double cx, double cy, double r, const std::string &region) {
   return {{"vertices", Json::array({point(cx + r, cy)})},
-          {"edges",
-           Json::array({{{"kind", "arc"},
-                         {"region", region},
-                         {"center", point(cx, cy)},
-                         {"radius_x", r},
-                         {"radius_y", r},
-                         {"rotation", 0.0},
-                         {"start_angle", 0.0},
-                         {"sweep_angle", 2 * std::numbers::pi}}})}};
+          {"edges", Json::array({{{"kind", "arc"},
+                                  {"region", region},
+                                  {"center", point(cx, cy)},
+                                  {"radius_x", r},
+                                  {"radius_y", r},
+                                  {"rotation", 0.0},
+                                  {"start_angle", 0.0},
+                                  {"sweep_angle", 2 * std::numbers::pi}}})}};
 }
 
 Json drawing(const Json &loops) {
@@ -160,8 +159,7 @@ void check_round_trip(const geometry::CurveGeometry &geometry,
     for (std::size_t c = 0; c < a[l].curves.size(); ++c) {
       const std::string where =
           name + ": loop " + std::to_string(l) + ", curve " + std::to_string(c);
-      check(a[l].curves[c].region == b[l].curves[c].region,
-            where + ": region");
+      check(a[l].curves[c].region == b[l].curves[c].region, where + ": region");
       check(same_curve(a[l].curves[c].curve, b[l].curves[c].curve),
             where + ": the curve differs");
     }
@@ -204,8 +202,8 @@ int main() {
                    std::vector<std::string>{"bottom", "right", "top", "left",
                                             "hole"},
                "regions");
-         near(domain.geometry->region_length("hole"), 2 * std::numbers::pi * 0.4,
-              1e-12, "the hole's length");
+         near(domain.geometry->region_length("hole"),
+              2 * std::numbers::pi * 0.4, 1e-12, "the hole's length");
          // A clockwise outer loop is turned (the library normalizes).
          Json turned = square_loop();
          Json vertices = Json::array();
@@ -213,7 +211,8 @@ int main() {
                   {0, 0}, {0, 2}, {2, 2}, {2, 0}})
            vertices.push_back(point(x, y));
          turned["vertices"] = vertices;
-         const app::Domain cw = app::build_domain(drawing(Json::array({turned})));
+         const app::Domain cw =
+             app::build_domain(drawing(Json::array({turned})));
          check(cw.geometry->depth(0) == 0, "an outer loop either way");
          // Beziers and an arc between lines, the view draws them.
          Json loop = polygon({{0, 0}, {3, 0}, {3, 1}, {0, 1}}, "wall");
@@ -231,7 +230,8 @@ int main() {
                              {"radius_y", 0.5},
                              {"start_angle", -std::numbers::pi / 2},
                              {"sweep_angle", std::numbers::pi}};
-         const app::Domain mixed = app::build_domain(drawing(Json::array({loop})));
+         const app::Domain mixed =
+             app::build_domain(drawing(Json::array({loop})));
          const Json view = app::domain_json(mixed);
          check(view["kind"] == "curves", "drawn as curves");
          check(view["loops"][0]["curves"][1]["kind"] == "elliptical_arc",
@@ -317,15 +317,14 @@ int main() {
          Json section = {{"source", "shape"},
                          {"shape", "rectangle_with_semicircle"},
                          {"options", Json::object()},
-                         {"region_edits",
-                          Json::array({{{"op", "split"},
-                                        {"region", "cap"},
-                                        {"fraction", 0.25},
-                                        {"first", "cap"},
-                                        {"second", "cap_2"}},
-                                       {{"op", "merge"},
-                                        {"source", "top"},
-                                        {"target", "left"}}})}};
+                         {"region_edits", Json::array({{{"op", "split"},
+                                                        {"region", "cap"},
+                                                        {"fraction", 0.25},
+                                                        {"first", "cap"},
+                                                        {"second", "cap_2"}},
+                                                       {{"op", "merge"},
+                                                        {"source", "top"},
+                                                        {"target", "left"}}})}};
          check_round_trip(*app::build_domain(section).geometry,
                           "an edited shape");
        }},
@@ -422,20 +421,20 @@ int main() {
                                                  {"second", "boundary_2"}}});
          const app::Domain split = app::build_domain(section);
          const auto &after = split.geometry->loops()[0].curves;
-         check(after.size() == 6, "no curve was cut: " +
-                                      std::to_string(after.size()));
+         check(after.size() == 6,
+               "no curve was cut: " + std::to_string(after.size()));
          std::size_t first = 0;
          for (const auto &curve : after)
            first += curve.region == "boundary" ? 1 : 0;
          check(first == 3, "three curves keep the name");
          // A corner inside a merged region (bottom and right).
-         Json rectangle = {{"source", "shape"},
-                           {"shape", "rectangle"},
-                           {"options", Json::object()},
-                           {"region_edits",
-                            Json::array({{{"op", "merge"},
-                                          {"source", "right"},
-                                          {"target", "bottom"}}})}};
+         Json rectangle = {
+             {"source", "shape"},
+             {"shape", "rectangle"},
+             {"options", Json::object()},
+             {"region_edits", Json::array({{{"op", "merge"},
+                                            {"source", "right"},
+                                            {"target", "bottom"}}})}};
          const app::Domain merged = app::build_domain(rectangle);
          const Json c = app::locate_boundary(merged, {1.004, -0.503}, 0.01);
          check(c["corner"].get<bool>() && c["point"] == point(1, -0.5),
@@ -479,13 +478,13 @@ int main() {
          near(end.x, at["point"][0].get<double>(), 1e-10, "split x");
          near(end.y, at["point"][1].get<double>(), 1e-10, "split y");
          // A region in two pieces cannot be split: the library says why.
-         Json annulus = {{"source", "shape"},
-                         {"shape", "annulus"},
-                         {"options", Json::object()},
-                         {"region_edits",
-                          Json::array({{{"op", "merge"},
-                                        {"source", "inner"},
-                                        {"target", "outer"}}})}};
+         Json annulus = {
+             {"source", "shape"},
+             {"shape", "annulus"},
+             {"options", Json::object()},
+             {"region_edits", Json::array({{{"op", "merge"},
+                                            {"source", "inner"},
+                                            {"target", "outer"}}})}};
          const Json two =
              app::locate_boundary(app::build_domain(annulus), {1.0, 0.0}, 0.0);
          check(!two["splittable"].get<bool>() && two["fraction"].is_null(),
@@ -534,9 +533,9 @@ int main() {
                                                  {"second", "outlet"}}});
          const app::Domain split = app::build_domain(section);
          const mesh::Mesh &s = *split.mesh;
-         check(s.region_names ==
-                   std::vector<std::string>{"bottom", "right", "top", "left",
-                                            "outlet"},
+         check(s.region_names == std::vector<std::string>{"bottom", "right",
+                                                          "top", "left",
+                                                          "outlet"},
                "a new region at the end");
          check(edges_of(s, "bottom") + edges_of(s, "outlet") == bottom_edges,
                "the bottom's edges are shared");
@@ -611,14 +610,13 @@ int main() {
                  "unknown key 'fraction'");
          // Two pieces after a merge of the opposite sides.
          Json two = rectangle_mesh_section();
-         two["region_edits"] = Json::array({{{"op", "merge"},
-                                             {"source", "top"},
-                                             {"target", "bottom"}},
-                                            {{"op", "split_at_node"},
-                                             {"region", "bottom"},
-                                             {"node", node},
-                                             {"first", "a"},
-                                             {"second", "b"}}});
+         two["region_edits"] = Json::array(
+             {{{"op", "merge"}, {"source", "top"}, {"target", "bottom"}},
+              {{"op", "split_at_node"},
+               {"region", "bottom"},
+               {"node", node},
+               {"first", "a"},
+               {"second", "b"}}});
          expect_throws<std::invalid_argument>(
              [&] { (void)app::build_domain(two); },
              "geometry.region_edits[1]: split: region 'bottom' has several "
@@ -633,12 +631,11 @@ int main() {
          Json shape = {{"source", "shape"},
                        {"shape", "rectangle"},
                        {"options", Json::object()},
-                       {"region_edits",
-                        Json::array({{{"op", "split_at_node"},
-                                      {"region", "bottom"},
-                                      {"node", 1},
-                                      {"first", "a"},
-                                      {"second", "b"}}})}};
+                       {"region_edits", Json::array({{{"op", "split_at_node"},
+                                                      {"region", "bottom"},
+                                                      {"node", 1},
+                                                      {"first", "a"},
+                                                      {"second", "b"}}})}};
          expect_throws<std::invalid_argument>(
              [&] { (void)app::build_domain(shape); },
              "geometry.region_edits[0].op: split_at_node is for a mesh file");

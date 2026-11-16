@@ -40,13 +40,12 @@ Json point_json(geometry::Point p) { return Json::array({p.x, p.y}); }
 // An arc has its own end points; a line or a Bezier takes them from the
 // vertices.
 bool is_arc(const geometry::Curve &curve) {
-  return std::visit(
-      geometry::overloaded{
-          [](const geometry::Line &) { return false; },
-          [](const geometry::QuadraticBezier &) { return false; },
-          [](const geometry::CubicBezier &) { return false; },
-          [](const geometry::EllipticalArc &) { return true; }},
-      curve.kind());
+  return std::visit(geometry::overloaded{
+                        [](const geometry::Line &) { return false; },
+                        [](const geometry::QuadraticBezier &) { return false; },
+                        [](const geometry::CubicBezier &) { return false; },
+                        [](const geometry::EllipticalArc &) { return true; }},
+                    curve.kind());
 }
 
 // One edge from `a` to `b` as written at `where`.
@@ -120,17 +119,16 @@ void check_arc_ends(const std::vector<geometry::Loop> &loops,
       const geometry::Curve &curve = loops[l].curves[e].curve;
       if (!is_arc(curve))
         continue;
-      const std::string where =
-          "geometry.loops[" + std::to_string(l) + "].edges[" +
-          std::to_string(e) + "]";
+      const std::string where = "geometry.loops[" + std::to_string(l) +
+                                "].edges[" + std::to_string(e) + "]";
       const auto check = [&](geometry::Point end, std::size_t vertex,
                              const char *which) {
         const geometry::Point at = vertices[l][vertex];
         if (geometry::distance(end, at) > tolerance)
-          throw PathError(where, std::string("the arc ") + which + " at " +
-                                     format_point(end) + ", not at its vertex " +
-                                     std::to_string(vertex) + " " +
-                                     format_point(at));
+          throw PathError(where,
+                          std::string("the arc ") + which + " at " +
+                              format_point(end) + ", not at its vertex " +
+                              std::to_string(vertex) + " " + format_point(at));
       };
       check(geometry::start_point(curve), e, "starts");
       check(geometry::end_point(curve), (e + 1) % n, "ends");
@@ -143,7 +141,8 @@ void check_arc_ends(const std::vector<geometry::Loop> &loops,
 std::string drawing_error_path(std::string_view message) {
   const std::string text(message);
   static const std::regex curve_named(R"(Loop (\d+), curve (\d+))");
-  static const std::regex not_closed(R"(Loop (\d+) is not closed: curve (\d+))");
+  static const std::regex not_closed(
+      R"(Loop (\d+) is not closed: curve (\d+))");
   static const std::regex itself(
       R"(Loop (\d+) intersects or touches itself near curves (\d+))");
   static const std::regex loop_named(R"(Loops? (\d+))");
