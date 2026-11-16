@@ -111,3 +111,14 @@ error; they need the mass and stiffness matrices of the mesh alone,
 which the app can only get by assembling a problem made for the purpose.
 Functions in `pde2d_fem` that give these norms (or a pure mass and
 Laplace matrix of a mesh) would make error studies standard.
+
+## 10. Whether a linear solver iterates
+
+The Solve result shows "Linear iterations" only when the run reports
+some: a direct solver (SparseLU, SimplicialLDLT) always reports 0, and
+nothing in `LinearSolverRequirements` or the solver's declarations says
+whether it iterates, so the page cannot tell "a direct solve" from "an
+iterative solve that needed none". A declared trait (for example
+`iterative` next to the symmetry requirement) would let the catalog carry
+it, as it carries `symmetric_matrix`, and the page show the figure for
+exactly the solvers it applies to.

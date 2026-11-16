@@ -75,7 +75,7 @@ flowchart LR
 | `app/src/binary.hpp` | little-endian float32, float64 and uint32 |
 | `app/src/session.*` | `Session`: the facade the server and `--run` use (stages, runs, comparisons, probes, exports, `run`), the default case, `check_case` |
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`: routes, client ids, token, Origin, the queue bound) and the command line |
-| `app/web/` | `index.html`, `style.css` (one dark theme, every colour a token), `js/`: `core.js` (pure helpers, tested in Node), `api.js` (every call, the client id and token headers), `state.js`, `actions.js`, `snapshots.js` (the bounded cache of a run's snapshots), `settings.js`, `dom.js` (forms from specs, error marks, info toggles, foldable sections), `view.js` (the picture), `timebar.js`, `probes.js` (the probe list and u(t)), `charts.js` (the SVG line chart), `compare.js` (the comparison with an exact solution), `panels/*.js` (one per step), `main.js` |
+| `app/web/` | `index.html`, `style.css` (one dark theme, every colour a token), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing and ticks; `color.js` OKLab ramps, field scales, the locked range; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, visible coefficients; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id and token headers), `state.js` (the store, `editCase`, tickets, undo, invalid entries), `actions.js` (stages, runs, presets, exports), `snapshots.js`, `settings.js`, `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
 | `app/examples/` | example cases (each runs as `app_run_*`) and an example SVG |
 | `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, error paths, `--set`), `server.cpp` (HTTP, token, Origin, 429, clients), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
@@ -265,7 +265,7 @@ All little-endian, as `application/octet-stream`.
   region tag of each boundary edge, an index into `region_names`).
   `arrays.bytes` is the total. The page decodes them into a
   `Float64Array` of nodes, a `Uint32Array` of triangles and a
-  `Uint32Array` of boundary edges as `[a, b, region, ...]` (`core.js`,
+  `Uint32Array` of boundary edges as `[a, b, region, ...]` (`pure/mesh_math.js`,
   `decodeMesh`).
 
 ## Comparisons
@@ -457,7 +457,7 @@ one entry per ready snapshot, a `Float32Array` where loaded and `null`
 where not. Showing snapshot k fetches the missing ones from k − 2 to
 k + 8 in one range request; beyond `keptSnapshots(nodes)` (about 64 MB of
 float32, from 8 to 1000 snapshots) the loaded ones farthest from k are
-dropped (`core.js`, `snapshotPlan`). Until the shown one arrives the
+dropped (`pure/run_values.js`, `snapshotPlan`). Until the shown one arrives the
 picture keeps the nearest loaded snapshot and says so in its label
 ("u at t = 0.2 (loading t = 0.3)"); the time bar says "loading…" for its
 range.
@@ -470,24 +470,95 @@ got.
 **Probes.** A click on the picture (or Enter with the picture focused)
 pins a probe, up to four; each keeps its colour slot while others come
 and go. The list under the picture gives x, y and the shown field's
-value there (interpolated page-side from the shown values, `core.js`:
+value there (interpolated page-side from the shown values, `pure/mesh_math.js`:
 `meshGrid`, `locatePoint`, `interpolateAt`); for a run in time a line
 chart shows u(t) of every probe from `/api/solve/probes`, asked again when
 the probes or the number of ready snapshots change.
 
-**Comparing with an exact solution** (`compare.js`): the Solve result
-takes an expression (kept in the case as `view.exact_solution`) and asks
-`/api/solve/compare`; it shows max |u − exact| and the lumped L2 error at
-the shown snapshot, the largest over all, a chart of max |u − exact| per
-snapshot, and "Show u − exact in the picture" (the shown snapshot's
-difference from `/api/solve/compare/difference`, fetched when shown) with
-one diverging scale from −max to max. The expression's error is marked on
-its input (`path` `exact`). A new solution is compared again with the
-same text. The reference run has API calls (`api.keepReference`,
-`api.compare(job, {reference: true})`) but no controls yet.
+**Comparisons** (`compare.js`, the Solve result). *With an exact
+solution*: an expression (kept in the case as `view.exact_solution`) is
+sent to `/api/solve/compare`; the section shows max |u − exact|, the RMS
+over the nodes and the lumped L2 error at the shown snapshot, the largest
+max over all, and for a run in time a chart of the three per snapshot.
+Next to the figures it says that this is the nodal error in double, not
+the solver's residual, and that a difference picture is float32. "Show
+u − exact in the picture" (`store.view.difference`) fetches the shown
+snapshot's difference from `/api/solve/compare/difference` and draws it
+with one diverging scale from −max to max. A comparison belongs to its
+solution and its expression: another solution drops it (a new done run is
+compared again with the same text), another expression in the case
+greys it out with "for the previous expression" until Compare. The
+expression's error is marked on its input (`path` `exact`). *With the
+reference run*: "Keep as reference" (a done, fresh run;
+`/api/solve/reference`, kept in `store.reference`), "Compare with
+reference" (max difference per snapshot, a chart for a run in time, "Show
+u − reference in the picture"), "Forget reference"; a refusal (another
+mesh, a run not done) shows the server's message in the section.
+
+**Request tickets** (`state.js`, `requestTicket`; `pure/tickets.js`).
+Every asynchronous answer is applied by one rule: a request takes a ticket
+of its kind with the case it was made in (`store.caseId`) and the key of
+its input; `live()` is true while no newer request of the kind was made in
+the same case (the answer may be kept, as outdated), `holds()` while the
+input key is also the same. Kinds and keys: each stage (its stage key;
+the problem check needs `holds`), `open` (New, Open, an example, a file:
+any newer replacement wins), `preset` (the revisions of the geometry,
+problem and solve sections: an edit made meanwhile refuses the answer
+with a toast), `compare-exact` and `compare-reference` (the solution),
+`difference-*` (not exclusive: several snapshots side by side, for the
+same comparison), `probes` (the run, snapshot count and points),
+`reference`.
+
+**Invalid entries.** Number fields are `numberInput` (`dom.js`): text
+inputs with `inputmode="decimal"` and the page's own parsing
+(`pure/format.js`, `parseNumberText`: a decimal point and an exponent,
+whatever the locale; a decimal comma gets its own message), shown with
+`numberText` (the shortest text that reads back as the same double).
+Text that is not a number changes nothing in the case: the field says
+"… The case still has 0.05.", and a field with a case path is recorded in
+`store.invalid` (path → label, reason). While any is recorded, every step
+head says "1 field is not a number: <label>" with a link that opens the
+step and focuses the field, Mesh, Assemble, Solve, Show (a field) and Run
+all are disabled with the reason (`guarded` buttons), `runWithPrerequisites`
+and `runAll` refuse with a toast, and Save warns. Building the forms again
+(a new case, an undo, a structural edit) clears the record, since the
+fields then show the case's values.
+
+**Undo and redo** (`state.js`, `pure/history.js`). `editCase` records, per
+case section it changed, the section's JSON text before and after; a
+step merges the following edits from the same input element (the element
+whose `input` event is being handled, `setInputGroup`) until a field
+loses the focus, so typing in a field is one step. At most 100 steps; a
+new case clears them. Undo and redo put the sections back, rebuild the
+forms and read the geometry again when it changed. Keys: Ctrl+Z, and
+Ctrl+Shift+Z or Ctrl+Y, except in a text field typed in since it got the
+focus, where the browser's own undo of the field wins; the conditions that
+follow a new geometry (`record: false`) are not steps of their own.
+**Restore previous case** (top bar, `store.previousCase`) brings back the
+case the last New, Open, example or file replaced, until the next
+replacement.
+
+**The picture** (`view/`). The legend names the field shown (`u at t =
+…`, `u − exact at t = …`, `Dirichlet values at t = …`, `|∇u| at t = …`),
+the Colour menu's options name it too (`field: u`, `|∇| of u`), a field
+with one value says "constant: <value>". **Lock range** fixes the colour
+range per quantity (field or |∇|) in `store.view.locked` (`lockedScale`),
+kept until **Unlock** and editable at its ends. **|∇|** colours each
+triangle by the gradient of the shown P1 field (`gradientMagnitudes`,
+display only). **Line profile**: with the tool on, a drag draws a line;
+the shown field along it (`sampleLine`, 200 intervals, gaps outside the
+mesh) is charted under the probes and follows the shown snapshot.
+Interaction: one pointer pans (a press that does not move pins a probe),
+two pinch and pan, the wheel zooms, +/−/fit buttons on the picture; at
+phone width a handle under the picture sets its height (kept in this
+browser). Edges are drawn fainter over a field's colours. Results whose
+reports hold messages show a warning chip with the count and the first
+message; it opens the reports. Solution exports are CSV, VTK and
+provenance; a 409 or 429 answer is said in plain words
+(`exportErrorText`).
 
 **Errors** carry `path` (`ApiError.path`); `markError` uses it, and the
-text only for an error without one (`core.js`, `errorPathOf`).
+text only for an error without one (`pure/stages.js`, `errorPathOf`).
 
 ## Presets
 

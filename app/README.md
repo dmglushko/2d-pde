@@ -57,8 +57,20 @@ scroll: running with the seconds, up to date, outdated or failed, and
 result comes next, the settings below it. Descriptions of options and
 components are behind the small **i** buttons. An
 error shown after the case changed is greyed out and marked "for the
-previous input". A number field whose text is not a number yet (`-`,
-`1e`) is marked "not a number" and changes nothing until it parses.
+previous input". Numbers are written with a decimal point (`0.05`, `1e-3`)
+whatever the browser's language. A number field whose text is not a
+number (`-`, `1e`, `0,05`) changes nothing: it says what the case still
+has, every step's head names it with a link to it, and Solve, Mesh,
+Assemble and Run all wait until it is fixed (Save warns that the file
+gets the previous value). A warning chip at the top of a result shows how
+many messages its reports hold and the first one; click it to open the
+reports.
+
+**Undo and redo** (the arrows in the top bar, Ctrl+Z and Ctrl+Shift+Z or
+Ctrl+Y) take back and redo edits of the case, up to 100; typing in one
+field is one step. While you type in a text field, Ctrl+Z belongs to that
+field (the browser's own undo, letter by letter); once you leave the
+field, Ctrl+Z undoes the whole edit of the field.
 
 1. **Geometry.** Pick a ready-made shape, load an SVG drawing, or load a
    mesh file (Gmsh `.msh` or `.pde2d`). You can also drop a file onto the
@@ -79,11 +91,14 @@ previous input". A number field whose text is not a number yet (`-`,
    marked at its field.
 3. **Problem.** Write the equation's coefficients, named parameters, one
    boundary condition per region and the initial conditions as expressions
-   in x, y and t. **Preset…** fills in a whole problem for the current
+   in x, y and t. Each form shows the coefficients in use and the right
+   side; **Show all coefficients** reveals the others (a template chosen
+   from **Start from…** or **Type…** shows its own). **Preset…** fills in a whole problem for the current
    geometry with matching solve settings (**Use a preset…** in the step's head): Poisson, Laplace with u = x,
    heat (a bump, a heated boundary, cooling), the wave equation with and
    without damping, steady convection-diffusion and reaction-diffusion;
-   the message that follows has **Undo**. The **Start from…** and
+   the message that follows has **Undo**. A preset is not applied when the
+   case changed while it was prepared (choose it again). The **Start from…** and
    **Type…** menus fill in common equations and conditions. Every edit is
    checked after a short pause in typing (see Settings): errors appear
    under their field, and each field shows what it depends on. Each condition
@@ -112,12 +127,25 @@ previous input". A number field whose text is not a number yet (`-`,
    in time, the time bar under the picture (**Play**, the slider, the
    shown time with that snapshot's min and max) walks through the
    snapshots; the colours keep one scale for every time. **Compare with
-   an exact solution** takes an expression in x, y, t: it shows
-   max |u − exact| and the L2 error at the shown time, the largest over
-   all snapshots, a chart per snapshot, and can show u − exact in the
-   picture. The server computes it in double precision (the picture gets
-   u as 32-bit floats). **Export solution .csv** saves x, y and u at every
-   kept time (full precision), once the run is done. Before a run, the panel says how large the
+   an exact solution** takes an expression in x, y, t: it shows the
+   largest nodal error max |u − exact|, its RMS over the nodes and the
+   lumped L2 error at the shown time, the largest over all snapshots and,
+   for a run in time, the three per snapshot in a chart; it can show
+   u − exact in the picture. The server computes the figures in double
+   precision; the picture of a difference is drawn from 32-bit floats.
+   Editing the expression greys the figures out ("for the previous
+   expression") until you compare again. **Compare with a reference
+   run**: **Keep as reference** keeps a finished run on the server;
+   change the case (dt, the method, a coefficient), solve again and
+   **Compare with reference** shows the largest difference per snapshot
+   and can show u − reference in the picture. Both runs must be on the
+   same mesh: after a change of the geometry or the mesh the server
+   refuses and says so. **Forget reference** drops it. **Export .csv**
+   saves x, y and u at every kept time (full precision), **Export .vtk**
+   the mesh and every snapshot for ParaView, **Export provenance** the
+   whole case with the versions and the run, once the run is done; an
+   export that is not ready, or a server that is busy, says so in plain
+   words. Before a run, the panel says how large the
    solution will be and warns above 50 MB. A run in time shows its
    snapshots while it goes on: the status shows t reached, steps and
    snapshots with a progress bar, and the picture the newest snapshot,
@@ -143,18 +171,25 @@ picture quality (lower is faster to pan and draw, higher is sharper). The Comput
 (sequential or parallel assembly and linear solves) is shown disabled: the
 library runs sequentially for now.
 
-In the picture, drag to pan, use the wheel to zoom, and double-click (or
-press **Fit**) to fit. With the picture focused (Tab), the arrow keys pan
-(Shift for bigger steps), + and - zoom, 0 fits and Enter pins a probe at
-the centre. The toolbar turns layers on and off (boundary, mesh edges,
-Dirichlet nodes, isolines) and chooses the colouring: the smallest angle
-of each triangle, or the last field shown. Point at the picture to read
-the coordinates, the region, the triangle and the field value there (for
-Dirichlet values and b, the value of the nearest dot). **Save picture**
-saves the picture with its legend as a PNG named after the case and the
-shown time.
+In the picture, drag to pan, use the wheel or pinch with two fingers to
+zoom, and double-click (or the **⤢** button) to fit; **+** and **−** at
+the picture's corner zoom too. With the picture focused (Tab), the arrow
+keys pan (Shift for bigger steps), + and - zoom, 0 fits and Enter pins a
+probe at the centre. The toolbar turns layers on and off (boundary, mesh
+edges, Dirichlet nodes, isolines) and chooses the colouring: the
+smallest angle of each triangle, the field shown (the menu names it:
+`field: u`, `field: Dirichlet values`…), or **|∇|** of that field, one
+value per triangle. The legend names the field and its time; a field with
+one value says "constant: …". **Lock range** keeps the colour range for
+every snapshot and run until **Unlock** (its ends can be edited), so two
+runs can be compared by eye. **Line profile**: drag a line across the
+picture to plot the shown field along it (it follows the time bar);
+**Remove line** drops it. Point at the picture to read the coordinates,
+the region, the triangle and the value there (for Dirichlet values and
+b, the value of the nearest dot). **Save picture** saves the picture with
+its legend as a PNG named after the case and the shown time.
 
-**Probes.** Click the picture to pin a probe (up to four). The list under
+**Probes.** Click or tap the picture to pin a probe (up to four). The list under
 the picture gives each probe's x, y and value; for a run in time a chart
 shows u(t) at every probe (computed on the server over all snapshots),
 with the shown time marked; click the chart to show that time. **✕**
@@ -167,7 +202,9 @@ jump far, the picture shows the nearest loaded snapshot for a moment
 replace or stop each other's solve.
 
 The page has one, dark, theme. On a phone, the steps stay at the top and
-the picture with its time bar stays under them while the panel scrolls.
+the picture with its time bar stays under them while the panel scrolls;
+drag the bar under the picture to make it taller or shorter (the browser
+remembers it).
 
 ## Cases
 
@@ -178,8 +215,10 @@ example it was opened from (`case.json` for a new case), and **Open
 case…** loads one; "unsaved changes" next to Save shows that the case
 changed since it was opened or saved. The browser also keeps the current
 case between visits. The **Examples** menu opens the cases in
-`app/examples/`. After **New**, **Open case…** or **Examples**, the
-message offers **Restore the previous case** for a few seconds. When
+`app/examples/`. After **New**, **Open case…** or **Examples**, **Restore
+previous case** in the top bar brings back the case they replaced (until
+the next replacement). An example or file that is still loading never
+replaces a case you started or opened meanwhile. When
 parts of an opened case had to be replaced by defaults, a notice above
 the steps lists them until you dismiss it.
 

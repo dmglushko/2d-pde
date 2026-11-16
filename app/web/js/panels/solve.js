@@ -117,10 +117,10 @@ const largest = (values) => {
 
 // What the figures are, said next to them.
 const NOTES = {
-  exact: "Nodal error: u − exact at the mesh nodes, in double. Not the solver's residual ‖b − A U‖ (above), which only says how well each linear system was solved.",
-  reference: "u − reference at the mesh nodes, in double, at the same times.",
+  exact: "Nodal error u − exact, in double: not the solver's residual ‖b − A U‖.",
+  reference: "u − reference at the nodes, at the same times, in double.",
 };
-const FLOAT_NOTE = "The picture of a difference is drawn in float32: below about 1e−7 × |u| it shows rounding, not the solution.";
+const FLOAT_NOTE = "The picture is float32: below about 1e−7 × |u| it shows rounding.";
 
 // The checkbox that shows u − other in the picture.
 function differenceBox(kind) {
@@ -235,7 +235,14 @@ function updateComparison(section, kind, result, frame) {
   const error = comparisons[kind].result === result ? comparisons[kind].error : null;
   if (section.shownError !== error) {
     section.shownError = error;
+    // The figures of the failed attempt go either way.
     if (kind !== "exact" || !markError(section, error)) fill(slot, error ? errorBox(error) : null);
+    else fill(slot);
+    const chart = section.querySelector(".compare-chart");
+    if (error && chart) {
+      fill(chart);
+      chart.chart = null;
+    }
   }
   if (error) return;
   const chartSlot = section.querySelector(".compare-chart");
@@ -253,7 +260,7 @@ function updateComparison(section, kind, result, frame) {
       "div",
       { class: "stats" },
       stat(`max ${label}`, shownNumber(c.linf[frame]), at),
-      kind === "exact" ? stat("RMS over the nodes", shownNumber(c.rms[frame]), "sqrt(Σ d_i² / N) over the N nodes") : null,
+      kind === "exact" ? stat("RMS (nodes)", shownNumber(c.rms[frame]), "sqrt(Σ d_i² / N) over the N nodes") : null,
       kind === "exact" ? stat("L2 (lumped)", shownNumber(c.l2[frame]), "sqrt(Σ w_i d_i²), w_i a third of the area around node i") : null,
       result.mode === "time" ? stat(`largest max ${label}`, shownNumber(largest(c.linf)), "Over every snapshot") : null,
       c.busy ? stat("Compared", "…") : null,

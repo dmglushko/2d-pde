@@ -454,3 +454,94 @@ What changed for the page in this round, all documented in app.md:
   (`kind: "not_ready"`).
 - Not in the page yet: the reference run's controls, the comparison's
   RMS, a warning text for 429 (`kind: "busy"`).
+
+## 2026-11-16, round 2, part B (the page)
+
+- **One rule for asynchronous answers: request tickets** (was: stages
+  used generations, presets compared only the case id, an example load
+  checked nothing, comparisons had their own counter). A ticket carries
+  its kind, a generation, the case it was made in and the key of the
+  input it was made for; `live()` and `holds()` are the two questions
+  every caller asks (may it change the state; is it about what is shown
+  now). Two races were reproduced and are tested: an example still
+  loading replaced a case started with New meanwhile (now the `open`
+  ticket of the example is superseded), and a preset's answer overwrote
+  edits made after the request (now its key is the revision of the
+  geometry, problem and solve sections, and the answer is refused with a
+  toast). Revisions, not section texts, are the preset's key: comparing
+  texts would let an edit that was typed back pass, and cost a stringify
+  of the problem per answer.
+- **Invalid entries block, visibly** (was: a field marked "not a number"
+  that changed nothing, while Solve ran the previous value). A run with
+  a value the page does not show is a silent wrong answer, so every run
+  button is disabled with the reason, every step head names the field
+  with a link to it, the field says which value the case still has, and
+  Save warns (it still saves: losing the rest of the case would be
+  worse). The record is cleared whenever the forms are built again, since
+  every field then shows the case's own value. The automatic geometry
+  read after an edit is not blocked: it reads the case, which is valid.
+- **Number fields are text** with `inputmode="decimal"` and the page's
+  own parser (was: `type="number"`, which Windows Chrome shows as
+  "0,05" in some locales and which reports "" for text it cannot parse).
+  A decimal comma is refused with a message naming the decimal point
+  rather than read as a thousands separator or a decimal: either guess
+  would be silently wrong for some users. The integer kind is left to the
+  library, as every range check.
+- **Undo is per section, by text.** A step keeps only the sections an
+  edit changed, as JSON text before and after, so a large SVG or mesh
+  file costs memory only in the steps that changed it; 100 steps. Typing
+  merges into the step of the input element being typed in until a field
+  loses the focus (the grouping is set around each `input` event, so no
+  form needs to pass anything). Which Ctrl+Z wins: the field's own
+  while it was typed in since it got the focus (letter-by-letter undo is
+  what a user expects there; its `input` events still update the case and
+  the same step), the case's everywhere else. A new case clears the
+  history: undoing across a replacement would mix two cases; **Restore
+  previous case** in the top bar covers that, until the next replacement
+  (was: a toast button that vanished after 12 s).
+- **Comparisons are tied to their solution and their expression.**
+  Editing the expression greys the figures with "for the previous
+  expression" instead of dropping them: the numbers stay readable while
+  the user decides. RMS joins max and lumped L2, the three in one chart
+  per snapshot (same unit, one axis); the notes next to the figures say
+  that this is the nodal error in double and not the solver's residual,
+  and that a difference picture is float32. Reference runs got their
+  controls; a refusal (another mesh) shows the server's own message.
+- **The legend names what is shown and can lock its range.** A locked
+  range is kept per quantity (the field, |∇|) until unlocked, so two runs
+  or two snapshots can be compared by eye; its ends can be typed. It
+  applies on Enter or when a field is left: applying while typing would
+  redraw the legend under the cursor. A constant field says "constant:
+  value" instead of a bar with equal ends.
+- **|∇u| and the line profile are display-only post-processing** of the
+  shown snapshot in float32 (the gradient of the P1 interpolant per
+  triangle; the interpolant at 201 points along the line). They are
+  pictures, not results: the figures a user may cite (errors, probes)
+  stay on the server in double.
+- **Linear iterations are hidden when there were none.** The library
+  declares no trait that says which solvers iterate (requested,
+  library-requests.md item 10); 0 is what every direct solver reports.
+- **Touch:** pinch to zoom and pan with pointer events (the canvas
+  already had `touch-action: none`), zoom buttons on the picture, 24 px
+  info buttons with a 44 px invisible target on coarse pointers, and a
+  drag handle (also arrow keys) for the picture's height at phone width,
+  kept in this browser. The toolbar's "Colour" label and "picture" in
+  "Save picture" are dropped at phone width so the toolbar fits two lines.
+- **Warnings visible without unfolding:** a result whose reports hold
+  messages starts with a chip giving their count and the first one; it
+  opens the reports. **Exports:** VTK and provenance next to the CSV;
+  409 and 429 answers are said as what to do.
+- **`core.js` split by topic into `web/js/pure/`** (format, color,
+  mesh_math, case_model, stages, run_values, prefs, tickets, history) and
+  `view.js` into `web/js/view/` (the viewer's state and layer order, the
+  layers, the legend and saved picture, the interaction). `probeSeries`,
+  `errorValues` and `maxAbs` were unused and are gone.
+- **Browser tests wait on conditions** (a page's requests in flight are
+  counted by the harness; `idle()` waits until none for a few turns of its
+  event loop, since headless Chrome under virtual time may not run
+  animation frames). One fixed wait remains, where the check is that
+  nothing moves (Pause). New scenarios: invalid entries, the example and
+  preset races, undo and redo, two tabs, the locked range with a pixel
+  check of the field's colours, |∇u|, the line profile, zoom, pinch and
+  the picture's height on a phone, and the reference run with the
+  outdated comparison.

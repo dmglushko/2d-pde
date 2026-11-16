@@ -42,7 +42,15 @@ meshing) in the app or the page.
 - **Every case edit goes through `editCase`** (state.js): stage keys are
   kept per section and recomputed only for the sections an edit names.
 - **The page has no build step**: plain ES modules. Pure helpers go to
-  `web/js/core.js` and get a test in `tests/web.test.mjs`.
+  the module of their topic in `web/js/pure/` (no DOM) and get a test in
+  `tests/web.test.mjs`.
+- **Every asynchronous answer takes a request ticket** (`requestTicket`
+  in `state.js`, `pure/tickets.js`): its kind, the case it was made in
+  and the input key it was made for; apply an answer only while its
+  ticket holds.
+- **Number fields are `numberInput`** (`dom.js`): text with the page's
+  own decimal parsing; invalid text is recorded with its case path and
+  blocks runs.
 
 ## Before finishing a change
 

@@ -58,7 +58,7 @@ export function updateProbes(root, { mesh, field, solution, frame, digits }) {
   const grid = gridOf(mesh);
   const located = probes.map((p) => locatePoint(mesh, grid, p.x, p.y));
   if (probes.length === 0) {
-    fill(list, h("p", { class: "note" }, "Click the picture to pin a probe (up to 4)."));
+    fill(list, h("p", { class: "note" }, "Click or tap the picture to pin a probe (up to 4)."));
   } else {
     const header = h(
       "tr",
@@ -66,7 +66,7 @@ export function updateProbes(root, { mesh, field, solution, frame, digits }) {
       h("th", {}, "Probe"),
       h("th", { class: "num" }, "x"),
       h("th", { class: "num" }, "y"),
-      h("th", { class: "num" }, field?.short ?? "value"),
+      h("th", { class: "num" }, field?.name ?? "value"),
       h("th", {}, h("button", { type: "button", class: "link", onclick: () => setProbes([]) }, "Remove all")),
     );
     fill(list, h("table", { class: "data probes-table" }, h("thead", {}, header), h("tbody", {}, probes.map((p, i) => probeRow(p, located[i], field, digits)))));
