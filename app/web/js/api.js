@@ -25,10 +25,26 @@ function randomId() {
 export const clientId = randomId();
 
 // The token of a server that listens beyond this machine: it is in the
-// address the server printed (?token=...), and goes with every request.
+// address the server printed (?token=...). The page keeps it in this tab's
+// sessionStorage and takes it out of the address bar (so it is not in a
+// copied link, a bookmark or the history from then on); it goes with every
+// request in X-PDE2D-Token (the server takes it only there).
+const tokenKey = "pde2d-token";
 const token = (() => {
   try {
-    return new URLSearchParams(globalThis.location?.search ?? "").get("token");
+    const url = new URL(globalThis.location.href);
+    const given = url.searchParams.get("token");
+    if (given) {
+      try {
+        globalThis.sessionStorage?.setItem(tokenKey, given);
+      } catch {
+        // Storage refused: the token still lives in this page.
+      }
+      url.searchParams.delete("token");
+      globalThis.history?.replaceState(globalThis.history.state, "", url.pathname + url.search + url.hash);
+      return given;
+    }
+    return globalThis.sessionStorage?.getItem(tokenKey) ?? null;
   } catch {
     return null;
   }

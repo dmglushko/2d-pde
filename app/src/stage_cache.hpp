@@ -12,6 +12,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The last result of each stage, keyed by the case sections it was built
@@ -33,6 +34,8 @@ struct MeshOutcome {
 // The "assembly" section: the time to assemble at (0 by default) and
 // which time terms to build (Assembler::assemble's max_time_order, 2 by
 // default). Throws PathError.
+inline constexpr std::string_view assembly_section_keys[] = {"t",
+                                                             "max_time_order"};
 struct AssemblySettings {
   double t = 0.0;
   int max_time_order = 2;

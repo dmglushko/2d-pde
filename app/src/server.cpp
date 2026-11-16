@@ -92,8 +92,12 @@ void send_error(httplib::Response &response, int status, std::string_view stage,
 int status_of(const StageError &error) {
   if (error.kind() == "internal")
     return 500;
-  if (error.kind() == "not_ready")
+  // A result that is not ready yet, a run a newer solve replaced.
+  if (error.kind() == "not_ready" || error.kind() == "replaced")
     return 409;
+  // A run that was dropped or that this server never had.
+  if (error.kind() == "expired")
+    return 410;
   return 422;
 }
 
@@ -131,24 +135,30 @@ struct Server::Impl {
 
   // Parses the request body and runs `work(body, client, response)`,
   // turning failures into error responses: 400 for a body that is not
-  // JSON, 409 for a result that is not ready, 422 for input the library
-  // refused or an algorithm that could not finish, 429 when too many
-  // requests already wait for the session, 500 otherwise.
+  // JSON, 409 for a result that is not ready or a run that was replaced,
+  // 410 for a run that is gone, 422 for input the library refused or an
+  // algorithm that could not finish, 429 when too many requests already
+  // wait for the session, 500 otherwise. A call that does not wait for the
+  // session (`waits` false: progress, stop, values, probes) is never
+  // refused for being busy and does not count.
   template <class Work>
   void handle(const httplib::Request &request, httplib::Response &response,
-              Work work) {
+              Work work, bool waits = true) {
     struct Slot {
-      std::atomic<int> &count;
-      ~Slot() { --count; }
+      std::atomic<int> *count;
+      ~Slot() {
+        if (count != nullptr)
+          --*count;
+      }
     };
-    if (++active > options.max_waiting + 1) {
+    if (waits && ++active > options.max_waiting + 1) {
       --active;
       send_error(response, 429, "request", "busy",
                  "the app is busy with earlier requests; try again in a "
                  "moment");
       return;
     }
-    const Slot slot{active};
+    const Slot slot{waits ? &active : nullptr};
     Json body;
     try {
       body = Json::parse(request.body);
@@ -188,7 +198,10 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
 
   http.set_mount_point("/", web.string());
   http.set_payload_max_length(impl_->options.max_body_bytes);
-  http.set_default_headers({{"Cache-Control", "no-store"}});
+  // No page this server sends names its address (and the token the
+  // first page load carries) to another site.
+  http.set_default_headers(
+      {{"Cache-Control", "no-store"}, {"Referrer-Policy", "no-referrer"}});
 
   // A page on another site must not drive this server: API requests must
   // name this machine in their Host header when it listens on loopback
@@ -208,10 +221,10 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
                      "requests must come from this machine");
           return httplib::Server::HandlerResponse::Handled;
         }
+        // The token comes in its header only: ?token= is for opening the
+        // page, which keeps it and removes it from the address bar.
         if (!token.empty()) {
-          const std::string given = request.has_header(token_header)
-                                        ? request.get_header_value(token_header)
-                                        : request.get_param_value("token");
+          const std::string given = request.get_header_value(token_header);
           if (!same_secret(given, token)) {
             send_error(response, 403, "request", "input",
                        "this server needs its token: open the address it "
@@ -277,27 +290,51 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
            [](const httplib::Request &, httplib::Response &response) {
              send_json(response, Session::default_case());
            });
+  http.Get("/api/case-schema",
+           [](const httplib::Request &, httplib::Response &response) {
+             response.status = 200;
+             response.set_content(Session::case_schema().dump(2),
+                                  "application/schema+json");
+           });
+  // What the session is busy with; never waits for it.
+  http.Get("/api/status", [&session, &impl](const httplib::Request &request,
+                                            httplib::Response &response) {
+    try {
+      Json body = session.status(client_of(request));
+      body["waiting"] = std::max(0, impl.active.load());
+      send_json(response, body);
+    } catch (const StageError &error) {
+      send_error(response, status_of(error), error.stage(), error.kind(),
+                 error.what(), error.path());
+    }
+  });
 
-  // A call answered in JSON: stage(body, client).
-  const auto route = [&http, &impl](const std::string &path, auto stage) {
-    http.Post(path, [stage, &impl](const httplib::Request &request,
-                                   httplib::Response &response) {
+  // A call answered in JSON: stage(body, client). `waits`: whether it
+  // waits for the session mutex (false for the calls that read only the
+  // runs' bookkeeping).
+  const auto route = [&http, &impl](const std::string &path, auto stage,
+                                    bool waits = true) {
+    http.Post(path, [stage, &impl, waits](const httplib::Request &request,
+                                          httplib::Response &response) {
       impl.handle(
           request, response,
           [&](const Json &body, const std::string &client,
-              httplib::Response &out) { send_json(out, stage(body, client)); });
+              httplib::Response &out) { send_json(out, stage(body, client)); },
+          waits);
     });
   };
   // A call answered in bytes.
-  const auto binary = [&http, &impl](const std::string &path, auto stage) {
-    http.Post(path, [stage, &impl](const httplib::Request &request,
-                                   httplib::Response &response) {
-      impl.handle(request, response,
-                  [&](const Json &body, const std::string &client,
-                      httplib::Response &out) {
-                    out.set_content(stage(body, client),
-                                    "application/octet-stream");
-                  });
+  const auto binary = [&http, &impl](const std::string &path, auto stage,
+                                     bool waits = true) {
+    http.Post(path, [stage, &impl, waits](const httplib::Request &request,
+                                          httplib::Response &response) {
+      impl.handle(
+          request, response,
+          [&](const Json &body, const std::string &client,
+              httplib::Response &out) {
+            out.set_content(stage(body, client), "application/octet-stream");
+          },
+          waits);
     });
   };
   route("/api/geometry", [&session](const Json &body, const std::string &) {
@@ -323,25 +360,32 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
   const auto job_request = [](const Json &body) {
     return staged("solve", [&] { return request_job(body, job_only); });
   };
-  route("/api/solve/progress",
-        [&session, job_request](const Json &body, const std::string &client) {
-          return session.solve_progress(job_request(body), client);
-        });
-  route("/api/solve/stop",
-        [&session, job_request](const Json &body, const std::string &client) {
-          return session.stop_solve(job_request(body), client);
-        });
+  route(
+      "/api/solve/progress",
+      [&session, job_request](const Json &body, const std::string &client) {
+        return session.solve_progress(job_request(body), client);
+      },
+      false);
+  route(
+      "/api/solve/stop",
+      [&session, job_request](const Json &body, const std::string &client) {
+        return session.stop_solve(job_request(body), client);
+      },
+      false);
   // Snapshots of a run as float32 (Session::solution_values_float32):
   // {"job": n, "first": k, "count": c}.
-  binary("/api/solve/values", [&session](const Json &body,
-                                         const std::string &client) {
-    static constexpr std::string_view known[] = {"job", "first", "count"};
-    const auto [job, first, count] = staged("solve", [&] {
-      return std::tuple(request_job(body, known), request_count(body, "first"),
-                        request_count(body, "count"));
-    });
-    return session.solution_values_float32(job, first, count, client);
-  });
+  binary(
+      "/api/solve/values",
+      [&session](const Json &body, const std::string &client) {
+        static constexpr std::string_view known[] = {"job", "first", "count"};
+        const auto [job, first, count] = staged("solve", [&] {
+          return std::tuple(request_job(body, known),
+                            request_count(body, "first"),
+                            request_count(body, "count"));
+        });
+        return session.solution_values_float32(job, first, count, client);
+      },
+      false);
   route("/api/solve/reference",
         [&session](const Json &body, const std::string &client) {
           return session.keep_reference(body, client);
@@ -358,10 +402,12 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
          [&session](const Json &body, const std::string &client) {
            return session.compare_difference(body, client);
          });
-  route("/api/solve/probes",
-        [&session](const Json &body, const std::string &client) {
-          return session.probes(body, client);
-        });
+  route(
+      "/api/solve/probes",
+      [&session](const Json &body, const std::string &client) {
+        return session.probes(body, client);
+      },
+      false);
   route("/api/preset", [&session](const Json &body, const std::string &) {
     return session.apply_preset(body);
   });

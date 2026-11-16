@@ -96,10 +96,14 @@ void set_case_value(Json &case_json, std::string_view path,
       node = &(*node)[index];
     }
   }
+  *node = set_value(value);
+}
+
+Json set_value(std::string_view text) {
   try {
-    *node = Json::parse(value);
+    return Json::parse(text);
   } catch (const Json::parse_error &) {
-    *node = std::string(value);
+    return std::string(text);
   }
 }
 

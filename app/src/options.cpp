@@ -14,7 +14,9 @@ namespace {
 
 const Json null_json = nullptr;
 
-std::string_view kind_name(OptionKind kind) {
+} // namespace
+
+std::string_view option_kind_name(OptionKind kind) {
   switch (kind) {
   case OptionKind::number:
     return "number";
@@ -27,6 +29,10 @@ std::string_view kind_name(OptionKind kind) {
   }
   throw std::logic_error("unknown option kind");
 }
+
+namespace {
+
+std::string_view kind_name(OptionKind kind) { return option_kind_name(kind); }
 
 [[noreturn]] void fail(std::string_view where, std::string_view what) {
   throw PathError(std::string(where), std::string(what));
@@ -177,6 +183,24 @@ mesh::LengthBound OptionReader::length_bound(std::string_view name) const {
   reject_unknown_keys(json, where, known);
   return {.absolute = optional_length(json, "absolute", where),
           .relative = optional_length(json, "relative", where)};
+}
+
+void OptionReader::check_kinds() const {
+  for (const OptionSpec &option : specs_)
+    switch (option.kind) {
+    case OptionKind::number:
+      (void)number(option.name);
+      break;
+    case OptionKind::integer:
+      (void)integer(option.name);
+      break;
+    case OptionKind::choice:
+      (void)choice(option.name);
+      break;
+    case OptionKind::length_bound:
+      (void)length_bound(option.name);
+      break;
+    }
 }
 
 const Json &require_object(const Json &value, std::string_view where) {

@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,10 @@ struct MeshCatalog {
 };
 
 const MeshCatalog &mesh_catalog();
+
+// The keys of the mesh section.
+inline constexpr std::string_view mesh_section_keys[] = {
+    "spec", "discretizer", "triangulator", "refiner", "improvers"};
 
 // The components and the target built from the "mesh" section of a case.
 // A geometry is meshed by a Mesher made of all of them; an imported mesh
@@ -92,7 +97,8 @@ Json mesh_catalog_json();
 //
 // Only the part of the chosen mode is read into the library's objects; the
 // other is kept as written (an object or null), so switching modes back
-// and forth keeps both.
+// and forth keeps both. It is still checked for unknown keys and value
+// types, with paths.
 struct SolveCatalog {
   std::vector<OptionSpec> static_settings; // t
   std::vector<OptionSpec> time_settings;   // t0, t1, snapshots
@@ -102,6 +108,12 @@ struct SolveCatalog {
 };
 
 const SolveCatalog &solve_catalog();
+
+// The keys of the solve section; "time" also holds "method" and "step"
+// beside its settings.
+inline constexpr std::string_view solve_section_keys[] = {
+    "mode", "linear_solver", "static", "time"};
+inline constexpr std::string_view solve_modes[] = {"static", "time"};
 
 enum class SolveMode { static_solve, time_integration };
 

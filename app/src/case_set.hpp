@@ -17,6 +17,9 @@ namespace pde2d::app {
 void set_case_value(Json &case_json, std::string_view path,
                     std::string_view value);
 
+// A value of --set or --sweep: the text read as JSON, or else the text.
+Json set_value(std::string_view text);
+
 // The same from "PATH=VALUE".
 void apply_set_argument(Json &case_json, std::string_view argument);
 

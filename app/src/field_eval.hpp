@@ -18,7 +18,9 @@
 // expression at the nodes (evaluated by fem::CompiledExpression, the only
 // evaluator), differences between a run and an exact solution or a
 // reference run, and the solution at points (docs/app.md, "Comparisons"
-// and "Probes"). Called under the session mutex.
+// and "Probes"). They read a run's RunSnapshots (the mesh and the values),
+// so probes need no lock; a comparison with an exact solution compiles an
+// expression, which needs the session mutex.
 namespace pde2d::app {
 
 // The compiled expression at every node of `mesh` at time t.
@@ -48,10 +50,11 @@ DifferenceStats difference_stats(std::span<const double> u,
 class Comparison {
 public:
   // Reads {"exact": text} or {"reference": true} from `request` (the keys
-  // besides "job", "snapshot"); `reference` is the client's reference run
-  // (may be null). Throws PathError for a request it cannot follow.
-  Comparison(const Run &run, const Json &request,
-             std::shared_ptr<const Run> reference);
+  // besides "job", "snapshot"); `parameters` are the run's; `reference` is
+  // the client's reference run (may be null). Throws PathError for a
+  // request it cannot follow.
+  Comparison(RunSnapshots run, const fem::Parameters &parameters,
+             const Json &request, std::optional<RunSnapshots> reference);
 
   // The other values for snapshot k of the run, or nothing when the
   // reference has no snapshot at that time.
@@ -63,10 +66,10 @@ public:
   std::string difference_float32(std::size_t k) const;
 
 private:
-  const Run &run_;
+  RunSnapshots run_;
   std::optional<fem::CompiledExpression> exact_;
   std::string text_;
-  std::shared_ptr<const Run> reference_;
+  std::optional<RunSnapshots> reference_;
   // For each run snapshot, the reference snapshot at the same time.
   std::vector<std::optional<std::size_t>> matched_;
 };
@@ -99,7 +102,7 @@ private:
 // max_probes), interpolated with the P1 basis: {"times", "probes": [{"x",
 // "y", "inside", "triangle", "values"}]}. Throws PathError for a bad
 // request.
-Json probe_series(const Run &run, const Json &points);
+Json probe_series(const RunSnapshots &run, const Json &points);
 inline constexpr std::size_t max_probes = 64;
 
 } // namespace pde2d::app

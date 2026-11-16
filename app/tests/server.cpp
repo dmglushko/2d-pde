@@ -123,7 +123,7 @@ int main() {
              post(client, "/api/solve/progress", {{"job", solved["job"]}}, 200);
          check(progress["state"] == "done" && progress["job"] == solved["job"],
                "progress");
-         post(client, "/api/solve/progress", {{"job", 999}}, 422);
+         post(client, "/api/solve/progress", {{"job", 999}}, 410);
          // A time run goes on in the background until it is done or
          // stopped.
          Json timed = case_json;
@@ -231,8 +231,10 @@ int main() {
          const auto header =
              client.Get("/api/catalog", {{"X-PDE2D-Token", "s3cret"}});
          check(header && header->status == 200, "in the header");
+         // The address carries it to the page only; API calls send the
+         // header.
          const auto query = client.Get("/api/catalog?token=s3cret");
-         check(query && query->status == 200, "in the address");
+         check(query && query->status == 403, "not in an API address");
          const auto page = client.Get("/");
          check(page && page->status == 200, "the page itself needs none");
          // A host beyond this machine always has a token, made at random.
@@ -288,7 +290,9 @@ int main() {
          check(mine && mine->status == 200, "a's run for a");
          const auto theirs = client.Post("/api/solve/progress", b, job.dump(),
                                          "application/json");
-         check(theirs && theirs->status == 422, "not b's");
+         check(theirs && theirs->status == 410, "not b's");
+         check(Json::parse(theirs->body)["error"]["kind"] == "expired",
+               "an unknown run is expired");
          const auto bad =
              client.Post("/api/solve/progress", {{"X-PDE2D-Client", "a b"}},
                          job.dump(), "application/json");

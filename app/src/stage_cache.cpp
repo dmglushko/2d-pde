@@ -26,8 +26,7 @@ AssemblySettings assembly_settings(const Json &case_json) {
   if (assembly.is_null())
     return out;
   require_object(assembly, "assembly");
-  static constexpr std::string_view known[] = {"t", "max_time_order"};
-  reject_unknown_keys(assembly, "assembly", known);
+  reject_unknown_keys(assembly, "assembly", assembly_section_keys);
   if (const Json &t = member(assembly, "t"); !t.is_null())
     out.t = require_number(t, "assembly.t");
   if (const Json &order = member(assembly, "max_time_order");

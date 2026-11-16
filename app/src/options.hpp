@@ -41,6 +41,9 @@ struct OptionSpec {
   std::string unit;                 // shown after the field, may be empty
 };
 
+// "number", "integer", "choice" or "length_bound".
+std::string_view option_kind_name(OptionKind kind);
+
 // What the page receives for one option.
 Json to_json(const OptionSpec &spec);
 Json to_json(std::span<const OptionSpec> specs);
@@ -73,6 +76,10 @@ public:
   std::size_t count(std::string_view name) const;
   std::string choice(std::string_view name) const;
   mesh::LengthBound length_bound(std::string_view name) const;
+  // Reads every option by its kind (and a choice against its choices),
+  // throwing what the getters throw; for a part of a case that is checked
+  // but not built.
+  void check_kinds() const;
 
 private:
   const OptionSpec &spec(std::string_view name, OptionKind kind) const;

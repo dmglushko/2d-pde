@@ -1,5 +1,7 @@
 #include "session.hpp"
 
+#include "binary.hpp"
+#include "case_schema.hpp"
 #include "catalog.hpp"
 #include "domain_input.hpp"
 #include "field_eval.hpp"
@@ -7,12 +9,12 @@
 #include "problem_input.hpp"
 #include "stage_cache.hpp"
 #include "views.hpp"
-#include "binary.hpp"
 
 #include "pde2d/fem/assembler.hpp"
 #include "pde2d/fem/compiled_expression.hpp"
 #include "pde2d/fem/meshed_problem.hpp"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <format>
@@ -27,9 +29,6 @@ namespace pde2d::app {
 
 namespace {
 
-constexpr std::string_view case_format = "pde2d-app-case";
-constexpr int case_version = 1;
-
 const std::string &client_name(const std::string &client) {
   static const std::string local(local_client);
   return client.empty() ? local : client;
@@ -38,6 +37,11 @@ const std::string &client_name(const std::string &client) {
 // The case's "assembly" section, read for the assembly stage.
 AssemblySettings read_assembly(const Json &case_json) {
   return staged("assembly", [&] { return assembly_settings(case_json); });
+}
+
+// The case, checked and brought to the current version.
+CaseInput read_case(const Json &case_json) {
+  return staged("case", [&] { return CaseInput(case_json); });
 }
 
 Json operator_json(const fem::Operator &op) {
@@ -67,13 +71,151 @@ template <class Read> auto solve_request(Read read) {
   return staged("solve", read);
 }
 
+// "27.4 MB" for messages.
+std::string bytes_text(std::size_t bytes) {
+  const auto value = static_cast<double>(bytes);
+  if (value >= 1e9)
+    return std::format("{:.2f} GB", value / 1e9);
+  if (value >= 1e6)
+    return std::format("{:.1f} MB", value / 1e6);
+  return std::format("{:.0f} kB", value / 1e3);
+}
+
+// --- field kinds
+// ---------------------------------------------------------------
+
+// What a field request gives: the values at the nodes, their label, and
+// the time when it is not the one asked for.
+struct FieldValues {
+  std::string label;
+  std::vector<double> values;
+  std::optional<double> t;
+};
+
+using FieldMaker = FieldValues (*)(StageCache &, const Json &case_json,
+                                   const Json &spec, double t);
+
+FieldValues expression_field(StageCache &cache, const Json &case_json,
+                             const Json &spec, double t) {
+  const auto outcome = cache.mesh(case_json);
+  const auto text = staged("field", [&] {
+    return require_string(member(spec, "text"), "field.text");
+  });
+  const fem::CompiledExpression compiled = staged("field", [&] {
+    const fem::Parameters parameters =
+        read_parameters(member(member(case_json, "problem"), "parameters"));
+    return at_path("field.text", [&] {
+      return fem::CompiledExpression(fem::Expression(text), parameters);
+    });
+  });
+  return {.label = text,
+          .values = values_at_nodes(*outcome->mesh, compiled, t),
+          .t = std::nullopt};
+}
+
+FieldValues initial_u_field(StageCache &cache, const Json &case_json,
+                            const Json &, double t) {
+  const auto meshed = cache.meshed(case_json);
+  auto values = staged("field", [&] { return meshed->initial_values(t); });
+  if (!values)
+    throw StageError("field", "input",
+                     "the problem has time order 0, so it has no initial "
+                     "values");
+  return {.label = "u at the start", .values = std::move(*values), .t = {}};
+}
+
+FieldValues initial_u_t_field(StageCache &cache, const Json &case_json,
+                              const Json &, double t) {
+  const auto meshed = cache.meshed(case_json);
+  auto values = staged("field", [&] { return meshed->initial_velocities(t); });
+  if (!values)
+    throw StageError("field", "input",
+                     "the problem has time order below 2, so it has no "
+                     "initial velocities");
+  return {.label = "u_t at the start", .values = std::move(*values), .t = {}};
+}
+
+FieldValues dirichlet_field(StageCache &cache, const Json &case_json,
+                            const Json &, double t) {
+  const auto meshed = cache.meshed(case_json);
+  std::vector<double> values(meshed->mesh()->nodes.size(), std::nan(""));
+  staged("field", [&] {
+    for (std::size_t k = 0; k < meshed->dirichlet_nodes().size(); ++k)
+      values[meshed->dirichlet_nodes()[k].node] = meshed->dirichlet_value(k, t);
+  });
+  return {.label = "Dirichlet values", .values = std::move(values), .t = {}};
+}
+
+FieldValues right_hand_side_field(StageCache &cache, const Json &case_json,
+                                  const Json &, double t) {
+  AssemblySettings settings = read_assembly(case_json);
+  settings.t = t;
+  const fem::AssembledProblem &assembled = cache.assembled(case_json, settings);
+  const fem::MeshedProblem &meshed = *assembled.meshed_problem();
+  std::vector<double> values(meshed.mesh()->nodes.size(), std::nan(""));
+  const auto rhs = assembled.right_hand_side();
+  for (std::size_t i = 0; i < rhs.size(); ++i)
+    values[meshed.free_nodes()[i]] = rhs[i];
+  return {.label = "assembled right-hand side b",
+          .values = std::move(values),
+          .t = assembled.time()};
+}
+
+// Every field the page can show, by its "kind".
+constexpr std::array<std::pair<std::string_view, FieldMaker>, 5> field_kinds{{
+    {"expression", expression_field},
+    {"initial_u", initial_u_field},
+    {"initial_u_t", initial_u_t_field},
+    {"dirichlet", dirichlet_field},
+    {"right_hand_side", right_hand_side_field},
+}};
+
+std::string field_kind_names() {
+  std::string out;
+  for (const auto &[name, maker] : field_kinds)
+    out += (out.empty() ? "" : ", ") + std::string(name);
+  return out;
+}
+
 } // namespace
 
 // The stage cache and the clients' runs.
 struct Session::State {
   StageCache cache;
-  RunManager runs;
+  RunManager runs; // the run lock
   explicit State(const SessionOptions &options) : runs(options.max_clients) {}
+};
+
+// Holds the session mutex for one call and says what it is doing
+// (status); on release it destroys the runs dropped meanwhile, after the
+// run lock and before the session mutex is released (they hold
+// expressions).
+class Session::Work {
+public:
+  Work(Session &session, std::string_view task, const std::string &client,
+       std::uint64_t job = 0)
+      : session_(session), lock_(session.mutex_) {
+    const std::scoped_lock book(session_.run_lock_);
+    session_.activity_ = Activity{.task = std::string(task),
+                                  .client = client_name(client),
+                                  .job = job,
+                                  .since = std::chrono::system_clock::now(),
+                                  .started = std::chrono::steady_clock::now()};
+  }
+  ~Work() {
+    std::vector<std::shared_ptr<const Run>> dropped;
+    {
+      const std::scoped_lock book(session_.run_lock_);
+      session_.activity_.reset();
+      dropped = session_.state_->runs.take_dropped();
+    }
+  }
+  Work(const Work &) = delete;
+  Work &operator=(const Work &) = delete;
+
+private:
+  Session &session_;
+  std::unique_lock<std::mutex> lock_;
 };
 
 Session::Session(SessionOptions options)
@@ -98,13 +240,33 @@ Session::~Session() {
 void Session::background_loop() {
   std::unique_lock lock(mutex_);
   while (!closing_) {
-    if (Run *run = state_->runs.next_running()) {
-      advance(*run, options_);
-      lock.unlock();
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
-      lock.lock();
-    } else
+    Run *run = nullptr;
+    {
+      const std::scoped_lock book(run_lock_);
+      run = state_->runs.next_running();
+      if (run != nullptr)
+        activity_ = Activity{.task = "run",
+                             .client = run->client,
+                             .job = run->id,
+                             .since = std::chrono::system_clock::now(),
+                             .started = std::chrono::steady_clock::now()};
+    }
+    if (run == nullptr) {
       wake_.wait(lock);
+      continue;
+    }
+    advance(*run, options_, run_lock_);
+    {
+      std::vector<std::shared_ptr<const Run>> dropped;
+      {
+        const std::scoped_lock book(run_lock_);
+        activity_.reset();
+        dropped = state_->runs.take_dropped();
+      }
+    }
+    lock.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    lock.lock();
   }
 }
 
@@ -126,6 +288,8 @@ Json Session::catalog() {
   out["default_case"] = default_case();
   return out;
 }
+
+Json Session::case_schema() { return app::case_schema(); }
 
 Json Session::default_case() {
   Json geometry = default_geometry_section();
@@ -150,38 +314,20 @@ Json Session::default_case() {
   return out;
 }
 
-void check_case(const Json &case_json) {
-  require_object(case_json, "case");
-  static constexpr std::string_view known[] = {"format", "version", "geometry",
-                                               "mesh",   "problem", "assembly",
-                                               "solve",  "view",    "notes"};
-  reject_unknown_keys(case_json, "case", known);
-  if (const Json &format = member(case_json, "format"); !format.is_null()) {
-    if (require_string(format, "format") != case_format)
-      throw std::invalid_argument("format: this is not a pde2d app case");
-  }
-  if (const Json &version = member(case_json, "version"); !version.is_null()) {
-    const double number = require_number(version, "version");
-    if (number != std::floor(number) || number < 1)
-      throw std::invalid_argument("version: expected a whole number from 1");
-    if (number > case_version)
-      throw std::invalid_argument(
-          "version: the case was written by a newer version of the app");
-  }
-}
-
 // --- stages -----------------------------------------------------------------
 
-Json Session::geometry(const Json &case_json) {
-  const std::scoped_lock lock(mutex_);
-  staged("case", [&] { check_case(case_json); });
+Json Session::geometry(const Json &input) {
+  const Work work(*this, "geometry", {});
+  const CaseInput read = read_case(input);
+  const Json &case_json = read.json();
   return staged("geometry",
                 [&] { return domain_json(state_->cache.domain(case_json)); });
 }
 
-Json Session::mesh(const Json &case_json) {
-  const std::scoped_lock lock(mutex_);
-  staged("case", [&] { check_case(case_json); });
+Json Session::mesh(const Json &input) {
+  const Work work(*this, "mesh", {});
+  const CaseInput read = read_case(input);
+  const Json &case_json = read.json();
   const auto outcome = state_->cache.mesh(case_json);
   Json out = Json::object();
   out["mesh"] = mesh_summary_json(*outcome->mesh, outcome->id);
@@ -191,11 +337,18 @@ Json Session::mesh(const Json &case_json) {
   out["max_edge_length"] = outcome->max_edge_length;
   out["domain_size"] = outcome->domain_size;
   out["reports"] = reports_json(outcome->reports);
+  // What a run on this mesh keeps per snapshot, for a warning before a
+  // solve: about snapshot_bytes * (snapshots + 1) of the budget.
+  Json memory = Json::object();
+  memory["snapshot_bytes"] = run_bytes(outcome->mesh->nodes.size(), 1, 0) -
+                             run_bytes(outcome->mesh->nodes.size(), 0, 0);
+  memory["budget"] = options_.memory_budget;
+  out["memory"] = std::move(memory);
   return out;
 }
 
 std::string Session::mesh_arrays(const Json &request) {
-  const std::scoped_lock lock(mutex_);
+  const Work work(*this, "mesh arrays", {});
   const double id = staged("mesh", [&] {
     require_object(request, "request");
     static constexpr std::string_view known[] = {"mesh"};
@@ -209,8 +362,10 @@ std::string Session::mesh_arrays(const Json &request) {
   std::shared_ptr<const mesh::Mesh> mesh;
   if (const auto outcome = state_->cache.find_mesh(mesh_id))
     mesh = outcome->mesh;
-  else
+  else {
+    const std::scoped_lock book(run_lock_);
     mesh = state_->runs.mesh_of(mesh_id);
+  }
   if (!mesh)
     throw StageError("mesh", "input",
                      std::format("mesh: the mesh {} is no longer kept (mesh "
@@ -220,17 +375,19 @@ std::string Session::mesh_arrays(const Json &request) {
   return staged("mesh", [&] { return mesh_arrays_binary(*mesh); });
 }
 
-Json Session::check_problem(const Json &case_json) {
-  const std::scoped_lock lock(mutex_);
-  staged("case", [&] { check_case(case_json); });
+Json Session::check_problem(const Json &input) {
+  const Work work(*this, "problem check", {});
+  const CaseInput read = read_case(input);
+  const Json &case_json = read.json();
   return staged("problem", [&] {
     return app::check_problem(member(case_json, "problem"));
   });
 }
 
-Json Session::assemble(const Json &case_json) {
-  const std::scoped_lock lock(mutex_);
-  staged("case", [&] { check_case(case_json); });
+Json Session::assemble(const Json &input) {
+  const Work work(*this, "assembly", {});
+  const CaseInput read = read_case(input);
+  const Json &case_json = read.json();
   const AssemblySettings settings = read_assembly(case_json);
   const fem::AssembledProblem &assembled =
       state_->cache.assembled(case_json, settings);
@@ -278,14 +435,14 @@ Json Session::assemble(const Json &case_json) {
 }
 
 Json Session::field(const Json &request) {
-  const std::scoped_lock lock(mutex_);
+  const Work work(*this, "field", {});
   staged("field", [&] {
     require_object(request, "request");
     static constexpr std::string_view known[] = {"case", "field"};
     reject_unknown_keys(request, "request", known);
   });
-  const Json &case_json = member(request, "case");
-  staged("case", [&] { check_case(case_json); });
+  const CaseInput read = read_case(member(request, "case"));
+  const Json &case_json = read.json();
   const Json &spec = staged("field", [&]() -> const Json & {
     const Json &object = require_object(member(request, "field"), "field");
     static constexpr std::string_view known[] = {"kind", "text", "t"};
@@ -300,109 +457,96 @@ Json Session::field(const Json &request) {
     return value.is_null() ? assembly_settings(case_json).t
                            : require_number(value, "field.t");
   });
-
+  const auto found = std::ranges::find(
+      field_kinds, kind, [](const auto &item) { return item.first; });
+  if (found == field_kinds.end())
+    throw StageError("field", "input",
+                     "field.kind: unknown field '" + kind + "' (" +
+                         field_kind_names() + ")",
+                     "field.kind");
+  FieldValues field = found->second(state_->cache, case_json, spec, t);
   Json out = Json::object();
   out["kind"] = kind;
-  out["t"] = t;
-  if (kind == "expression") {
-    const auto outcome = state_->cache.mesh(case_json);
-    const auto text = staged("field", [&] {
-      return require_string(member(spec, "text"), "field.text");
-    });
-    const fem::CompiledExpression compiled = staged("field", [&] {
-      const fem::Parameters parameters =
-          read_parameters(member(member(case_json, "problem"), "parameters"));
-      return at_path("field.text", [&] {
-        return fem::CompiledExpression(fem::Expression(text), parameters);
-      });
-    });
-    const std::vector<double> values =
-        values_at_nodes(*outcome->mesh, compiled, t);
-    out["label"] = text;
-    out["values"] = values_json(values);
-    return out;
-  }
-  if (kind == "initial_u" || kind == "initial_u_t") {
-    const auto &meshed = state_->cache.meshed(case_json);
-    const auto values = staged("field", [&] {
-      return kind == "initial_u" ? meshed->initial_values(t)
-                                 : meshed->initial_velocities(t);
-    });
-    if (!values)
-      throw StageError("field", "input",
-                       kind == "initial_u"
-                           ? "the problem has time order 0, so it has no "
-                             "initial values"
-                           : "the problem has time order below 2, so it has "
-                             "no initial velocities");
-    out["label"] = kind == "initial_u" ? "u at the start" : "u_t at the start";
-    out["values"] = values_json(*values);
-    return out;
-  }
-  if (kind == "dirichlet") {
-    const auto &meshed = state_->cache.meshed(case_json);
-    std::vector<double> values(meshed->mesh()->nodes.size(), std::nan(""));
-    staged("field", [&] {
-      for (std::size_t k = 0; k < meshed->dirichlet_nodes().size(); ++k)
-        values[meshed->dirichlet_nodes()[k].node] =
-            meshed->dirichlet_value(k, t);
-    });
-    out["label"] = "Dirichlet values";
-    out["values"] = values_json(values);
-    return out;
-  }
-  if (kind == "right_hand_side") {
-    AssemblySettings settings = read_assembly(case_json);
-    settings.t = t;
-    const fem::AssembledProblem &assembled =
-        state_->cache.assembled(case_json, settings);
-    const fem::MeshedProblem &meshed = *assembled.meshed_problem();
-    std::vector<double> values(meshed.mesh()->nodes.size(), std::nan(""));
-    const auto rhs = assembled.right_hand_side();
-    for (std::size_t i = 0; i < rhs.size(); ++i)
-      values[meshed.free_nodes()[i]] = rhs[i];
-    out["t"] = assembled.time();
-    out["label"] = "assembled right-hand side b";
-    out["values"] = values_json(values);
-    return out;
-  }
-  throw StageError("field", "input",
-                   "field.kind: unknown field '" + kind +
-                       "' (expression, initial_u, initial_u_t, dirichlet or "
-                       "right_hand_side)",
-                   "field.kind");
+  out["t"] = field.t.value_or(t);
+  out["label"] = std::move(field.label);
+  out["values"] = values_json(field.values);
+  return out;
 }
 
 // --- runs -------------------------------------------------------------------
 
-Json Session::solve(const Json &case_json, const std::string &client) {
+Json Session::solve(const Json &input, const std::string &client) {
   const std::string &who = client_name(client);
   std::uint64_t id = 0;
   {
-    const std::scoped_lock lock(mutex_);
-    staged("case", [&] { check_case(case_json); });
+    const Work work(*this, "solve", who);
+    const CaseInput read = read_case(input);
+    const Json &case_json = read.json();
     State &state = *state_;
     // Built (or found in the cache) first, so a refusal of an earlier
     // stage is thrown as that stage's.
     (void)state.cache.meshed(case_json);
     const std::string key = solve_key(case_json);
-    RunManager::Client &owner = state.runs.client(who);
-    if (owner.run && owner.run->key == key &&
-        owner.run->state != RunState::failed) {
-      if (owner.run->state == RunState::stopped) {
-        owner.run->state = RunState::running;
-        wake_.notify_all();
+    {
+      const std::scoped_lock book(run_lock_);
+      RunManager::Client &owner = state.runs.client(who);
+      if (owner.run && owner.run->key == key &&
+          owner.run->published.state != RunState::failed) {
+        Run &current = *owner.run;
+        if (current.published.state == RunState::stopped) {
+          current.published.state = RunState::running;
+          wake_.notify_all();
+        }
+        if (current.published.state != RunState::running ||
+            options_.background_runs)
+          return progress_json(current, options_.memory_budget);
+        id = current.id;
       }
-    } else {
-      // Dropped under the mutex: the run holds expressions.
-      owner.run.reset();
-      owner.run =
-          make_run(state.cache, case_json, options_, state.runs.next_id());
-      wake_.notify_all();
     }
-    id = owner.run->id;
-    if (owner.run->state != RunState::running || options_.background_runs)
-      return progress_json(*owner.run);
+    if (id == 0) {
+      std::uint64_t next = 0;
+      {
+        const std::scoped_lock book(run_lock_);
+        next = state.runs.next_id();
+      }
+      const std::shared_ptr<Run> made =
+          make_run(state.cache, case_json, next, who);
+      {
+        const std::scoped_lock book(run_lock_);
+        if (!state.runs.make_room(who, made->bytes, options_.memory_budget)) {
+          const std::size_t room =
+              state.runs.room_for(who, options_.memory_budget);
+          const RunManager::Client *owner = state.runs.find(who);
+          const bool has_reference = owner != nullptr && owner->reference;
+          const bool in_time = made->setup.mode == SolveMode::time_integration;
+          throw StageError(
+              "solve", "memory",
+              std::format(
+                  "{}this run would keep {} snapshot{} of {} nodes ({}), but "
+                  "only {} of the server's memory budget for runs ({}) is "
+                  "free for it{}. {}use a coarser mesh{}, or start the "
+                  "server with a larger --memory-budget",
+                  in_time ? "solve.time.snapshots: " : "", made->times.size(),
+                  made->times.size() == 1 ? "" : "s", made->mesh->nodes.size(),
+                  bytes_text(made->bytes), bytes_text(room),
+                  bytes_text(options_.memory_budget),
+                  has_reference ? " (your reference run and other pages' "
+                                  "running runs hold the rest)"
+                                : " (other pages' running runs hold the rest)",
+                  in_time ? "Keep fewer snapshots, " : "",
+                  has_reference ? ", forget the reference run" : ""),
+              in_time ? "solve.time.snapshots" : "");
+        }
+        state.runs.set_run(state.runs.client(who), made);
+      }
+      start_run(*made, options_, run_lock_);
+      wake_.notify_all();
+      const std::scoped_lock book(run_lock_);
+      if (made->published.state != RunState::running ||
+          options_.background_runs)
+        return progress_json(*made, options_.memory_budget);
+      id = made->id;
+    }
   }
   return finish_run(id, who);
 }
@@ -410,31 +554,44 @@ Json Session::solve(const Json &case_json, const std::string &client) {
 Json Session::finish_run(std::uint64_t job, const std::string &client) {
   while (advance_solve(job, client)) {
   }
-  const std::scoped_lock lock(mutex_);
+  const std::scoped_lock book(run_lock_);
   const Run &current = state_->runs.run_of(client_name(client), job);
-  if (current.state == RunState::failed)
-    throw *current.error;
-  return progress_json(current);
+  if (current.published.state == RunState::failed)
+    throw *current.published.error;
+  return progress_json(current, options_.memory_budget);
 }
 
 bool Session::advance_solve(std::uint64_t job, const std::string &client) {
-  const std::scoped_lock lock(mutex_);
-  Run &current = state_->runs.run_of(client_name(client), job);
-  advance(current, options_);
-  return current.state == RunState::running;
+  const Work work(*this, "run", client, job);
+  Run *current = nullptr;
+  {
+    const std::scoped_lock book(run_lock_);
+    current = &state_->runs.run_of(client_name(client), job);
+  }
+  // Not removed meanwhile: only a holder of the session mutex drops runs.
+  advance(*current, options_, run_lock_);
+  const std::scoped_lock book(run_lock_);
+  return current->published.state == RunState::running;
 }
 
 Json Session::solve_progress(std::uint64_t job, const std::string &client) {
-  const std::scoped_lock lock(mutex_);
-  return progress_json(state_->runs.run_of(client_name(client), job));
+  const std::scoped_lock book(run_lock_);
+  return progress_json(state_->runs.run_of(client_name(client), job),
+                       options_.memory_budget);
 }
 
 Json Session::stop_solve(std::uint64_t job, const std::string &client) {
-  const std::scoped_lock lock(mutex_);
+  const std::scoped_lock book(run_lock_);
   Run &current = state_->runs.run_of(client_name(client), job);
-  if (current.state == RunState::running)
-    current.state = RunState::stopped;
-  return progress_json(current);
+  if (current.published.state == RunState::running)
+    current.published.state = RunState::stopped;
+  return progress_json(current, options_.memory_budget);
+}
+
+RunSnapshots Session::snapshots_of(std::uint64_t job,
+                                   const std::string &client) {
+  const std::scoped_lock book(run_lock_);
+  return state_->runs.run_of(client_name(client), job).snapshots();
 }
 
 std::vector<std::vector<double>>
@@ -442,11 +599,9 @@ Session::solution_values(const Json &case_json, const std::string &client) {
   const Json progress = solve(case_json, client);
   const auto id = progress["job"].get<std::uint64_t>();
   (void)finish_run(id, client_name(client));
-  const std::scoped_lock lock(mutex_);
   std::vector<std::vector<double>> out;
-  for (const solve::Solution &solution :
-       *state_->runs.run_of(client_name(client), id).solutions)
-    out.push_back(solution.values);
+  for (const Snapshot &solution : snapshots_of(id, client).snapshots)
+    out.push_back(solution->values);
   return out;
 }
 
@@ -454,41 +609,41 @@ std::string Session::solution_values_float32(std::uint64_t job,
                                              std::size_t first,
                                              std::size_t count,
                                              const std::string &client) {
-  const std::scoped_lock lock(mutex_);
-  const Run &current = state_->runs.run_of(client_name(client), job);
-  const auto &solutions = *current.solutions;
-  if (first > solutions.size() || count > solutions.size() - first)
+  const RunSnapshots run = snapshots_of(job, client);
+  const auto &snapshots = run.snapshots;
+  if (first > snapshots.size() || count > snapshots.size() - first)
     throw StageError("solve", "input",
                      std::format("snapshots {} to {} are not ready ({} are)",
-                                 first, first + count, solutions.size()));
+                                 first, first + count, snapshots.size()));
   std::string out;
   if (count > 0)
-    out.reserve(count * solutions[first].values.size() * 4);
+    out.reserve(count * snapshots[first]->values.size() * 4);
   for (std::size_t k = first; k < first + count; ++k)
-    for (const double value : solutions[k].values)
+    for (const double value : snapshots[k]->values)
       append_float32(out, value);
   return out;
 }
 
 Json Session::keep_reference(const Json &request, const std::string &client) {
-  const std::scoped_lock lock(mutex_);
+  const Work work(*this, "reference", client);
   static constexpr std::string_view known[] = {"job"};
   const auto job = solve_request([&] { return request_job(request, known); });
+  const std::scoped_lock book(run_lock_);
   const Run &run = state_->runs.run_of(client_name(client), job);
   RunManager::Client &owner = *state_->runs.find(client_name(client));
-  if (run.state != RunState::done)
+  if (run.published.state != RunState::done)
     throw StageError("solve", "not_ready",
                      std::format("the run {} is {}; only a run that is done "
                                  "can be the reference",
-                                 job, state_name(run.state)));
-  owner.reference = owner.run;
+                                 job, state_name(run.published.state)));
+  state_->runs.set_reference(owner, owner.run);
   Json reference = Json::object();
   reference["job"] = run.id;
   reference["mode"] = run.base["mode"];
   reference["mesh_id"] = run.mesh_id;
   Json times = Json::array();
-  for (const solve::Solution &solution : *run.solutions)
-    times.push_back(solution.time);
+  for (const Snapshot &solution : run.published.snapshots)
+    times.push_back(solution->time);
   reference["times"] = std::move(times);
   Json out = Json::object();
   out["reference"] = std::move(reference);
@@ -496,10 +651,12 @@ Json Session::keep_reference(const Json &request, const std::string &client) {
 }
 
 Json Session::clear_reference(const std::string &client) {
-  const std::scoped_lock lock(mutex_);
-  // Dropped under the mutex: the run holds expressions.
-  if (RunManager::Client *owner = state_->runs.find(client_name(client)))
-    owner->reference.reset();
+  const Work work(*this, "reference", client);
+  {
+    const std::scoped_lock book(run_lock_);
+    if (RunManager::Client *owner = state_->runs.find(client_name(client)))
+      state_->runs.set_reference(*owner, nullptr);
+  }
   Json out = Json::object();
   out["reference"] = nullptr;
   return out;
@@ -512,61 +669,103 @@ constexpr std::string_view compare_keys[] = {"job", "exact", "reference",
 
 } // namespace
 
+Session::ComparedRuns Session::compared_runs(const Json &request,
+                                             std::uint64_t job,
+                                             const std::string &client) {
+  const std::scoped_lock book(run_lock_);
+  const Run &current = state_->runs.run_of(client_name(client), job);
+  ComparedRuns out{.run = current.snapshots(),
+                   .reference = std::nullopt,
+                   .parameters = current.parameters};
+  if (!member(request, "reference").is_null())
+    if (const auto kept = state_->runs.reference_of(client_name(client)))
+      out.reference = kept->snapshots();
+  return out;
+}
+
 Json Session::compare(const Json &request, const std::string &client) {
-  const std::scoped_lock lock(mutex_);
+  const Work work(*this, "comparison", client);
   const auto job = solve_request([&] {
     static constexpr std::string_view known[] = {"job", "exact", "reference"};
     return request_job(request, known);
   });
-  const Run &run = state_->runs.run_of(client_name(client), job);
-  auto reference = state_->runs.find(client_name(client))->reference;
+  ComparedRuns runs = compared_runs(request, job, client);
   return staged("compare", [&] {
-    return Comparison(run, request, std::move(reference)).summary();
+    return Comparison(std::move(runs.run), runs.parameters, request,
+                      std::move(runs.reference))
+        .summary();
   });
 }
 
 std::string Session::compare_difference(const Json &request,
                                         const std::string &client) {
-  const std::scoped_lock lock(mutex_);
+  const Work work(*this, "comparison", client);
   const auto [job, snapshot] = solve_request([&] {
     return std::pair(request_job(request, compare_keys),
                      request_count(request, "snapshot"));
   });
-  const Run &run = state_->runs.run_of(client_name(client), job);
-  auto reference = state_->runs.find(client_name(client))->reference;
+  ComparedRuns runs = compared_runs(request, job, client);
   return staged("compare", [&] {
-    return Comparison(run, request, std::move(reference))
+    return Comparison(std::move(runs.run), runs.parameters, request,
+                      std::move(runs.reference))
         .difference_float32(snapshot);
   });
 }
 
 Json Session::probes(const Json &request, const std::string &client) {
-  const std::scoped_lock lock(mutex_);
   const auto job = solve_request([&] {
     static constexpr std::string_view known[] = {"job", "points"};
     return request_job(request, known);
   });
-  const Run &run = state_->runs.run_of(client_name(client), job);
+  // The mesh and the values only: no lock while interpolating.
+  const RunSnapshots run = snapshots_of(job, client);
   return staged("probes",
                 [&] { return probe_series(run, member(request, "points")); });
 }
 
+Json Session::status(const std::string &client) {
+  const std::string &who = client_name(client);
+  const std::scoped_lock book(run_lock_);
+  Json out = Json::object();
+  if (activity_) {
+    Json busy = Json::object();
+    busy["task"] = activity_->task;
+    busy["client"] = activity_->client;
+    busy["yours"] = activity_->client == who;
+    busy["job"] = activity_->job == 0 ? Json(nullptr) : Json(activity_->job);
+    busy["since"] = utc_time(activity_->since);
+    busy["seconds"] = std::chrono::duration<double>(
+                          std::chrono::steady_clock::now() - activity_->started)
+                          .count();
+    out["busy"] = std::move(busy);
+  } else
+    out["busy"] = nullptr;
+  out["running"] = state_->runs.running();
+  out["clients"] = state_->runs.clients();
+  Json memory = Json::object();
+  memory["budget"] = options_.memory_budget;
+  memory["used"] = state_->runs.used_bytes();
+  memory["room"] = state_->runs.room_for(who, options_.memory_budget);
+  out["memory"] = std::move(memory);
+  return out;
+}
+
 std::size_t Session::clients() {
-  const std::scoped_lock lock(mutex_);
+  const std::scoped_lock book(run_lock_);
   return state_->runs.clients();
 }
 
 // --- presets and exports ----------------------------------------------------
 
 Json Session::apply_preset(const Json &request) {
-  const std::scoped_lock lock(mutex_);
+  const Work work(*this, "preset", {});
   staged("preset", [&] {
     require_object(request, "request");
     static constexpr std::string_view known[] = {"case", "preset"};
     reject_unknown_keys(request, "request", known);
   });
-  const Json &case_json = member(request, "case");
-  staged("case", [&] { check_case(case_json); });
+  const CaseInput read = read_case(member(request, "case"));
+  const Json &case_json = read.json();
   const std::string id = staged("preset", [&] {
     return require_string(member(request, "preset"), "preset");
   });
@@ -576,40 +775,53 @@ Json Session::apply_preset(const Json &request) {
   });
 }
 
-ExportedFile Session::export_file(const Json &case_json, std::string_view kind,
+ExportedFile Session::export_file(const Json &input, std::string_view kind,
                                   const ExportContext &context) {
-  const std::scoped_lock lock(mutex_);
+  const Work work(*this, "export", context.client);
   const ExportInfo *info = find_export(kind);
   if (info == nullptr)
     throw StageError("export", "input",
                      "unknown export '" + std::string(kind) + "' (" +
                          export_names() + ")");
-  staged("case", [&] { check_case(case_json); });
+  const CaseInput read = read_case(input);
+  const Json &case_json = read.json();
   ExportInputs in;
   in.case_json = &case_json;
   // A run of this case, found by its inputs' text alone: an export never
   // starts or continues one.
-  std::shared_ptr<const Run> run;
+  Json run_provenance = nullptr;
   if (info->needs == ExportNeeds::done_run ||
       info->needs == ExportNeeds::case_only) {
+    const std::scoped_lock book(run_lock_);
     const RunManager::Client *owner =
         state_->runs.find(client_name(context.client));
-    if (owner != nullptr && owner->run &&
-        owner->run->key == solve_key(case_json))
-      run = owner->run;
+    const Run *run = owner != nullptr && owner->run &&
+                             owner->run->key == solve_key(case_json)
+                         ? owner->run.get()
+                         : nullptr;
+    const RunState state =
+        run != nullptr ? run->published.state : RunState::failed;
     if (info->needs == ExportNeeds::done_run) {
-      if (!run)
+      if (run == nullptr)
         throw StageError("export", "not_ready",
                          std::string(info->name) +
                              ": no run of this case; solve it first");
-      if (run->state != RunState::done)
+      if (state != RunState::done)
         throw StageError("export", "not_ready",
                          std::format("{}: the run {} is {}; a solution is "
                                      "exported once its run is done",
-                                     info->name, run->id,
-                                     state_name(run->state)));
-    } else if (run && run->state != RunState::done)
-      run.reset();
+                                     info->name, run->id, state_name(state)));
+    }
+    if (run != nullptr && state == RunState::done) {
+      in.run = run->snapshots();
+      in.run_summary = progress_json(*run, options_.memory_budget);
+      in.run_summary.erase("values");
+      in.run_summary["started"] = utc_time(run->started);
+      run_provenance = Json::object();
+      run_provenance["id"] = run->id;
+      run_provenance["state"] = state_name(state);
+      run_provenance["started"] = utc_time(run->started);
+    }
   }
   switch (info->needs) {
   case ExportNeeds::domain:
@@ -626,18 +838,19 @@ ExportedFile Session::export_file(const Json &case_json, std::string_view kind,
   case ExportNeeds::case_only:
     break;
   }
-  in.run = run;
   in.provenance =
-      provenance_json(*info, case_json, context.case_name, run.get());
+      provenance_json(*info, case_json, context.case_name, run_provenance);
   return staged("export", [&] { return info->write(*info, in); });
 }
 
 // --- the command line --------------------------------------------------------
 
-Json Session::run(const Json &case_json) {
+Json Session::run(const Json &input) {
   Json out = Json::object();
   out["ok"] = false;
   try {
+    const CaseInput read = read_case(input);
+    const Json &case_json = read.json();
     {
       Json domain = geometry(case_json);
       Json summary = Json::object();

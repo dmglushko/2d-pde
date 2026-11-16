@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The "geometry" section of a case: where the domain comes from.
@@ -33,6 +34,23 @@
 // A mesh file takes rename and merge (not split: it has no curves); they
 // change its region names and the region tags of its boundary edges.
 namespace pde2d::app {
+
+// The keys the reader accepts, per source and per region edit (the case
+// schema is generated from them).
+inline constexpr std::string_view geometry_sources[] = {"shape", "svg",
+                                                        "mesh_file"};
+inline constexpr std::string_view shape_section_keys[] = {
+    "source", "shape", "options", "region_edits"};
+inline constexpr std::string_view svg_section_keys[] = {"source", "name", "svg",
+                                                        "region_edits"};
+inline constexpr std::string_view mesh_file_section_keys[] = {
+    "source", "format", "name", "text", "region_edits"};
+inline constexpr std::string_view mesh_file_formats[] = {"gmsh", "pde2d"};
+inline constexpr std::string_view rename_edit_keys[] = {"op", "from", "to"};
+inline constexpr std::string_view merge_edit_keys[] = {"op", "source",
+                                                       "target"};
+inline constexpr std::string_view split_edit_keys[] = {
+    "op", "region", "fraction", "first", "second"};
 
 // Exactly one of the two is set.
 struct Domain {

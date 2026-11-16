@@ -7,8 +7,10 @@
 
 #include "pde2d/fem/assembled_problem.hpp"
 
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,12 +23,19 @@ namespace pde2d::app {
 // A file to save. Small files carry their `content`; large ones (a
 // solution) a `stream` that writes it piece by piece, so the server can
 // send it without building one big string.
+//
+// An archive (solution-vtk.zip) also has `members`: its files one by one,
+// so the command line can write them into a directory instead of the
+// archive.
 struct ExportedFile {
   using Sink = std::function<void(std::string_view)>;
+  using MemberSink =
+      std::function<void(std::string_view name, std::string_view content)>;
   std::string name;
   std::string content_type;
   std::string content;
-  std::function<void(const Sink &)> stream; // empty: use content
+  std::function<void(const Sink &)> stream;        // empty: use content
+  std::function<void(const MemberSink &)> members; // an archive's files
   // The whole file (runs the stream).
   std::string text() const;
 };
@@ -41,6 +50,7 @@ enum class ExportKind {
   rhs_mtx,
   solution_csv,
   solution_vtk,
+  solution_vtk_zip,
   provenance_json,
 };
 
@@ -60,7 +70,11 @@ struct ExportInputs {
   const Domain *domain = nullptr;
   std::shared_ptr<const MeshOutcome> mesh;
   const fem::AssembledProblem *assembled = nullptr;
-  std::shared_ptr<const Run> run;
+  // A done run of the case (its mesh and values, no expressions) and its
+  // summary (progress_json without the values' layout, with "started"),
+  // or nothing.
+  std::optional<RunSnapshots> run;
+  Json run_summary;
 };
 
 struct ExportInfo {
@@ -77,15 +91,23 @@ const ExportInfo *find_export(std::string_view name);
 // "mesh.pde2d, mesh.svg, ..." for messages.
 std::string export_names();
 
+// A time as "2026-11-16T12:00:00Z".
+std::string utc_time(std::chrono::system_clock::time_point time);
+
 // The app's and the library's versions.
 std::string_view app_version();
 std::string_view library_version();
 
-// What produced an export: {"app", "library", "case_name" (or null),
-// "exported" (UTC), "stage", "settings" (the case sections the kind is
-// built from; an SVG or mesh text is replaced by its length), "run" ({"id",
-// "state", "started"} or null)}.
+// The case's content hash: SHA-256 of its canonical JSON (keys sorted, no
+// spaces), as 64 hex digits.
+std::string case_hash(const Json &case_json);
+
+// What produced an export: {"app" ({"name", "version", "commit",
+// "dirty"}), "library", "case_name" (or null), "case_sha256", "exported"
+// (UTC), "file", "settings" (the case sections the kind is built from; an
+// SVG or mesh text is replaced by its length), "run" ({"id", "state",
+// "started"} or null)}. `run` is that object or null.
 Json provenance_json(const ExportInfo &info, const Json &case_json,
-                     std::string_view case_name, const Run *run);
+                     std::string_view case_name, const Json &run);
 
 } // namespace pde2d::app

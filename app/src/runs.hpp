@@ -11,87 +11,187 @@
 #include "pde2d/solve/solution.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
-// Solves as runs: a static one is done when it is made; a time
+// Solves as runs: a static one is done when it is started; a time
 // integration runs in chunks that end on snapshot times, each continuing
 // from the state the previous one ended with (Integrator::integrate with
 // `initial`), so the page sees the snapshots while the run goes on
-// (docs/app.md, "Runs"). Runs belong to clients (one page each). Not
-// thread-safe: the Session calls everything here under its mutex.
+// (docs/app.md, "Runs"). Runs belong to clients (one page each).
+//
+// Two locks guard a run (docs/app.md, "Locks"). The session mutex guards
+// everything that touches the library: building a run, running a chunk,
+// dropping a run (it holds expressions). The run lock (RunLock, the
+// Session's short lock) guards what readers see: the RunManager's clients
+// and every Run's `published` part. A chunk computes without the run lock
+// and takes it only to publish what it made. Lock order: the session
+// mutex first, then the run lock; never the other way round.
 namespace pde2d::app {
 
-// How a Session runs time integrations.
+// How a Session runs time integrations and how much it keeps.
 struct SessionOptions {
   // Run time integrations in a background thread: solve() returns after
   // the first chunk and the run continues, one chunk at a time under the
   // session mutex. Off (the command line, tests): solve() runs every chunk
   // before it returns.
   bool background_runs = false;
-  // What a chunk should take; the next chunk's number of snapshot
-  // intervals is scaled towards it. 0 keeps every chunk one interval.
+  // Chunk planning (plan_chunk): a chunk should take at least about
+  // chunk_seconds (fewer, longer chunks cost less), its fixed cost (the
+  // preparation of the linear solver and the assembly at its start) at
+  // most max_fixed_share of it, and it at most about max_chunk_seconds
+  // (progress and Stop answer between chunks). chunk_seconds 0 keeps every
+  // chunk one interval.
   double chunk_seconds = 0.4;
+  double max_chunk_seconds = 3.0;
+  double max_fixed_share = 0.2;
   // Snapshot intervals in the first chunk.
   std::size_t first_chunk = 1;
   // The most clients kept; a new one drops the least recently used (and
   // stops its run).
   std::size_t max_clients = 8;
+  // The bytes every kept run together may hold (their snapshots); a run
+  // that does not fit even after dropping other clients' finished runs is
+  // refused.
+  std::size_t memory_budget = std::size_t{1} << 30;
 };
 
 enum class RunState { running, done, failed, stopped };
 std::string_view state_name(RunState state);
 
-struct Run {
+using Snapshot = std::shared_ptr<const solve::Solution>;
+
+// A run's kept snapshots at one moment, for readers outside the session
+// mutex: the mesh and the values hold no expressions, and a snapshot never
+// changes once it is kept.
+struct RunSnapshots {
   std::uint64_t id = 0;
+  std::shared_ptr<const mesh::Mesh> mesh;
+  std::vector<Snapshot> snapshots;
+};
+
+// What one chunk cost: its snapshot intervals, its steps and its seconds
+// (wall clock, the whole integrate call).
+struct ChunkCost {
+  std::size_t intervals = 0;
+  double steps = 0.0;
+  double seconds = 0.0;
+};
+
+// A chunk's cost as fixed + per_step * steps, fitted by least squares to
+// the chunks so far. `fitted` is false while they do not tell the two
+// apart (fewer than two different step counts).
+struct ChunkCostModel {
+  double fixed = 0.0;
+  double per_step = 0.0;
+  bool fitted = false;
+};
+ChunkCostModel fit_chunk_cost(std::span<const ChunkCost> history);
+
+// The snapshot intervals of the next chunk (at least 1), from the chunks
+// so far (docs/app.md, "Chunk sizes").
+std::size_t plan_chunk(std::span<const ChunkCost> history,
+                       const SessionOptions &options);
+
+// How one metric of the integrator's report combines over chunks.
+enum class Combine { sum, max, min, first, last };
+struct MetricRule {
+  std::string_view name;
+  Combine combine;
+  // Only chunks that took steps count (min_dt, max_dt).
+  bool needs_steps = false;
+};
+// Every metric the integrator reports, with its rule.
+std::span<const MetricRule> integrator_metric_rules();
+// Adds one chunk's report to the run's total (`total` empty: the first).
+// Throws std::logic_error for a metric without a rule.
+void combine_report(std::optional<mesh::StageReport> &total,
+                    const mesh::StageReport &part);
+
+struct Run {
+  // Set when the run is made; read without a lock.
+  std::uint64_t id = 0;
+  std::string client;
   std::string key; // solve_key of the case it was made from
-  RunState state = RunState::running;
-  std::shared_ptr<const fem::MeshedProblem> meshed;
+  std::shared_ptr<const fem::MeshedProblem> meshed; // session mutex only
+  std::shared_ptr<const mesh::Mesh> mesh;           // meshed's mesh
   std::uint64_t mesh_id = 0;  // the StageCache's id of its mesh
   fem::Parameters parameters; // the problem's, for comparisons
   Json settings;              // the sections it was made from
   std::chrono::system_clock::time_point started;
   SolveSetup setup;
-  // The snapshot times of a time run; the kept solutions are the first
-  // solutions->size() of them. Shared so an export can stream a done
-  // run's values without the session mutex (Solution holds no
-  // expressions).
+  // The snapshot times of a time run (one time for a static solve).
   std::vector<double> times;
-  std::shared_ptr<std::vector<solve::Solution>> solutions =
-      std::make_shared<std::vector<solve::Solution>>();
+  Json base = Json::object(); // mode, time orders, free unknowns
+  // The bytes its snapshots will hold when it is done (run_bytes).
+  std::size_t bytes = 0;
+
+  // The computing side: the session mutex only.
   // The state at the end of the last chunk (with velocities for time
   // order 2), the start of the next one.
   std::optional<solve::Solution> last;
   std::size_t chunk = 1; // snapshot intervals in the next chunk
-  std::size_t chunks = 0;
-  Json base = Json::object(); // mode, time orders, free unknowns
-  Json static_reports = Json::array();
-  std::optional<mesh::StageReport> integrator; // the chunks', combined
-  double low = 0.0;
-  double high = 0.0;
-  bool has_range = false;
-  std::optional<StageError> error; // of a failed run
+  std::vector<ChunkCost> costs;
+
+  // What readers see: the run lock.
+  struct Published {
+    RunState state = RunState::running;
+    std::vector<Snapshot> snapshots;
+    // Per snapshot, the smallest and largest finite value (NaN when it has
+    // none).
+    std::vector<double> minima;
+    std::vector<double> maxima;
+    double t = 0.0; // reached
+    std::size_t chunks = 0;
+    Json static_reports = Json::array();
+    std::optional<mesh::StageReport> integrator; // the chunks', combined
+    std::optional<StageError> error;             // of a failed run
+    // RunManager's clock at its last use (a lookup marks it).
+    mutable std::uint64_t used = 0;
+  } published;
+
+  // The run lock held.
+  RunSnapshots snapshots() const;
 };
 
-// A new run of the case: a static one is solved, a time one has run its
-// first chunk. Throws the StageError of either.
+// The bytes a run of `snapshots` snapshots on `nodes` nodes keeps: the
+// values of each (velocities are not kept) and the state the next chunk
+// starts from.
+std::size_t run_bytes(std::size_t nodes, std::size_t snapshots, int time_order);
+
+// A new run of the case, ready to start: its setup, times and bytes are
+// known, nothing is solved. Throws the StageError of a stage it builds.
 std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
-                              const SessionOptions &options, std::uint64_t id);
+                              std::uint64_t id, const std::string &client);
+
+// Solves a static run, or runs a time run's first chunk. Throws the
+// StageError of either (a failed first chunk is also recorded in the
+// run). Under the session mutex; takes `run_lock` to publish.
+void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock);
 
 // Runs the next chunk of a running time run. A failure ends the run with
-// its error. The next chunk is scaled so that it takes about
-// chunk_seconds.
-void advance(Run &run, const SessionOptions &options);
+// its error. Under the session mutex; takes `run_lock` to publish.
+void advance(Run &run, const SessionOptions &options, std::mutex &run_lock);
 
-// The run's summary so far (docs/app.md, "The API": POST /api/solve).
-Json progress_json(const Run &run);
+// The run's summary so far (docs/app.md, "The API": POST /api/solve). The
+// run lock held.
+Json progress_json(const Run &run, std::size_t memory_budget);
 
-// The runs of every client: its current run and its reference run.
+// Why a run is no longer a client's current run.
+enum class GoneReason { replaced, memory_budget, client_limit };
+
+// The runs of every client: its current run and its reference run. Its
+// methods need the run lock; those that drop runs need the session mutex
+// too, and keep the dropped runs until take_dropped (to be destroyed
+// after the run lock is released, still under the session mutex).
 class RunManager {
 public:
   explicit RunManager(std::size_t max_clients) : max_clients_(max_clients) {}
@@ -99,6 +199,8 @@ public:
   struct Client {
     std::shared_ptr<Run> run;
     std::shared_ptr<const Run> reference;
+    // Why the reference run went, when it was dropped (not forgotten).
+    std::optional<GoneReason> reference_gone;
     std::uint64_t used = 0;
   };
 
@@ -108,19 +210,57 @@ public:
   Client &client(const std::string &id);
   // The client `id` if it is kept (marked used), or null.
   Client *find(const std::string &id);
-  // The client's current run if it is `job`, else a StageError.
+  // The client's current run if it is `job`, else a StageError: kind
+  // "replaced" for a run a newer solve of the client replaced, "expired"
+  // for one that was dropped (memory budget, client limit) or that this
+  // server never had (it was restarted).
   Run &run_of(const std::string &client, std::uint64_t job);
+  // The client's reference run, or null; a StageError ("expired") when it
+  // was dropped.
+  std::shared_ptr<const Run> reference_of(const std::string &client);
+  // Replaces the client's current run (records why the old one went).
+  void set_run(Client &owner, std::shared_ptr<Run> run);
+  void set_reference(Client &owner, std::shared_ptr<const Run> reference);
   // A running run after the one advanced last (round robin over clients),
   // or null.
   Run *next_running();
+  std::size_t running() const;
   // A run of any client that holds `mesh_id`'s mesh, or null.
   std::shared_ptr<const mesh::Mesh> mesh_of(std::uint64_t mesh_id) const;
   std::size_t clients() const { return clients_.size(); }
   std::uint64_t next_id() { return next_run_++; }
 
+  // The bytes every kept run reserves (each run counted once).
+  std::size_t used_bytes() const;
+  // The bytes a new run of `client` may have: the budget less what the
+  // runs that cannot be dropped for it reserve (running runs, its
+  // reference run, other clients' references and current runs that are
+  // running). Its own current run is not counted (a solve replaces it)
+  // unless it is also its reference.
+  std::size_t room_for(const std::string &client, std::size_t budget) const;
+  // Drops other clients' finished runs, least recently used first, until
+  // `bytes` fit beside what stays; false (nothing dropped) when they
+  // cannot fit even then.
+  bool make_room(const std::string &client, std::size_t bytes,
+                 std::size_t budget);
+
+  // The runs dropped since the last call.
+  std::vector<std::shared_ptr<const Run>> take_dropped();
+
 private:
+  void forget(const std::shared_ptr<const Run> &run, GoneReason reason);
+  void touch(const Run &run);
+
+  struct Gone {
+    std::string client;
+    GoneReason reason;
+  };
   std::size_t max_clients_;
   std::map<std::string, Client, std::less<>> clients_;
+  // Runs that are gone, by id (the last max_gone).
+  std::map<std::uint64_t, Gone> gone_;
+  static constexpr std::size_t max_gone = 4096;
+  std::vector<std::shared_ptr<const Run>> dropped_;
   std::uint64_t clock_ = 0;
   std::uint64_t next_run_ = 1;
   std::string last_advanced_;

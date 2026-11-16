@@ -14,8 +14,8 @@ namespace pde2d::app {
 
 namespace {
 
-const std::vector<double> &values_of(const Run &run, std::size_t k) {
-  return (*run.solutions)[k].values;
+const std::vector<double> &values_of(const RunSnapshots &run, std::size_t k) {
+  return run.snapshots[k]->values;
 }
 
 Json number_or_null(double value) {
@@ -75,9 +75,10 @@ DifferenceStats difference_stats(std::span<const double> u,
   return out;
 }
 
-Comparison::Comparison(const Run &run, const Json &request,
-                       std::shared_ptr<const Run> reference)
-    : run_(run) {
+Comparison::Comparison(RunSnapshots run, const fem::Parameters &parameters,
+                       const Json &request,
+                       std::optional<RunSnapshots> reference)
+    : run_(std::move(run)) {
   const Json &exact = member(request, "exact");
   const Json &against_reference = member(request, "reference");
   if (exact.is_null() == against_reference.is_null())
@@ -87,7 +88,7 @@ Comparison::Comparison(const Run &run, const Json &request,
   if (!exact.is_null()) {
     text_ = require_string(exact, "exact");
     exact_.emplace(at_path("exact", [&] {
-      return fem::CompiledExpression(fem::Expression(text_), run.parameters);
+      return fem::CompiledExpression(fem::Expression(text_), parameters);
     }));
     return;
   }
@@ -97,22 +98,22 @@ Comparison::Comparison(const Run &run, const Json &request,
     throw PathError("reference", "no reference run is kept (keep one with "
                                  "/api/solve/reference)");
   // The same mesh object, so node i is the same point in both.
-  if (reference->meshed->mesh() != run.meshed->mesh())
+  if (reference->mesh != run_.mesh)
     throw PathError(
         "reference",
         std::format("the reference run {} is on another mesh than run {}; "
                     "a comparison node by node needs the same mesh (solve "
                     "both without changing the geometry or the mesh)",
-                    reference->id, run.id));
+                    reference->id, run_.id));
   reference_ = std::move(reference);
-  const auto &theirs = *reference_->solutions;
-  for (const solve::Solution &mine : *run.solutions) {
+  const auto &theirs = reference_->snapshots;
+  for (const Snapshot &mine : run_.snapshots) {
     std::optional<std::size_t> match;
     if (theirs.size() == 1)
       match = 0; // a static reference stands for every time
     else
       for (std::size_t j = 0; j < theirs.size(); ++j)
-        if (same_time(theirs[j].time, mine.time)) {
+        if (same_time(theirs[j]->time, mine->time)) {
           match = j;
           break;
         }
@@ -122,19 +123,18 @@ Comparison::Comparison(const Run &run, const Json &request,
 
 std::optional<std::vector<double>> Comparison::other(std::size_t k) const {
   if (exact_)
-    return values_at_nodes(*run_.meshed->mesh(), *exact_,
-                           (*run_.solutions)[k].time);
+    return values_at_nodes(*run_.mesh, *exact_, run_.snapshots[k]->time);
   if (k >= matched_.size() || !matched_[k])
     return std::nullopt;
-  return (*reference_->solutions)[*matched_[k]].values;
+  return reference_->snapshots[*matched_[k]]->values;
 }
 
 Json Comparison::summary() const {
-  const std::vector<double> weights = lumped_weights(*run_.meshed->mesh());
+  const std::vector<double> weights = lumped_weights(*run_.mesh);
   Json snapshots = Json::array();
   double max_abs = 0.0, max_rms = 0.0, max_l2 = 0.0;
   bool any = false, finite = true;
-  for (std::size_t k = 0; k < run_.solutions->size(); ++k) {
+  for (std::size_t k = 0; k < run_.snapshots.size(); ++k) {
     const auto values = other(k);
     if (!values) {
       snapshots.push_back(nullptr);
@@ -143,7 +143,7 @@ Json Comparison::summary() const {
     const DifferenceStats stats =
         difference_stats(values_of(run_, k), *values, weights);
     Json item = Json::object();
-    item["t"] = (*run_.solutions)[k].time;
+    item["t"] = run_.snapshots[k]->time;
     item["max_abs"] = number_or_null(stats.max_abs);
     item["rms"] = number_or_null(stats.rms);
     item["l2"] = number_or_null(stats.l2);
@@ -165,7 +165,7 @@ Json Comparison::summary() const {
   Json out = Json::object();
   out["job"] = run_.id;
   out["against"] = std::move(against);
-  out["nodes"] = run_.meshed->mesh()->nodes.size();
+  out["nodes"] = run_.mesh->nodes.size();
   out["snapshots"] = std::move(snapshots);
   const auto overall = [&](double value) {
     return any && finite ? Json(value) : Json(nullptr);
@@ -177,14 +177,14 @@ Json Comparison::summary() const {
 }
 
 std::string Comparison::difference_float32(std::size_t k) const {
-  if (k >= run_.solutions->size())
+  if (k >= run_.snapshots.size())
     throw PathError("snapshot", std::format("snapshot {} is not ready ({} are)",
-                                            k, run_.solutions->size()));
+                                            k, run_.snapshots.size()));
   const auto values = other(k);
   if (!values)
     throw PathError("snapshot",
                     std::format("the reference has no snapshot at t = {}",
-                                (*run_.solutions)[k].time));
+                                run_.snapshots[k]->time));
   const std::vector<double> &u = values_of(run_, k);
   std::string out;
   out.reserve(4 * u.size());
@@ -288,13 +288,13 @@ PointLocator::locate(geometry::Point p) const {
   return best;
 }
 
-Json probe_series(const Run &run, const Json &points) {
+Json probe_series(const RunSnapshots &run, const Json &points) {
   if (!points.is_array())
     throw PathError("points", "expected a list of [x, y]");
   if (points.size() > max_probes)
     throw PathError("points",
                     std::format("at most {} points at once", max_probes));
-  const mesh::Mesh &mesh = *run.meshed->mesh();
+  const mesh::Mesh &mesh = *run.mesh;
   const PointLocator locator(mesh);
   Json probes = Json::array();
   for (std::size_t k = 0; k < points.size(); ++k) {
@@ -312,19 +312,19 @@ Json probe_series(const Run &run, const Json &points) {
     item["triangle"] = found ? Json(found->triangle) : Json(nullptr);
     Json values = Json::array();
     if (found)
-      for (const solve::Solution &solution : *run.solutions) {
+      for (const Snapshot &solution : run.snapshots) {
         double value = 0.0;
         for (int v = 0; v < 3; ++v)
           value += found->weights[static_cast<std::size_t>(v)] *
-                   solution.values[found->nodes[static_cast<std::size_t>(v)]];
+                   solution->values[found->nodes[static_cast<std::size_t>(v)]];
         values.push_back(number_or_null(value));
       }
     item["values"] = std::move(values);
     probes.push_back(std::move(item));
   }
   Json times = Json::array();
-  for (const solve::Solution &solution : *run.solutions)
-    times.push_back(solution.time);
+  for (const Snapshot &solution : run.snapshots)
+    times.push_back(solution->time);
   Json out = Json::object();
   out["job"] = run.id;
   out["times"] = std::move(times);

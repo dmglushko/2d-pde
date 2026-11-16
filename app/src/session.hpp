@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app_error.hpp"
+#include "case_format.hpp"
 #include "exports.hpp"
 #include "options.hpp"
 #include "runs.hpp"
@@ -8,8 +9,10 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -23,9 +26,15 @@
 // StageCache), keyed by the sections they were built from, so meshing
 // again after a change to the problem reuses the mesh, and the runs of
 // each client (the RunManager): one page is one client, with its current
-// run and its reference run. Calls are serialized by one mutex: the
-// library's symbolic work must not run in two threads at once
-// (SymEngine's reference counts are not thread-safe in this build).
+// run and its reference run.
+//
+// Two locks (docs/app.md, "Locks"). The session mutex serializes every
+// call that uses the library: the library's symbolic work must not run in
+// two threads at once (SymEngine's reference counts are not thread-safe in
+// this build), and a run holds expressions. The run lock is short: it
+// guards the runs' bookkeeping (states, kept snapshots, clients) and what
+// the session is busy with, so progress, stop, values, probes and status
+// never wait for a chunk, a mesh or a solve.
 namespace pde2d::app {
 
 // The client of calls that name none (the command line, tests).
@@ -50,6 +59,9 @@ public:
   static Json catalog();
   // A complete case to start from.
   static Json default_case();
+  // A JSON Schema of the case, generated from the catalog and the section
+  // readers' keys (case_schema.hpp).
+  static Json case_schema();
 
   // Each throws StageError. Every call reads only the sections it needs.
   Json geometry(const Json &case_json);
@@ -75,16 +87,18 @@ public:
   // fails). Returns the progress (solve_progress).
   Json solve(const Json &case_json, const std::string &client = {});
   // The client's current run's summary so far (runs.hpp, progress_json).
-  // Throws StageError for a run that is not the client's current one.
+  // Throws StageError for a run that is not the client's current one
+  // (kind "replaced" or "expired", RunManager::run_of). The run lock only.
   Json solve_progress(std::uint64_t job, const std::string &client = {});
   // Stops the run after the chunk that is running; solve() with the same
-  // inputs continues it. Returns its progress.
+  // inputs continues it. Returns its progress. The run lock only.
   Json stop_solve(std::uint64_t job, const std::string &client = {});
   // Runs one chunk of the run; false once it is no longer running. For
   // the command line and tests (the background thread does the same).
   bool advance_solve(std::uint64_t job, const std::string &client = {});
   // Snapshots [first, first + count) of the run as float32, little-endian,
-  // snapshot after snapshot (what POST /api/solve/values sends).
+  // snapshot after snapshot (what POST /api/solve/values sends). The run
+  // lock only.
   std::string solution_values_float32(std::uint64_t job, std::size_t first,
                                       std::size_t count,
                                       const std::string &client = {});
@@ -105,8 +119,16 @@ public:
   // u - other at {"snapshot": k} of the same request, float32.
   std::string compare_difference(const Json &request,
                                  const std::string &client = {});
-  // u(t) of the run {"job"} at {"points": [[x, y], ...]}.
+  // u(t) of the run {"job"} at {"points": [[x, y], ...]}. The run lock
+  // only.
   Json probes(const Json &request, const std::string &client = {});
+
+  // What the session is busy with, for the page ("server busy: meshing
+  // (12 s)"): {"busy": {"task", "client", "yours", "job", "since",
+  // "seconds"} or null, "running" (runs), "clients", "memory": {"budget",
+  // "used", "room" (what a new run of `client` may keep)}}. The run lock
+  // only.
+  Json status(const std::string &client = {});
 
   // The case with a complete problem of the preset `preset` for its
   // geometry (problem and solve sections replaced; see presets.hpp).
@@ -128,25 +150,44 @@ public:
 
   // How many clients the session keeps now.
   std::size_t clients();
+  const SessionOptions &options() const { return options_; }
 
 private:
   struct State;
+  class Work;
+  // What holds the session mutex now (under the run lock).
+  struct Activity {
+    std::string task;
+    std::string client;
+    std::uint64_t job = 0;
+    std::chrono::system_clock::time_point since;
+    std::chrono::steady_clock::time_point started;
+  };
   // Runs the client's run to its end, chunk by chunk (each under the
   // mutex); throws its error when it failed. Returns its progress.
   Json finish_run(std::uint64_t job, const std::string &client);
   void background_loop();
+  // The run's kept snapshots (the run lock taken here).
+  RunSnapshots snapshots_of(std::uint64_t job, const std::string &client);
+  // What a comparison of the run `job` reads: its snapshots, the
+  // reference's when the request asks for it, and its parameters.
+  struct ComparedRuns {
+    RunSnapshots run;
+    std::optional<RunSnapshots> reference;
+    fem::Parameters parameters;
+  };
+  ComparedRuns compared_runs(const Json &request, std::uint64_t job,
+                             const std::string &client);
 
   SessionOptions options_;
-  std::mutex mutex_;
+  std::mutex mutex_;    // the session mutex: library work
+  std::mutex run_lock_; // the run lock: bookkeeping
   std::unique_ptr<State> state_;
+  std::optional<Activity> activity_;
   // The background runner (with background_runs): wakes when a run starts.
   std::condition_variable wake_;
   bool closing_ = false;
   std::thread worker_;
 };
-
-// Throws std::invalid_argument for a case that is not an object, has a
-// key that is not a section, or names another format or a newer version.
-void check_case(const Json &case_json);
 
 } // namespace pde2d::app

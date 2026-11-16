@@ -8,19 +8,42 @@ find_package(Threads REQUIRED)
 
 # Everything but HTTP: the case format, the catalog of components and the
 # stages. Tests link it directly.
+# Which commit the app is built from, for the exports' provenance: written
+# at every build (cmake/build_info.cmake), rewritten only when it changes,
+# "unknown" outside git.
+set(PDE2D_APP_BUILD_INFO "${CMAKE_CURRENT_BINARY_DIR}/build_info.cpp")
+set(PDE2D_APP_BUILD_INFO_COMMAND
+  "${CMAKE_COMMAND}" -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+  -DOUTPUT=${PDE2D_APP_BUILD_INFO}
+  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_info.cmake")
+execute_process(COMMAND ${PDE2D_APP_BUILD_INFO_COMMAND})
+add_custom_target(pde2d_app_build_info
+  COMMAND ${PDE2D_APP_BUILD_INFO_COMMAND}
+  BYPRODUCTS "${PDE2D_APP_BUILD_INFO}"
+  COMMENT "Recording the app's git commit"
+  VERBATIM)
+
 add_library(pde2d_app_core STATIC
+  src/case_format.cpp
+  src/case_schema.cpp
   src/case_set.cpp
-  src/catalog.cpp
   src/domain_input.cpp
   src/exports.cpp
   src/field_eval.cpp
+  src/mesh_catalog.cpp
   src/options.cpp
   src/presets.cpp
   src/problem_input.cpp
   src/runs.cpp
   src/session.cpp
+  src/sha256.cpp
+  src/solve_catalog.cpp
+  src/sweep.cpp
   src/stage_cache.cpp
-  src/views.cpp)
+  src/views.cpp
+  src/zip.cpp
+  "${PDE2D_APP_BUILD_INFO}")
+add_dependencies(pde2d_app_core pde2d_app_build_info)
 target_include_directories(pde2d_app_core PUBLIC src)
 target_compile_definitions(pde2d_app_core
   PRIVATE PDE2D_VERSION="${PROJECT_VERSION}")

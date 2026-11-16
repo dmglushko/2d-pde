@@ -4,6 +4,8 @@
 
 #include "pde2d/fem/problem.hpp"
 
+#include <string_view>
+
 // The "problem" section of a case, as text, and the fem::Problem built
 // from it:
 //
@@ -17,6 +19,12 @@
 // missing, null or empty is not set: zero for the equation and the
 // boundary conditions, "not given" for the initial conditions.
 namespace pde2d::app {
+
+// The keys of the problem section, and what a boundary condition has
+// besides its coefficients.
+inline constexpr std::string_view problem_section_keys[] = {
+    "equation", "parameters", "boundary_conditions", "initial"};
+inline constexpr std::string_view condition_extra_keys[] = {"priority"};
 
 // Throws std::invalid_argument naming the path in the case file
 // ("problem.equation.a_xx: ...") for a wrong value type, an unknown key or

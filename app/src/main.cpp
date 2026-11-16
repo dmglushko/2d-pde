@@ -5,6 +5,7 @@
 #include "case_set.hpp"
 #include "server.hpp"
 #include "session.hpp"
+#include "sweep.hpp"
 
 #include <csignal>
 #include <cstdlib>
@@ -32,19 +33,31 @@ using pde2d::app::Json;
 
 constexpr std::string_view usage = R"(Usage:
   pde2d_app [--host HOST] [--port PORT] [--web DIR] [--token TOKEN]
+            [--memory-budget BYTES]
       Starts the interface; open the printed address in a browser.
       Default: 127.0.0.1:8765 and the page files of this checkout. A host
       that is not loopback needs a token on every request: TOKEN, or a
-      random one; the printed address carries it.
+      random one; the printed address carries it. --memory-budget bounds
+      what the kept runs of all pages hold (default 1G; a number of bytes,
+      or with K, M or G for powers of 1024).
   pde2d_app --run CASE.json [--set PATH=VALUE]... [--output DIR]
       Runs a saved case without the browser (geometry, mesh, problem,
       assembly, solve) and prints a JSON summary. Exit code 0 when every
       stage ran. --set replaces one value of the case first (PATH dotted
       with [i] indices, VALUE read as JSON, else as text), for example
       --set mesh.spec.max_edge_length.relative=0.02. With --output,
-      writes mesh.pde2d, mesh.svg, solution.csv, solution.vtk,
-      provenance.json and the assembled system at assembly.t
-      (stiffness.mtx, mass.mtx, damping.mtx, rhs.mtx) there.
+      writes summary.json, mesh.pde2d, mesh.svg, solution.csv,
+      solution.vtk, the series solution_NNNN.vtk with solution.vtk.series
+      (ParaView opens it with its times), provenance.json and the
+      assembled system at assembly.t (stiffness.mtx, mass.mtx,
+      damping.mtx, rhs.mtx) there.
+  pde2d_app --run CASE.json --sweep PATH=V1,V2,... [--sweep ...]
+            [--set PATH=VALUE]... [--output DIR]
+      Runs the case once per combination of the swept values (the first
+      --sweep varies slowest), reusing what a combination does not change,
+      and prints one row per run: the values, mesh nodes, solve time and,
+      with view.exact_solution in the case, the error and its observed
+      order. With --output, writes sweep.json and sweep.csv there.
   pde2d_app --default-case
       Prints the case a new session starts with.
 )";
@@ -63,6 +76,13 @@ std::string read_file(const std::filesystem::path &path) {
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
+void write_text(const std::filesystem::path &path, std::string_view text) {
+  std::ofstream out(path, std::ios::binary);
+  out.write(text.data(), static_cast<std::streamsize>(text.size()));
+  if (!out)
+    throw std::runtime_error("cannot write " + path.string());
+}
+
 void write_file(const std::filesystem::path &path,
                 const pde2d::app::ExportedFile &file) {
   std::ofstream out(path, std::ios::binary);
@@ -78,27 +98,77 @@ void write_file(const std::filesystem::path &path,
 
 int run_case(const std::filesystem::path &case_path,
              const std::vector<std::string> &sets,
+             const std::vector<pde2d::app::SweepAxis> &sweeps,
              const std::optional<std::filesystem::path> &output) {
   Json case_json = Json::parse(read_file(case_path));
   for (const std::string &set : sets)
     pde2d::app::apply_set_argument(case_json, set);
   pde2d::app::Session session;
+  if (!sweeps.empty()) {
+    const Json sweep = pde2d::app::run_sweep(session, case_json, sweeps);
+    if (output) {
+      std::filesystem::create_directories(*output);
+      write_text(*output / "sweep.json", sweep.dump(2) + "\n");
+      write_text(*output / "sweep.csv", pde2d::app::sweep_csv(sweep));
+    }
+    std::cout << pde2d::app::sweep_table(sweep);
+    bool ok = true;
+    for (const Json &row : sweep["rows"])
+      ok = ok && row["ok"].get<bool>();
+    return ok ? 0 : 1;
+  }
   Json summary = session.run(case_json);
-  if (summary["ok"].get<bool>() && output) {
+  if (output) {
     std::filesystem::create_directories(*output);
+    write_text(*output / "summary.json", summary.dump(2) + "\n");
+  }
+  if (summary["ok"].get<bool>() && output) {
     const pde2d::app::ExportContext context{
         .client = std::string(pde2d::app::local_client),
         .case_name = case_path.filename().string()};
     for (const std::string_view kind :
          {"mesh.pde2d", "mesh.svg", "solution.csv", "solution.vtk",
-          "provenance.json", "stiffness.mtx", "mass.mtx", "damping.mtx",
-          "rhs.mtx"}) {
+          "solution-vtk.zip", "provenance.json", "stiffness.mtx", "mass.mtx",
+          "damping.mtx", "rhs.mtx"}) {
       const auto file = session.export_file(case_json, kind, context);
-      write_file(*output / file.name, file);
+      // An archive's files go into the directory itself.
+      if (file.members)
+        file.members([&](std::string_view name, std::string_view content) {
+          write_text(*output / name, content);
+        });
+      else
+        write_file(*output / file.name, file);
     }
   }
   std::cout << summary.dump(2) << '\n';
   return summary["ok"].get<bool>() ? 0 : 1;
+}
+
+// "1G", "512M", "300000000": bytes, with K, M or G (optionally followed
+// by "iB" or "B") for powers of 1024.
+std::size_t parse_bytes(const std::string &text) {
+  std::size_t used = 0;
+  const double number = std::stod(text, &used);
+  std::string unit = text.substr(used);
+  for (const std::string_view tail : {"iB", "B"})
+    if (unit.size() > tail.size() && unit.ends_with(tail)) {
+      unit.resize(unit.size() - tail.size());
+      break;
+    }
+  double scale = 1.0;
+  if (unit == "K" || unit == "k")
+    scale = 1024.0;
+  else if (unit == "M")
+    scale = 1024.0 * 1024.0;
+  else if (unit == "G")
+    scale = 1024.0 * 1024.0 * 1024.0;
+  else if (!unit.empty() && unit != "B")
+    throw std::invalid_argument("--memory-budget: unknown unit '" + unit +
+                                "' (K, M or G)");
+  const double bytes = number * scale;
+  if (!(bytes >= 1) || bytes > 1e18)
+    throw std::invalid_argument("--memory-budget: expected a size above 0");
+  return static_cast<std::size_t>(bytes);
 }
 
 int serve(pde2d::app::ServerOptions options) {
@@ -135,6 +205,7 @@ int main(int argc, char **argv) {
   std::optional<std::filesystem::path> case_path;
   std::optional<std::filesystem::path> output;
   std::vector<std::string> sets;
+  std::vector<pde2d::app::SweepAxis> sweeps;
   try {
     for (std::size_t i = 1; i < args.size(); ++i) {
       const std::string_view arg = args[i];
@@ -163,6 +234,10 @@ int main(int argc, char **argv) {
         output = value();
       else if (arg == "--set")
         sets.push_back(value());
+      else if (arg == "--sweep")
+        sweeps.push_back(pde2d::app::parse_sweep_argument(value()));
+      else if (arg == "--memory-budget")
+        options.session.memory_budget = parse_bytes(value());
       else if (arg == "--token")
         options.token = value();
       else
@@ -170,8 +245,10 @@ int main(int argc, char **argv) {
     }
     if (!sets.empty() && !case_path)
       throw std::invalid_argument("--set needs --run");
+    if (!sweeps.empty() && !case_path)
+      throw std::invalid_argument("--sweep needs --run");
     if (case_path)
-      return run_case(*case_path, sets, output);
+      return run_case(*case_path, sets, sweeps, output);
     return serve(std::move(options));
   } catch (const std::exception &error) {
     std::cerr << "pde2d_app: " << error.what() << "\n\n" << usage;

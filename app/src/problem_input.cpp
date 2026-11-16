@@ -147,9 +147,7 @@ fem::Problem read_problem(const Json &section, Errors &errors) {
   const Json &input = section.is_null() ? empty : section;
   if (!errors.attempt("problem", [&] {
         require_object(input, "problem");
-        static constexpr std::string_view known[] = {
-            "equation", "parameters", "boundary_conditions", "initial"};
-        reject_unknown_keys(input, "problem", known);
+        reject_unknown_keys(input, "problem", problem_section_keys);
       }))
     return problem;
 
@@ -188,7 +186,8 @@ fem::Problem read_problem(const Json &section, Errors &errors) {
       if (!errors.attempt(where, [&] {
             require_object(object, where);
             auto names = field_names(condition_fields);
-            names.push_back("priority");
+            names.insert(names.end(), std::begin(condition_extra_keys),
+                         std::end(condition_extra_keys));
             reject_unknown_keys(object, where, names);
           }))
         continue;

@@ -1,7 +1,10 @@
 #include "exports.hpp"
 
 #include "app_error.hpp"
+#include "build_info.hpp"
+#include "sha256.hpp"
 #include "views.hpp"
+#include "zip.hpp"
 
 #include "pde2d/io/pde2d_mesh.hpp"
 #include "pde2d/io/svg.hpp"
@@ -18,12 +21,12 @@
 
 namespace pde2d::app {
 
-namespace {
-
-std::string utc(std::chrono::system_clock::time_point time) {
+std::string utc_time(std::chrono::system_clock::time_point time) {
   return std::format("{:%FT%TZ}",
                      std::chrono::floor<std::chrono::seconds>(time));
 }
+
+namespace {
 
 // The geometry section without its document: an SVG or mesh text is
 // replaced by its length, so the settings stay one readable line.
@@ -37,13 +40,29 @@ Json geometry_settings(const Json &geometry) {
   return out;
 }
 
+// "commit 0123abc..., uncommitted changes" for the provenance lines.
+std::string build_text() {
+  const BuildInfo build = build_info();
+  if (build.commit == "unknown")
+    return "commit unknown";
+  std::string out = "commit " + std::string(build.commit);
+  if (build.dirty == "true")
+    out += ", with uncommitted changes";
+  else if (build.dirty == "unknown")
+    out += ", changes unknown";
+  return out;
+}
+
 // The provenance as comment lines (without the comment mark).
 std::vector<std::string> provenance_lines(const Json &provenance) {
   std::vector<std::string> lines;
-  lines.push_back(std::format("produced by pde2d_app {} (library pde2d {})",
-                              app_version(), library_version()));
+  lines.push_back(
+      std::format("produced by pde2d_app {} ({}) (library pde2d {})",
+                  app_version(), build_text(), library_version()));
   if (provenance["case_name"].is_string())
     lines.push_back("case: " + provenance["case_name"].get<std::string>());
+  lines.push_back("case sha256: " +
+                  provenance["case_sha256"].get<std::string>());
   lines.push_back("exported: " + provenance["exported"].get<std::string>());
   if (const Json &run = provenance["run"]; run.is_object())
     lines.push_back(std::format(
@@ -64,7 +83,8 @@ ExportedFile text_file(const ExportInfo &info, std::string content) {
   return {.name = std::string(info.name),
           .content_type = std::string(info.content_type),
           .content = std::move(content),
-          .stream = {}};
+          .stream = {},
+          .members = {}};
 }
 
 // An SVG with the provenance as an XML comment after the declaration.
@@ -169,24 +189,24 @@ ExportedFile write_operator(const ExportInfo &info, const ExportInputs &in) {
 // written row by row.
 ExportedFile write_solution_csv(const ExportInfo &info,
                                 const ExportInputs &in) {
-  auto mesh = in.run->meshed->mesh();
-  auto solutions = in.run->solutions;
+  const RunSnapshots run = *in.run;
   std::string header = comment_block(in.provenance, "#");
   header += "x,y";
-  for (const solve::Solution &solution : *solutions)
-    header += std::format(",u(t={})", solution.time);
+  for (const Snapshot &solution : run.snapshots)
+    header += std::format(",u(t={})", solution->time);
   header += '\n';
   ExportedFile file = text_file(info, {});
   // The stream holds the mesh and the values (no expressions), so it may
-  // run after the session's mutex is released; a done run's values do not
+  // run after the session's mutex is released; a kept snapshot does not
   // change.
-  file.stream = [mesh, solutions, header](const ExportedFile::Sink &sink) {
+  file.stream = [run, header](const ExportedFile::Sink &sink) {
     sink(header);
     std::string rows;
-    for (std::size_t i = 0; i < mesh->nodes.size(); ++i) {
-      rows += std::format("{},{}", mesh->nodes[i].x, mesh->nodes[i].y);
-      for (const solve::Solution &solution : *solutions)
-        rows += std::format(",{}", solution.values[i]);
+    const mesh::Mesh &mesh = *run.mesh;
+    for (std::size_t i = 0; i < mesh.nodes.size(); ++i) {
+      rows += std::format("{},{}", mesh.nodes[i].x, mesh.nodes[i].y);
+      for (const Snapshot &solution : run.snapshots)
+        rows += std::format(",{}", solution->values[i]);
       rows += '\n';
       if (rows.size() > 1 << 16) {
         sink(rows);
@@ -198,18 +218,16 @@ ExportedFile write_solution_csv(const ExportInfo &info,
   return file;
 }
 
-// A VTK legacy unstructured grid: the mesh (z = 0), triangles, and one
-// point-data array per kept snapshot, named u(t=...). The format has no
-// comments; its title line (at most 256 characters) names what produced
-// it, and provenance.json has the rest.
-ExportedFile write_solution_vtk(const ExportInfo &info,
-                                const ExportInputs &in) {
-  auto mesh = in.run->meshed->mesh();
-  auto solutions = in.run->solutions;
-  std::string title =
-      std::format("pde2d_app {} (library {}), run {}, exported {}",
-                  app_version(), library_version(), in.run->id,
-                  in.provenance["exported"].get<std::string>());
+// The VTK title line: what produced the file, at most 255 characters on
+// one line (legacy VTK has no comments; provenance.json has the rest).
+std::string vtk_title(const ExportInputs &in) {
+  const BuildInfo build = build_info();
+  std::string title = std::format(
+      "pde2d_app {} ({}{}) library {}, run {}, case sha256 {}, exported {}",
+      app_version(), build.commit.substr(0, 12),
+      build.dirty == "true" ? "+changes" : "", library_version(), in.run->id,
+      in.provenance["case_sha256"].get<std::string>().substr(0, 16),
+      in.provenance["exported"].get<std::string>());
   if (in.provenance["case_name"].is_string())
     title += ", case " + in.provenance["case_name"].get<std::string>();
   for (char &c : title)
@@ -217,47 +235,68 @@ ExportedFile write_solution_vtk(const ExportInfo &info,
       c = ' ';
   if (title.size() > 255)
     title.resize(255);
+  return title;
+}
+
+// A VTK legacy unstructured grid: the mesh (z = 0), triangles, and one
+// point-data array per given snapshot, named `name(k)`.
+template <class Name>
+void write_vtk(const ExportedFile::Sink &sink, const mesh::Mesh &mesh,
+               const std::string &title, std::span<const Snapshot> arrays,
+               Name name) {
+  std::string out = "# vtk DataFile Version 3.0\n" + title +
+                    "\nASCII\nDATASET UNSTRUCTURED_GRID\n";
+  const auto flush = [&] {
+    if (out.size() > 1 << 16) {
+      sink(out);
+      out.clear();
+    }
+  };
+  out += std::format("POINTS {} double\n", mesh.nodes.size());
+  for (const geometry::Point &p : mesh.nodes) {
+    out += std::format("{} {} 0\n", p.x, p.y);
+    flush();
+  }
+  const std::size_t triangles = mesh.triangles.size();
+  out += std::format("CELLS {} {}\n", triangles, 4 * triangles);
+  for (const mesh::Triangle &t : mesh.triangles) {
+    out += std::format("3 {} {} {}\n", t.nodes[0], t.nodes[1], t.nodes[2]);
+    flush();
+  }
+  out += std::format("CELL_TYPES {}\n", triangles);
+  for (std::size_t k = 0; k < triangles; ++k) {
+    out += "5\n"; // VTK_TRIANGLE
+    flush();
+  }
+  out += std::format("POINT_DATA {}\n", mesh.nodes.size());
+  for (std::size_t k = 0; k < arrays.size(); ++k) {
+    out += std::format("SCALARS {} double 1\nLOOKUP_TABLE default\n",
+                       name(*arrays[k]));
+    for (const double value : arrays[k]->values) {
+      out += std::format("{}\n", value);
+      flush();
+    }
+  }
+  sink(out);
+}
+
+// One file: the mesh and an array per kept snapshot, named u(t=...).
+ExportedFile write_solution_vtk(const ExportInfo &info,
+                                const ExportInputs &in) {
+  const RunSnapshots run = *in.run;
   ExportedFile file = text_file(info, {});
-  file.stream = [mesh, solutions, title](const ExportedFile::Sink &sink) {
-    std::string out = "# vtk DataFile Version 3.0\n" + title +
-                      "\nASCII\nDATASET UNSTRUCTURED_GRID\n";
-    const auto flush = [&] {
-      if (out.size() > 1 << 16) {
-        sink(out);
-        out.clear();
-      }
-    };
-    out += std::format("POINTS {} double\n", mesh->nodes.size());
-    for (const geometry::Point &p : mesh->nodes) {
-      out += std::format("{} {} 0\n", p.x, p.y);
-      flush();
-    }
-    const std::size_t triangles = mesh->triangles.size();
-    out += std::format("CELLS {} {}\n", triangles, 4 * triangles);
-    for (const mesh::Triangle &t : mesh->triangles) {
-      out += std::format("3 {} {} {}\n", t.nodes[0], t.nodes[1], t.nodes[2]);
-      flush();
-    }
-    out += std::format("CELL_TYPES {}\n", triangles);
-    for (std::size_t k = 0; k < triangles; ++k) {
-      out += "5\n"; // VTK_TRIANGLE
-      flush();
-    }
-    out += std::format("POINT_DATA {}\n", mesh->nodes.size());
-    for (const solve::Solution &solution : *solutions) {
-      out += std::format("SCALARS u(t={}) double 1\nLOOKUP_TABLE default\n",
-                         solution.time);
-      for (const double value : solution.values) {
-        out += std::format("{}\n", value);
-        flush();
-      }
-    }
-    sink(out);
+  file.stream = [run, title = vtk_title(in)](const ExportedFile::Sink &sink) {
+    write_vtk(sink, *run.mesh, title, run.snapshots,
+              [](const solve::Solution &solution) {
+                return std::format("u(t={})", solution.time);
+              });
   };
   return file;
 }
 
-ExportedFile write_provenance(const ExportInfo &info, const ExportInputs &in) {
+// provenance.json: the provenance without its settings line, the case as
+// sent and the run's summary.
+Json provenance_document(const ExportInputs &in) {
   Json out = Json::object();
   out["format"] = "pde2d-app-provenance";
   out["version"] = 1;
@@ -265,16 +304,62 @@ ExportedFile write_provenance(const ExportInfo &info, const ExportInputs &in) {
     if (key != "settings")
       out[key] = value;
   out["case"] = *in.case_json;
-  if (in.run) {
-    Json run = progress_json(*in.run);
-    run.erase("values");
-    run["started"] = utc(in.run->started);
-    out["run"] = std::move(run);
-  }
-  return text_file(info, out.dump(2) + "\n");
+  if (in.run)
+    out["run"] = in.run_summary;
+  return out;
 }
 
-constexpr std::array<ExportInfo, 10> kinds{{
+// The name of snapshot k's file in the series: solution_0000.vtk, ...
+std::string series_member(std::size_t k) {
+  return std::format("solution_{:04}.vtk", k);
+}
+
+// A time series for ParaView: one VTK file per snapshot (the mesh and u),
+// solution.vtk.series (ParaView's JSON manifest: each file with its time)
+// and solution-vtk.provenance.json, as members of a stored zip.
+ExportedFile write_solution_vtk_zip(const ExportInfo &info,
+                                    const ExportInputs &in) {
+  const RunSnapshots run = *in.run;
+  const std::string title = vtk_title(in);
+  Json provenance = provenance_document(in);
+  ExportedFile file = text_file(info, {});
+  file.members = [run, title, provenance = provenance.dump(2) + "\n"](
+                     const ExportedFile::MemberSink &sink) {
+    Json files = Json::array();
+    for (std::size_t k = 0; k < run.snapshots.size(); ++k) {
+      std::string text;
+      write_vtk([&](std::string_view piece) { text += piece; }, *run.mesh,
+                std::format("{}, t = {}", title, run.snapshots[k]->time)
+                    .substr(0, 255),
+                std::span(run.snapshots).subspan(k, 1),
+                [](const solve::Solution &) { return std::string("u"); });
+      sink(series_member(k), text);
+      Json item = Json::object();
+      item["name"] = series_member(k);
+      item["time"] = run.snapshots[k]->time;
+      files.push_back(std::move(item));
+    }
+    Json series = Json::object();
+    series["file-series-version"] = "1.0";
+    series["files"] = std::move(files);
+    sink("solution.vtk.series", series.dump(2) + "\n");
+    sink("solution-vtk.provenance.json", provenance);
+  };
+  file.stream = [members = file.members](const ExportedFile::Sink &sink) {
+    ZipWriter zip(sink);
+    members([&](std::string_view name, std::string_view content) {
+      zip.add(name, content);
+    });
+    zip.finish();
+  };
+  return file;
+}
+
+ExportedFile write_provenance(const ExportInfo &info, const ExportInputs &in) {
+  return text_file(info, provenance_document(in).dump(2) + "\n");
+}
+
+constexpr std::array<ExportInfo, 11> kinds{{
     {ExportKind::mesh_pde2d, "mesh.pde2d", "text/plain", ExportNeeds::mesh,
      write_mesh_pde2d},
     {ExportKind::mesh_svg, "mesh.svg", "image/svg+xml", ExportNeeds::mesh,
@@ -293,6 +378,8 @@ constexpr std::array<ExportInfo, 10> kinds{{
      ExportNeeds::done_run, write_solution_csv},
     {ExportKind::solution_vtk, "solution.vtk", "text/plain",
      ExportNeeds::done_run, write_solution_vtk},
+    {ExportKind::solution_vtk_zip, "solution-vtk.zip", "application/zip",
+     ExportNeeds::done_run, write_solution_vtk_zip},
     {ExportKind::provenance_json, "provenance.json", "application/json",
      ExportNeeds::case_only, write_provenance},
 }};
@@ -326,11 +413,20 @@ std::string export_names() {
 std::string_view app_version() { return PDE2D_VERSION; }
 std::string_view library_version() { return PDE2D_VERSION; }
 
+std::string case_hash(const Json &case_json) {
+  // nlohmann::json keeps its keys sorted, ordered_json as written.
+  return sha256_hex(nlohmann::json(case_json).dump());
+}
+
 Json provenance_json(const ExportInfo &info, const Json &case_json,
-                     std::string_view case_name, const Run *run) {
+                     std::string_view case_name, const Json &run) {
+  const BuildInfo build = build_info();
   Json app = Json::object();
   app["name"] = "pde2d_app";
   app["version"] = app_version();
+  app["commit"] = build.commit;
+  app["dirty"] =
+      build.dirty == "unknown" ? Json(nullptr) : Json(build.dirty == "true");
   Json library = Json::object();
   library["name"] = "pde2d";
   library["version"] = library_version();
@@ -364,17 +460,11 @@ Json provenance_json(const ExportInfo &info, const Json &case_json,
   out["app"] = std::move(app);
   out["library"] = std::move(library);
   out["case_name"] = case_name.empty() ? Json(nullptr) : Json(case_name);
-  out["exported"] = utc(std::chrono::system_clock::now());
+  out["case_sha256"] = case_hash(case_json);
+  out["exported"] = utc_time(std::chrono::system_clock::now());
   out["file"] = info.name;
   out["settings"] = std::move(settings);
-  if (run != nullptr) {
-    Json item = Json::object();
-    item["id"] = run->id;
-    item["state"] = state_name(run->state);
-    item["started"] = utc(run->started);
-    out["run"] = std::move(item);
-  } else
-    out["run"] = nullptr;
+  out["run"] = run;
   return out;
 }
 

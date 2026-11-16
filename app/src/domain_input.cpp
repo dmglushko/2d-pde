@@ -150,17 +150,13 @@ void apply_edit(geometry::CurveGeometry &geometry, const Json &edit,
   };
   at_path(where, [&] {
     if (op == "rename") {
-      static constexpr std::string_view known[] = {"op", "from", "to"};
-      reject_unknown_keys(edit, where, known);
+      reject_unknown_keys(edit, where, rename_edit_keys);
       geometry.rename_region(text("from"), text("to"));
     } else if (op == "merge") {
-      static constexpr std::string_view known[] = {"op", "source", "target"};
-      reject_unknown_keys(edit, where, known);
+      reject_unknown_keys(edit, where, merge_edit_keys);
       geometry.merge_region_into(text("source"), text("target"));
     } else if (op == "split") {
-      static constexpr std::string_view known[] = {"op", "region", "fraction",
-                                                   "first", "second"};
-      reject_unknown_keys(edit, where, known);
+      reject_unknown_keys(edit, where, split_edit_keys);
       geometry.split_region(
           text("region"),
           require_number(member(edit, "fraction"), where + ".fraction"),
@@ -227,12 +223,10 @@ void apply_mesh_edit(mesh::Mesh &mesh, const Json &edit,
   };
   at_path(where, [&] {
     if (op == "rename") {
-      static constexpr std::string_view known[] = {"op", "from", "to"};
-      reject_unknown_keys(edit, where, known);
+      reject_unknown_keys(edit, where, rename_edit_keys);
       rename_mesh_region(mesh, text("from"), text("to"));
     } else if (op == "merge") {
-      static constexpr std::string_view known[] = {"op", "source", "target"};
-      reject_unknown_keys(edit, where, known);
+      reject_unknown_keys(edit, where, merge_edit_keys);
       merge_mesh_region(mesh, text("source"), text("target"));
     } else if (op == "split") {
       throw PathError(where + ".op",
@@ -366,13 +360,9 @@ Domain build_domain(const Json &section) {
   const std::string source =
       require_string(member(section, "source"), "geometry.source");
   if (source == "svg" || source == "shape") {
-    static constexpr std::string_view svg_keys[] = {"source", "name", "svg",
-                                                    "region_edits"};
-    static constexpr std::string_view shape_keys[] = {
-        "source", "shape", "options", "region_edits"};
     reject_unknown_keys(section, "geometry",
-                        source == "svg" ? std::span(svg_keys)
-                                        : std::span(shape_keys));
+                        source == "svg" ? std::span(svg_section_keys)
+                                        : std::span(shape_section_keys));
     geometry::CurveGeometry geometry =
         source == "svg"
             ? at_path("geometry.svg",
@@ -386,9 +376,7 @@ Domain build_domain(const Json &section) {
     return {.geometry = std::move(geometry), .mesh = std::nullopt};
   }
   if (source == "mesh_file") {
-    static constexpr std::string_view known[] = {"source", "format", "name",
-                                                 "text", "region_edits"};
-    reject_unknown_keys(section, "geometry", known);
+    reject_unknown_keys(section, "geometry", mesh_file_section_keys);
     const std::string format =
         require_string(member(section, "format"), "geometry.format");
     std::istringstream in(
