@@ -170,6 +170,11 @@ export const api = {
   examples: () => request("/api/examples"),
   example: (name) => request(`/api/examples/${encodeURIComponent(name)}`),
   geometry: (caseData) => request("/api/geometry", caseData),
+  // Where on the boundary a point is, for a split there: {region,
+  // fraction or node, point, corner, splittable, reason}.
+  locate: (caseData, point, snap) => request("/api/geometry/locate", { case: caseData, point, snap }),
+  // The case's curves (after its region edits) as a drawing section.
+  toDrawing: (caseData) => request("/api/geometry/drawing", caseData),
   // The mesh's summary, then its arrays in binary (pure/mesh_math.js, decodeMesh):
   // the answer has "mesh" with nodes, triangles and boundary_edges as
   // typed arrays, as the picture uses them.

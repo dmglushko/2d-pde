@@ -50,16 +50,31 @@ export function listen(v) {
       // A pointer the browser does not track (a synthetic event).
     }
     v.tooltip.hidden = true;
-    if (pointers.size === 2) return startPinch();
+    if (pointers.size === 2) {
+      if (drag?.overlay) v.overlay?.pointerup?.(v, p, event, true);
+      return startPinch();
+    }
     if (pointers.size > 2) return;
+    // The geometry editor takes a press on something it edits.
+    if (v.overlay?.pointerdown?.(v, p, event)) {
+      drag = { x: p.x, y: p.y, overlay: true };
+      return;
+    }
     const profile = v.data.tool === "profile" && v.data.mesh && !v.data.meshStale;
     drag = { x: p.x, y: p.y, offset: { ...v.offset }, moved: false, profile, start: v.toWorld(p.x, p.y) };
   });
 
   canvas.addEventListener("pointermove", (event) => {
-    if (!pointers.has(event.pointerId)) return hover(v, event);
+    if (!pointers.has(event.pointerId)) {
+      v.overlay?.hover?.(v, local(event), event);
+      return hover(v, event);
+    }
     const p = local(event);
     pointers.set(event.pointerId, p);
+    if (drag?.overlay) {
+      v.overlay?.pointermove?.(v, p, event);
+      return;
+    }
     if (pinch && pointers.size >= 2) {
       // The world point under the fingers' middle stays under it while
       // the scale follows the fingers' distance.
@@ -96,6 +111,10 @@ export function listen(v) {
     const ended = drag;
     drag = null;
     canvas.classList.remove("dragging");
+    if (ended?.overlay) {
+      v.overlay?.pointerup?.(v, local(event), event, cancelled);
+      return;
+    }
     if (!ended || cancelled) {
       if (v.draft) {
         v.draft = null;
@@ -110,16 +129,21 @@ export function listen(v) {
       return;
     }
     if (!ended.moved && event.button === 0) {
-      // On a boundary (within a few pixels) a click selects its region;
-      // elsewhere it pins a probe.
+      // The editor may take the click (a click beside the drawing clears
+      // its selection); on a boundary (within a few pixels) a click
+      // selects its region; elsewhere it pins a probe.
+      if (v.overlay?.click?.(v, { x: ended.x, y: ended.y }, event)) return;
       const region = v.callbacks.onRegion ? regionNear(v, ended.x, ended.y) : null;
-      if (region) v.callbacks.onRegion(region);
+      if (region) v.callbacks.onRegion(region, { x: ended.x, y: ended.y });
       else pin(v, ended.x, ended.y);
     }
   };
   canvas.addEventListener("pointerup", (event) => release(event, false));
   canvas.addEventListener("pointercancel", (event) => release(event, true));
-  canvas.addEventListener("pointerleave", () => (v.tooltip.hidden = true));
+  canvas.addEventListener("pointerleave", () => {
+    v.tooltip.hidden = true;
+    v.overlay?.leave?.(v);
+  });
   canvas.addEventListener(
     "wheel",
     (event) => {
@@ -131,8 +155,17 @@ export function listen(v) {
     },
     { passive: false },
   );
-  canvas.addEventListener("dblclick", () => v.fit());
-  canvas.addEventListener("keydown", (event) => key(v, event));
+  canvas.addEventListener("dblclick", (event) => {
+    if (v.overlay?.dblclick?.(v, local(event), event)) return;
+    v.fit();
+  });
+  canvas.addEventListener("keydown", (event) => {
+    if (v.overlay?.key?.(v, event)) {
+      event.preventDefault();
+      return;
+    }
+    key(v, event);
+  });
 }
 
 // Keyboard: arrows pan, + and - zoom about the centre, 0 fits, Enter

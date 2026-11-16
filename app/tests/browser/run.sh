@@ -46,6 +46,7 @@ all=(
   "study 1440 900 solve"
   "case_menu 1280 800 geometry"
   "phone_menu 390 844 solve"
+  "geometry_editor 1280 800 geometry"
 )
 
 chrome="${PDE2D_CHROME:-}"

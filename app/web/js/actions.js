@@ -67,6 +67,15 @@ function hideToast() {
 
 // --- running stages ---------------------------------------------------------------
 
+let geometryTimer = null;
+
+// Reads the geometry a moment after the last change (typing, the end of
+// a drag in the drawing editor).
+export function scheduleGeometry() {
+  clearTimeout(geometryTimer);
+  geometryTimer = setTimeout(() => runStage("geometry"), 250);
+}
+
 // The solve: the server answers its first chunk at once; a time run then
 // goes on in the background, and followRun fetches the snapshots as they
 // come (docs/app.md, "Runs in chunks").

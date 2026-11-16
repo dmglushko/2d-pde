@@ -1030,3 +1030,52 @@ dialog.settings h3 {
   text-underline-offset: 3px;
   cursor: help;
 }
+
+/* --- the drawing's selection (the Geometry step) ------------------------- */
+
+.drawing-hint {
+  justify-content: flex-end;
+}
+
+.drawing-selection:empty {
+  display: none;
+}
+
+.selection-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.selection-title {
+  font-weight: 600;
+}
+
+.selection-title .muted {
+  font-weight: 400;
+}
+
+.coordinates label,
+.region-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.coordinates input.coordinate {
+  width: 9em;
+}
+
+.region-row .name-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.segmented.kinds {
+  flex-wrap: wrap;
+}
+
+.muted {
+  color: var(--muted);
+}

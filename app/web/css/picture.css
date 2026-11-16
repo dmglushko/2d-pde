@@ -60,6 +60,115 @@
   cursor: grabbing;
 }
 
+/* The geometry editor's pointer: a hand over what it drags, a crosshair
+   where a tool places something. */
+#view.over-handle {
+  cursor: grab;
+}
+
+#view.over-edge {
+  cursor: pointer;
+}
+
+#view.tool-split.over-boundary,
+#view.tool-add {
+  cursor: crosshair;
+}
+
+#view.dragging.over-handle,
+#view.dragging.over-edge {
+  cursor: grabbing;
+}
+
+/* The geometry tools, at the picture's top left (the zoom buttons are at
+   its top right). */
+.geometry-tools {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 4px var(--shadow);
+  z-index: 1;
+}
+
+.geometry-tools button.tool {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.geometry-tools button.tool:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+.geometry-tools button.tool[aria-pressed="true"] {
+  background: var(--accent-wash);
+  border-color: var(--accent-strong);
+  color: var(--accent-text);
+}
+
+.geometry-tools svg {
+  width: 18px;
+  height: 18px;
+}
+
+.geometry-tools .sep {
+  height: 1px;
+  margin: 2px 5px;
+  background: var(--hairline);
+}
+
+/* A region's actions at the point clicked on the picture. */
+.region-pop {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 210px;
+  max-width: calc(100% - 16px);
+  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: 13px;
+}
+
+.region-pop .pop-title,
+.region-pop .pop-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.region-pop .pop-title {
+  color: var(--ink-2);
+}
+
+.region-pop .name-input,
+.region-pop select {
+  flex: 1;
+  min-width: 0;
+}
+
+.region-pop .close {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+}
+
 .canvas-wrap.over {
   outline: 2px dashed var(--accent);
   outline-offset: -6px;

@@ -13,6 +13,8 @@ import { plainError } from "./pure/requests.js";
 import { fill, guardButtons, h, readFileText, revealFolded } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
 import { geometryPanel, loadDomainFile, scheduleGeometry } from "./panels/geometry.js";
+import { initEditor, updateEditor } from "./geometry_editor.js";
+import { openRegionPopover, wirePopoverClosing } from "./region_popover.js";
 import { dotClass, setInvalidNotice } from "./panels/head.js";
 import { meshPanel } from "./panels/mesh.js";
 import { problemPanel } from "./panels/problem.js";
@@ -396,6 +398,10 @@ function refresh(reason) {
   }
   if (reason === "step") {
     applyStep();
+    // The editor's tools and what the picture draws of a drawing follow
+    // the step.
+    updateEditor(reason);
+    viewer.draw();
     return;
   }
   if (reason === "study") {
@@ -420,7 +426,11 @@ function refresh(reason) {
   if (reason === "case" || reason === "structure") buildPanels();
   else for (const [name, panel] of Object.entries(panels)) panel.update(element(`panel-${name}`));
   updateDots();
+  updateEditor(reason);
   updateViewer();
+  // A drawing edited (or undone) redraws over the picture even when the
+  // server's view of it did not change yet.
+  viewer.requestOverlay();
   updateCaseBar();
   updateInvalid();
   tick();
@@ -566,16 +576,18 @@ function wireHistory() {
 // A boundary region chosen in the picture (a click on it) or its legend:
 // it is highlighted, and its condition opens in the Problem step (or its
 // row in the Geometry step, when that step is open).
-function selectRegion(name) {
+function selectRegion(name, at = null) {
   setSelectedRegion(name);
   if (store.step === "geometry") {
+    // A click on the picture: the region's actions right there.
+    if (at) openRegionPopover(at, { region: name });
     const row = [...document.querySelectorAll("#geometry-regions tr[data-region]")].find((r) => r.dataset.region === name);
     for (const other of document.querySelectorAll("#geometry-regions tr.selected")) other.classList.remove("selected");
     if (row) {
       row.classList.add("selected");
       revealFolded(row);
       row.scrollIntoView({ block: "nearest" });
-      row.querySelector("button")?.focus({ preventScroll: true });
+      if (!at) row.querySelector("button")?.focus({ preventScroll: true });
     }
     return;
   }
@@ -643,6 +655,8 @@ async function start() {
     onLock: (quantity, range) => setLockedRange(quantity, range),
     onRegion: selectRegion,
   });
+  initEditor(viewer, element("canvas-wrap"));
+  wirePopoverClosing();
   wireTimebar(element("timebar"));
   new ResizeObserver(() => {
     forgetChartSize();

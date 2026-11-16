@@ -49,6 +49,14 @@ export class Viewer {
     this.settleTimer = null;
     // The profile line being drawn ({from, to}) or null.
     this.draft = null;
+    // What is drawn over the picture and takes the pointer first (the
+    // geometry editor, geometry_editor.js), or null: {draw(v),
+    // ownsGeometry(), holdsView(), pointerdown/move/up, hover, click,
+    // dblclick, key, leave}. It is drawn over the kept frame, so a
+    // pointer move redraws only it (redrawOverlay), never the mesh or a
+    // field.
+    this.overlay = null;
+    this.overlayRequest = null;
 
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
     listen(this);
@@ -78,8 +86,11 @@ export class Viewer {
     const box = this.boundingBox();
     const key = box ? JSON.stringify(box) : null;
     if (key && key !== this.fittedKey) {
+      // A drawing being edited keeps the view the user works in.
+      const keep = this.fittedKey !== null && this.overlay?.holdsView?.();
       this.fittedKey = key;
-      this.fit();
+      if (keep) this.draw();
+      else this.fit();
     } else this.draw();
     return true;
   }
@@ -224,7 +235,11 @@ export class Viewer {
     const fieldShown = hasMesh && Boolean(field) && (current || field.outdated);
     let note = "";
 
-    if (geometry?.kind === "curves" && !current && !fieldShown) layers.fillGeometry(this, geometry);
+    // The editor draws a drawing it edits itself (from the case, at
+    // pointer speed); the server's view of it may be a step behind.
+    const edited = Boolean(this.overlay?.ownsGeometry?.());
+    this.fillWanted = !current && !fieldShown;
+    if (geometry?.kind === "curves" && !current && !fieldShown && !edited) layers.fillGeometry(this, geometry);
     if (current && colorBy === "quality") layers.drawQuality(this, mesh);
     if (fieldShown) {
       ctx.globalAlpha = field.outdated ? OUTDATED_ALPHA : 1;
@@ -239,10 +254,10 @@ export class Viewer {
     }
     if (shown.geometry) {
       if (current) layers.drawMeshBoundary(this, mesh);
-      else if (geometry?.kind === "curves") layers.drawCurves(this, geometry);
+      else if (geometry?.kind === "curves" && !edited) layers.drawCurves(this, geometry);
       else if (geometry?.kind === "mesh_file") layers.drawEdgeList(this, geometry);
     }
-    if (this.data.selectedRegion) layers.drawSelectedRegion(this, current ? mesh : null, geometry, this.data.selectedRegion);
+    if (this.data.selectedRegion && !edited) layers.drawSelectedRegion(this, current ? mesh : null, geometry, this.data.selectedRegion);
     if (fieldShown && this.isolines) layers.drawIsolines(this, this.isolines, tableOf(this.isolines.scale), colorBy === "field");
     if (fieldShown && colorBy === "field" && !this.fieldComplete) layers.drawFieldDots(this, mesh, field.values, this.shownScale, tableOf(this.shownScale));
     if (current && shown.dirichlet && this.data.dirichlet) layers.drawNodes(this, mesh, this.data.dirichlet);
@@ -253,6 +268,40 @@ export class Viewer {
     if (this.data.tool === "profile" && !note) note = "drag across the picture to draw the profile line";
     this.status.textContent = note;
     this.keepFrame();
+    this.overlay?.draw(this);
+  }
+
+  // --- the overlay -------------------------------------------------------------
+
+  setOverlay(overlay) {
+    this.overlay = overlay;
+    this.draw();
+  }
+
+  // The overlay again over the kept frame (the picture under it did not
+  // change), at most once per animation frame. A timer stands in where
+  // animation frames do not run (a hidden or headless page).
+  requestOverlay() {
+    if (this.overlayRequest !== null) return;
+    const run = () => {
+      if (this.overlayRequest === null) return;
+      cancelAnimationFrame(this.overlayRequest.frame);
+      clearTimeout(this.overlayRequest.timer);
+      this.overlayRequest = null;
+      this.redrawOverlay();
+    };
+    this.overlayRequest = { frame: requestAnimationFrame(run), timer: setTimeout(run, 50) };
+  }
+
+  redrawOverlay() {
+    const view = this.frameView;
+    if (!view || this.frame.width !== this.canvas.width || this.frame.height !== this.canvas.height) return this.draw();
+    if (view.scale !== this.scale || view.offset.x !== this.offset.x || view.offset.y !== this.offset.y) return this.blit();
+    const ctx = this.context;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.frame, 0, 0);
+    ctx.setTransform(this.ratio, 0, 0, this.ratio, 0, 0);
+    this.overlay?.draw(this);
   }
 
   // --- gestures --------------------------------------------------------------
@@ -295,6 +344,7 @@ export class Viewer {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.drawImage(this.frame, t.x * r, t.y * r, this.frame.width * t.scale, this.frame.height * t.scale);
     ctx.setTransform(r, 0, 0, r, 0, 0);
+    this.overlay?.draw(this);
   }
 
   // --- the legend ------------------------------------------------------------
