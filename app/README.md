@@ -83,16 +83,46 @@ conditions of new regions) is not a step and does not make the case
 field (the browser's own undo, letter by letter); once you leave the
 field, Ctrl+Z undoes the whole edit of the field.
 
-1. **Geometry.** Pick a ready-made shape, load an SVG drawing, or load a
-   mesh file (Gmsh `.msh` or `.pde2d`). You can also drop a file onto the
-   picture. The regions of the boundary are listed with their lengths;
-   **Edit** renames a region, merges it into another, or splits it in two
-   (the boundary conditions follow), and **Undo** takes back the last
-   edit. The regions of a mesh file can be renamed and merged, not
-   split.
+1. **Geometry.** Pick a ready-made shape, load an SVG, load a mesh file
+   (Gmsh `.msh` or `.pde2d`), or draw the domain (**Drawing**). You can
+   also drop a file onto the picture. The regions of the boundary are
+   listed with their lengths; **Edit** renames a region, merges it into
+   another, or splits it in two (the boundary conditions follow), and
+   **Undo** takes back the last edit.
    In an SVG, each `<path>` gives the region named by its `data-region`
    attribute or else its `id`; `app/examples/plate_with_hole.svg` is a
    small example.
+
+   **Splitting a region** is done on the picture: the scissors tool
+   (top left of the picture, or **S**), then a click on the boundary. A
+   marker follows the pointer along the boundary and snaps to corners;
+   the click splits the region there (exactly at a corner) and offers
+   the two names right away: type a name and press Enter. This works for
+   shapes, SVGs and drawings, and for mesh files at the nearest boundary
+   node. A click on a region (with the Geometry step open) shows its name
+   (type a new one and press Enter), **Merge into** and **Split…** right
+   there.
+
+   **Drawing.** **Edit as drawing** turns a shape or an SVG (with its
+   region edits) into a drawing with exactly the same curves; choosing
+   **Drawing** as the source starts from a blank rectangle. On the
+   picture: drag a vertex (both of its edges follow), drag an outline or
+   the ✥ handle to move a whole loop; click an edge to select it
+   (Shift+click for more): the Geometry step then offers its kind (line,
+   arc, quadratic or cubic Bézier, with handles to drag; the round
+   handle in the middle of a line or an arc bends it into an arc), its
+   region (an existing name or a new one: the way to split a region in a
+   drawing), **Add vertex** and **Delete loop**. Double-click an edge to
+   add a vertex there; a selected vertex has x and y fields, the arrow
+   keys nudge it (Shift: ten steps) and Delete removes it. The tools add a
+   rectangle (drag), a circle (drag from its centre) or a polygon (click
+   its corners, close on the first or with Enter); inside the domain a new
+   loop is a hole, outside it another piece. The grid button (**G**)
+   snaps to a grid of about a fortieth of the domain. Escape cancels a
+   drag, a polygon or a tool. Every drag is one undo step; the server
+   reads the geometry once you let go. A geometry the library refuses
+   keeps your edit: the bad edge is drawn red and dashed, and the step
+   says why.
 2. **Mesh.** Set the maximum edge length (absolute, or a fraction of the
    domain size) and pick the components: boundary discretizer, initial
    triangulator, refiner, and a list of improvers, each with its options.
@@ -206,8 +236,8 @@ value per triangle. The legend names the field and its time, with round
 values under the colour bar; a field with one value says "constant: …".
 A result the case no longer matches is drawn greyed with an "Outdated"
 stamp. Click a boundary (or a region in the legend) to select it: its
-boundary condition opens in the Problem step (its row in the Geometry
-step). **Lock range** keeps the colour range for
+boundary condition opens in the Problem step (in the Geometry step, its
+row and its actions at the click). **Lock range** keeps the colour range for
 every snapshot and run until **Unlock** (its ends can be edited), so two
 runs can be compared by eye. **Line profile**: drag a line across the
 picture to plot the shown field along it (it follows the time bar);
@@ -327,7 +357,8 @@ the catalog (`app_session`), the Solve step against exact solutions
 reference runs, probes and clients (`app_compare`), exports, provenance,
 error paths, the VTK series zip, `--set` and `--sweep` (`app_exports`),
 the HTTP API with its token, Origin, 429 and status checks
-(`app_server`), every example case on the command line (`app_run_*`;
+(`app_server`), drawings, the boundary locator and the split of a mesh
+file's region (`app_drawing`), every example case on the command line (`app_run_*`;
 `app_check_*` compares each one's figures with the bounds in
 `app/tests/example_checks.json`; `app_run_set*` for `--set`,
 `app_run_sweep` for `--sweep`) and the page's code in Node.js

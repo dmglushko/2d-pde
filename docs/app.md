@@ -29,6 +29,10 @@ the library is a library change, raised with the owner
 - **Two locks**: the session mutex for library work (SymEngine is one
   thread), a short run lock for bookkeeping, so progress, Stop, values,
   probes and `GET /api/status` never wait for a chunk or a mesh.
+- **A geometry editor on the picture**: a drawing source (loops of exact
+  curves the page edits at pointer speed), and a split tool that splits
+  any region where it is clicked, the fraction computed on the server
+  from the exact curves (exact at corners).
 - **Results in double on the server** (comparisons, probes, per-snapshot
   min and max); float32 only for pictures. Exports carry their provenance
   (versions, git commit, the case's SHA-256).
@@ -39,7 +43,8 @@ the library is a library change, raised with the owner
 [Clients](#clients) · [The API](#the-api) ·
 [Binary answers](#binary-answers) · [Comparisons](#comparisons) ·
 [Probes](#probes) · [Exports](#exports) · [The catalog](#the-catalog) ·
-[Adding a component](#adding-a-component) ·
+[Adding a component](#adding-a-component) · [The drawing](#the-drawing) ·
+[The geometry editor](#the-geometry-editor) ·
 [The stage cache](#the-stage-cache) · [Runs](#runs) · [Locks](#locks) ·
 [Memory](#memory) · [The page](#the-page) · [Presets](#presets) ·
 [Security](#security) · [The command line](#the-command-line)
@@ -98,7 +103,9 @@ flowchart LR
 | `app/src/catalog.hpp`, `mesh_catalog.cpp`, `solve_catalog.cpp`, `catalog_parts.hpp` | the mesh and solve catalogs: every component, its options with the library's defaults, a function that builds it; `build_mesh_setup`, `build_solve_setup` (the inactive mode's part checked, not built: `check_component`); the sections' key lists |
 | `app/src/case_format.*` | the case's format, version and keys, `case_migrations` (`migrate_vN_to_vN+1`, none yet), `migrate_case`, `check_case`, `CaseInput` (a checked, migrated case) |
 | `app/src/case_schema.*` | `case_schema()`: the JSON Schema generated from the catalogs and the readers' key lists |
-| `app/src/domain_input.*` | the `geometry` section: shapes, SVG, mesh files, region edits; the geometry view; `DomainFacts` |
+| `app/src/domain_input.*` | the `geometry` section: shapes, SVG, mesh files, drawings (`drawing.*`), region edits (`split_mesh_region_at_node` for a mesh file); the geometry view; `DomainFacts` |
+| `app/src/drawing.*` | the drawing source: `build_drawing` (errors at `geometry.loops[i].edges[j]`), `drawing_error_path` (the library's loop and curve indices as a path), `drawing_section` (a `CurveGeometry` as a drawing, curve for curve) |
+| `app/src/locate.*` | `locate_boundary`: the boundary point nearest to a point, snapped to corners, with `split_region`'s fraction (or a mesh file's node) and whether the library splits there |
 | `app/src/problem_input.*` | the `problem` section: `build_problem`, `check_problem` (every error at once, with paths), the problem catalog and templates |
 | `app/src/presets.*` | problem presets: a complete problem and its solve settings for any geometry, scaled by `DomainFacts` |
 | `app/src/stage_cache.*` | `StageCache`: the last domain, mesh (with its id), `MeshedProblem` and assembly, keyed by the case sections; `assembly_settings`, `solve_key` |
@@ -111,9 +118,9 @@ flowchart LR
 | `app/src/binary.hpp` | little-endian float32, float64 and uint32 |
 | `app/src/session.*` | `Session`: the facade the server and `--run` use (stages, runs, comparisons, probes, status, exports, `run`), the two locks and `Work` (a call under the session mutex, with what it does), the table of field kinds, the default case |
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`: routes, client ids, token, Origin, the queue bound for calls that wait for the session) and the command line |
-| `app/web/` | `index.html`, `css/` (one dark theme, every colour a token: `tokens.css` tokens and base, `panels.css` controls, step heads, forms, results, toast, settings, `picture.css` viewer, time bar, legend, overlays, charts, `layout.css` top bar, columns, tabs, narrow screens; loaded in that order), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing, chart, colour-bar and log ticks, CSV, byte sizes; `color.js` OKLab ramps, field scales, the locked range, the colour maps; `display.js` what the picture shows (`resolveDisplay`); `requests.js` retries, backoff, plain error texts, the server's busy text; `study.js` refinement levels and observed orders; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, visible coefficients; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id kept per tab and its claim, the token header, requests that wait), `state.js` (the store, `editCase`, tickets, undo, invalid entries, the picture's state per tab), `actions.js` (stages, runs and their progress with retries, reattaching after a reload, presets, exports), `display.js` (the store gathered for `resolveDisplay`), `snapshots.js`, `settings.js`, `case_menu.js`, `server_status.js`, `refinement.js` (the refinement study), `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart: keyboard readout, CSV, log–log), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
+| `app/web/` | `index.html`, `css/` (one dark theme, every colour a token: `tokens.css` tokens and base, `panels.css` controls, step heads, forms, results, toast, settings, `picture.css` viewer, time bar, legend, overlays, charts, `layout.css` top bar, columns, tabs, narrow screens; loaded in that order), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing, chart, colour-bar and log ticks, CSV, byte sizes; `color.js` OKLab ramps, field scales, the locked range, the colour maps; `display.js` what the picture shows (`resolveDisplay`); `requests.js` retries, backoff, plain error texts, the server's busy text; `study.js` refinement levels and observed orders; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, the conditions that follow a drawing's region changes, visible coefficients; `drawing.js` the drawing's curves, hit testing, snapping, the split point, the drawing edits; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id kept per tab and its claim, the token header, requests that wait), `state.js` (the store, `editCase`, tickets, undo, invalid entries, the picture's state per tab), `actions.js` (stages, runs and their progress with retries, reattaching after a reload, presets, exports), `display.js` (the store gathered for `resolveDisplay`), `snapshots.js`, `settings.js`, `case_menu.js`, `server_status.js`, `refinement.js` (the refinement study), `geometry_editor.js` (the tools bar, the split tool, the drawing editor: the viewer's overlay), `region_popover.js` (a region's actions on the picture), `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, the overlay drawn over the kept frame, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart: keyboard readout, CSV, log–log), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
 | `app/examples/` | example cases (each runs as `app_run_*`) and an example SVG |
-| `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, the series zip, CRC-32 and SHA-256, error paths, `--set`, `--sweep`), `server.cpp` (HTTP, token, Origin, 429, status, clients), `example_checks.json` and `example_check.cpp` (each example's expected figures, `app_check_*`), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
+| `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `drawing.cpp` (drawings, their errors' paths, the exact conversion of every shape and example, the locator, a mesh file's split at a node), `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, the series zip, CRC-32 and SHA-256, error paths, `--set`, `--sweep`), `server.cpp` (HTTP, token, Origin, 429, status, clients), `example_checks.json` and `example_check.cpp` (each example's expected figures, `app_check_*`), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
 
 ## The case
@@ -156,17 +163,25 @@ must not be ignored silently), and a missing value means its default.
 ```
 
 - `geometry.source` is `shape` (`shape`, `options`), `svg` (`svg`: the
-  document's text, `name`) or `mesh_file` (`format`: `gmsh` or `pde2d`,
-  `text`, `name`). SVG's y axis points down; the library flips it, so the
-  SVG point (x, y) is (x, −y) in the case. Shapes and SVGs take
-  `region_edits`: `{"op": "rename", "from", "to"}`, `{"op": "merge",
-  "source", "target"}`, `{"op": "split", "region", "fraction", "first",
-  "second"}`, applied in order with `CurveGeometry`'s methods. A mesh file
-  takes `rename` and `merge` (not `split`: it has no curves); the app
-  applies them to the imported `mesh::Mesh` (a renamed region keeps its
-  tag; a merge moves the source's boundary edges to the target's tag and
-  drops the source's name, renumbering the tags above it) and checks the
-  result with `mesh::validate`.
+  document's text, `name`), `mesh_file` (`format`: `gmsh` or `pde2d`,
+  `text`, `name`) or `drawing` (`loops`; see "The drawing"). SVG's y axis
+  points down; the library flips it, so the SVG point (x, y) is (x, −y) in
+  the case. Shapes and SVGs take `region_edits`: `{"op": "rename",
+  "from", "to"}`, `{"op": "merge", "source", "target"}`, `{"op":
+  "split", "region", "fraction", "first", "second"}`, applied in order
+  with `CurveGeometry`'s methods. A mesh file takes `rename`, `merge` and
+  `{"op": "split_at_node", "region", "node", "first", "second"}` (not
+  `split`: it has no curves); the app applies them to the imported
+  `mesh::Mesh` (a renamed region keeps its tag; a merge moves the
+  source's boundary edges to the target's tag and drops the source's
+  name, renumbering the tags above it; a split at a node: the region's
+  boundary edges must form one chain, domain on the left, which starts
+  at the edge no other edge of the region leads into, or for a whole
+  closed loop at its first edge in the mesh's order; the edges from the
+  start to the node keep the tag, named `first`, the rest get a new last
+  tag named `second`; each new name is the old one or a new one) and
+  checks the result with `mesh::validate`. A drawing has no region
+  edits: its edges carry their regions.
 - A mesh file is not meshed again: the `Remesher` runs the refiner and
   the improvers on it (the discretizer and triangulator are not used).
 - `mesh.refiner` may be `null` (no refiner). A length bound is
@@ -248,6 +263,8 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 | `GET /api/case-schema` | | the case's JSON Schema (`application/schema+json`; see "The case") |
 | `GET /api/status` | | what the session is busy with, never waiting for it: `busy` (`{"task", "client", "yours", "job", "since", "seconds"}` or `null`; tasks: `geometry`, `mesh`, `mesh arrays`, `problem check`, `assembly`, `field`, `solve` (making or starting a run), `run` (a chunk), `comparison`, `reference`, `preset`, `export`), `waiting` (requests being served or waiting for the session), `running` (runs), `clients`, `memory` (`budget`, `used`, `room`: what a new run of this client may keep) |
 | `POST /api/geometry` | case | loops (each curve sampled for drawing, with its region and kind), regions and lengths, bounding box, domain size; for a mesh file its boundary edges |
+| `POST /api/geometry/locate` | `{"case", "point": [x, y], "snap"}` | the boundary point nearest to `point` and how to split its region there (see "The geometry editor"): curves `{"kind": "curves", "region", "loop", "curve", "t", "point", "corner", "fraction", "splittable", "reason", "distance"}`; a mesh file `{"kind": "mesh_file", "region", "node", "point", "corner", "splittable", "reason", "distance"}` |
+| `POST /api/geometry/drawing` | case | `{"geometry": drawing}`: the case's curves after its region edits as a drawing section, curve for curve (refused for a mesh file) |
 | `POST /api/mesh` | case | `mesh`: the mesh's summary (`id`, counts `nodes`, `triangles`, `boundary_edges`, `region_names`, `has_links`, and `arrays`: where its arrays are, see "Binary answers"); `stats`, `target_met`, `longest_edge`, `max_edge_length`, `domain_size`, every stage's `reports`, `memory` (`snapshot_bytes`: what a run on this mesh keeps per snapshot, about `snapshot_bytes` × (snapshots + 1) in all; `budget`) |
 | `POST /api/mesh/arrays` | `{"mesh": id}` | the mesh's arrays in binary. The session keeps the last 16 meshes it built and the meshes of every kept run |
 | `POST /api/problem` | case | the check: `ok`, `errors` (`path`, `message`), `facts` per path (none for a text that did not parse), each condition's kind, time order, needed initial conditions |
@@ -299,7 +316,12 @@ start of its text. Where the paths come from:
   the path is that option's (`named_option`), else the options object's.
 - An SVG or mesh text the library refuses is at `geometry.svg` or
   `geometry.text`; a region edit at `geometry.region_edits[i]` (or its
-  `.op`); a coefficient at `problem.equation.a_xx` and so on; the mesh
+  `.op`); a drawing's JSON at its place (`geometry.loops[1].vertices[2]`,
+  `geometry.loops[0].edges[3].kind`), the library's refusal of its curves
+  at the loop and edge the message names (`Loop 1, curve 3: ...` is
+  `geometry.loops[1].edges[3]`; for two loops that cross, the curve of
+  the later loop it names; `geometry.loops[i]` when it names only a
+  loop); a coefficient at `problem.equation.a_xx` and so on; the mesh
   spec at `mesh.spec.max_edge_length...`; `--set` at the path it was
   given; a comparison's expression at `exact`; a probe point at
   `points[i]`.
@@ -464,6 +486,173 @@ needs and its writer:
 
 Ranges are never checked in the app: the component's constructor
 validates its options, and its message is shown at the field.
+
+## The drawing
+
+`geometry.source` `drawing` is a geometry the page edits (`drawing.hpp`,
+`pure/drawing.js`):
+
+```json
+{"source": "drawing",
+ "loops": [{"vertices": [[0, 0], [3, 0], [3, 1], [0, 1]],
+            "edges": [{"kind": "line", "region": "base"},
+                      {"kind": "arc", "region": "tip", "center": [3, 0.5],
+                       "radius_x": 0.5, "radius_y": 0.5, "rotation": 0,
+                       "start_angle": -1.5707963267948966,
+                       "sweep_angle": 3.141592653589793},
+                      {"kind": "cubic", "region": "top",
+                       "control1": [2, 1.4], "control2": [1, 0.6]},
+                      {"kind": "line", "region": "root"}]},
+           {"vertices": [[1.7, 0.5]],
+            "edges": [{"kind": "arc", "region": "hole", "center": [1.5, 0.5],
+                       "radius_x": 0.2, "radius_y": 0.2, "rotation": 0,
+                       "start_angle": 0, "sweep_angle": 6.283185307179586}]}]}
+```
+
+- **Shared vertices.** Edge i of a loop runs from vertex i to vertex
+  i + 1 (the last to vertex 0): a loop has one edge per vertex, and
+  moving a vertex moves both of its edges. Kinds: `line`, `quadratic`
+  (`control`), `cubic` (`control1`, `control2`), which take their ends
+  from the vertices, and `arc`, kept exactly in the library's centre form
+  (`geometry::EllipticalArc`: `center`, `radius_x`, `radius_y`,
+  `rotation` (0 when missing), `start_angle`, `sweep_angle`, radians). An
+  arc's ends must lie on its vertices, within 1e-9 of the drawing's size
+  (the library's closure tolerance): the app checks it, since nothing
+  else would notice a vertex between two arcs that is not where they
+  meet (`geometry.loops[1].edges[0]: the arc starts at (1.8, 0.5), not
+  at its vertex 0 (1.7, 0.5)`). A full circle or ellipse is a loop of one
+  vertex and one arc of sweep 2π.
+- **The library decides the rest**: `CurveGeometry` validates the loops,
+  decides holes by containment and normalizes the direction (a loop may
+  be drawn either way). Its errors are mapped to the drawing's paths
+  (see "Errors"); the page draws the edge or loop they name red and
+  dashed and keeps the edit.
+- **Regions** are the edges' `region`; a drawing has no `region_edits`.
+  Renames, merges and splits change the edges (and the conditions follow,
+  as for region edits: `applyDrawingChange`).
+- **Exact conversion.** `POST /api/geometry/drawing` (`drawing_section`)
+  writes a curve geometry (a shape or an SVG, after its region edits) as
+  a drawing of its normalized loops, curve for curve: vertex i is the
+  exact end point of the line or Bézier next to it, or an arc's own start
+  between two arcs. Read back, every curve is bit for bit the same
+  (`app_drawing` checks every shape of the catalog, an edited shape,
+  every example and the example SVG): numbers are written in the
+  shortest form that reads back as the same double. (Two lines or
+  Béziers that meet at slightly different points, as an SVG's paths may
+  within its join tolerance, would share one vertex: the drawing moves
+  one end by at most that tolerance. None of the examples does.)
+- `--set` and `--sweep` reach every number of a drawing
+  (`--set "geometry.loops[0].vertices[3][1]=1.2"`). A circle's radius is
+  `radius_x`, `radius_y` and its vertex together: a sweep of one of them
+  makes an ellipse, or an arc whose end is no longer at its vertex
+  (refused with the path).
+- `app/examples/cooling_fin.json` is a drawn domain.
+
+## The geometry editor
+
+The editor is on the picture while the Geometry step is open
+(`geometry_editor.js`). A tools bar at the picture's top left: **Select**
+(V), **Split** (S) and, for a drawing, **Rectangle** (R), **Circle** (C),
+**Polygon** (P) and the grid (G). It is the viewer's *overlay*: the
+viewer draws the mesh, fields and layers once and keeps the frame; the
+overlay is drawn over that frame (`redrawOverlay`, at most once per
+animation frame, a timer standing in where frames do not run), so a
+pointer move redraws only the drawing, its handles or the split marker,
+never the mesh or a field, and no panel DOM is rebuilt.
+
+**Splitting a region** (every source with a boundary). With the split
+tool, a marker follows the pointer along the boundary, computed in the
+page: on the drawing's exact curves (nearest point, refined like the
+server's), or on the server's sampled curves of a shape or an SVG, or on
+a mesh file's boundary edges (its nearest node). It snaps to a curve's
+end (a corner, also every region's end) within 12 px. A click splits
+the region there and names the parts `region` and `region_2` (the next
+free name), offered at once in a card on the picture for renaming (the
+second name selected; Enter applies).
+
+- **Shapes, SVGs, mesh files**: the page sends the marker's point to
+  `POST /api/geometry/locate` (snap: 12 px in world units). The server
+  finds the nearest point of the exact curves (64 samples per curve,
+  golden-section search, then Newton's method on (c(t) − p)·c′(t)), snaps
+  to a corner within `snap`, and computes `split_region`'s fraction as
+  the library will measure it: the region's run of curves in the
+  normalized loop (from the curve whose predecessor is another region,
+  or the loop's first curve for a whole loop), lengths summed curve by
+  curve in the library's order, the partial length `curve_length(curve,
+  t)`. At a corner the fraction is the sum of whole curves, which the
+  library's junction tolerance (1e-9 of the region's length) takes as
+  exactly that corner: no curve is cut (`app_drawing`: a hexagon's
+  vertex, a corner of two merged sides). Whether the split works is
+  asked of the library by splitting a copy; its message is `reason`
+  (a region end, a region in several pieces). The page then adds the
+  region edit `split` (or `split_at_node` with the node for a mesh file)
+  through `applyRegionEdit`, so the conditions follow and undo works as
+  for every region edit. Renaming a part right after its split replaces
+  the split's name in that edit instead of adding a rename.
+- **Drawings** are split in the page (the drawing is the case): at a
+  vertex the edges are retagged; inside an edge the edge is split there
+  exactly (`splitCurve`: a line at its point, de Casteljau for Béziers,
+  an arc at its angle) and the new vertex inserted. The run of edges of
+  the region around the point (in the loop's order; a whole loop from
+  vertex 0) is cut there: the edges before keep `first`, the rest get
+  `second`.
+
+**A region on the picture.** With the Geometry step open, a click on a
+region (Select tool, not a drawing) opens a card at the click: its name
+(Enter renames), **Merge into** another, **Split…** (the split tool).
+The legend and the region table still select it.
+
+**The drawing editor** (a drawing, Select tool). Hit testing in screen
+pixels (8 px, 16 for a finger): the selected edges' handles (a Bézier's
+controls, a round bend handle in the middle of a line or an arc), then
+vertices, the selected loop's move handle (✥ at its box's middle), then
+edges.
+
+- Dragging a vertex moves both of its edges: a line or a Bézier follows
+  its vertices, a cubic's handle next to the vertex moves with it, an
+  arc is moved by the similarity that takes its old chord to the new one
+  (it keeps its shape; a closed arc turns and scales about its centre).
+  The bend handle makes the circular arc through the two ends and the
+  pointer (`arcThrough`; a closed arc changes its radius). Dragging an
+  outline or the move handle moves the loop. With the grid on, points
+  (and a loop's offset) snap to a grid of 1, 2 or 5 × 10ⁿ, about a
+  fortieth of the domain size.
+- During a drag the editor keeps its own copy of the drawing (built from
+  the drawing at the start of the drag, so nothing accumulates) and
+  draws it; the case changes once, when the pointer is released
+  (`editCase`, "edit": one undo step), and the server reads the geometry
+  250 ms after (`scheduleGeometry`). The view holds still while a
+  drawing is edited (a new bounding box does not refit it).
+- A click selects a vertex or an edge (Shift+click adds edges); a click
+  beside the drawing clears the selection. A double-click on an edge adds
+  a vertex there. Keys on the picture: the arrows nudge the selected
+  vertex (a grid step, or a pixel; Shift: ten; the nudges of one vertex
+  are one undo step until the picture loses the focus), Delete removes
+  it (or the loop of the selected edges), Escape cancels a drag, a
+  polygon, a tool, then the selection.
+- The tools: a rectangle (drag corner to corner), a circle (drag from
+  the centre; one vertex and a full arc), a polygon (click the corners,
+  close on the first or with Enter; Backspace removes the last). A new
+  loop is one region, `hole` when its first point is inside an odd
+  number of loops, else `boundary` (or the next free name), selected
+  afterwards; the tool goes back to Select.
+- **The inspector** (the Geometry step): a selected vertex's x and y
+  (`numberInput`; a change moves the vertex as a drag does), **Delete
+  vertex**; a selected edge's kind (line, arc, quadratic, cubic: a line
+  bulges outward by 0.15 of its length, a quadratic becomes the same
+  cubic, an arc or Bézier becomes the arc through its middle or a Bézier
+  with its end tangents; a closed arc stays an arc), its region (an
+  existing name or a new one, for every selected edge: a new name for
+  part of one region is a split of it, both parts keep its condition; for
+  the whole region a rename), **Add vertex** (at the edge's middle),
+  **Delete loop**. Loops, vertices and edges are numbered from 0, as in
+  the case file and the library's messages. Deleting a vertex joins its
+  edges with a line (three vertices stay at least); the last loop stays.
+- What is drawn: the drawing's fill (holes empty), each edge in its
+  region's colour (the legend's order), selected edges and the selected
+  region wider on a halo, vertices as small squares (the selected one
+  filled), handles with their lines, the error's edge red and dashed,
+  the grid's points, the tool's outline while it is drawn.
 
 ## The stage cache
 
@@ -684,8 +873,9 @@ the chart with Retry.
 **Boundary regions.** A click within 7 px of a boundary edge selects its
 region instead of pinning a probe: the region is drawn wider on a halo,
 its legend entry is pressed, and its condition opens in the Problem step
-(its row in the Geometry step when that step is open). The legend's
-regions are buttons that do the same (the keyboard path).
+(in the Geometry step: its row, and its actions in a card at the click;
+see "The geometry editor"). The legend's regions are buttons that do the
+same (the keyboard path).
 
 **Charts** (`charts.js`): u(t), the line profile, the error per snapshot,
 the reference difference and the refinement study. A hairline grid,
@@ -751,7 +941,8 @@ a domain file read: any newer replacement wins; a domain file also needs
 the geometry's revision unchanged), `preset` (the revisions of the
 geometry, problem and solve sections: an edit made meanwhile refuses the
 answer with a toast), `compare-exact` and `compare-reference` (the
-solution), `difference-*` (not exclusive: several snapshots side by
+solution), `locate` (a split on the picture) and `drawing` (Edit as
+drawing): the geometry's revision, `difference-*` (not exclusive: several snapshots side by
 side, for the same comparison), `probes` (the run, snapshot count and
 points), `reference`, and `solve` for a reattached run.
 
@@ -826,7 +1017,8 @@ and the text only for an error without one (`pure/stages.js`,
 equation, parameters, a condition for every region (the heated preset
 gives the first region its own), initial conditions and the solve section
 (mode, linear solver, method, dt, t1, snapshots). Lengths and times are
-scaled to the domain (`DomainFacts`): its size, and a point well inside it
+scaled to the domain (`DomainFacts`, the same for a shape, an SVG or a
+drawing): its size, and a point well inside it
 with its distance to the boundary, found on a grid over the bounding box
 (inside an odd number of loops, farthest from the sampled boundary) or
 among the triangle centroids of a mesh file. Bumps are centred there with
@@ -834,7 +1026,8 @@ a width of half that distance. The page names presets only by the ids the
 catalog gives; every physical choice is in `presets.cpp`, which spells out
 the sign conventions (−k Δu is `a_xx = a_yy = -k`; cooling is
 `alpha = h, beta_n = 1, g = h u_out`). Each preset runs on the default
-rectangle and on an annulus in `tests/runs.cpp`.
+rectangle and on an annulus in `tests/runs.cpp`, and on the drawn
+cooling fin in `tests/drawing.cpp`.
 
 ## Security
 

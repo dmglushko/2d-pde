@@ -82,9 +82,10 @@ this exact.
 ## 5. Region edits on a `Mesh`
 
 `CurveGeometry` has rename, merge and split of boundary regions; a `Mesh`
-has none. The app renames and merges regions of an imported mesh itself
-(its region names and boundary edge tags). Library functions for this
-(rename and merge on a `Mesh`, keeping chains and links valid) would keep
+has none. The app renames, merges and splits (at a boundary node:
+`split_at_node`) regions of an imported mesh itself (its region names
+and boundary edge tags). Library functions for this (rename, merge and
+split at a node on a `Mesh`, keeping chains and links valid) would keep
 that logic in one place.
 
 ## 6. Problems that are not well posed
@@ -135,3 +136,15 @@ iterative solve that needed none". A declared trait (for example
 `iterative` next to the symmetry requirement) would let the catalog carry
 it, as it carries `symmetric_matrix`, and the page show the figure for
 exactly the solvers it applies to.
+
+## 11. Splitting a region at a boundary point
+
+The app's split tool turns a point the user clicked into
+`CurveGeometry::split_region`'s fraction (`app/src/locate.cpp`): it finds
+the nearest point of the exact curves and repeats the library's rules
+for the region's run (where it starts in the normalized loop, the order
+in which lengths are summed) so that a corner gives exactly the
+library's junction. A library function that splits a region at a point
+of a curve (loop, curve, parameter), or that gives the fraction of such
+a point, would keep those rules in one place; so would one that gives
+the nearest boundary point (curve and parameter) of a point.

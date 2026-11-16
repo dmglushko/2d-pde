@@ -868,3 +868,113 @@ What changed for the page in this round, all documented in app.md:
   on the L-shape (study), the case menu by keyboard at desktop and phone
   width (case_menu, phone_menu), the phone's one-row top bar and the
   folded picture (phone).
+
+## 2026-11-16, round 4: the geometry editor
+
+The owner asked for an in-app geometry editor, above all an easy way to
+split boundary regions (a typed fraction is not something anyone can
+guess).
+
+- **Split on the picture, for every source.** A split tool (scissors,
+  **S**) shows a marker on the boundary under the pointer, computed in
+  the page with no server call per move, snapping to a curve's end (a
+  corner, also every region's end) within 12 px; a click splits there.
+  Why: the user points at the place; the corner snap makes the common
+  case (split exactly at a corner of a merged or SVG region) exact.
+- **The fraction is the server's, the edit stays `split`.** For a shape
+  or an SVG the page sends the marker's point to `POST
+  /api/geometry/locate`, which projects it on the exact curves and
+  computes `CurveGeometry::split_region`'s fraction as the library
+  measures it (the region's run in the normalized loop, lengths summed
+  curve by curve in the library's order). A corner's fraction is a sum of
+  whole curves, which the library's junction tolerance takes as exactly
+  that corner, so no sliver curve appears. The split is tried on a copy,
+  so "not splittable here" is the library's own message. Why server
+  side: the curves are exact there (the page has samples), and old cases
+  and `--run` read the same `{"op": "split", ...}` edit. The run logic is
+  repeated from the library (library request 11 would remove that).
+- **Names are offered at once.** A split names the parts `region` (kept:
+  its condition stays where it was) and `region_2` (the next free name),
+  in a card at the click with the second name selected: type and press
+  Enter. Renaming a part right after its split rewrites that split's
+  names instead of adding a rename edit, so the edit list stays readable.
+- **A mesh file splits at a node.** New edit `{"op": "split_at_node",
+  "region", "node", "first", "second"}`, applied to the imported `Mesh`
+  like rename and merge: the region's edges must form one chain (as
+  `split_region` needs one connected piece); the part from the chain's
+  start to the node keeps the tag, the rest gets a new last tag. The
+  locator snaps to the nearest node of the nearest boundary edge. Why a
+  node: a mesh file has no curves, its boundary edges are the only
+  places a region can change; node numbers are stable (edits never
+  change nodes). Library request 5 now covers it.
+- **Region actions on the picture.** In the Geometry step a click on a
+  region opens a small card at the click: its name (Enter renames),
+  Merge into, Split… (the tool). Why: the user is looking at the region,
+  not at the table; the table's Edit stays (and works for every source).
+- **A drawing source.** `geometry.source: "drawing"` holds loops of
+  vertices and edges (line, arc, quadratic, cubic), edge i from vertex i
+  to vertex i + 1, so a vertex is shared and dragging it moves both
+  edges. Arcs keep the library's exact centre form (not a bulge from the
+  vertices): converting a shape or an SVG then gives the same curves bit
+  for bit, which the owner asked for, and the library's ellipses and
+  rotated arcs fit. The price: an arc's ends are stored twice (its own
+  and the vertices), so the app checks that they agree within the
+  library's closure tolerance (else a vertex between two arcs could sit
+  anywhere unnoticed); the editor keeps them together (an arc follows its
+  moved ends by the similarity of its chord). A drawing has no region
+  edits: its edges carry the final regions, so the editor shows the
+  regions the library sees, and renames, merges and splits are drawing
+  edits whose conditions follow like region edits'
+  (`applyDrawingChange`).
+- **Errors at the edge.** The library's `CurveGeometry` messages name
+  loops and curves by input index; the app turns them into
+  `geometry.loops[i].edges[j]` (the later loop for two that cross), and
+  the page draws that edge red and dashed and keeps the user's edit.
+  Indices are shown from 0 in the inspector, as in the case file and the
+  messages.
+- **Edit as drawing / a blank drawing.** `POST /api/geometry/drawing`
+  writes the geometry after its region edits as a drawing (the server
+  has the exact curves); choosing Drawing as the source starts from a
+  blank 2 × 1 rectangle with the rectangle shape's four region names (so
+  the default conditions still apply).
+- **Speed.** The editor is the viewer's overlay: the viewer keeps its
+  last full frame (mesh, field, layers) and the overlay is drawn over it
+  at most once per animation frame (a timer where frames do not run). A
+  drag edits a copy built from the drawing at its start; the case changes
+  once when the pointer is released (one `editCase`, one undo step) and
+  the geometry is read 250 ms later. No panel is rebuilt during a drag:
+  the inspector's x and y fields are set in place. The view holds still
+  while a drawing is edited (a new bounding box does not refit it).
+- **Tools.** Select (vertices, Bézier handles, a bend handle in the
+  middle of a line or an arc that makes the arc through the pointer,
+  outlines and a ✥ handle that move a loop; Shift+click for several
+  edges; double-click adds a vertex), rectangle, circle (one vertex, one
+  full arc), polygon (close on the first point or Enter), and a grid of
+  1, 2 or 5 × 10ⁿ near a fortieth of the domain. A new loop is a `hole`
+  inside the domain, else `boundary` (the library decides holes; the
+  name is only a guess the user can change). Keys: arrows nudge (one undo
+  step per vertex until the picture loses the focus), Delete, Escape,
+  Enter, and V, S, R, C, P, G for the tools. A new curve bulges by 0.15
+  of its edge so its handles stay on screen.
+- **Assigning a region to selected edges is the split inside a drawing**:
+  a new name for part of one region copies its condition (a split), a new
+  name for all of it is a rename, an existing name is a merge.
+- **Visuals**: the existing tokens only; region colours as in the
+  legend; vertices as small squares, handles as diamonds and rings in
+  the accent colour, selection wider on the halo used for selected
+  regions; no explanatory text on the picture (the help is behind the
+  step's ⓘ).
+- **Tests.** C++ (`app_drawing`): reading drawings and their errors'
+  paths, the exact round trip of every catalog shape, an edited shape,
+  every example and the example SVG, the locator (fractions, corners
+  exact, refusals), a mesh file's split at a node and its refusals,
+  presets and the SVG export on a drawing; the schema accepts drawings
+  and `split_at_node` (`app_session`); the routes (`app_server`); a
+  drawn example (`cooling_fin`) with `--run`, its figures and `--set` on
+  a vertex. Node: curves, nearest points, hit testing, snapping, arcs
+  through three points and arcs that follow their ends, every drawing
+  edit, conditions that follow. Browser (`geometry_editor`): a new
+  drawing, a polygon hole, a vertex dragged and typed, undo of the whole
+  drag, a split by a click with its name typed, a corner split of a
+  merged shape region through the server (fraction exactly 2/3), Edit as
+  drawing, and a reload.

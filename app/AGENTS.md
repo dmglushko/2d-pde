@@ -17,7 +17,8 @@ ctest --test-dir build -R app_ --output-on-failure   # the app's tests only
 - **Where things are:** HTTP in `src/server.cpp` only; everything else
   goes through `Session` (`src/session.*`), which owns the stage cache
   (`stage_cache.*`), the runs (`runs.*`) and the two locks. Case sections
-  are read by `domain_input`, `mesh_catalog`/`solve_catalog`,
+  are read by `domain_input` (with `drawing` for the drawing source;
+  `locate` finds boundary points for splits), `mesh_catalog`/`solve_catalog`,
   `problem_input` and `stage_cache` (assembly), each against its own key
   list, from which `case_schema.cpp` is generated. Exports are one table
   in `exports.cpp`.
@@ -75,6 +76,10 @@ meshing) in the app or the page.
   client.
 - **Every case edit goes through `editCase`** (state.js): stage keys are
   kept per section and recomputed only for the sections an edit names.
+  The geometry editor (`geometry_editor.js`) edits a copy while the
+  pointer drags and calls `editCase` once, when it is released; what
+  moves with the pointer is drawn as the viewer's overlay, never by
+  rebuilding the picture or a panel.
 - **The page has no build step**: plain ES modules. Pure helpers go to
   the module of their topic in `web/js/pure/` (no DOM) and get a test in
   `tests/web.test.mjs`.
@@ -89,7 +94,7 @@ meshing) in the app or the page.
 ## Before finishing a change
 
 1. `tools/format.sh --check` (C++ of the app included).
-2. `tools/test.sh`: the app's tests are `app_session`, `app_solve`, `app_runs`,
+2. `tools/test.sh`: the app's tests are `app_session`, `app_drawing`, `app_solve`, `app_runs`,
    `app_compare`, `app_exports`, `app_server`, `app_run_*` (every case in
    `examples/`, `--set` and `--sweep`), `app_check_*` (each example's
    figures against `tests/example_checks.json`; a new example needs an
