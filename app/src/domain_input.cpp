@@ -1,6 +1,7 @@
 #include "domain_input.hpp"
 
 #include "app_error.hpp"
+#include "drawing.hpp"
 
 #include "pde2d/geometry/polygon.hpp"
 #include "pde2d/geometry/shapes.hpp"
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -155,6 +157,9 @@ void apply_edit(geometry::CurveGeometry &geometry, const Json &edit,
     } else if (op == "merge") {
       reject_unknown_keys(edit, where, merge_edit_keys);
       geometry.merge_region_into(text("source"), text("target"));
+    } else if (op == "split_at_node") {
+      throw PathError(where + ".op", "split_at_node is for a mesh file; split "
+                                     "curves at a fraction (split)");
     } else if (op == "split") {
       reject_unknown_keys(edit, where, split_edit_keys);
       geometry.split_region(
@@ -214,6 +219,91 @@ void merge_mesh_region(mesh::Mesh &mesh, const std::string &source,
                           static_cast<std::ptrdiff_t>(from));
 }
 
+} // namespace
+
+void split_mesh_region_at_node(mesh::Mesh &mesh, const std::string &region,
+                               std::size_t node, const std::string &first,
+                               const std::string &second) {
+  const std::size_t tag = mesh_region(mesh, region);
+  for (const std::string &name : {first, second})
+    if (!geometry::is_valid_region_name(name))
+      throw std::invalid_argument(
+          "split: region name '" + name +
+          "' is invalid; use ASCII letters, digits, '_', '.' or '-' (a lone "
+          "'-' is reserved)");
+  if (first == second)
+    throw std::invalid_argument("split: the two names must differ");
+  for (const std::string &name : {first, second})
+    if (name != region &&
+        std::ranges::find(mesh.region_names, name) != mesh.region_names.end())
+      throw std::invalid_argument("split: region '" + name +
+                                  "' already exists");
+  if (node >= mesh.nodes.size())
+    throw std::invalid_argument("split: the mesh has no node " +
+                                std::to_string(node));
+  // The region's edges by the node they start from and end at.
+  std::map<std::size_t, std::size_t> starting;
+  std::map<std::size_t, std::size_t> ending;
+  std::size_t count = 0;
+  for (std::size_t e = 0; e < mesh.boundary_edges.size(); ++e) {
+    const mesh::BoundaryEdge &edge = mesh.boundary_edges[e];
+    if (edge.region != tag)
+      continue;
+    ++count;
+    if (!starting.emplace(edge.nodes[0], e).second)
+      throw std::invalid_argument("split: region '" + region +
+                                  "' passes through node " +
+                                  std::to_string(edge.nodes[0]) +
+                                  " twice; split needs one simple piece");
+    ending.emplace(edge.nodes[1], e);
+  }
+  // The chain's first edge: the one no edge of the region leads into, or
+  // for a closed loop the first in the mesh's order.
+  std::optional<std::size_t> start;
+  for (std::size_t e = 0; e < mesh.boundary_edges.size() && !start; ++e)
+    if (mesh.boundary_edges[e].region == tag &&
+        !ending.contains(mesh.boundary_edges[e].nodes[0]))
+      start = e;
+  for (std::size_t e = 0; e < mesh.boundary_edges.size() && !start; ++e)
+    if (mesh.boundary_edges[e].region == tag)
+      start = e;
+  if (!start)
+    throw std::invalid_argument("split: region '" + region +
+                                "' has no boundary edges");
+  std::vector<std::size_t> chain;
+  for (std::size_t e = *start;;) {
+    chain.push_back(e);
+    const auto next = starting.find(mesh.boundary_edges[e].nodes[1]);
+    if (next == starting.end() || next->second == *start ||
+        chain.size() > count)
+      break;
+    e = next->second;
+  }
+  if (chain.size() != count)
+    throw std::invalid_argument(
+        "split: region '" + region +
+        "' has several separate pieces; split needs one connected piece");
+  std::size_t at = chain.size();
+  for (std::size_t k = 0; k < chain.size(); ++k)
+    if (mesh.boundary_edges[chain[k]].nodes[0] == node)
+      at = k;
+  if (at == 0 || (at == chain.size() &&
+                  mesh.boundary_edges[chain.back()].nodes[1] == node))
+    throw std::invalid_argument("split: node " + std::to_string(node) +
+                                " is an end of the region '" + region +
+                                "'; split it inside");
+  if (at == chain.size())
+    throw std::invalid_argument("split: node " + std::to_string(node) +
+                                " is not on the region '" + region + "'");
+  const std::size_t added = mesh.region_names.size();
+  mesh.region_names[tag] = first;
+  mesh.region_names.push_back(second);
+  for (std::size_t k = at; k < chain.size(); ++k)
+    mesh.boundary_edges[chain[k]].region = added;
+}
+
+namespace {
+
 void apply_mesh_edit(mesh::Mesh &mesh, const Json &edit,
                      const std::string &where) {
   require_object(edit, where);
@@ -228,13 +318,21 @@ void apply_mesh_edit(mesh::Mesh &mesh, const Json &edit,
     } else if (op == "merge") {
       reject_unknown_keys(edit, where, merge_edit_keys);
       merge_mesh_region(mesh, text("source"), text("target"));
+    } else if (op == "split_at_node") {
+      reject_unknown_keys(edit, where, split_at_node_edit_keys);
+      const Json &node = member(edit, "node");
+      if (!node.is_number_unsigned())
+        throw PathError(where + ".node", "expected a node number");
+      split_mesh_region_at_node(mesh, text("region"), node.get<std::size_t>(),
+                                text("first"), text("second"));
     } else if (op == "split") {
       throw PathError(where + ".op",
-                      "an imported mesh has no curves to split; only rename "
-                      "and merge apply to it");
+                      "an imported mesh has no curves to split at a fraction; "
+                      "split it at a boundary node (split_at_node)");
     } else {
-      throw PathError(where + ".op", "unknown edit '" + op +
-                                         "' (rename or merge for a mesh file)");
+      throw PathError(where + ".op",
+                      "unknown edit '" + op +
+                          "' (rename, merge or split_at_node for a mesh file)");
     }
   });
 }
@@ -375,6 +473,10 @@ Domain build_domain(const Json &section) {
     apply_edits(section, geometry, apply_edit);
     return {.geometry = std::move(geometry), .mesh = std::nullopt};
   }
+  if (source == "drawing") {
+    reject_unknown_keys(section, "geometry", drawing_section_keys);
+    return {.geometry = build_drawing(section), .mesh = std::nullopt};
+  }
   if (source == "mesh_file") {
     reject_unknown_keys(section, "geometry", mesh_file_section_keys);
     const std::string format =
@@ -397,7 +499,8 @@ Domain build_domain(const Json &section) {
     return {.geometry = std::nullopt, .mesh = std::move(mesh)};
   }
   throw PathError("geometry.source",
-                  "unknown source '" + source + "' (svg, shape or mesh_file)");
+                  "unknown source '" + source +
+                      "' (shape, svg, mesh_file or drawing)");
 }
 
 Json domain_json(const Domain &domain) {

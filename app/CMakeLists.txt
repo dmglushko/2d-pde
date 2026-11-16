@@ -28,8 +28,10 @@ add_library(pde2d_app_core STATIC
   src/case_schema.cpp
   src/case_set.cpp
   src/domain_input.cpp
+  src/drawing.cpp
   src/exports.cpp
   src/field_eval.cpp
+  src/locate.cpp
   src/mesh_catalog.cpp
   src/options.cpp
   src/presets.cpp

@@ -17,6 +17,10 @@ target_compile_definitions(app_solve
 
 pde2d_app_add_test(app_runs runs.cpp pde2d_app_core)
 
+pde2d_app_add_test(app_drawing drawing.cpp pde2d_app_core)
+target_compile_definitions(app_drawing
+  PRIVATE PDE2D_APP_EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/app/examples")
+
 pde2d_app_add_test(app_compare compare.cpp pde2d_app_core)
 
 pde2d_app_add_test(app_exports exports.cpp pde2d_app_core)

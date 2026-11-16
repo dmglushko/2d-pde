@@ -3,6 +3,7 @@
 #include "case_format.hpp"
 #include "catalog.hpp"
 #include "domain_input.hpp"
+#include "drawing.hpp"
 #include "problem_input.hpp"
 #include "stage_cache.hpp"
 
@@ -129,6 +130,8 @@ Json constant(std::string_view value) {
   return out;
 }
 
+// For curves (shapes, SVG) the edits split at a fraction; for a mesh file
+// at a node.
 Json region_edits_schema(bool with_split) {
   const Json text = typed({"string"});
   Json alternatives = Json::array();
@@ -149,10 +152,100 @@ Json region_edits_schema(bool with_split) {
                        {"first", text},
                        {"second", text}},
                       {"op", "region", "fraction", "first", "second"}));
+  else {
+    Json node = Json::object();
+    node["type"] = "integer";
+    node["minimum"] = 0;
+    alternatives.push_back(
+        object_schema(split_at_node_edit_keys,
+                      {{"op", constant("split_at_node")},
+                       {"region", text},
+                       {"node", node},
+                       {"first", text},
+                       {"second", text}},
+                      {"op", "region", "node", "first", "second"}));
+  }
   Json items = Json::object();
   items["oneOf"] = std::move(alternatives);
   Json out = typed({"array", "null"});
   out["items"] = std::move(items);
+  return out;
+}
+
+Json point_schema() {
+  Json out = Json::object();
+  out["type"] = "array";
+  out["items"] = typed({"number"});
+  out["minItems"] = 2;
+  out["maxItems"] = 2;
+  return out;
+}
+
+// The drawing source (drawing.hpp): loops of vertices and edges, each edge
+// one of the kinds with its own keys.
+Json drawing_schema() {
+  const Json text = typed({"string"});
+  const Json number = typed({"number"});
+  const Json point = point_schema();
+  Json edges = Json::array();
+  for (const std::string_view kind : drawing_edge_kinds) {
+    if (kind == "line")
+      edges.push_back(object_schema(
+          line_edge_keys, {{"kind", constant(kind)}, {"region", text}},
+          {"kind", "region"}));
+    else if (kind == "quadratic")
+      edges.push_back(object_schema(
+          quadratic_edge_keys,
+          {{"kind", constant(kind)}, {"region", text}, {"control", point}},
+          {"kind", "region", "control"}));
+    else if (kind == "cubic")
+      edges.push_back(
+          object_schema(cubic_edge_keys,
+                        {{"kind", constant(kind)},
+                         {"region", text},
+                         {"control1", point},
+                         {"control2", point}},
+                        {"kind", "region", "control1", "control2"}));
+    else if (kind == "arc")
+      edges.push_back(
+          object_schema(arc_edge_keys,
+                        {{"kind", constant(kind)},
+                         {"region", text},
+                         {"center", point},
+                         {"radius_x", number},
+                         {"radius_y", number},
+                         {"rotation", typed({"number", "null"})},
+                         {"start_angle", number},
+                         {"sweep_angle", number}},
+                        {"kind", "region", "center", "radius_x", "radius_y",
+                         "start_angle", "sweep_angle"}));
+    else
+      throw std::logic_error("case_schema: the edge kind '" +
+                             std::string(kind) + "' is not described");
+  }
+  Json edge = Json::object();
+  edge["oneOf"] = std::move(edges);
+  Json vertex_list = Json::object();
+  vertex_list["type"] = "array";
+  vertex_list["items"] = point;
+  vertex_list["minItems"] = 1;
+  Json edge_list = Json::object();
+  edge_list["type"] = "array";
+  edge_list["items"] = std::move(edge);
+  edge_list["minItems"] = 1;
+  Json loop = object_schema(
+      drawing_loop_keys,
+      {{"vertices", std::move(vertex_list)}, {"edges", std::move(edge_list)}},
+      {"vertices", "edges"});
+  Json loops = Json::object();
+  loops["type"] = "array";
+  loops["items"] = std::move(loop);
+  loops["minItems"] = 1;
+  Json out = object_schema(
+      drawing_section_keys,
+      {{"source", constant("drawing")}, {"loops", std::move(loops)}},
+      {"source", "loops"});
+  out["title"] = "Drawing";
   return out;
 }
 
@@ -206,8 +299,9 @@ Json geometry_schema() {
                      {"text", text},
                      {"region_edits", region_edits_schema(false)}},
                     {"source", "format", "text"}));
-  if (alternatives.size() != shape_catalog_json().size() + 2 ||
-      std::size(geometry_sources) != 3)
+  alternatives.push_back(drawing_schema());
+  if (alternatives.size() != shape_catalog_json().size() + 3 ||
+      std::size(geometry_sources) != 4)
     throw std::logic_error("case_schema: a geometry source is not described");
   Json out = Json::object();
   out["oneOf"] = std::move(alternatives);

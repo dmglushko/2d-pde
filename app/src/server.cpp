@@ -341,6 +341,14 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
         [&session](const Json &body, const std::string &client) {
           return session.geometry(body, client);
         });
+  route("/api/geometry/locate",
+        [&session](const Json &body, const std::string &client) {
+          return session.locate(body, client);
+        });
+  route("/api/geometry/drawing",
+        [&session](const Json &body, const std::string &client) {
+          return session.to_drawing(body, client);
+        });
   route("/api/mesh", [&session](const Json &body, const std::string &client) {
     return session.mesh(body, client);
   });

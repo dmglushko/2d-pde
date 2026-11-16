@@ -756,6 +756,48 @@ int main() {
          }
          check(violation(schema, app::Session::default_case(), "case").empty(),
                "the default case");
+         // Drawings (lines and arcs, Beziers) and a mesh file's split at a
+         // node.
+         {
+           app::Session session;
+           for (const std::string shape :
+                {"rectangle", "annulus", "rectangle_with_semicircle"}) {
+             Json drawn = app::Session::default_case();
+             drawn["geometry"] = {{"source", "shape"},
+                                  {"shape", shape},
+                                  {"options", Json::object()}};
+             drawn["geometry"] = session.to_drawing(drawn)["geometry"];
+             const std::string v = violation(schema, drawn, "case");
+             check(v.empty(), shape + " drawn: " + v);
+           }
+           Json drawn = app::Session::default_case();
+           drawn["geometry"] = session.to_drawing(drawn)["geometry"];
+           drawn["geometry"]["loops"][0]["edges"][0] = {
+               {"kind", "cubic"},
+               {"region", "bottom"},
+               {"control1", {-0.5, -1}},
+               {"control2", {0.5, -1}}};
+           drawn["geometry"]["loops"][0]["edges"][1] = {
+               {"kind", "quadratic"}, {"region", "right"}, {"control", {2, 0}}};
+           check(violation(schema, drawn, "case").empty(), "Beziers");
+           drawn["geometry"]["loops"][0]["edges"][1]["kind"] = "spline";
+           check(!violation(schema, drawn, "case").empty(), "an unknown kind");
+           Json imported = app::Session::default_case();
+           imported["geometry"] = {
+               {"source", "mesh_file"},
+               {"format", "gmsh"},
+               {"text", "..."},
+               {"region_edits", Json::array({{{"op", "split_at_node"},
+                                              {"region", "bottom"},
+                                              {"node", 3},
+                                              {"first", "a"},
+                                              {"second", "b"}}})}};
+           check(violation(schema, imported, "case").empty(),
+                 "a mesh file's split at a node");
+           imported["geometry"]["region_edits"][0]["fraction"] = 0.5;
+           check(!violation(schema, imported, "case").empty(),
+                 "a split at a node has no fraction");
+         }
          // What the readers refuse, the schema refuses too.
          Json bad = app::Session::default_case();
          bad["mesh"]["refiner"]["options"]["min_angel_degrees"] = 25;

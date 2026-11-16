@@ -18,6 +18,7 @@
 //    "options": {"width": 2, "height": 1}, "region_edits": [...]}
 //   {"source": "mesh_file", "format": "gmsh" or "pde2d",
 //    "name": "plate.msh", "text": "...", "region_edits": [...]}
+//   {"source": "drawing", "loops": [...]}   (drawing.hpp)
 //
 // An SVG or a shape gives a CurveGeometry, which the Mesher meshes. A mesh
 // file gives a Mesh directly; the mesh section's refiner and improvers
@@ -31,14 +32,18 @@
 //   {"op": "merge", "source": "a", "target": "b"}
 //   {"op": "split", "region": "a", "fraction": 0.5,
 //    "first": "a1", "second": "a2"}
-// A mesh file takes rename and merge (not split: it has no curves); they
-// change its region names and the region tags of its boundary edges.
+// A mesh file takes rename, merge and
+//   {"op": "split_at_node", "region": "a", "node": 12,
+//    "first": "a1", "second": "a2"}
+// (not split: it has no curves); they change its region names and the
+// region tags of its boundary edges. A drawing has no region edits: its
+// edges carry their regions.
 namespace pde2d::app {
 
 // The keys the reader accepts, per source and per region edit (the case
 // schema is generated from them).
 inline constexpr std::string_view geometry_sources[] = {"shape", "svg",
-                                                        "mesh_file"};
+                                                        "mesh_file", "drawing"};
 inline constexpr std::string_view shape_section_keys[] = {
     "source", "shape", "options", "region_edits"};
 inline constexpr std::string_view svg_section_keys[] = {"source", "name", "svg",
@@ -51,6 +56,8 @@ inline constexpr std::string_view merge_edit_keys[] = {"op", "source",
                                                        "target"};
 inline constexpr std::string_view split_edit_keys[] = {
     "op", "region", "fraction", "first", "second"};
+inline constexpr std::string_view split_at_node_edit_keys[] = {
+    "op", "region", "node", "first", "second"};
 
 // Exactly one of the two is set.
 struct Domain {
@@ -62,6 +69,20 @@ struct Domain {
 // ("geometry.svg: ...") with the library's message for a document, shape
 // or edit it refuses; std::runtime_error from the library passes through.
 Domain build_domain(const Json &geometry_section);
+
+// Splits the region `region` of an imported mesh at its boundary node
+// `node`: the region's boundary edges form one chain (domain on the
+// left); the edges from the chain's start to the node keep the region's
+// tag, named `first`, and the edges from the node to the chain's end get
+// a new tag (the last), named `second`. A chain that is a whole closed
+// loop starts at its edge that comes first in the mesh's boundary edges.
+// Each new name must be the old name or a name that does not exist yet.
+// Throws std::invalid_argument (and changes nothing) for a region in
+// several pieces, a node that is not on it or is an end of it, or bad
+// names.
+void split_mesh_region_at_node(mesh::Mesh &mesh, const std::string &region,
+                               std::size_t node, const std::string &first,
+                               const std::string &second);
 
 // What the page draws: for a CurveGeometry its loops (depth, parent and
 // curves, each curve sampled as a polyline with its region and kind),

@@ -4,6 +4,8 @@
 #include "case_schema.hpp"
 #include "catalog.hpp"
 #include "domain_input.hpp"
+#include "drawing.hpp"
+#include "locate.hpp"
 #include "field_eval.hpp"
 #include "presets.hpp"
 #include "problem_input.hpp"
@@ -322,6 +324,47 @@ Json Session::geometry(const Json &input, const std::string &client) {
   const Json &case_json = read.json();
   return staged("geometry",
                 [&] { return domain_json(state_->cache.domain(case_json)); });
+}
+
+Json Session::locate(const Json &request, const std::string &client) {
+  const Work work(*this, "geometry", client);
+  const geometry::Point point = staged("geometry", [&] {
+    require_object(request, "request");
+    static constexpr std::string_view known[] = {"case", "point", "snap"};
+    reject_unknown_keys(request, "request", known);
+    const Json &at = member(request, "point");
+    if (!at.is_array() || at.size() != 2)
+      throw PathError("point", "expected a point [x, y]");
+    return geometry::Point{require_number(at[0], "point[0]"),
+                           require_number(at[1], "point[1]")};
+  });
+  const double snap = staged("geometry", [&] {
+    const Json &value = member(request, "snap");
+    const double out = value.is_null() ? 0.0 : require_number(value, "snap");
+    if (out < 0)
+      throw PathError("snap", "must not be negative");
+    return out;
+  });
+  const CaseInput read = read_case(member(request, "case"));
+  const Json &case_json = read.json();
+  const Domain &domain = state_->cache.domain(case_json);
+  return staged("geometry",
+                [&] { return locate_boundary(domain, point, snap); });
+}
+
+Json Session::to_drawing(const Json &input, const std::string &client) {
+  const Work work(*this, "geometry", client);
+  const CaseInput read = read_case(input);
+  const Json &case_json = read.json();
+  const Domain &domain = state_->cache.domain(case_json);
+  return staged("geometry", [&] {
+    if (!domain.geometry)
+      throw PathError("geometry.source",
+                      "an imported mesh has no curves to edit as a drawing");
+    Json out = Json::object();
+    out["geometry"] = drawing_section(*domain.geometry);
+    return out;
+  });
 }
 
 Json Session::mesh(const Json &input, const std::string &client) {

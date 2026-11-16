@@ -85,6 +85,15 @@ int main() {
              Json::parse(client.Get("/api/default-case")->body);
          const Json geometry = post(client, "/api/geometry", case_json, 200);
          check(geometry["regions"].size() == 4, "regions");
+         // The geometry editor's calls.
+         const Json located = post(
+             client, "/api/geometry/locate",
+             {{"case", case_json}, {"point", {0.0, 0.6}}, {"snap", 0.01}}, 200);
+         check(located["region"] == "top", located.dump());
+         post(client, "/api/geometry/locate", {{"case", case_json}}, 422);
+         const Json drawn =
+             post(client, "/api/geometry/drawing", case_json, 200);
+         check(drawn["geometry"]["source"] == "drawing", drawn.dump());
          const Json mesh = post(client, "/api/mesh", case_json, 200);
          check(mesh["target_met"].get<bool>(), "target met");
          const Json arrays_request = {{"mesh", mesh["mesh"]["id"]}};

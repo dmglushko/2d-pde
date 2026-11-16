@@ -66,6 +66,14 @@ public:
   // Each throws StageError. Every call reads only the sections it needs.
   // `client` only says whose call it is (status).
   Json geometry(const Json &case_json, const std::string &client = {});
+  // Where on the boundary a point is, for splitting a region there
+  // (locate.hpp, locate_boundary). request: {"case", "point": [x, y],
+  // "snap": distance (0 by default)}.
+  Json locate(const Json &request, const std::string &client = {});
+  // The case's curve geometry (after its region edits) as a drawing
+  // section, curve for curve (drawing.hpp, drawing_section):
+  // {"geometry": section}. Refused for a mesh file.
+  Json to_drawing(const Json &case_json, const std::string &client = {});
   // The mesh's summary (views.hpp, mesh_summary_json, under "mesh"), its
   // stats and reports; the arrays come from mesh_arrays.
   Json mesh(const Json &case_json, const std::string &client = {});
