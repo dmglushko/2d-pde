@@ -887,8 +887,8 @@ coarsening, moving nodes or enrichment for now.
   Ruppert, flips), and from it the angles fall to about half of the
   starting mesh's smallest (L-shape, h = 0.12: 2.9° instead of 6.0°).
   `refine(marked)` never does: between cycles the stored vertex order is
-  the method's memory; the user calls
-  `set_longest_edges_as_refinement_edges` once on the starting mesh.
+  the method's memory (who sets the order on a starting mesh: see "The
+  library delivers the refinement-edge order" below).
   Equally long edges are ordered by their node indices, the order of the
   bisection core, which both triangles of an edge agree on.
 - **Error estimation and the adaptive loop are built too** (decided
@@ -935,6 +935,51 @@ coarsening, moving nodes or enrichment for now.
   2026-11-17), controlled by an estimate of each step's time error, with
   rejected steps; the `StepController` interface is extended when it is
   built.
+- **Details of slice 1 (estimators and the static loop), accepted
+  2026-11-17:** residual estimator η_T² = h_T²‖r‖² + Σ interior ½h_E‖J‖²
+  + Σ natural/dynamic h_E‖R‖² with h the longest edge, r = f − b·∇u_h −
+  c u_h − m1 u_t − m2 u_tt (the A part cancels for P1), R = κ_n/β̂_n times
+  the condition's residual, not scaled by A; u_t is required when m1 ≠ 0
+  or a region is dynamic, u_tt when m2 ≠ 0, from the estimator's own
+  terms; total = √(Σ η_T²); Kelly = the residual estimator's edge terms;
+  recovery = area-weighted nodal average of the gradients, in the energy
+  norm of A (`.norm = energy`, or `gradient`; an indefinite or zero A
+  throws). An `Adaptation` has two steps, `estimate` and `adapt`, so the
+  loop tests its tolerance before refining; the loop's estimate comes from
+  the first adaptation that declares it estimates the error, and at most
+  one adaptation may change the mesh until solution transfer exists. The
+  target: at least one of tolerance (absolute and/or relative to the first
+  estimate, the smaller applies), `max_cycles`, `max_nodes`; the node
+  budget refines, then discards a mesh over it and stops; the loop also
+  stops with `nothing_changed` when nothing was marked or the refinement
+  left the mesh unchanged. The loop takes a `MeshedProblem` and builds a
+  new one per cycle; a static solution passes u_t = u_tt = 0; the result
+  keeps every cycle. A bad indicator from an estimator is a
+  `std::runtime_error`, a solution on another mesh `std::invalid_argument`.
+- **Estimator quadrature degrees are options** (decided 2026-11-17), with
+  the rules from the same table (`fem/quadrature.hpp`): residual and Kelly
+  `triangle_degree` 4 and `edge_degree` 6 (the jumps use the edge degree
+  too), recovery `triangle_degree` 3; a degree the table does not have
+  throws in the constructor. *Why:* a setting read by one component only
+  is that component's option. The defaults are exact for coefficients and
+  data of degree at most 1 (with β̂_n constant).
+- **Solution transfer is interpolation** (decided 2026-11-17): the new
+  mesh's nodal values are the old u_h at the new nodes (old nodes keep
+  theirs, a bisection midpoint gets the average of its edge's ends, a
+  Dirichlet node gets g), through the parents when the refinement kept
+  them and by point location otherwise; velocities the same way. Built
+  with the time-dependent loop (slice 2).
+- **The library delivers the refinement-edge order; the user never calls
+  `set_longest_edges_as_refinement_edges`** (decided 2026-11-17, replacing
+  "the user calls it once"): `Mesher::run` and `Remesher::run(spec)` end
+  by making every triangle's longest edge its refinement edge, and Gmsh
+  import does it too. `Remesher::refine` also ends with it, but only for
+  the triangles whose order is not a bisection's (made or changed by
+  improvers, for example flips); the triangles bisection made and the
+  untouched ones keep their order, which is newest vertex bisection's
+  memory between cycles. A `.pde2d` file keeps its order (it may be a
+  saved mesh in the middle of adaptation). The function stays public for
+  meshes built by hand.
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks
