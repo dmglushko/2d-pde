@@ -26,6 +26,7 @@ endif()
 add_subdirectory(src/geometry)
 add_subdirectory(src/mesh)
 add_subdirectory(src/io)
+add_subdirectory(src/adapt)
 
 # SymEngine parses and compiles expressions in pde2d_fem, only in its .cpp
 # files. Point CMake at an installation with -DSymEngine_DIR=<prefix>/lib/
@@ -49,7 +50,7 @@ add_subdirectory(src/solve)
 add_library(pde2d INTERFACE)
 add_library(pde2d::pde2d ALIAS pde2d)
 target_link_libraries(pde2d INTERFACE pde2d_geometry pde2d_mesh pde2d_io
-                                      pde2d_fem pde2d_solve)
+                                      pde2d_fem pde2d_solve pde2d_adapt)
 
 if(PDE2D_BUILD_EXAMPLES)
   add_subdirectory(examples)

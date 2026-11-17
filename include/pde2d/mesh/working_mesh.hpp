@@ -78,6 +78,12 @@ struct BoundarySplitResult {
 // without the tombstones, and to_mesh() never contains them. Each edit
 // returns the triangles it changed or created. An edit that would create
 // an inverted triangle throws and leaves the mesh unchanged.
+//
+// The refinement edge of a triangle is its edge 0, the edge opposite its
+// vertex 0 (see the convention in mesh.hpp). The edits here choose vertex
+// 0 of the triangles they change freely; the bisection refiners then put
+// the new node first (set_refinement_edge), and nothing reorders a
+// triangle it does not change.
 class WorkingMesh {
 public:
   using TriangleNodes = std::array<std::size_t, 3>;
@@ -145,7 +151,8 @@ public:
   std::array<std::size_t, 3> insert_in_triangle(std::size_t triangle,
                                                 geometry::Point p);
   // Adds node p on interior edge `edge` of `triangle`; four triangles
-  // result.
+  // result: {triangle, its neighbour across the edge, the other half of
+  // triangle, the other half of the neighbour}.
   std::array<std::size_t, 4> split_interior_edge(std::size_t triangle, int edge,
                                                  geometry::Point p);
   // The point where boundary edge k is split. For a linked edge it is the
@@ -172,6 +179,11 @@ public:
   BoundarySplitResult split_boundary_edge(std::size_t k);
   // True if a split of boundary edge k has failed before.
   bool is_unsplittable(std::size_t k) const { return unsplittable_.at(k); }
+
+  // Rotates the vertices of the triangle (it stays counterclockwise, and
+  // the same triangle) so that its edge `edge` becomes edge 0, its
+  // refinement edge. Neighbours follow; nothing else changes.
+  void set_refinement_edge(std::size_t triangle, int edge);
 
   // Moves an interior node if every triangle around it stays
   // counterclockwise; returns false (and changes nothing) otherwise.

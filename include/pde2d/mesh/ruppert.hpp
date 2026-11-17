@@ -27,9 +27,24 @@ struct RuppertOptions {
 // Delaunay. A boundary edge with a curve link is split at the curve point.
 // Local improvers it is given run after every insertion and its flips.
 // max_edge_length is resolved against domain_size(mesh).
+//
+// refine() (for adaptive refinement) inserts the circumcenter of every
+// marked triangle (as it was when refine() was called), with the same
+// rules: the input is first made Delaunay; a circumcenter that would
+// encroach boundary edges, or lies beyond one, is not inserted and those
+// boundary edges are split instead; after each insertion the boundary
+// edges a new point encroaches are split; flips keep the mesh Delaunay.
+// There is no angle or length goal here, so nothing else is refined. It
+// never keeps the parents (it flips).
+//
 // Metrics: "initial_flips", "flips", "boundary_splits", "circumcenters",
-// "local_improver_changes" and "local_improver_changes.<name>",
-// "domain_size" and "max_edge_length" (resolved).
+// "retriangulated_splits", "deleted_nodes", "unsplittable_edges",
+// "local_improver_changes" and "local_improver_changes.<name>"; run()
+// adds "domain_size", "max_edge_length" (resolved) and
+// "abandoned_triangles", refine() adds "marked", "skipped_circumcenters"
+// (one already a node, for example the shared circumcenter of two marked
+// triangles of a rectangle, or cut off with its triangle) and
+// "blocked_circumcenters" (needing an unsplittable boundary edge).
 class Ruppert final : public Refiner {
 public:
   explicit Ruppert(RuppertOptions options = {});
@@ -40,13 +55,19 @@ public:
     // It keeps its own Delaunay invariant, so it accepts no outside
     // changes during refinement: only local improvers that neither flip
     // nor move nor make the mesh Delaunay.
+    // It flips edges, so it never keeps parents.
     return {.tolerates_flips = false,
             .tolerates_node_moves = false,
-            .maintains_delaunay = true};
+            .maintains_delaunay = true,
+            .keeps_parents = false};
   }
   void run(WorkingMesh &mesh, const MeshSpec &spec,
            std::span<const LocalImprover *const> local_improvers,
            StageReport &report) const override;
+  std::optional<Parents>
+  refine(WorkingMesh &mesh, std::span<const std::size_t> marked_triangles,
+         std::span<const LocalImprover *const> local_improvers,
+         StageReport &report) const override;
 
 private:
   RuppertOptions options_;

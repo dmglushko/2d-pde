@@ -15,10 +15,16 @@ What exists now:
 - `pde2d_mesh`: a mesher with a fixed stage order (boundary discretizer,
   initial triangulator, optional refiner, improvers), the v1 components
   (chord-length boundary discretization, ear clipping, CDT, Ruppert,
-  longest-edge bisection, Delaunay flips, Laplacian smoothing), and a
-  `Remesher` that refines an existing mesh. A mesh made by the mesher
-  keeps its curve links, so refining it again puts new boundary points on
-  the true curves.
+  longest-edge bisection, newest vertex bisection, red-green-blue
+  refinement, Delaunay flips, Laplacian smoothing), and a `Remesher` that
+  refines an existing mesh, towards a target or (for adaptive refinement)
+  at marked triangles, with the parents of the new triangles and nodes
+  when they stay true. Every result carries the measured properties of
+  the final mesh (angles, edge lengths, a warning angle). A mesh made by
+  the mesher keeps its curve links, so refining it again puts new
+  boundary points on the true curves.
+- `pde2d_adapt`: the marking strategies of adaptive refinement (maximum,
+  Dörfler, fixed fraction, equidistribution).
 - `pde2d_io`: SVG import and export of geometries, SVG pictures of
   meshes, the `.pde2d` mesh format of the previous code (read by the
   browser viewer in `tools/mesh_viewer/`), and Gmsh `.msh` import
