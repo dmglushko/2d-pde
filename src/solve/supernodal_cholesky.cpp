@@ -6,6 +6,7 @@
 #include <cholmod.h>
 
 #include <cstddef>
+#include <algorithm>
 #include <format>
 #include <memory>
 #include <stdexcept>
@@ -124,6 +125,9 @@ public:
     if (n == 0)
       return result;
     result.threads = static_cast<std::size_t>(threads_);
+    // Allocated before CHOLMOD's result exists, so nothing can throw
+    // between its allocation and its release (review finding).
+    result.values.resize(n);
     {
       const detail::FactorizationThreads scope(threads_, threads_);
       cholmod_common *c = common_->get();
@@ -142,7 +146,7 @@ public:
         throw std::runtime_error(std::format(
             "{}: the solve failed ({})", solver_name, status_text(c->status)));
       const auto *values = static_cast<const double *>(x->x);
-      result.values.assign(values, values + n);
+      std::copy(values, values + n, result.values.begin());
       cholmod_l_free_dense(&x, c);
     }
     detail::check_direct_result(result, *matrix_, right_hand_side,
