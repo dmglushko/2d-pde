@@ -398,6 +398,26 @@ Started 2026-11-11.
   a derivative) and `data_depends_on_t` (f or g). They describe stage 1
   only, not the assembled system, and are computed by functions, never
   stored. "Zero" means zero as written.
+- **Equations and conditions can be written as one line** (decided
+  2026-11-18): `parse_equation(text)` and `parse_condition(text)`
+  (`equation_text.hpp`) read lines such as `u_t - div(k*grad(u)) = 1`,
+  `-∇·(k∇u) = f` or `k*u_n + h*u = h*u_out` into the existing `Equation`
+  and `BoundaryCondition`; `equation_text` and `condition_text` print
+  them back in the coefficient form. Operators by name (grad, div, lap,
+  dot) and with nabla (∇, ∇·, ∇², Δ), vectors and matrices; in a
+  condition the normal n and tangent tau. The divergence form is expanded
+  into the coefficient form (b = −∇k), with the coefficients'
+  derivatives taken by the one derivative function; assembly, the
+  solvers and the estimators are unchanged. A line that is not linear in
+  u, has a third derivative or a space derivative of u_t, or a condition
+  whose derivatives depend on the normal in another way (an anisotropic
+  flux (A∇u)·n) is refused with a message quoting the part. *Why:* the
+  owner wants to type the equation as it is written on paper; the
+  coefficients need symbolic derivatives, which only the library may
+  take, and keeping `Equation` as it is leaves every reader of it
+  unchanged. Alternatives not taken: a `text` member in `Equation` (two
+  forms that readers would have to choose between) and a divergence form
+  that assembly integrates directly (a much larger change).
 - **Well-posedness checks are deferred.**
 
 ## Problem combined with a mesh

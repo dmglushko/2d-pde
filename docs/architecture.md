@@ -601,7 +601,7 @@ module: it is a program over the public headers, described in
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) and `edge_bisection.hpp` (the bisection core shared by the three bisection refiners: marked edges, closure, division patterns, parents, the `run` loop; `detail::check_marked`) and `refinement_edges.hpp` (the longest-edge tie order `detail::longest_local_edge`, shared by the core and `set_longest_edges_as_refinement_edges`; `detail::set_longest_edges_as_refinement_edges` of a working mesh, for all triangles or those whose order an edit chose; `RefinementEdgeRecord`, a friend of `WorkingMesh`); `bisection_refiners.cpp` holds the three bisection refiners (each a rule for the core) |
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
-| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`AssemblerOptions`, `Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
+| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `equation_text.hpp` (`parse_equation`, `parse_condition`, `equation_text`, `condition_text`), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`AssemblerOptions`, `Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`), `element_blocks.hpp` (assembly's pure element block functions) and `threads.hpp` (checking and resolving `AssemblerOptions::threads`; includes `<omp.h>`); `assembler.cpp` holds the driver (with the OpenMP loop over a colour), patterns, colouring and `detail::AssemblyInternals` |
 | `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`), `supernodal_cholesky.hpp` (`SupernodalCholeskyOptions`, `SupernodalCholesky`), `multifrontal_lu.hpp` (`MultifrontalLuOptions`, `MultifrontalLu`) |
 | `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `threads.hpp` (checking and resolving a `threads` option; includes `<omp.h>`), `eigen_threads.hpp` (`detail::EigenThreads`, the scope every Eigen computation runs in), `factorization_threads.hpp` (`detail::FactorizationThreads`, the scope every SuiteSparse call runs in: a process-wide lock, OpenBLAS's count and the calling thread's OpenMP count; the OpenBLAS calls are in `factorization_threads.cpp`), `suitesparse.hpp` (what the two SuiteSparse solvers share: their options check, CHOLMOD's view of a `CsrMatrix` as the compressed columns of its transpose, the singularity rule, the checks of a result; includes `cholmod.h`) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the Eigen solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`), SuiteSparse only in `suitesparse.hpp`, `supernodal_cholesky.cpp` and `multifrontal_lu.cpp`; `time_methods.cpp` holds the three time methods |
@@ -1063,6 +1063,7 @@ text ──► Expression ─┐
 | `InitialConditions` | `problem.hpp` | `std::optional<Expression>` `u` and `u_t` |
 | `Problem` | `problem.hpp` | `equation`, `parameters`, `boundary_conditions` (region name → condition), `initial` |
 | `ConditionKind` | `problem.hpp` | `dirichlet`, `natural`, `dynamic`; `classify(condition)` and `is_oblique(condition)` |
+| (functions) | `equation_text.hpp` | `parse_equation(text)` → `Equation`, `parse_condition(text)` → `BoundaryCondition` (one line each, with grad, div, lap, dot or ∇, ∇·, ∇², Δ, vectors and matrices; see "Equations as one line"), and back: `equation_text(equation)`, `condition_text(condition)` |
 | `CompiledEquation`, `CompiledCondition` | `meshed_problem.hpp` | the same members as `CompiledExpression`s; a condition also has its `kind`, `oblique` and `priority` |
 | `DirichletNode` | `meshed_problem.hpp` | a node and the regions whose `g / alpha` is averaged there (one, or two at an equal-priority corner) |
 | `MeshedProblem` | `meshed_problem.hpp` | `Problem` + `std::shared_ptr<const Mesh>`, checked and compiled, up to assembly |
@@ -1084,6 +1085,32 @@ Problem problem{
 auto meshed = std::make_shared<const MeshedProblem>(mesh, problem);
 double a = meshed->equation().a_xx(0.5, 0.5, 0.0); // -1000
 ```
+
+**Equations as one line** (`equation_text.hpp`, `src/fem/equation_text.cpp`).
+`parse_equation("u_t - ∇·(k∇u) = 1")` reads a line into an `Equation`,
+`parse_condition("k*u_n + h*u = h*u_out")` into a `BoundaryCondition`;
+nothing after them knows the line. A small recursive-descent parser of
+its own reads the structure (`=`, `+ - * / ^`, `·`, vectors `(a, b)`,
+matrices `[[a, b], [c, d]]`, `grad div lap dot`, `∇ ∇· ∇² Δ`, a factor in
+front of ∇ or Δ); every part without u, the normal or an operator of the
+line (a number, a name, a function call with its arguments, and `+ - * /
+^` and parentheses of such) is handed to `Expression` as it is written,
+so coefficients keep Expression's syntax, allow-list and messages
+(`Piecewise` and its conditions included). The line is evaluated to a
+form linear in u: a SymEngine coefficient per derivative of u (u, u_x,
+u_y, u_xx, u_xy, u_yy, u_t, u_tt) and, in a condition, per component
+n_x, n_y of the normal; a product of two parts with u, a function of u
+or a third derivative is refused where it is written. grad and div
+differentiate by the product rule, the coefficients through
+`detail::derivative`, so `-∇·(k∇u)` becomes a = −k, b = −∇k. The left
+side minus the right side gives the coefficients and −(the part without
+u) the right-hand side; a condition's normal components must form
+β_n u_n + β_τ u_τ (the u_x n_x and u_y n_y coefficients equal, the u_x
+n_y one the negative of the u_y n_x one), after `expand`. Coefficients
+are built with `detail::expression_from_form` (checked, printed by
+SymEngine). `equation_text` and `condition_text` print the coefficient
+form back from the parsed forms, which `parse_*` reads to the same
+coefficients.
 
 **Expressions.** SymEngine parses the text when an `Expression` is built
 (`parse`, with `^` as power). Floating literals are restored in a bottom-up
