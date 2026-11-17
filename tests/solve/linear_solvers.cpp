@@ -2,8 +2,10 @@
 
 #include "pde2d/solve/bicgstab.hpp"
 #include "pde2d/solve/conjugate_gradient.hpp"
+#include "pde2d/solve/multifrontal_lu.hpp"
 #include "pde2d/solve/simplicial_ldlt.hpp"
 #include "pde2d/solve/sparse_lu.hpp"
+#include "pde2d/solve/supernodal_cholesky.hpp"
 
 #include <cmath>
 #include <limits>
@@ -161,6 +163,8 @@ int main() {
          rejects_bad_input(BiCgStab());
          rejects_bad_input(ConjugateGradient());
          rejects_bad_input(SimplicialLdlt());
+         rejects_bad_input(SupernodalCholesky());
+         rejects_bad_input(MultifrontalLu());
        }},
       {"requirements are declared",
        [] {
@@ -170,6 +174,9 @@ int main() {
          check(ConjugateGradient().requirements().symmetric_matrix &&
                    SimplicialLdlt().requirements().symmetric_matrix,
                "CG and LDL^T need a symmetric one");
+         check(SupernodalCholesky().requirements().symmetric_matrix &&
+                   !MultifrontalLu().requirements().symmetric_matrix,
+               "Cholesky needs a symmetric matrix, the multifrontal LU not");
        }},
       {"ConjugateGradient solves symmetric positive definite systems",
        [] {
@@ -228,6 +235,77 @@ int main() {
          expect_throws<std::invalid_argument>(
              [] { ConjugateGradient({.max_iterations = 0}); },
              "max_iterations");
+       }},
+      {"MultifrontalLu solves symmetric and non-symmetric systems",
+       [] {
+         solves_known_systems(MultifrontalLu());
+         const auto r = MultifrontalLu().prepare(sparse(spd))->solve(spd_b);
+         check(r.iterations == 0, "a direct solver has no iterations");
+         check(r.threads == 1, "1 thread by default");
+         // It pivots: a zero diagonal is no problem.
+         expect_solution(
+             MultifrontalLu().prepare(sparse(indefinite))->solve(indefinite_b),
+             {0, 1}, 0.0);
+       }},
+      {"MultifrontalLu throws for a singular matrix",
+       [] {
+         expect_throws<std::runtime_error>(
+             [] { (void)MultifrontalLu().prepare(sparse({{1, 2}, {2, 4}})); },
+             "multifrontal_lu: the matrix is singular");
+         // A row without entries.
+         expect_throws<std::runtime_error>(
+             [] { (void)MultifrontalLu().prepare(sparse({{1, 0}, {0, 0}})); },
+             "multifrontal_lu: the matrix is singular");
+       }},
+      {"SupernodalCholesky solves symmetric positive definite systems",
+       [] {
+         solves_symmetric_systems(SupernodalCholesky());
+         const auto r = SupernodalCholesky().prepare(sparse(spd))->solve(spd_b);
+         check(r.iterations == 0, "a direct solver has no iterations");
+         check(r.threads == 1, "1 thread by default");
+       }},
+      {"SupernodalCholesky throws on a matrix that is not positive definite",
+       [] {
+         // Indefinite with a zero diagonal, indefinite with nonzero pivots
+         // (which LDL^T handles), negative definite, singular.
+         for (const Dense &a : {indefinite, Dense{{2, 1}, {1, -3}},
+                                Dense{{-2, 1}, {1, -2}}, Dense{{1, 2}, {2, 4}}})
+           expect_throws<std::runtime_error>(
+               [&] { (void)SupernodalCholesky().prepare(sparse(a)); },
+               "supernodal_cholesky: the matrix is not positive definite");
+         // Positive semidefinite (singular): the last pivot is rounding.
+         expect_throws<std::runtime_error>(
+             [] {
+               (void)SupernodalCholesky().prepare(
+                   sparse({{1, -1, 0}, {-1, 2, -1}, {0, -1, 1}}));
+             },
+             "supernodal_cholesky: the matrix is");
+       }},
+      {"the parallel direct solvers validate their options",
+       [] {
+         for (const double tolerance :
+              {0.0, -1.0, 1.0, std::numeric_limits<double>::quiet_NaN()}) {
+           expect_throws<std::invalid_argument>(
+               [&] { SupernodalCholesky({.residual_tolerance = tolerance}); },
+               "supernodal_cholesky: residual_tolerance must be in (0, 1)");
+           expect_throws<std::invalid_argument>(
+               [&] { MultifrontalLu({.residual_tolerance = tolerance}); },
+               "multifrontal_lu: residual_tolerance must be in (0, 1)");
+         }
+         const std::size_t too_many = 1025;
+         const std::size_t negative = std::numeric_limits<std::size_t>::max();
+         for (const std::size_t threads : {too_many, negative}) {
+           expect_throws<std::invalid_argument>(
+               [&] { SupernodalCholesky({.threads = threads}); },
+               "supernodal_cholesky: threads must be at most 1024");
+           expect_throws<std::invalid_argument>(
+               [&] { MultifrontalLu({.threads = threads}); },
+               "multifrontal_lu: threads must be at most 1024");
+         }
+         check(SupernodalCholesky({.threads = 1024}).options().threads ==
+                       1024 &&
+                   MultifrontalLu({.threads = 0}).options().threads == 0,
+               "1024 and 0 are accepted");
        }},
   });
 }

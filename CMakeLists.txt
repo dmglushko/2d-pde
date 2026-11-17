@@ -46,6 +46,17 @@ add_subdirectory(src/fem)
 # Eigen 3 (header-only) solves the linear systems in pde2d_solve, only in its
 # .cpp files.
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+# SuiteSparse gives the parallel direct solvers of pde2d_solve (CHOLMOD:
+# supernodal Cholesky; ParU: multifrontal LU), only in their .cpp files.
+# Their speed comes from a threaded BLAS: OpenBLAS, linked directly for
+# openblas_set_num_threads (its CMake config file in Ubuntu points at a
+# wrong directory, so the library is found by name).
+# CHOLMOD's config file asks for OpenMP's C component, which needs the C
+# language enabled (nothing of ours is written in C).
+enable_language(C)
+find_package(CHOLMOD 5.3 REQUIRED CONFIG)
+find_package(ParU 1.0 REQUIRED CONFIG)
+find_library(PDE2D_OPENBLAS_LIBRARY NAMES openblas REQUIRED)
 add_subdirectory(src/solve)
 add_subdirectory(src/adapt)
 
