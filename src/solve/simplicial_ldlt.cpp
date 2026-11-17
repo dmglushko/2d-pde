@@ -29,8 +29,8 @@ public:
       : matrix_(std::move(matrix)), options_(options) {
     if (matrix_->rows() == 0)
       return; // nothing to factorize: every solve returns an empty vector
-    // Direct solvers run in one thread (docs/decisions.md: their parallel
-    // version needs a library still to be chosen).
+    // The Eigen direct solvers run in one thread (the parallel ones are
+    // SupernodalCholesky and MultifrontalLu).
     const detail::EigenThreads scope(1);
     const ColumnMajorMatrix a = detail::view(*matrix_);
     ldlt_.compute(a);
