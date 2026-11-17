@@ -17,6 +17,8 @@
 #include "pde2d/mesh/ear_clipping.hpp"
 #include "pde2d/mesh/laplacian_smoothing.hpp"
 #include "pde2d/mesh/longest_edge_bisection.hpp"
+#include "pde2d/mesh/newest_vertex_bisection.hpp"
+#include "pde2d/mesh/red_green_blue_refinement.hpp"
 #include "pde2d/mesh/ruppert.hpp"
 
 #include <algorithm>
@@ -228,6 +230,14 @@ int main() {
                        .default_value.get<std::size_t>() ==
                    mesh::RuppertOptions{}.max_points,
                "ruppert points");
+         check(option(catalog.refiners, "newest_vertex_bisection", "max_points")
+                       .default_value.get<std::size_t>() ==
+                   mesh::NewestVertexBisectionOptions{}.max_points,
+               "nvb points");
+         check(option(catalog.refiners, "red_green_blue", "max_points")
+                       .default_value.get<std::size_t>() ==
+                   mesh::RedGreenBlueRefinementOptions{}.max_points,
+               "rgb points");
          check(option(catalog.improvers, "laplacian_smoothing", "iterations")
                        .default_value.get<int>() ==
                    mesh::LaplacianSmoothingOptions{}.iterations,

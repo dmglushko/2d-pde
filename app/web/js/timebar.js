@@ -35,7 +35,7 @@ export function showFrame(index) {
   store.solveFrame = index;
   store.solveFrameChosen = true;
   store.fieldSource = "solve";
-  if (store.view.colorBy !== "field" && store.view.colorBy !== "gradient") store.view.colorBy = "field";
+  if (!["field", "gradient", "indicator"].includes(store.view.colorBy)) store.view.colorBy = "field";
   notify("frame");
 }
 

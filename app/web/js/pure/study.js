@@ -30,3 +30,32 @@ export function observedOrders(rows, errorOf, sizeOf = (row) => row.h) {
 export function referenceSlope(hs, order, h, e) {
   return Array.from(hs, (x) => e * (x / h) ** order);
 }
+
+// The rows of an adaptive solve's cycle table: the server's cycles
+// ({cycle, nodes, triangles, estimate, marked}) with, when the solve was
+// compared with an exact solution, each cycle's errors (`compared`: the
+// comparison's "cycles", [{cycle, max_abs, l2}]; null otherwise), and the
+// observed rates against the number of nodes N: e ~ N^(-rate), so
+// rate = log(e_prev / e) / log(N / N_prev) (null where it cannot be
+// computed). An energy-norm error falls like N^(-1/2) on a well-adapted
+// mesh of P1 elements, an L2 error like N^(-1).
+export function adaptiveRows(cycles, compared = null) {
+  const byCycle = new Map((compared ?? []).map((c) => [c.cycle, c]));
+  const rows = (cycles ?? []).map((c) => {
+    const error = byCycle.get(c.cycle);
+    return {
+      cycle: c.cycle,
+      nodes: c.nodes,
+      triangles: c.triangles,
+      estimate: c.estimate ?? null,
+      marked: c.marked ?? null,
+      max: error ? (error.max_abs ?? null) : null,
+      l2: error ? (error.l2 ?? null) : null,
+    };
+  });
+  const perNode = (row) => 1 / row.nodes;
+  const rates = (key) => observedOrders(rows, (row) => row[key], perNode);
+  const estimate = rates("estimate");
+  const l2 = rates("l2");
+  return rows.map((row, i) => ({ ...row, estimateRate: estimate[i], l2Rate: l2[i] }));
+}

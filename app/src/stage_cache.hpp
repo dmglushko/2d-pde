@@ -60,6 +60,9 @@ public:
   std::shared_ptr<const MeshOutcome> find_mesh(std::uint64_t id) const;
   // The id of a mesh this cache built recently, or 0.
   std::uint64_t id_of(const mesh::Mesh *mesh) const;
+  // A new mesh id, for a mesh made elsewhere (an adaptive run's last
+  // mesh): never one this cache gives.
+  std::uint64_t new_mesh_id() { return next_mesh_++; }
 
   static constexpr std::size_t recent_meshes = 16;
 

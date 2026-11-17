@@ -180,12 +180,18 @@ export const api = {
   // typed arrays, as the picture uses them.
   mesh: async (caseData) => {
     const data = await request("/api/mesh", caseData);
-    const summary = data.mesh;
-    if (!summary?.arrays) throw new ApiError({ stage: "mesh", message: "the mesh answer has no arrays" });
-    const buffer = await requestBinary(summary.arrays.path, { mesh: summary.id });
-    data.mesh = decodeMesh(summary, buffer);
+    data.mesh = await api.meshArrays(data.mesh);
     return data;
   },
+  // A mesh's arrays from its summary ({id, arrays, ...}), decoded.
+  meshArrays: async (summary) => {
+    if (!summary?.arrays) throw new ApiError({ stage: "mesh", message: "the mesh answer has no arrays" });
+    const buffer = await requestBinary(summary.arrays.path, { mesh: summary.id });
+    return decodeMesh(summary, buffer);
+  },
+  // An adaptive run's error indicators: a Float32Array, one per triangle
+  // of its last mesh.
+  indicators: async (job, count) => splitSnapshots(await requestBinary("/api/solve/indicators", { job }), 1, count)[0],
   problem: (caseData) => request("/api/problem", caseData),
   assemble: (caseData) => request("/api/assemble", caseData),
   field: (caseData, field) => request("/api/field", { case: caseData, field }),

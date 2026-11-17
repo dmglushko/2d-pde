@@ -677,7 +677,8 @@
   border-top-style: dotted;
 }
 
-.study-table td.study-order {
+.study-table td.study-order,
+.cycles-table td.cycle-rate {
   font-weight: 600;
 }
 

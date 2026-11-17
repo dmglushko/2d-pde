@@ -113,6 +113,16 @@ ExportedFile write_mesh_pde2d(const ExportInfo &info, const ExportInputs &in) {
   return text_file(info, out.str());
 }
 
+// The mesh the run's solution is on: the Mesh step's, or an adaptive
+// run's last mesh. The same format as mesh.pde2d (a refinement edge is
+// vertex 0's opposite edge, so a later refinement continues from it).
+ExportedFile write_solution_mesh_pde2d(const ExportInfo &info,
+                                       const ExportInputs &in) {
+  std::ostringstream out;
+  staged("export", [&] { io::export_pde2d(*in.run->mesh, out); });
+  return text_file(info, out.str());
+}
+
 ExportedFile write_mesh_svg(const ExportInfo &info, const ExportInputs &in) {
   std::ostringstream out;
   staged("export", [&] { io::export_mesh_svg(*in.mesh->mesh, out); });
@@ -359,7 +369,7 @@ ExportedFile write_provenance(const ExportInfo &info, const ExportInputs &in) {
   return text_file(info, provenance_document(in).dump(2) + "\n");
 }
 
-constexpr std::array<ExportInfo, 11> kinds{{
+constexpr std::array<ExportInfo, 12> kinds{{
     {ExportKind::mesh_pde2d, "mesh.pde2d", "text/plain", ExportNeeds::mesh,
      write_mesh_pde2d},
     {ExportKind::mesh_svg, "mesh.svg", "image/svg+xml", ExportNeeds::mesh,
@@ -380,6 +390,8 @@ constexpr std::array<ExportInfo, 11> kinds{{
      ExportNeeds::done_run, write_solution_vtk},
     {ExportKind::solution_vtk_zip, "solution-vtk.zip", "application/zip",
      ExportNeeds::done_run, write_solution_vtk_zip},
+    {ExportKind::solution_mesh_pde2d, "solution-mesh.pde2d", "text/plain",
+     ExportNeeds::done_run, write_solution_mesh_pde2d},
     {ExportKind::provenance_json, "provenance.json", "application/json",
      ExportNeeds::case_only, write_provenance},
 }};

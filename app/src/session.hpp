@@ -117,6 +117,11 @@ public:
   std::string solution_values_float32(std::uint64_t job, std::size_t first,
                                       std::size_t count,
                                       const std::string &client = {});
+  // The error indicators of an adaptive run's last cycle as float32, one
+  // per triangle of its mesh (what POST /api/solve/indicators sends). The
+  // run lock only.
+  std::string indicators_float32(std::uint64_t job,
+                                 const std::string &client = {});
   // Solves the case to the end and returns every kept solution's values,
   // one vector per time (one value per mesh node), as computed.
   std::vector<std::vector<double>>

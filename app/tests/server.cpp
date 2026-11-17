@@ -162,7 +162,7 @@ int main() {
          const Running running;
          auto client = running.client();
          const Json list = Json::parse(client.Get("/api/examples")->body);
-         check(list.size() == 7, "seven examples");
+         check(list.size() == 8, "eight examples");
          const std::string name = list[0]["name"].get<std::string>();
          const auto example = client.Get("/api/examples/" + name);
          check(example && example->status == 200, "served");

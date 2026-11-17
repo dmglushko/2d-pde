@@ -27,7 +27,7 @@ const NOT_SHOWN = {
 const at = (t, format) => (Number.isFinite(t) ? `at t = ${format(t)}` : "");
 
 // input:
-//   colorBy: "none" | "quality" | "field" | "gradient"
+//   colorBy: "none" | "quality" | "field" | "gradient" | "indicator"
 //   source: "solve" | "field" (store.fieldSource)
 //   difference: null | "exact" | "reference" (what the user asked for)
 //   solve: null | {data, fresh, frame, snapshot: {values, nearest:
@@ -40,7 +40,8 @@ const at = (t, format) => (Number.isFinite(t) ? `at t = ${format(t)}` : "");
 // Returns {kind ("none", "solution", "difference", "field"), source, name,
 // when, label, values, scale, frame, t, outdated, loading (text or null),
 // failure ({error, retry: "snapshot" | "difference"} or null), difference
-// ({requested, state, shown, note}), precision}.
+// ({requested, state, shown, note}), precision, indicators (an adaptive
+// solution's error indicators, one per triangle of its mesh, or null)}.
 export function resolveDisplay({ colorBy, source, difference = null, solve = null, comparison = null, field = null, format = String }) {
   const none = {
     kind: "none",
@@ -57,8 +58,9 @@ export function resolveDisplay({ colorBy, source, difference = null, solve = nul
     failure: null,
     difference: { requested: difference, state: "none", shown: false, note: null },
     precision: null,
+    indicators: null,
   };
-  const colouring = colorBy === "field" || colorBy === "gradient";
+  const colouring = colorBy === "field" || colorBy === "gradient" || colorBy === "indicator";
   if (source === "solve" && solve?.data) return solution({ ...none, colouring }, solve, difference, comparison, format);
   if (field?.data) {
     const data = field.data;
@@ -122,6 +124,7 @@ function solution(base, solve, difference, comparison, format) {
     loading: pick.loading ? `Loading u at t = ${format(t)}…` : null,
     failure: solve.snapshot?.failure ? { error: solve.snapshot.failure, retry: "snapshot" } : null,
     precision: PRECISION.solve,
+    indicators: data.indicators ?? null,
   };
 }
 

@@ -681,6 +681,21 @@ std::string Session::solution_values_float32(std::uint64_t job,
   return out;
 }
 
+std::string Session::indicators_float32(std::uint64_t job,
+                                        const std::string &client) {
+  const RunSnapshots run = snapshots_of(job, client);
+  if (!run.indicators)
+    throw StageError("solve", "not_ready",
+                     std::format("the run {} has no error indicators (only "
+                                 "a finished adaptive run has them)",
+                                 job));
+  std::string out;
+  out.reserve(run.indicators->size() * 4);
+  for (const double value : *run.indicators)
+    append_float32(out, value);
+  return out;
+}
+
 Json Session::keep_reference(const Json &request, const std::string &client) {
   const Work work(*this, "reference", client);
   static constexpr std::string_view known[] = {"job"};
@@ -952,8 +967,12 @@ Json Session::run(const Json &input) {
         request["exact"] = exact;
         Json comparison = compare(request);
         comparison.erase("snapshots");
-        comparison["nodes"] = out["mesh"]["stats"]["nodes"];
-        comparison["longest_edge"] = out["mesh"]["longest_edge"];
+        // An adaptive run's mesh is its last one: the comparison's own
+        // node count, and no longest edge of the Mesh stage.
+        if (!comparison.contains("cycles")) {
+          comparison["nodes"] = out["mesh"]["stats"]["nodes"];
+          comparison["longest_edge"] = out["mesh"]["longest_edge"];
+        }
         out["comparison"] = std::move(comparison);
       }
     }

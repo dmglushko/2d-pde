@@ -17,6 +17,14 @@
       "solve.min": {"min": -1e-9},
       "solve.max": {"min": 0.9, "max": 1.000000001}
     },
+    "l_shape_adaptive": {
+      "solve.state": {"equals": "done"},
+      "solve.mode": {"equals": "adaptive"},
+      "solve.adaptive.stop_reason": {"equals": "tolerance_met"},
+      "solve.max": {"min": 1.25, "max": 1.26},
+      "comparison.max_abs": {"max": 0.003},
+      "comparison.max_l2": {"max": 0.0003}
+    },
     "l_shape_corner": {
       "solve.state": {"equals": "done"},
       "solve.max": {"min": 1.25, "max": 1.26},

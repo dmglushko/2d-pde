@@ -17,8 +17,19 @@ export function drawnSolve() {
   const data = fresh ?? lastResult("solve");
   if (!data || !(data.values?.length > 0)) return null;
   const mesh = lastResult("mesh")?.mesh;
-  if (!fresh && (!mesh || mesh.id !== data.mesh_id)) return null;
+  // An adaptive result is on its own mesh; an outdated one is drawn while
+  // the Mesh step still has the mesh it started from.
+  const from = data.mesh ? data.start_mesh_id : data.mesh_id;
+  if (!fresh && (!mesh || mesh.id !== from)) return null;
   return { data, fresh: Boolean(fresh) };
+}
+
+// The mesh the picture draws: an adaptive solution's own mesh while the
+// solution is what is shown, else the Mesh step's. {mesh, fresh}.
+export function pictureMesh() {
+  const drawn = store.fieldSource === "solve" ? drawnSolve() : null;
+  if (drawn?.data.mesh) return { mesh: drawn.data.mesh, fresh: drawn.fresh };
+  return { mesh: lastResult("mesh")?.mesh ?? null, fresh: freshResult("mesh") !== null };
 }
 
 function drawnField() {

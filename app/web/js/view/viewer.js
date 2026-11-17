@@ -23,7 +23,7 @@ const OUTDATED_ALPHA = 0.4;
 
 const sameLayers = (a = {}, b = {}) =>
   a.geometry === b.geometry && a.mesh === b.mesh && a.dirichlet === b.dirichlet && a.isolines === b.isolines && a.isolineCount === b.isolineCount;
-const sameField = (a, b) => a === b || (a && b && a.values === b.values && a.scale === b.scale && a.label === b.label);
+const sameField = (a, b) => a === b || (a && b && a.values === b.values && a.scale === b.scale && a.label === b.label && a.indicators === b.indicators);
 
 export class Viewer {
   // callbacks: onPin(x, y) for a click (or Enter) at a point;
@@ -115,8 +115,32 @@ export class Viewer {
     this.positions = null;
     this.gradients = null;
     this.gradientBuckets = null;
+    this.indicatorLogs = null;
     this.shownScale = null;
     if (!field) return;
+    if (colorBy === "indicator") {
+      // log10 of each triangle's indicator: they span decades. A zero
+      // indicator (nothing to estimate there) takes the lowest colour.
+      const eta = field.indicators;
+      if (!eta || !mesh || eta.length * 3 !== mesh.triangles.length) return;
+      const logs = new Float64Array(eta.length);
+      let low = Infinity;
+      let high = -Infinity;
+      for (let k = 0; k < eta.length; k++) {
+        logs[k] = eta[k] > 0 ? Math.log10(eta[k]) : -Infinity;
+        if (Number.isFinite(logs[k])) {
+          low = Math.min(low, logs[k]);
+          high = Math.max(high, logs[k]);
+        }
+      }
+      if (!Number.isFinite(low)) low = high = 0;
+      for (let k = 0; k < logs.length; k++) if (!Number.isFinite(logs[k])) logs[k] = low;
+      const scale = (locked.indicator && lockedScale(locked.indicator.low, locked.indicator.high)) ?? fieldScale([low, high]);
+      this.shownScale = scale;
+      this.indicatorLogs = logs;
+      this.gradientBuckets = layers.bucketTriangles(logs.length, (k) => scale.position(logs[k]));
+      return;
+    }
     if (colorBy === "gradient") {
       if (!this.fieldComplete) return;
       this.gradients = gradientMagnitudes(mesh.nodes, mesh.triangles, field.values);
@@ -136,7 +160,7 @@ export class Viewer {
   prepareIsolines() {
     this.isolines = null;
     const { field, mesh, layers: shown = {}, colorBy } = this.data;
-    if (!shown.isolines || !this.fieldComplete || colorBy === "gradient") return;
+    if (!shown.isolines || !this.fieldComplete || colorBy === "gradient" || colorBy === "indicator") return;
     const scale = this.shownScale ?? field.scale ?? fieldScale(field.values);
     const levels = isolineLevels(scale.low, scale.high, shown.isolineCount ?? 10);
     this.isolines = { levels, segments: isolines(mesh.nodes, mesh.triangles, field.values, levels), positions: levels.map((v) => scale.position(v)), scale };
@@ -214,7 +238,7 @@ export class Viewer {
   // read: edges go fainter).
   colouredByField() {
     const { colorBy, field } = this.data;
-    return Boolean(field) && !field.outdated && (colorBy === "field" || (colorBy === "gradient" && this.gradients));
+    return Boolean(field) && !field.outdated && (colorBy === "field" || (colorBy === "gradient" && this.gradients) || (colorBy === "indicator" && this.indicatorLogs));
   }
 
   draw() {
@@ -244,9 +268,10 @@ export class Viewer {
     if (fieldShown) {
       ctx.globalAlpha = field.outdated ? OUTDATED_ALPHA : 1;
       if (colorBy === "field" && this.positions) layers.rasterField(this, mesh, this.positions, tableOf(this.shownScale));
-      if (colorBy === "gradient" && this.gradientBuckets) layers.fillBuckets(this, mesh, this.gradientBuckets, tableOf(this.shownScale));
+      if ((colorBy === "gradient" || colorBy === "indicator") && this.gradientBuckets) layers.fillBuckets(this, mesh, this.gradientBuckets, tableOf(this.shownScale));
       ctx.globalAlpha = 1;
       if (colorBy === "gradient" && !this.gradients) note = "|∇| needs a value at every node";
+      if (colorBy === "indicator" && !this.indicatorLogs) note = "error indicators come from an adaptive solve";
     }
     if (hasMesh && shown.mesh) {
       const alpha = meshStale ? 0.35 : this.colouredByField() ? EDGES_OVER_FIELD : 1;

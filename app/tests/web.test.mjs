@@ -38,7 +38,7 @@ import { LARGE_SOLUTION_BYTES, RUN_ALL, STAGES, STEPS, errorPath, errorPathOf, r
 import { Tickets } from "../web/js/pure/tickets.js";
 import { displayKey, resolveDisplay } from "../web/js/pure/display.js";
 import { backoffDelay, isTransient, plainError, serverBusyText } from "../web/js/pure/requests.js";
-import { observedOrders, referenceSlope, studyLevels } from "../web/js/pure/study.js";
+import { adaptiveRows, observedOrders, referenceSlope, studyLevels } from "../web/js/pure/study.js";
 import { bytesText, colorbarTicks, csvText, logTicks, seriesCsv } from "../web/js/pure/format.js";
 import { COLOR_MAPS, colorMapOf } from "../web/js/pure/color.js";
 import { serverRunBytes } from "../web/js/pure/stages.js";
@@ -386,6 +386,9 @@ test("solution sizes and binary snapshots", () => {
   assert.equal(solutionBytes({ mode: "time", time: { snapshots: 9 } }, 1000), 40000);
   assert.equal(solutionBytes({ mode: "time", time: {} }, 1000), null);
   assert.equal(solutionBytes({ mode: "static" }, undefined), null);
+  // An adaptive solve sends its last solution: at most max_nodes values.
+  assert.equal(solutionBytes({ mode: "adaptive", adaptive: { max_nodes: 500 } }, 1000), 2000);
+  assert.equal(solutionBytes({ mode: "adaptive", adaptive: {} }, 1000), null);
   assert.ok(solutionBytes({ mode: "time", time: { snapshots: 1000 } }, 2000) < LARGE_SOLUTION_BYTES, "8 MB is not large");
   assert.ok(solutionBytes({ mode: "time", time: { snapshots: 1000 } }, 20000) > LARGE_SOLUTION_BYTES, "80 MB is");
   const buffer = new ArrayBuffer(4 * 6);
@@ -808,6 +811,9 @@ test("chart data as CSV, sizes in bytes", () => {
   assert.equal(bytesText(1024 ** 3), "1 GB");
   assert.deepEqual(serverRunBytes({ mode: "time", time: { snapshots: 9 } }, { snapshot_bytes: 100, budget: 2000 }), { bytes: 1000, budget: 2000, share: 0.5 });
   assert.equal(serverRunBytes({ mode: "static" }, { snapshot_bytes: 100, budget: 1000 }).bytes, 100);
+  // An adaptive run reserves max_cycles meshes of max_nodes (runs.cpp).
+  assert.equal(serverRunBytes({ mode: "adaptive", adaptive: { max_nodes: 1000, max_cycles: 3 } }, { snapshot_bytes: 100, budget: 1e9 }).bytes, 3 * (1000 * 64 + 512));
+  assert.equal(serverRunBytes({ mode: "adaptive", adaptive: { max_nodes: 0, max_cycles: 3 } }, { snapshot_bytes: 100, budget: 1e9 }), null);
   assert.equal(serverRunBytes({ mode: "time", time: {} }, { snapshot_bytes: 1, budget: 1 }), null);
   assert.equal(serverRunBytes({ mode: "static" }, null), null);
 });
@@ -822,6 +828,34 @@ test("colour maps: a default per kind, chosen by name", () => {
   assert.equal(normalizeSettings({ sequentialMap: "orange" }).sequentialMap, "orange");
   assert.equal(normalizeSettings({ sequentialMap: "rainbow" }).sequentialMap, "blue", "an unknown map is the default");
   assert.equal(normalizeSettings({ divergingMap: 3 }).divergingMap, "blue-red");
+});
+
+test("an adaptive solve's cycle rows: errors by cycle and rates against N", () => {
+  const cycles = [
+    { cycle: 1, nodes: 100, triangles: 180, estimate: 0.4, marked: 20 },
+    { cycle: 2, nodes: 400, triangles: 760, estimate: 0.2, marked: 90 },
+    { cycle: 3, nodes: 1600, triangles: 3100, estimate: 0.1, marked: null },
+  ];
+  const plain = adaptiveRows(cycles);
+  assert.equal(plain.length, 3);
+  assert.equal(plain[0].estimateRate, null);
+  // 0.4 -> 0.2 while N grows 4 times: N^(-1/2).
+  assert.ok(Math.abs(plain[1].estimateRate - 0.5) < 1e-12);
+  assert.ok(Math.abs(plain[2].estimateRate - 0.5) < 1e-12);
+  assert.equal(plain[1].l2, null);
+  assert.equal(plain[1].l2Rate, null);
+  // The comparison's cycles may come in any order; a missing one is null.
+  const compared = [
+    { cycle: 3, max_abs: 0.01, l2: 0.000625 },
+    { cycle: 1, max_abs: 0.1, l2: 0.01 },
+    { cycle: 2, max_abs: 0.05, l2: 0.0025 },
+  ];
+  const rows = adaptiveRows(cycles, compared);
+  assert.equal(rows[0].max, 0.1);
+  assert.ok(Math.abs(rows[1].l2Rate - 1) < 1e-12);
+  assert.ok(Math.abs(rows[2].l2Rate - 1) < 1e-12);
+  assert.deepEqual(adaptiveRows(null), []);
+  assert.equal(adaptiveRows(cycles, [{ cycle: 2, max_abs: 1, l2: 1 }])[0].l2, null);
 });
 
 test("a refinement study: levels and observed orders", () => {

@@ -9,6 +9,8 @@
 #include "pde2d/mesh/ear_clipping.hpp"
 #include "pde2d/mesh/laplacian_smoothing.hpp"
 #include "pde2d/mesh/longest_edge_bisection.hpp"
+#include "pde2d/mesh/newest_vertex_bisection.hpp"
+#include "pde2d/mesh/red_green_blue_refinement.hpp"
 #include "pde2d/mesh/ruppert.hpp"
 
 #include <array>
@@ -202,6 +204,58 @@ MeshCatalog make_mesh_catalog() {
              -> std::shared_ptr<const mesh::Refiner> {
            return std::make_shared<mesh::LongestEdgeBisection>(
                mesh::LongestEdgeBisectionOptions{
+                   .max_points = options.count("max_points")});
+         }});
+  }
+  {
+    const mesh::NewestVertexBisectionOptions defaults{};
+    catalog.refiners.push_back(
+        {.type = "newest_vertex_bisection",
+         .label = "Newest vertex bisection",
+         .description =
+             "Bisects each triangle at its refinement edge (opposite its "
+             "newest vertex), with the closure that keeps the mesh "
+             "conforming. Its triangles fall into a few similarity classes, "
+             "so angles stay bounded over many adaptive cycles.",
+         .options = {{.name = "max_points",
+                      .label = "Maximum points",
+                      .description =
+                          "Refinement stops with an error after inserting "
+                          "this many points.",
+                      .kind = OptionKind::integer,
+                      .default_value = defaults.max_points,
+                      .choices = {},
+                      .unit = {}}},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const mesh::Refiner> {
+           return std::make_shared<mesh::NewestVertexBisection>(
+               mesh::NewestVertexBisectionOptions{
+                   .max_points = options.count("max_points")});
+         }});
+  }
+  {
+    const mesh::RedGreenBlueRefinementOptions defaults{};
+    catalog.refiners.push_back(
+        {.type = "red_green_blue",
+         .label = "Red-green-blue refinement",
+         .description =
+             "Splits all three edges of a marked triangle (red: four similar "
+             "children) and closes the mesh with newest vertex bisections "
+             "(green, blue). Near curved boundaries it flattens triangles "
+             "with two boundary edges; newest vertex bisection does not.",
+         .options = {{.name = "max_points",
+                      .label = "Maximum points",
+                      .description =
+                          "Refinement stops with an error after inserting "
+                          "this many points.",
+                      .kind = OptionKind::integer,
+                      .default_value = defaults.max_points,
+                      .choices = {},
+                      .unit = {}}},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const mesh::Refiner> {
+           return std::make_shared<mesh::RedGreenBlueRefinement>(
+               mesh::RedGreenBlueRefinementOptions{
                    .max_points = options.count("max_points")});
          }});
   }

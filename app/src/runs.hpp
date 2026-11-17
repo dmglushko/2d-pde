@@ -22,7 +22,9 @@
 #include <string_view>
 #include <vector>
 
-// Solves as runs: a static one is done when it is started; a time
+// Solves as runs: a static one is done when it is started, and so is an
+// adaptive one (the library's AdaptiveStaticSolver, one call; its run's
+// mesh is the last adapted mesh, under an id of its own); a time
 // integration runs in chunks that end on snapshot times, each continuing
 // from the state the previous one ended with (Integrator::integrate with
 // `initial`), so the page sees the snapshots while the run goes on
@@ -76,6 +78,12 @@ struct RunSnapshots {
   std::uint64_t id = 0;
   std::shared_ptr<const mesh::Mesh> mesh;
   std::vector<Snapshot> snapshots;
+  // An adaptive run's solution of every cycle, each on its own mesh (the
+  // last is snapshots[0]); empty for other runs.
+  std::vector<Snapshot> cycles;
+  // An adaptive run's last indicators (one per triangle of `mesh`), or
+  // null.
+  std::shared_ptr<const std::vector<double>> indicators;
 };
 
 // What one chunk cost: its snapshot intervals, its steps and its seconds
@@ -121,9 +129,14 @@ struct Run {
   std::uint64_t id = 0;
   std::string client;
   std::string key; // solve_key of the case it was made from
+  // An adaptive run replaces meshed, mesh, mesh_id and base's
+  // free_unknowns once, under the run lock, when it is solved (its last
+  // problem, its last mesh and adapted_mesh_id); readers take the run lock.
   std::shared_ptr<const fem::MeshedProblem> meshed; // session mutex only
   std::shared_ptr<const mesh::Mesh> mesh;           // meshed's mesh
-  std::uint64_t mesh_id = 0;  // the StageCache's id of its mesh
+  std::uint64_t mesh_id = 0; // the StageCache's id of its mesh
+  // An adaptive run's id for its last mesh (StageCache::new_mesh_id).
+  std::uint64_t adapted_mesh_id = 0;
   fem::Parameters parameters; // the problem's, for comparisons
   Json settings;              // the sections it was made from
   std::chrono::system_clock::time_point started;
@@ -154,6 +167,13 @@ struct Run {
     Json static_reports = Json::array();
     std::optional<mesh::StageReport> integrator; // the chunks', combined
     std::optional<StageError> error;             // of a failed run
+    // An adaptive run: every cycle's solution, the indicators of the last
+    // cycle's estimate (one per triangle of the last mesh, empty without
+    // an estimate), and the summary sent as "adaptive" (stop reason,
+    // tolerance, a row per cycle).
+    std::vector<Snapshot> cycles;
+    std::shared_ptr<const std::vector<double>> indicators;
+    Json adaptive;
     // RunManager's clock at its last use (a lookup marks it).
     mutable std::uint64_t used = 0;
   } published;
@@ -167,12 +187,17 @@ struct Run {
 // starts from.
 std::size_t run_bytes(std::size_t nodes, std::size_t snapshots, int time_order);
 
+// The most an adaptive run keeps: at most `max_cycles` solutions and
+// meshes of at most `max_nodes` nodes each (values, nodes, about two
+// triangles a node, boundary edges and the indicators).
+std::size_t adaptive_run_bytes(std::size_t max_nodes, std::size_t max_cycles);
+
 // A new run of the case, ready to start: its setup, times and bytes are
 // known, nothing is solved. Throws the StageError of a stage it builds.
 std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
                               std::uint64_t id, const std::string &client);
 
-// Solves a static run, or runs a time run's first chunk. Throws the
+// Solves a static or adaptive run, or runs a time run's first chunk. Throws the
 // StageError of either (a failed first chunk is also recorded in the
 // run). Under the session mutex; takes `run_lock` to publish.
 void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock);

@@ -219,6 +219,7 @@ function hover(v, event) {
         rows.push([field.label, formatNumber(value, digits + 2)]);
       }
       if (field && colorBy === "gradient" && v.gradients) rows.push([gradientName(field.name), formatNumber(v.gradients[found.triangle], digits + 2)]);
+      if (field && colorBy === "indicator" && v.indicatorLogs && field.indicators) rows.push(["η (error indicator)", formatNumber(field.indicators[found.triangle], digits + 2)]);
     }
     if (field && colorBy === "field" && !v.fieldComplete) {
       const node = nearestValuedNode(mesh.nodes, field.values, x, y, DOT_PICK_PX / v.scale);

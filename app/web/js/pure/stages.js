@@ -54,6 +54,12 @@ export function stagesToRun(stage, isFresh) {
 export function solutionBytes(solveSection, nodes) {
   if (!Number.isFinite(nodes) || !solveSection) return null;
   if (solveSection.mode === "static") return 4 * nodes;
+  // An adaptive solve sends its last solution only, on a mesh not known
+  // before it is solved (at most max_nodes nodes).
+  if (solveSection.mode === "adaptive") {
+    const most = solveSection.adaptive?.max_nodes;
+    return Number.isInteger(most) && most > 0 ? 4 * most : null;
+  }
   const snapshots = solveSection.time?.snapshots ?? null;
   if (!Number.isInteger(snapshots) || snapshots < 1) return null;
   return 4 * nodes * (snapshots + 1);
@@ -94,6 +100,14 @@ export function serverRunBytes(solveSection, memory) {
   const perSnapshot = memory?.snapshot_bytes;
   const budget = memory?.budget;
   if (!Number.isFinite(perSnapshot) || !(budget > 0) || !solveSection) return null;
+  // An adaptive run reserves room for max_cycles meshes and solutions of
+  // at most max_nodes nodes (runs.cpp, adaptive_run_bytes).
+  if (solveSection.mode === "adaptive") {
+    const { max_nodes: nodes, max_cycles: cycles } = solveSection.adaptive ?? {};
+    if (!Number.isInteger(nodes) || !Number.isInteger(cycles) || nodes < 1 || cycles < 1) return null;
+    const bytes = cycles * (nodes * 64 + 512);
+    return { bytes, budget, share: bytes / budget };
+  }
   let count = 1;
   if (solveSection.mode !== "static") {
     const snapshots = solveSection.time?.snapshots;

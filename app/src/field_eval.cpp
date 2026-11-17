@@ -173,6 +173,25 @@ Json Comparison::summary() const {
   out["max_abs"] = overall(max_abs);
   out["max_rms"] = overall(max_rms);
   out["max_l2"] = overall(max_l2);
+  // An adaptive run against an exact solution: the error of every cycle,
+  // each on its own mesh (the last is the snapshot above).
+  if (exact_ && !run_.cycles.empty()) {
+    Json cycles = Json::array();
+    for (std::size_t k = 0; k < run_.cycles.size(); ++k) {
+      const solve::Solution &cycle = *run_.cycles[k];
+      const DifferenceStats stats = difference_stats(
+          cycle.values, values_at_nodes(*cycle.mesh, *exact_, cycle.time),
+          lumped_weights(*cycle.mesh));
+      Json item = Json::object();
+      item["cycle"] = k + 1;
+      item["nodes"] = cycle.mesh->nodes.size();
+      item["max_abs"] = number_or_null(stats.max_abs);
+      item["rms"] = number_or_null(stats.rms);
+      item["l2"] = number_or_null(stats.l2);
+      cycles.push_back(std::move(item));
+    }
+    out["cycles"] = std::move(cycles);
+  }
   return out;
 }
 

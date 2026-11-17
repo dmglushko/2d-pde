@@ -8,7 +8,7 @@ import { clearStudy } from "./refinement.js";
 import { watchServer } from "./server_status.js";
 import { setColorMaps } from "./view/tokens.js";
 import { recompareIfNeeded, retryDifference } from "./compare.js";
-import { currentDisplay } from "./display.js";
+import { currentDisplay, pictureMesh } from "./display.js";
 import { plainError } from "./pure/requests.js";
 import { fill, guardButtons, h, readFileText, revealFolded } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
@@ -181,8 +181,8 @@ let shown = null;
 function drawnField(display) {
   if (!display.values) return (shown = null);
   const label = display.outdated ? `${display.label} (outdated)` : display.label;
-  const next = { name: display.name, when: display.when, label, values: display.values, scale: display.scale, data: display.data, outdated: display.outdated };
-  if (shown && shown.values === next.values && shown.scale === next.scale && shown.label === next.label && shown.outdated === next.outdated) return shown;
+  const next = { name: display.name, when: display.when, label, values: display.values, scale: display.scale, data: display.data, outdated: display.outdated, indicators: display.indicators ?? null };
+  if (shown && shown.values === next.values && shown.scale === next.scale && shown.label === next.label && shown.outdated === next.outdated && shown.indicators === next.indicators) return shown;
   // The Assemble step's field keeps its identity while its data does.
   if (next.data && shown?.data === next.data && shown.outdated === next.outdated) return shown;
   shown = next;
@@ -196,6 +196,10 @@ function updateColorMenu(display) {
   const name = display.name;
   menu.querySelector('option[value="field"]').textContent = name ? `field: ${name}${display.outdated ? " (outdated)" : ""}` : "field (none yet)";
   menu.querySelector('option[value="gradient"]').textContent = name ? `|∇| of ${name}` : "|∇| of the field";
+  // Only an adaptive solution has error indicators.
+  const indicator = menu.querySelector('option[value="indicator"]');
+  indicator.disabled = !display.indicators && store.view.colorBy !== "indicator";
+  indicator.title = display.indicators ? "" : "Only an adaptive solve gives error indicators";
 }
 
 // Over the picture: the "outdated" stamp of a result built for an earlier
@@ -230,13 +234,13 @@ function updateOverlay(display, colouring) {
 
 function updateViewer() {
   const geometry = freshResult("geometry") ?? lastResult("geometry");
-  const meshResult = lastResult("mesh");
   const assembled = lastResult("assemble");
-  const mesh = meshResult?.mesh ?? null;
-  const meshFresh = freshResult("mesh") !== null;
+  // An adaptive solution is drawn on its own mesh (display.js).
+  const { mesh, fresh: meshFresh } = pictureMesh();
+  const ownMesh = mesh !== null && mesh !== lastResult("mesh")?.mesh;
   const display = currentDisplay();
   const field = drawnField(display);
-  const colouring = store.view.colorBy === "field" || store.view.colorBy === "gradient";
+  const colouring = ["field", "gradient", "indicator"].includes(store.view.colorBy);
   updateColorMenu(display);
   updateOverlay(display, colouring);
   element("layer-isolines").checked = store.view.isolines;
@@ -247,7 +251,8 @@ function updateViewer() {
     geometry,
     mesh,
     meshStale: mesh !== null && !meshFresh,
-    dirichlet: assembled && freshResult("assemble") ? assembled.meshed_problem.dirichlet_nodes : null,
+    // The Dirichlet nodes are the Mesh step's mesh's.
+    dirichlet: assembled && freshResult("assemble") && !ownMesh ? assembled.meshed_problem.dirichlet_nodes : null,
     field,
     colorBy: store.view.colorBy,
     locked: store.view.locked,

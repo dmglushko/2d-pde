@@ -1,5 +1,5 @@
 // Step 5: solving, built from the catalog's solve section: the linear
-// solver, and per mode (static, in time) its settings and slots. The head
+// solver, and per mode (static, in time, adaptive) its settings and slots. The head
 // holds Solve (Continue after a stop, Stop during a run) and the status
 // with the run's progress; the result, its exports, the comparison with
 // an exact solution and with the reference run follow; the settings come
@@ -8,13 +8,13 @@
 
 import { exportFile, followedRun, runWithPrerequisites, stopRun, toast } from "../actions.js";
 import { lineChart } from "../charts.js";
-import { LABELS, clearComparison, compare, compareWith, comparisons, currentComparison, forgetReference, keepReference } from "../compare.js";
+import { LABELS, clearComparison, compare, compareWith, comparisonState, comparisons, currentComparison, forgetReference, keepReference } from "../compare.js";
 import { comparisonControls, currentDisplay } from "../display.js";
 import { runStudy, stopStudy, study, studyOrders } from "../refinement.js";
 import { bytesText, formatNumber } from "../pure/format.js";
 import { isTransient, plainError } from "../pure/requests.js";
 import { LARGE_SOLUTION_BYTES, serverRunBytes, solutionBytes } from "../pure/stages.js";
-import { referenceSlope } from "../pure/study.js";
+import { adaptiveRows, referenceSlope } from "../pure/study.js";
 import { actionButton, errorBox, exportButton, fill, foldable, h, infoToggle, markError, optionsForm, reportsView, stat, warningChip } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, notify, openStep, outdatedError, setViewOption, store } from "../state.js";
 import { showFrame } from "../timebar.js";
@@ -41,7 +41,7 @@ function sizeWarning() {
     const share = `${Math.round(100 * server.share)}%`;
     lines.push(
       server.share > 1
-        ? `This run would keep about ${bytesText(server.bytes)} on the server, more than its whole memory budget for runs (${bytesText(server.budget)}): it will be refused. Keep fewer snapshots or use a coarser mesh.`
+        ? `This run would keep about ${bytesText(server.bytes)} on the server, more than its whole memory budget for runs (${bytesText(server.budget)}): it will be refused. ${store.caseData.solve?.mode === "adaptive" ? "Lower the maximum nodes or cycles." : "Keep fewer snapshots or use a coarser mesh."}`
         : `This run will keep about ${bytesText(server.bytes)} on the server: ${share} of its memory budget for runs (${bytesText(server.budget)}). Other tabs' finished runs may be dropped to make room.`,
     );
   }
@@ -50,7 +50,8 @@ function sizeWarning() {
     lines.push(
       `The page holds up to ${bytesText(bytes)} of it as float32 (${formatNumber(nodes)} nodes × ${formatNumber(bytes / 4 / nodes)} times), loading snapshots as they are shown.`,
     );
-  return lines.length ? h("div", { class: "notice", dataset: { path: "solve.time.snapshots" } }, lines.map((line) => h("p", {}, line))) : null;
+  const path = store.caseData.solve?.mode === "adaptive" ? "solve.adaptive.max_nodes" : "solve.time.snapshots";
+  return lines.length ? h("div", { class: "notice", dataset: { path } }, lines.map((line) => h("p", {}, line))) : null;
 }
 
 // The figures of a run. Linear iterations are left out when there were
@@ -62,6 +63,23 @@ function resultStats(result) {
   const staticReport = report("static_solver");
   const dt = formatNumber(integrator.min_dt) === formatNumber(integrator.max_dt) ? formatNumber(integrator.max_dt) : `${formatNumber(integrator.min_dt)} – ${formatNumber(integrator.max_dt)}`;
   const iterations = (count) => (count > 0 ? stat("Linear iterations", formatNumber(count)) : null);
+  if (result.mode === "adaptive") {
+    const adaptive = result.adaptive ?? {};
+    const cycles = adaptive.cycles ?? [];
+    const last = cycles.at(-1);
+    return [
+      stat("Cycles", formatNumber(cycles.length)),
+      stat("Stopped", STOP_REASONS[adaptive.stop_reason] ?? adaptive.stop_reason ?? "…", adaptive.tolerance ? `Tolerance ${formatNumber(adaptive.tolerance, 3)}` : null),
+      last ? stat("Nodes", formatNumber(last.nodes), `${formatNumber(last.triangles)} triangles in the last mesh`) : null,
+      stat("Unknowns", formatNumber(result.free_unknowns)),
+      last && Number.isFinite(last.estimate) ? stat("Estimate", formatNumber(last.estimate, 3), "The error estimator's total √(Σ η_T²) on the last mesh") : null,
+      adaptive.mesh_stats ? stat("Smallest angle", `${formatNumber(adaptive.mesh_stats.min_angle_degrees, 3)}°`, "Of the last mesh") : null,
+      stat("min u", formatNumber(result.min)),
+      stat("max u", formatNumber(result.max)),
+      iterations(staticReport.linear_iterations),
+      stat("Residual", formatNumber(staticReport.residual, 2), "‖b − A U‖ of the last linear solve: how well the system was solved, not the error of u"),
+    ];
+  }
   return [
     stat("Unknowns", formatNumber(result.free_unknowns)),
     stat("Time order", timeOrderText(result.time_order, result.problem_time_order)),
@@ -103,7 +121,7 @@ function headStatus(result, fresh, running) {
   }
   if (fresh && result.state === "stopped") return { status: "stopped", text: `Stopped at t = ${formatNumber(result.t, 5)}` };
   if (fresh && result.state === "failed") return { status: "failed", text: `Failed after t = ${formatNumber(result.t, 5)}` };
-  if (fresh) return { detail: result.mode === "time" ? `${result.values.length} snapshots` : "static" };
+  if (fresh) return { detail: result.mode === "time" ? `${result.values.length} snapshots` : result.mode === "adaptive" ? `adaptive · ${result.adaptive?.cycles?.length ?? 0} cycles` : "static" };
   return {};
 }
 
@@ -116,13 +134,137 @@ const EXPORTS = [
   ["provenance.json", "Export provenance", "The whole case, the app and library versions and this run: what made the results."],
 ];
 
+// An adaptive solve's last mesh, which the Mesh step does not have.
+const ADAPTED_MESH_EXPORT = ["solution-mesh.pde2d", "Export adapted mesh", "The last mesh of the adaptive solve in the .pde2d format: open it as a mesh file to start from it."];
+
 function exportsRow(result, fresh) {
   const done = fresh && result.state === "done";
   const stale = result.state === "done" ? "The solution shown is outdated: solve again to export it." : "The run did not reach t1: continue it to export.";
+  const kinds = result.mode === "adaptive" ? [...EXPORTS, ADAPTED_MESH_EXPORT] : EXPORTS;
   return h(
     "div",
     { class: "row actions-row" },
-    EXPORTS.map(([kind, label, about]) => exportButton(label, () => exportFile(kind), { fresh: done, staleReason: stale, about })),
+    kinds.map(([kind, label, about]) => exportButton(label, () => exportFile(kind), { fresh: done, staleReason: stale, about })),
+  );
+}
+
+// --- the adaptive cycles -------------------------------------------------------------
+
+// The reports whose messages the warning chip counts: an adaptive solve
+// that met its tolerance says why it stopped, which is no warning (the
+// stats say it); one stopped by a budget is.
+function warningReports(result) {
+  if (result.mode !== "adaptive" || result.adaptive?.stop_reason !== "tolerance_met") return result.reports;
+  return result.reports.filter((r) => r.stage !== "adaptive_static_solver");
+}
+
+const RATE_TITLE = "The observed rate: e ~ N^(−rate) between this cycle and the one before";
+
+// Why the adaptive loop stopped, in words.
+const STOP_REASONS = {
+  tolerance_met: "tolerance met",
+  max_cycles: "maximum cycles",
+  node_budget: "node budget",
+  nothing_changed: "nothing marked",
+};
+
+// The cycles of an adaptive solve: a table (nodes, the estimate, the
+// marked triangles, and with a comparison with an exact solution each
+// cycle's errors) and a log–log chart against the number of nodes with
+// the slopes N^(-1/2) and N^(-1). Drawn again when the result or its
+// comparison changes.
+function updateCycles(container) {
+  const slot = container.querySelector("#solve-cycles");
+  if (!slot) return;
+  const result = freshResult("solve") ?? lastResult("solve");
+  const compared = currentComparison("exact");
+  const errors = compared && comparisonState("exact") === "current" ? (compared.summary?.cycles ?? null) : null;
+  const key = [result, errors];
+  if (slot.shown && slot.shown[0] === key[0] && slot.shown[1] === key[1]) return;
+  slot.shown = key;
+  if (result?.mode !== "adaptive" || !result.adaptive?.cycles?.length) return fill(slot);
+  const rows = adaptiveRows(result.adaptive.cycles, errors);
+  const number = (v, digits = 3) => (v === null || v === undefined ? "–" : formatNumber(v, digits));
+  const withErrors = Boolean(errors);
+  const table = h(
+    "table",
+    { class: "data study-table cycles-table" },
+    h(
+      "thead",
+      {},
+      h(
+        "tr",
+        {},
+        h("th", { class: "num" }, "Cycle"),
+        h("th", { class: "num", title: "Nodes of the cycle's mesh" }, "N"),
+        h("th", { class: "num" }, "Estimate"),
+        h("th", { class: "num", title: RATE_TITLE }, "rate"),
+        withErrors ? [h("th", { class: "num", title: "The lumped L2 norm of u − exact" }, "L2 error"), h("th", { class: "num", title: RATE_TITLE }, "rate")] : null,
+      ),
+    ),
+    h(
+      "tbody",
+      {},
+      rows.map((r) =>
+        h(
+          "tr",
+          {},
+          h("td", { class: "num", title: r.marked === null ? "The last cycle: nothing marked" : `${formatNumber(r.marked)} of ${formatNumber(r.triangles)} triangles marked` }, String(r.cycle)),
+          h("td", { class: "num" }, formatNumber(r.nodes)),
+          h("td", { class: "num" }, number(r.estimate)),
+          h("td", { class: "num cycle-rate", dataset: { of: "estimate" } }, number(r.estimateRate, 2)),
+          withErrors ? [h("td", { class: "num" }, number(r.l2)), h("td", { class: "num cycle-rate", dataset: { of: "l2" } }, number(r.l2Rate, 2))] : null,
+        ),
+      ),
+    ),
+  );
+  let chart = null;
+  const plotted = rows.filter((r) => r.nodes > 0 && r.estimate > 0);
+  if (plotted.length >= 2) {
+    const nodes = plotted.map((r) => r.nodes);
+    const first = plotted[0];
+    const series = [{ name: "estimate", cls: "s1", values: plotted.map((r) => r.estimate) }];
+    if (withErrors) {
+      series.push({ name: "L2 error", cls: "s2", values: plotted.map((r) => (r.l2 > 0 ? r.l2 : NaN)) });
+      series.push({ name: "max error", cls: "s3", values: plotted.map((r) => (r.max > 0 ? r.max : NaN)) });
+    }
+    series.push({ name: "N^(−1/2)", cls: "ref", values: referenceSlope(nodes, -0.5, first.nodes, first.estimate) });
+    if (withErrors && first.l2 > 0) series.push({ name: "N^(−1)", cls: "ref ref-2", values: referenceSlope(nodes, -1, first.nodes, first.l2) });
+    chart = h(
+      "div",
+      { class: "study-chart" },
+      h("div", { class: "chart-title" }, "Against the number of nodes N (log–log)"),
+      h(
+        "div",
+        { class: "chart-key" },
+        series.map((s) => h("span", { class: "item" }, h("span", { class: `key-line ${s.cls}`, "aria-hidden": "true" }), s.name)),
+      ),
+      lineChart({
+        times: nodes,
+        series,
+        current: null,
+        log: true,
+        xName: "N",
+        width: Math.max(220, slot.clientWidth || 340),
+        height: 180,
+        label: "The error estimate of each adaptive cycle against its number of nodes N, on log–log axes, with the errors against the exact solution when compared, and reference slopes N^(−1/2) and N^(−1)",
+        csvName: "adaptive-cycles.csv",
+        endLabels: false,
+      }),
+    );
+  }
+  const info = infoToggle(
+    "Each cycle solves on a mesh, estimates the error of every triangle, marks some and refines them. The estimate bounds the error in the energy norm (up to a constant): on a well-adapted mesh of P1 elements it falls like N^(−1/2), and an L2 error like N^(−1), also for a solution with a corner singularity, where uniform refinement is slower. Compare with an exact solution (below) to add each cycle's error. Colour the picture by the error indicator (Colour menu) to see where the last estimate puts the error.",
+    "the adaptive cycles",
+  );
+  fill(
+    slot,
+    foldable(
+      { id: "solve.cycles", title: "Adaptive cycles", kind: "section", extras: [info.button], info: info.panel, attributes: { class: "cycles" } },
+      table,
+      chart,
+      withErrors ? null : h("p", { class: "note" }, "Compare with an exact solution to add each cycle's error."),
+    ),
   );
 }
 
@@ -342,6 +484,7 @@ function updateComparison(section, kind, result, frame, display) {
 
 function updateComparisons(container) {
   updateStudy(container);
+  updateCycles(container);
   const result = freshResult("solve");
   if (!result) return;
   const frame = Math.min(store.solveFrame, result.values.length - 1);
@@ -374,7 +517,9 @@ function updateStudy(container) {
   const slot = container.querySelector("#solve-study");
   if (!slot) return;
   const expression = (store.caseData.view?.exact_solution ?? "").trim();
-  const offered = study.running || study.rows.length > 0 || study.message || (expression && freshResult("solve")?.state === "done");
+  // Not for an adaptive solve, which refines its mesh itself.
+  const adaptive = store.caseData.solve?.mode === "adaptive";
+  const offered = study.running || study.rows.length > 0 || study.message || (expression && !adaptive && freshResult("solve")?.state === "done");
   const key = JSON.stringify([offered, study.running, study.stopping, study.rows.length, study.message, expression !== ""]);
   if (slot.shown === key) return;
   slot.shown = key;
@@ -492,11 +637,11 @@ function orderHint(solveCase) {
   const check = freshResult("problem");
   if (!check?.ok || typeof check.time_order !== "number") return null;
   const order = check.time_order;
-  if (solveCase.mode === "static" && order > 0)
+  if (solveCase.mode !== "time" && order > 0)
     return h(
       "div",
       { class: "notice" },
-      `The problem has time order ${order}: a static solve drops u_t and u_tt. `,
+      `The problem has time order ${order}: a ${solveCase.mode === "adaptive" ? "adaptive (static) " : "static "}solve drops u_t and u_tt. `,
       h("button", { type: "button", class: "small", onclick: () => editCase((c) => (c.solve.mode = "time"), "structure") }, "Solve in time"),
     );
   if (solveCase.mode === "time" && order === 0) return h("div", { class: "notice" }, "The problem has time order 0: each step is a static solve, which only some methods support.");
@@ -538,7 +683,7 @@ export const solvePanel = {
     const solveButton = actionButton("Solve", solve, { primary: true, guarded: true });
     const stopButton = actionButton("Stop", stopRun);
     const head = stepHead("solve", solveButton, stopButton);
-    fill(container, head, h("div", { class: "result", id: "solve-result" }), h("div", { id: "solve-study" }), settingsPart(section, solveCase, mode));
+    fill(container, head, h("div", { class: "result", id: "solve-result" }), h("div", { id: "solve-cycles" }), h("div", { id: "solve-study" }), settingsPart(section, solveCase, mode));
     Object.assign(container, { head, solveButton, stopButton });
     this.update(container);
   },
@@ -553,7 +698,7 @@ export const solvePanel = {
       fill(hint, orderHint(store.caseData.solve));
     }
     const size = container.querySelector("#solve-size");
-    const sizeKey = JSON.stringify([freshResult("mesh")?.stats?.nodes ?? null, store.caseData.solve?.mode, store.caseData.solve?.time?.snapshots]);
+    const sizeKey = JSON.stringify([freshResult("mesh")?.stats?.nodes ?? null, store.caseData.solve?.mode, store.caseData.solve?.time?.snapshots, store.caseData.solve?.adaptive?.max_nodes, store.caseData.solve?.adaptive?.max_cycles]);
     if (size.shown !== sizeKey) {
       size.shown = sizeKey;
       fill(size, sizeWarning());
@@ -596,11 +741,13 @@ export const solvePanel = {
       slot,
       error && !placed ? runErrorBox(error) : null,
       old ? errorBox(old, { outdated: true }) : null,
-      result && !running ? warningChip(result.reports, "solve.reports") : null,
+      result && !running ? warningChip(warningReports(result), "solve.reports") : null,
       result ? h("div", { class: "stats", id: "solve-stats" }, resultStats(result)) : null,
       result && !running ? exportsRow(result, fresh) : null,
       compared ? compareSection(result) : null,
-      compared ? referenceSection(result, fresh) : null,
+      // Two adaptive solves end on different meshes: no node-by-node
+      // comparison between them.
+      compared && result.mode !== "adaptive" ? referenceSection(result, fresh) : null,
       result && !running ? foldable({ id: "solve.reports", title: "Reports", kind: "section", folded: true }, reportsView(result.reports)) : null,
     );
     slot.classList.toggle("outdated-result", Boolean(result) && !fresh);

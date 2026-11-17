@@ -11,6 +11,12 @@
 
 #include "support/check.hpp"
 
+#include "pde2d/adapt/dorfler_marking.hpp"
+#include "pde2d/adapt/fixed_fraction_marking.hpp"
+#include "pde2d/adapt/kelly_estimator.hpp"
+#include "pde2d/adapt/maximum_marking.hpp"
+#include "pde2d/adapt/recovery_estimator.hpp"
+#include "pde2d/adapt/residual_estimator.hpp"
 #include "pde2d/solve/bicgstab.hpp"
 #include "pde2d/solve/conjugate_gradient.hpp"
 #include "pde2d/solve/fixed_step.hpp"
@@ -133,6 +139,16 @@ int main() {
          check_names(catalog.time_methods, Json(nullptr));
          // FixedStepOptions{}.dt = 0 is refused, so give one.
          check_names(catalog.step_controllers, Json{{"dt", 0.1}});
+         check_names(catalog.estimators, Json(nullptr));
+         // EquidistributionMarkingOptions has no usable default tolerance.
+         for (const auto &marking : catalog.markings) {
+           const Json given = marking.type == "equidistribution"
+                                  ? Json{{"tolerance", 0.5}}
+                                  : Json(nullptr);
+           const app::OptionReader options(given, "test", marking.options);
+           check(marking.make(options)->name() == marking.type,
+                 "name of " + marking.type);
+         }
        }},
       {"solve catalog defaults and traits are the library's",
        [] {
@@ -158,6 +174,39 @@ int main() {
                        .default_value.get<double>() ==
                    solve::FixedStepOptions{}.dt,
                "dt");
+         const adapt::ResidualEstimatorOptions residual{};
+         check(
+             option(catalog.estimators, "residual_estimator", "triangle_degree")
+                         .default_value.get<int>() ==
+                     residual.triangle_degree &&
+                 option(catalog.estimators, "residual_estimator", "edge_degree")
+                         .default_value.get<int>() == residual.edge_degree,
+             "residual degrees");
+         check(option(catalog.estimators, "kelly_estimator", "edge_degree")
+                       .default_value.get<int>() ==
+                   adapt::KellyEstimatorOptions{}.edge_degree,
+               "kelly degree");
+         const adapt::RecoveryEstimatorOptions recovery{};
+         check(
+             option(catalog.estimators, "recovery_estimator", "triangle_degree")
+                         .default_value.get<int>() ==
+                     recovery.triangle_degree &&
+                 option(catalog.estimators, "recovery_estimator", "norm")
+                         .default_value == "energy" &&
+                 recovery.norm == adapt::RecoveryNorm::energy,
+             "recovery");
+         check(option(catalog.markings, "dorfler", "theta")
+                       .default_value.get<double>() ==
+                   adapt::DorflerMarkingOptions{}.theta,
+               "dorfler theta");
+         check(option(catalog.markings, "maximum", "theta")
+                       .default_value.get<double>() ==
+                   adapt::MaximumMarkingOptions{}.theta,
+               "maximum theta");
+         check(option(catalog.markings, "fixed_fraction", "fraction")
+                       .default_value.get<double>() ==
+                   adapt::FixedFractionMarkingOptions{}.fraction,
+               "fraction");
 
          const Json section = app::solve_catalog_json();
          const Json &solvers = section["linear_solver"]["components"];
@@ -318,6 +367,172 @@ int main() {
          case_json = app::Session::default_case();
          case_json["solve"]["time"] = nullptr;
          check(session.solve(case_json)["state"] == "done", "no time part");
+       }},
+      {"the adaptive mode builds the library's components",
+       [] {
+         Json section = app::default_solve_section();
+         check(section["adaptive"]["refiner"]["type"] ==
+                   "newest_vertex_bisection",
+               "NVB by default");
+         section["mode"] = "adaptive";
+         section["adaptive"]["marking"] = {{"type", "fixed_fraction"},
+                                           {"options", {{"fraction", 0.2}}}};
+         section["adaptive"]["estimator"] = {
+             {"type", "recovery_estimator"},
+             {"options", {{"norm", "gradient"}}}};
+         section["adaptive"]["tolerance"] = {{"absolute", 0.01},
+                                             {"relative", nullptr}};
+         section["adaptive"]["max_cycles"] = 4;
+         const app::SolveSetup setup = app::build_solve_setup(section);
+         check(setup.mode == app::SolveMode::adaptive, "mode");
+         const auto *marking =
+             dynamic_cast<const adapt::FixedFractionMarking *>(
+                 setup.marking.get());
+         check(marking != nullptr && marking->options().fraction == 0.2,
+               "marking");
+         const auto *estimator = dynamic_cast<const adapt::RecoveryEstimator *>(
+             setup.estimator.get());
+         check(estimator != nullptr &&
+                   estimator->options().norm == adapt::RecoveryNorm::gradient,
+               "estimator");
+         check(setup.refiner->name() == "newest_vertex_bisection", "refiner");
+         check(setup.target.tolerance.absolute == 0.01 &&
+                   !setup.target.tolerance.relative,
+               "tolerance");
+         check(setup.target.max_cycles == 4u &&
+                   setup.target.max_nodes == 50000u,
+               "budgets");
+         // A missing slot is the catalog's default.
+         section["adaptive"].erase("marking");
+         check(app::build_solve_setup(section).marking->name() == "dorfler",
+               "default marking");
+         // Read strictly, with paths, also when another mode is chosen.
+         section["adaptive"]["max_cycles"] = 1.5;
+         test::expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_solve_setup(section); },
+             "solve.adaptive.max_cycles");
+         section["mode"] = "static";
+         test::expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_solve_setup(section); },
+             "solve.adaptive.max_cycles");
+         section["adaptive"]["max_cycles"] = 4;
+         section["adaptive"]["estimator"]["type"] = "guess";
+         test::expect_throws<std::invalid_argument>(
+             [&] { (void)app::build_solve_setup(section); },
+             "solve.adaptive.estimator.type");
+       }},
+      {"an adaptive solve refines the L-shape at its corner and converges",
+       [] {
+         const Json case_json = load_example("l_shape_adaptive.json");
+         app::Session session;
+         const Json mesh = session.mesh(case_json);
+         const Json run = session.solve(case_json);
+         check(run["state"] == "done" && run["mode"] == "adaptive", "done");
+         const Json &adaptive = run["adaptive"];
+         check(adaptive["stop_reason"] == "tolerance_met",
+               "stopped: " + adaptive["stop_reason"].dump());
+         const Json &cycles = adaptive["cycles"];
+         check(cycles.size() > 5, "several cycles");
+         check(cycles[0]["nodes"] == mesh["mesh"]["nodes"],
+               "the first cycle is the Mesh step's mesh");
+         check(cycles.back()["estimate"].get<double>() <=
+                   adaptive["tolerance"].get<double>(),
+               "the last estimate meets the tolerance");
+         for (std::size_t k = 1; k < cycles.size(); ++k)
+           check(cycles[k]["nodes"].get<std::size_t>() >
+                     cycles[k - 1]["nodes"].get<std::size_t>(),
+                 "every cycle refines");
+         check(cycles.back()["marked"].is_null() &&
+                   cycles[0]["marked"].get<double>() > 0,
+               "marked counts until the last cycle");
+         // The run's mesh is the last one, under its own id.
+         const Json &last = adaptive["mesh"];
+         check(run["mesh_id"] == last["id"] &&
+                   run["mesh_id"] != mesh["mesh"]["id"] &&
+                   run["start_mesh_id"] == mesh["mesh"]["id"],
+               "mesh ids");
+         check(last["nodes"] == cycles.back()["nodes"] &&
+                   run["values"]["nodes"] == last["nodes"],
+               "values on the last mesh");
+         Json request = Json::object();
+         request["mesh"] = last["id"];
+         check(session.mesh_arrays(request).size() ==
+                   last["arrays"]["bytes"].get<std::size_t>(),
+               "its arrays are served");
+         const auto job = run["job"].get<std::uint64_t>();
+         check(session.indicators_float32(job).size() ==
+                   4 * last["triangles"].get<std::size_t>(),
+               "one indicator per triangle");
+         check(adaptive["mesh_stats"]["min_angle_degrees"].get<double>() > 20,
+               "NVB keeps the angles");
+         // Against the exact solution: an error per cycle, falling about
+         // like N^-1 in L2 (the rate of a smooth solution on uniform
+         // meshes; uniform refinement gives N^(-2/3) here).
+         Json compare = Json::object();
+         compare["job"] = job;
+         compare["exact"] = case_json["view"]["exact_solution"];
+         const Json summary = session.compare(compare);
+         const Json &errors = summary["cycles"];
+         check(errors.size() == cycles.size(), "an error per cycle");
+         check(errors.back()["l2"] == summary["max_l2"],
+               "the last cycle is the snapshot");
+         const double n0 = errors[2]["nodes"].get<double>();
+         const double n1 = errors.back()["nodes"].get<double>();
+         const double rate = std::log(errors[2]["l2"].get<double>() /
+                                      errors.back()["l2"].get<double>()) /
+                             std::log(n1 / n0);
+         check(rate > 0.85, "L2 rate " + std::to_string(rate));
+         // The solution exports on the last mesh; the adapted mesh too.
+         const std::string csv =
+             session.export_file(case_json, "solution.csv").text();
+         check(std::ranges::count(csv, '\n') >=
+                   last["nodes"].get<std::size_t>(),
+               "a CSV row per node of the last mesh");
+         const std::string adapted =
+             session.export_file(case_json, "solution-mesh.pde2d").text();
+         check(adapted.find("NODES " + last["nodes"].dump()) !=
+                   std::string::npos,
+               "the adapted mesh");
+       }},
+      {"the library's refusal of an adaptive setting lands on its field",
+       [] {
+         Json case_json = load_example("l_shape_adaptive.json");
+         app::Session session;
+         case_json["solve"]["adaptive"]["max_cycles"] = 0;
+         try {
+           (void)session.solve(case_json);
+           throw test::Failure("max_cycles 0 should be refused");
+         } catch (const app::StageError &error) {
+           check(error.path() == "solve.adaptive.max_cycles",
+                 "path " + error.path());
+         }
+         case_json["solve"]["adaptive"]["max_cycles"] = 3;
+         case_json["solve"]["adaptive"]["max_nodes"] = 5;
+         try {
+           (void)session.solve(case_json);
+           throw test::Failure("a starting mesh above max_nodes");
+         } catch (const app::StageError &error) {
+           check(error.path() == "solve.adaptive.max_nodes",
+                 "path " + error.path());
+         }
+         case_json["solve"]["adaptive"]["max_nodes"] = 100000;
+         case_json["solve"]["adaptive"]["marking"] = {
+             {"type", "dorfler"}, {"options", {{"theta", 2.0}}}};
+         try {
+           (void)session.solve(case_json);
+           throw test::Failure("theta 2 should be refused");
+         } catch (const app::StageError &error) {
+           check(error.path() == "solve.adaptive.marking.options.theta",
+                 "path " + error.path());
+         }
+         // Not an adaptive run: no indicators.
+         const Json plain = session.solve(load_example("l_shape_corner.json"));
+         expect_stage_error(
+             [&] {
+               (void)session.indicators_float32(
+                   plain["job"].get<std::uint64_t>());
+             },
+             "solve", "no error indicators");
        }},
       {"the library's refusals reach the page",
        [] {

@@ -26,6 +26,8 @@ std::string_view option_kind_name(OptionKind kind) {
     return "choice";
   case OptionKind::length_bound:
     return "length_bound";
+  case OptionKind::tolerance:
+    return "tolerance";
   }
   throw std::logic_error("unknown option kind");
 }
@@ -185,6 +187,18 @@ mesh::LengthBound OptionReader::length_bound(std::string_view name) const {
           .relative = optional_length(json, "relative", where)};
 }
 
+adapt::ErrorTolerance OptionReader::tolerance(std::string_view name) const {
+  const Json &json = value(spec(name, OptionKind::tolerance));
+  const std::string where = path(name);
+  if (json.is_null())
+    return {};
+  require_object(json, where);
+  static constexpr std::string_view known[] = {"absolute", "relative"};
+  reject_unknown_keys(json, where, known);
+  return {.absolute = optional_length(json, "absolute", where),
+          .relative = optional_length(json, "relative", where)};
+}
+
 void OptionReader::check_kinds() const {
   for (const OptionSpec &option : specs_)
     switch (option.kind) {
@@ -199,6 +213,9 @@ void OptionReader::check_kinds() const {
       break;
     case OptionKind::length_bound:
       (void)length_bound(option.name);
+      break;
+    case OptionKind::tolerance:
+      (void)tolerance(option.name);
       break;
     }
 }
@@ -257,7 +274,8 @@ std::string named_option(std::string_view message,
         continue;
       best = at;
       suffix = "." + spec.name;
-      if (spec.kind == OptionKind::length_bound)
+      if (spec.kind == OptionKind::length_bound ||
+          spec.kind == OptionKind::tolerance)
         for (const std::string_view part : {".absolute", ".relative"})
           if (message.substr(end).starts_with(part))
             suffix += part;

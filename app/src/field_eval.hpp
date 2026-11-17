@@ -60,7 +60,9 @@ public:
   // reference has no snapshot at that time.
   std::optional<std::vector<double>> other(std::size_t k) const;
   // {"against", "nodes", "snapshots": [{"t", "max_abs", "rms", "l2"} or
-  // null], "max_abs", "max_rms", "max_l2"} over every ready snapshot.
+  // null], "max_abs", "max_rms", "max_l2"} over every ready snapshot; for
+  // an adaptive run against an exact solution also "cycles": [{"cycle",
+  // "nodes", "max_abs", "rms", "l2"}], one per cycle on its own mesh.
   Json summary() const;
   // u - other at snapshot k, as float32 little-endian.
   std::string difference_float32(std::size_t k) const;

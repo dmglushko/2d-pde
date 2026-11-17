@@ -405,6 +405,17 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
         return session.solution_values_float32(job, first, count, client);
       },
       false);
+  // An adaptive run's error indicators as float32, one per triangle of
+  // its mesh (Session::indicators_float32): {"job": n}.
+  binary(
+      "/api/solve/indicators",
+      [&session](const Json &body, const std::string &client) {
+        static constexpr std::string_view known[] = {"job"};
+        const auto job =
+            staged("solve", [&] { return request_job(body, known); });
+        return session.indicators_float32(job, client);
+      },
+      false);
   route("/api/solve/reference",
         [&session](const Json &body, const std::string &client) {
           return session.keep_reference(body, client);

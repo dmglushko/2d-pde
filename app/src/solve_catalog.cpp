@@ -3,6 +3,13 @@
 #include "app_error.hpp"
 #include "catalog_parts.hpp"
 
+#include "pde2d/adapt/dorfler_marking.hpp"
+#include "pde2d/adapt/equidistribution_marking.hpp"
+#include "pde2d/adapt/fixed_fraction_marking.hpp"
+#include "pde2d/adapt/kelly_estimator.hpp"
+#include "pde2d/adapt/maximum_marking.hpp"
+#include "pde2d/adapt/recovery_estimator.hpp"
+#include "pde2d/adapt/residual_estimator.hpp"
 #include "pde2d/solve/bicgstab.hpp"
 #include "pde2d/solve/conjugate_gradient.hpp"
 #include "pde2d/solve/fixed_step.hpp"
@@ -193,6 +200,188 @@ SolveCatalog make_solve_catalog() {
                solve::FixedStepOptions{.dt = options.number("dt")});
          }});
   }
+
+  catalog.adaptive_settings = {
+      plain_option("t", "Time t",
+                   "The time the coefficients and boundary data are taken "
+                   "at; each cycle is a static solve (A U = b) at t.",
+                   OptionKind::number, 0.0),
+      plain_option("tolerance", "Tolerance",
+                   "Stops when the estimated error is at most the smaller of "
+                   "the absolute value and the relative one times the first "
+                   "cycle's estimate. Empty: no tolerance (the budgets stop "
+                   "the loop).",
+                   OptionKind::tolerance,
+                   Json{{"absolute", nullptr}, {"relative", 0.1}}),
+      plain_option("max_cycles", "Maximum cycles",
+                   "Stops after solving this many meshes (the first "
+                   "included); at least 1.",
+                   OptionKind::integer, 10),
+      plain_option("max_nodes", "Maximum nodes",
+                   "Stops before solving a refined mesh with more nodes "
+                   "than this; at least the starting mesh's nodes.",
+                   OptionKind::integer, 50000)};
+
+  const auto degree_option = [](std::string name, std::string label,
+                                std::string what, int value) {
+    return plain_option(std::move(name), std::move(label),
+                        "The exact degree of the quadrature rule for " +
+                            std::move(what) +
+                            ". The default is exact for coefficients and "
+                            "data of degree at most 1.",
+                        OptionKind::integer, value);
+  };
+  {
+    const adapt::ResidualEstimatorOptions defaults{};
+    catalog.estimators.push_back(
+        {.type = "residual_estimator",
+         .label = "Residual",
+         .description =
+             "The explicit residual estimator: h_T² ‖f − b·∇u − c u‖² on "
+             "each triangle, plus the jumps of the flux A∇u across interior "
+             "edges and the residual of natural conditions on boundary "
+             "edges. A reliable upper bound up to a constant.",
+         .options = {degree_option("triangle_degree", "Triangle degree",
+                                   "the element residual",
+                                   defaults.triangle_degree),
+                     degree_option("edge_degree", "Edge degree",
+                                   "the jumps and the boundary residual",
+                                   defaults.edge_degree)},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const adapt::ErrorEstimator> {
+           return std::make_shared<adapt::ResidualEstimator>(
+               adapt::ResidualEstimatorOptions{
+                   .triangle_degree = options.small_integer("triangle_degree"),
+                   .edge_degree = options.small_integer("edge_degree")});
+         }});
+  }
+  {
+    const adapt::KellyEstimatorOptions defaults{};
+    catalog.estimators.push_back(
+        {.type = "kelly_estimator",
+         .label = "Kelly (flux jumps)",
+         .description =
+             "Only the jumps of the flux A∇u across interior edges and the "
+             "residual of natural conditions: no element residual, so it "
+             "misses errors from the load inside triangles.",
+         .options = {degree_option("edge_degree", "Edge degree",
+                                   "the jumps and the boundary residual",
+                                   defaults.edge_degree)},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const adapt::ErrorEstimator> {
+           return std::make_shared<adapt::KellyEstimator>(
+               adapt::KellyEstimatorOptions{
+                   .edge_degree = options.small_integer("edge_degree")});
+         }});
+  }
+  {
+    const adapt::RecoveryEstimatorOptions defaults{};
+    catalog.estimators.push_back(
+        {.type = "recovery_estimator",
+         .label = "Gradient recovery (ZZ)",
+         .description =
+             "Zienkiewicz–Zhu: the difference between ∇u and its recovered "
+             "gradient (the area-weighted average at the nodes, linear "
+             "between them). Close to the true energy error for smooth "
+             "solutions.",
+         .options = {{.name = "norm",
+                      .label = "Norm",
+                      .description =
+                          "energy: weighted by |A| (needs A semidefinite); "
+                          "gradient: the plain gradient difference.",
+                      .kind = OptionKind::choice,
+                      .default_value =
+                          defaults.norm == adapt::RecoveryNorm::energy
+                              ? "energy"
+                              : "gradient",
+                      .choices = {"energy", "gradient"},
+                      .unit = {}},
+                     degree_option("triangle_degree", "Triangle degree",
+                                   "the gradient difference",
+                                   defaults.triangle_degree)},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const adapt::ErrorEstimator> {
+           return std::make_shared<adapt::RecoveryEstimator>(
+               adapt::RecoveryEstimatorOptions{
+                   .norm = options.choice("norm") == "energy"
+                               ? adapt::RecoveryNorm::energy
+                               : adapt::RecoveryNorm::gradient,
+                   .triangle_degree =
+                       options.small_integer("triangle_degree")});
+         }});
+  }
+
+  {
+    const adapt::DorflerMarkingOptions defaults{};
+    catalog.markings.push_back(
+        {.type = "dorfler",
+         .label = "Dörfler (bulk)",
+         .description =
+             "Marks the fewest triangles, largest indicators first, whose "
+             "squared indicators make up the share θ of the total.",
+         .options = {plain_option("theta", "θ",
+                                  "The share of Σ η² to mark; in [0, 1].",
+                                  OptionKind::number, defaults.theta)},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const adapt::MarkingStrategy> {
+           return std::make_shared<adapt::DorflerMarking>(
+               adapt::DorflerMarkingOptions{.theta = options.number("theta")});
+         }});
+  }
+  {
+    const adapt::MaximumMarkingOptions defaults{};
+    catalog.markings.push_back(
+        {.type = "maximum",
+         .label = "Maximum",
+         .description = "Marks every triangle whose indicator is at least θ "
+                        "times the largest.",
+         .options = {plain_option("theta", "θ",
+                                  "The fraction of the largest indicator; in "
+                                  "[0, 1].",
+                                  OptionKind::number, defaults.theta)},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const adapt::MarkingStrategy> {
+           return std::make_shared<adapt::MaximumMarking>(
+               adapt::MaximumMarkingOptions{.theta = options.number("theta")});
+         }});
+  }
+  {
+    const adapt::FixedFractionMarkingOptions defaults{};
+    catalog.markings.push_back(
+        {.type = "fixed_fraction",
+         .label = "Fixed fraction",
+         .description = "Marks the given fraction of the triangles, those "
+                        "with the largest indicators.",
+         .options = {plain_option("fraction", "Fraction",
+                                  "The share of the triangles to mark; in "
+                                  "[0, 1].",
+                                  OptionKind::number, defaults.fraction)},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const adapt::MarkingStrategy> {
+           return std::make_shared<adapt::FixedFractionMarking>(
+               adapt::FixedFractionMarkingOptions{
+                   .fraction = options.number("fraction")});
+         }});
+  }
+  {
+    const adapt::EquidistributionMarkingOptions defaults{.tolerance = 0.0};
+    catalog.markings.push_back(
+        {.type = "equidistribution",
+         .label = "Equidistribution",
+         .description = "Marks every triangle whose indicator is at least "
+                        "tol / √N (N triangles): aims at an equal error per "
+                        "triangle with total tol.",
+         .options = {plain_option("tolerance", "Tolerance",
+                                  "The total error aimed at; required, "
+                                  "positive.",
+                                  OptionKind::number, defaults.tolerance)},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const adapt::MarkingStrategy> {
+           return std::make_shared<adapt::EquidistributionMarking>(
+               adapt::EquidistributionMarkingOptions{
+                   .tolerance = options.number("tolerance")});
+         }});
+  }
   return catalog;
 }
 
@@ -226,6 +415,60 @@ TimePart split_time_part(const Json &part) {
   return out;
 }
 
+// The "adaptive" part: its settings and its three component slots.
+struct AdaptivePart {
+  Json settings;
+  Json estimator;
+  Json marking;
+  Json refiner;
+};
+AdaptivePart split_adaptive_part(const Json &part) {
+  AdaptivePart out{.settings = part.is_null() ? Json::object() : part,
+                   .estimator = nullptr,
+                   .marking = nullptr,
+                   .refiner = nullptr};
+  out.estimator = member(out.settings, "estimator");
+  out.marking = member(out.settings, "marking");
+  out.refiner = member(out.settings, "refiner");
+  for (const char *key : {"estimator", "marking", "refiner"})
+    out.settings.erase(key);
+  return out;
+}
+
+// A slot of the adaptive part: a missing choice is the catalog's first
+// component with its defaults.
+template <class Interface>
+Json choice_or_default(const Json &choice,
+                       const std::vector<Component<Interface>> &components,
+                       std::size_t index = 0) {
+  return choice.is_null() ? default_choice(components.at(index)) : choice;
+}
+
+// The mesh catalog's newest vertex bisection: the default refiner of the
+// adaptive mode.
+std::size_t default_adaptive_refiner() {
+  const auto &refiners = mesh_catalog().refiners;
+  for (std::size_t i = 0; i < refiners.size(); ++i)
+    if (refiners[i].type == "newest_vertex_bisection")
+      return i;
+  throw std::logic_error("no newest_vertex_bisection in the mesh catalog");
+}
+
+// Checks the adaptive part without building it (another mode is chosen).
+void check_adaptive_part(const AdaptivePart &part) {
+  const SolveCatalog &catalog = solve_catalog();
+  OptionReader(part.settings, "solve.adaptive", catalog.adaptive_settings)
+      .check_kinds();
+  if (!part.estimator.is_null())
+    check_component(catalog.estimators, part.estimator,
+                    "solve.adaptive.estimator");
+  if (!part.marking.is_null())
+    check_component(catalog.markings, part.marking, "solve.adaptive.marking");
+  if (!part.refiner.is_null())
+    check_component(mesh_catalog().refiners, part.refiner,
+                    "solve.adaptive.refiner");
+}
+
 } // namespace
 
 const SolveCatalog &solve_catalog() {
@@ -247,14 +490,16 @@ SolveSetup build_solve_setup(const Json &solve_section) {
     setup.mode = SolveMode::static_solve;
   else if (mode == "time")
     setup.mode = SolveMode::time_integration;
+  else if (mode == "adaptive")
+    setup.mode = SolveMode::adaptive;
   else
     throw PathError("solve.mode",
-                    "unknown mode '" + mode + "' (static or time)");
+                    "unknown mode '" + mode + "' (static, time or adaptive)");
   setup.linear_solver =
       build_component(catalog.linear_solvers, member(section, "linear_solver"),
                       "solve.linear_solver");
 
-  for (const std::string_view part : {"static", "time"}) {
+  for (const std::string_view part : {"static", "time", "adaptive"}) {
     const Json &value = member(section, part);
     if (!value.is_null())
       require_object(value, "solve." + std::string(part));
@@ -264,16 +509,47 @@ SolveSetup build_solve_setup(const Json &solve_section) {
   // unknown keys and value types (nothing of it is built, so a value only
   // the library would refuse passes).
   const TimePart time = split_time_part(member(section, "time"));
-  if (setup.mode == SolveMode::static_solve) {
-    const OptionReader settings(member(section, "static"), "solve.static",
-                                catalog.static_settings);
-    setup.t = settings.number("t");
+  const AdaptivePart adaptive =
+      split_adaptive_part(member(section, "adaptive"));
+  const auto check_time_part = [&] {
     OptionReader(time.settings, "solve.time", catalog.time_settings)
         .check_kinds();
     if (!time.method.is_null())
       check_component(catalog.time_methods, time.method, "solve.time.method");
     if (!time.step.is_null())
       check_component(catalog.step_controllers, time.step, "solve.time.step");
+  };
+  if (setup.mode == SolveMode::adaptive) {
+    OptionReader(member(section, "static"), "solve.static",
+                 catalog.static_settings)
+        .check_kinds();
+    check_time_part();
+    const OptionReader settings(adaptive.settings, "solve.adaptive",
+                                catalog.adaptive_settings);
+    setup.t = settings.number("t");
+    setup.target = {.tolerance = settings.tolerance("tolerance"),
+                    .max_cycles = settings.count("max_cycles"),
+                    .max_nodes = settings.count("max_nodes")};
+    setup.estimator = build_component(
+        catalog.estimators,
+        choice_or_default(adaptive.estimator, catalog.estimators),
+        "solve.adaptive.estimator");
+    setup.marking = build_component(
+        catalog.markings, choice_or_default(adaptive.marking, catalog.markings),
+        "solve.adaptive.marking");
+    setup.refiner = build_component(
+        mesh_catalog().refiners,
+        choice_or_default(adaptive.refiner, mesh_catalog().refiners,
+                          default_adaptive_refiner()),
+        "solve.adaptive.refiner");
+    return setup;
+  }
+  check_adaptive_part(adaptive);
+  if (setup.mode == SolveMode::static_solve) {
+    const OptionReader settings(member(section, "static"), "solve.static",
+                                catalog.static_settings);
+    setup.t = settings.number("t");
+    check_time_part();
     return setup;
   }
   OptionReader(member(section, "static"), "solve.static",
@@ -313,6 +589,12 @@ Json default_solve_section() {
   out["linear_solver"] = default_choice(catalog.linear_solvers.at(0));
   out["static"] = defaults(catalog.static_settings);
   out["time"] = std::move(time);
+  Json adaptive = defaults(catalog.adaptive_settings);
+  adaptive["estimator"] = default_choice(catalog.estimators.at(0));
+  adaptive["marking"] = default_choice(catalog.markings.at(0));
+  adaptive["refiner"] =
+      default_choice(mesh_catalog().refiners.at(default_adaptive_refiner()));
+  out["adaptive"] = std::move(adaptive);
   return out;
 }
 
@@ -331,6 +613,12 @@ Json solve_component_choice(std::string_view slot, std::string_view type) {
     return find(catalog.time_methods);
   if (slot == "step")
     return find(catalog.step_controllers);
+  if (slot == "estimator")
+    return find(catalog.estimators);
+  if (slot == "marking")
+    return find(catalog.markings);
+  if (slot == "refiner")
+    return find(mesh_catalog().refiners);
   throw std::logic_error("no solve slot " + std::string(slot));
 }
 
@@ -388,9 +676,34 @@ Json solve_catalog_json() {
       settings("time", "Time integration", catalog.time_settings);
   time_mode["slots"] = std::move(time_slots);
 
+  Json adaptive_slots = Json::array();
+  adaptive_slots.push_back(
+      slot_json("estimator", "Error estimator",
+                "Gives each triangle an error indicator η_T from the solution.",
+                "one", components_json(catalog.estimators)));
+  adaptive_slots.push_back(slot_json("marking", "Marking",
+                                     "Chooses the triangles to refine.", "one",
+                                     components_json(catalog.markings)));
+  adaptive_slots.push_back(slot_json(
+      "refiner", "Refiner",
+      "Refines the marked triangles (and their neighbours, so the mesh "
+      "stays conforming). The same refiners as the Mesh step.",
+      "one", components_json(mesh_catalog().refiners)));
+  Json adaptive_mode = Json::object();
+  adaptive_mode["id"] = "adaptive";
+  adaptive_mode["label"] = "Adaptive";
+  adaptive_mode["description"] =
+      "Solves A U = b at t, estimates the error per triangle, refines the "
+      "marked triangles and solves again, until the estimate meets the "
+      "tolerance or a budget is reached. The picture shows the last mesh.";
+  adaptive_mode["settings"] =
+      settings("adaptive", "Adaptive loop", catalog.adaptive_settings);
+  adaptive_mode["slots"] = std::move(adaptive_slots);
+
   Json modes = Json::array();
   modes.push_back(std::move(static_mode));
   modes.push_back(std::move(time_mode));
+  modes.push_back(std::move(adaptive_mode));
 
   Json out = Json::object();
   out["id"] = "solve";

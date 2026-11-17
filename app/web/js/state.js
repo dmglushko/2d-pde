@@ -41,13 +41,14 @@ export const store = {
   // picture then stops following the newest snapshot.
   solveFrameChosen: false,
   // The picture's settings: colorBy is "none", "quality", "field" or
-  // "gradient" (|∇u| of the shown field); isolines draws the shown field's
+  // "gradient" (|∇u| of the shown field) or "indicator" (an adaptive
+  // solution's error indicators, log10); isolines draws the shown field's
   // isolines; difference shows u − exact ("exact") or u − reference
   // ("reference") instead of u while that comparison is current; locked
   // holds the colour range the viewer fixed, per quantity ("field",
-  // "gradient"), kept until unlocked; tool is "pan" or "profile" (a drag
+  // "gradient", "indicator"), kept until unlocked; tool is "pan" or "profile" (a drag
   // draws the line of the profile).
-  view: { colorBy: "none", isolines: false, difference: null, locked: { field: null, gradient: null }, tool: "pan" },
+  view: { colorBy: "none", isolines: false, difference: null, locked: { field: null, gradient: null, indicator: null }, tool: "pan" },
   // The probes pinned on the picture: {slot (its colour), x, y}, at most
   // MAX_PROBES. The viewer's, not the case's.
   probes: [],
@@ -310,7 +311,7 @@ export function setViewOption(name, value) {
   notify("view");
 }
 
-// Fixes the colour range of `quantity` ("field" or "gradient") to
+// Fixes the colour range of `quantity` ("field", "gradient" or "indicator") to
 // {low, high}, or frees it (null).
 export function setLockedRange(quantity, range) {
   store.view.locked = { ...store.view.locked, [quantity]: range };
@@ -371,10 +372,10 @@ export function restoreView(kept) {
   if (!kept || typeof kept !== "object") return false;
   const point = (p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
   const range = (r) => (r && Number.isFinite(r.low) && Number.isFinite(r.high) && r.low < r.high ? { low: r.low, high: r.high } : null);
-  if (["none", "quality", "field", "gradient"].includes(kept.colorBy)) store.view.colorBy = kept.colorBy;
+  if (["none", "quality", "field", "gradient", "indicator"].includes(kept.colorBy)) store.view.colorBy = kept.colorBy;
   store.view.isolines = kept.isolines === true;
   store.view.difference = ["exact", "reference"].includes(kept.difference) ? kept.difference : null;
-  store.view.locked = { field: range(kept.locked?.field), gradient: range(kept.locked?.gradient) };
+  store.view.locked = { field: range(kept.locked?.field), gradient: range(kept.locked?.gradient), indicator: range(kept.locked?.indicator) };
   if (Array.isArray(kept.probes))
     store.probes = kept.probes.filter((p) => Number.isInteger(p?.slot) && p.slot >= 0 && p.slot < 4 && Number.isFinite(p.x) && Number.isFinite(p.y)).slice(0, 4);
   store.profile = kept.profile && point(kept.profile.from) && point(kept.profile.to) ? { from: kept.profile.from, to: kept.profile.to } : null;

@@ -50,7 +50,8 @@ constexpr std::string_view usage = R"(Usage:
       solution.vtk, the series solution_NNNN.vtk with solution.vtk.series
       (ParaView opens it with its times), provenance.json and the
       assembled system at assembly.t (stiffness.mtx, mass.mtx,
-      damping.mtx, rhs.mtx) there.
+      damping.mtx, rhs.mtx) there; for an adaptive solve also its last
+      mesh (solution-mesh.pde2d).
   pde2d_app --run CASE.json --sweep PATH=V1,V2,... [--sweep ...]
             [--set PATH=VALUE]... [--output DIR]
       Runs the case once per combination of the swept values (the first
@@ -129,7 +130,11 @@ int run_case(const std::filesystem::path &case_path,
     for (const std::string_view kind :
          {"mesh.pde2d", "mesh.svg", "solution.csv", "solution.vtk",
           "solution-vtk.zip", "provenance.json", "stiffness.mtx", "mass.mtx",
-          "damping.mtx", "rhs.mtx"}) {
+          "damping.mtx", "rhs.mtx", "solution-mesh.pde2d"}) {
+      // The solution's own mesh only when it is not the Mesh step's.
+      if (kind == "solution-mesh.pde2d" &&
+          summary["solve"]["mode"] != "adaptive")
+        continue;
       const auto file = session.export_file(case_json, kind, context);
       // An archive's files go into the directory itself.
       if (file.members)

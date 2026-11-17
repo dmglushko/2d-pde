@@ -73,7 +73,8 @@ Json option_schema(const OptionSpec &spec) {
     out["enum"] = std::move(values);
     break;
   }
-  case OptionKind::length_bound: {
+  case OptionKind::length_bound:
+  case OptionKind::tolerance: {
     static constexpr std::string_view keys[] = {"absolute", "relative"};
     out = object_schema(keys,
                         {{"absolute", typed({"number", "null"})},
@@ -370,12 +371,20 @@ Json solve_schema() {
   Json time = options_schema(catalog.time_settings);
   time["properties"]["method"] = choice_schema(catalog.time_methods);
   time["properties"]["step"] = choice_schema(catalog.step_controllers);
+  // The adaptive part: its settings and three slots (each may be missing:
+  // the catalog's default).
+  Json adaptive = options_schema(catalog.adaptive_settings);
+  adaptive["properties"]["estimator"] = choice_schema(catalog.estimators, true);
+  adaptive["properties"]["marking"] = choice_schema(catalog.markings, true);
+  adaptive["properties"]["refiner"] =
+      choice_schema(mesh_catalog().refiners, true);
   Json out =
       object_schema(solve_section_keys,
                     {{"mode", std::move(modes)},
                      {"linear_solver", choice_schema(catalog.linear_solvers)},
                      {"static", options_schema(catalog.static_settings)},
-                     {"time", std::move(time)}},
+                     {"time", std::move(time)},
+                     {"adaptive", std::move(adaptive)}},
                     {"mode", "linear_solver"}, true);
   // In time, the time part needs its method and step.
   Json condition = Json::object();

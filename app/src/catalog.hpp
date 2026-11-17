@@ -2,6 +2,9 @@
 
 #include "options.hpp"
 
+#include "pde2d/adapt/adaptive_static_solver.hpp"
+#include "pde2d/adapt/error_estimator.hpp"
+#include "pde2d/adapt/marking.hpp"
 #include "pde2d/mesh/components.hpp"
 #include "pde2d/mesh/mesh_spec.hpp"
 #include "pde2d/mesh/mesher.hpp"
@@ -88,12 +91,21 @@ Json mesh_catalog_json();
 
 // The "solve" section of a case:
 //
-//   {"mode": "static" or "time",
+//   {"mode": "static", "time" or "adaptive",
 //    "linear_solver": {"type": "sparse_lu", "options": {}},
 //    "static": {"t": 0},
 //    "time": {"t0": 0, "t1": 1, "snapshots": 50,
 //             "method": {"type": "implicit_euler", "options": {}},
-//             "step": {"type": "fixed_step", "options": {"dt": 0.01}}}}
+//             "step": {"type": "fixed_step", "options": {"dt": 0.01}}},
+//    "adaptive": {"t": 0, "tolerance": {"absolute": null, "relative": 0.1},
+//                 "max_cycles": 10, "max_nodes": 50000,
+//                 "estimator": {"type": "residual_estimator", ...},
+//                 "marking": {"type": "dorfler", ...},
+//                 "refiner": {"type": "newest_vertex_bisection", ...}}}
+//
+// The adaptive mode is the library's AdaptiveStaticSolver with one
+// MeshRefinement (estimator, marking, a Remesher of the refiner). Its
+// refiners are the mesh catalog's.
 //
 // Only the part of the chosen mode is read into the library's objects; the
 // other is kept as written (an object or null), so switching modes back
@@ -102,25 +114,30 @@ Json mesh_catalog_json();
 struct SolveCatalog {
   std::vector<OptionSpec> static_settings; // t
   std::vector<OptionSpec> time_settings;   // t0, t1, snapshots
+  // t, tolerance, max_cycles, max_nodes
+  std::vector<OptionSpec> adaptive_settings;
   std::vector<Component<solve::LinearSolver>> linear_solvers;
   std::vector<Component<solve::TimeMethod>> time_methods;
   std::vector<Component<solve::StepController>> step_controllers;
+  std::vector<Component<adapt::ErrorEstimator>> estimators;
+  std::vector<Component<adapt::MarkingStrategy>> markings;
 };
 
 const SolveCatalog &solve_catalog();
 
 // The keys of the solve section; "time" also holds "method" and "step"
-// beside its settings.
+// beside its settings, "adaptive" "estimator", "marking" and "refiner".
 inline constexpr std::string_view solve_section_keys[] = {
-    "mode", "linear_solver", "static", "time"};
-inline constexpr std::string_view solve_modes[] = {"static", "time"};
+    "mode", "linear_solver", "static", "time", "adaptive"};
+inline constexpr std::string_view solve_modes[] = {"static", "time",
+                                                   "adaptive"};
 
-enum class SolveMode { static_solve, time_integration };
+enum class SolveMode { static_solve, time_integration, adaptive };
 
 struct SolveSetup {
   SolveMode mode = SolveMode::static_solve;
   std::shared_ptr<const solve::LinearSolver> linear_solver;
-  double t = 0.0; // static
+  double t = 0.0; // static and adaptive
   // Time integration:
   std::shared_ptr<const solve::TimeMethod> method;
   std::shared_ptr<const solve::StepController> step_controller;
@@ -128,6 +145,11 @@ struct SolveSetup {
   double t1 = 0.0;
   // Solutions are kept at t0 + k (t1 - t0) / snapshots, k = 0..snapshots.
   std::size_t snapshots = 0;
+  // Adaptive (at t):
+  std::shared_ptr<const adapt::ErrorEstimator> estimator;
+  std::shared_ptr<const adapt::MarkingStrategy> marking;
+  std::shared_ptr<const mesh::Refiner> refiner;
+  adapt::AdaptiveTarget target;
 };
 
 // The most snapshots a run keeps (each one is a value per mesh node sent
@@ -142,7 +164,8 @@ SolveSetup build_solve_setup(const Json &solve_section);
 Json default_solve_section();
 
 // {"type", "options"} with the catalog's defaults, for the component
-// `type` of a solve slot: "linear_solver", "method" or "step". Throws
+// `type` of a solve slot: "linear_solver", "method", "step", "estimator",
+// "marking" or "refiner". Throws
 // std::logic_error for a type the catalog does not have.
 Json solve_component_choice(std::string_view slot, std::string_view type);
 

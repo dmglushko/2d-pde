@@ -96,6 +96,13 @@ async function solveData(summary) {
   summary.layout = summary.values;
   summary.values = [];
   growSnapshots(summary, summary.layout.snapshots);
+  // An adaptive run's solution is on its own (last) mesh, with an error
+  // indicator per triangle: both come with the result.
+  const adapted = summary.adaptive?.mesh;
+  if (adapted) {
+    summary.mesh = await api.meshArrays(adapted);
+    if (summary.adaptive.indicators) summary.indicators = await api.indicators(summary.job, summary.adaptive.indicators);
+  }
   if (summary.values.length > 0) await loadAround(summary, summary.values.length - 1);
   return summary;
 }
@@ -145,7 +152,7 @@ async function run(stage, field, found = null) {
       store.solveFrameChosen = false;
       store.fieldSource = "solve";
       // A reattached run keeps the colouring this tab had (restoreView).
-      if (!(found && store.view.colorBy === "gradient")) store.view.colorBy = "field";
+      if (!(found && (store.view.colorBy === "gradient" || store.view.colorBy === "indicator"))) store.view.colorBy = "field";
     }
     if (stage === "field") {
       store.fieldSource = "field";

@@ -1,0 +1,117 @@
+{
+  "format": "pde2d-app-case",
+  "version": 1,
+  "notes": "Adaptive refinement on the L-shaped domain of l_shape_corner: the same corner singularity u = r^(2/3) sin(2 theta / 3), solved on a coarse mesh, then refined where the residual estimator says the error is (Dorfler marking, theta = 0.5, newest vertex bisection) until the estimate is a tenth of the first one or 20000 nodes. The refinement gathers at the re-entrant corner; the Solve step's cycle table and chart show the estimate and, compared with the exact solution in view.exact_solution, the true error against the number of nodes: about N^(-1/2) in the energy norm, the rate of a smooth solution on uniform meshes, where uniform refinement gives only N^(-1/3) here.",
+  "geometry": {
+    "source": "svg",
+    "name": "l_shape.svg",
+    "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-1.1 -1.1 2.2 2.2\">\n  <!-- An L: the square [-1, 1]^2 without the quarter x > 0, y < 0 (SVG's\n       y points down; the app flips it, so y < 0 is y > 0 here). The two\n       edges at the re-entrant corner (0, 0) are one region. -->\n  <path data-region=\"corner\" d=\"M 0 0 L 1 0\" fill=\"none\" stroke=\"#eb6834\" stroke-width=\"0.02\"/>\n  <path data-region=\"outer\" d=\"M 1 0 L 1 -1 L -1 -1 L -1 1 L 0 1\" fill=\"none\" stroke=\"#2a78d6\" stroke-width=\"0.02\"/>\n  <path data-region=\"corner\" d=\"M 0 1 L 0 0\" fill=\"none\" stroke=\"#eb6834\" stroke-width=\"0.02\"/>\n</svg>\n",
+    "region_edits": []
+  },
+  "mesh": {
+    "spec": {
+      "max_edge_length": {
+        "absolute": null,
+        "relative": 0.2
+      }
+    },
+    "discretizer": {
+      "type": "chord_length",
+      "options": {
+        "max_curve_deviation": {
+          "absolute": null,
+          "relative": 0.001
+        },
+        "corner_angle_degrees": 30
+      }
+    },
+    "triangulator": {
+      "type": "cdt",
+      "options": {}
+    },
+    "refiner": {
+      "type": "ruppert",
+      "options": {
+        "min_angle_degrees": 25
+      }
+    },
+    "improvers": []
+  },
+  "problem": {
+    "equation": {
+      "a_xx": "-1",
+      "a_yy": "-1"
+    },
+    "parameters": {},
+    "boundary_conditions": {
+      "corner": {
+        "alpha": "1",
+        "g": "0"
+      },
+      "outer": {
+        "alpha": "1",
+        "g": "(x^2 + y^2)^(1/3) * sin(2/3 * Piecewise((atan(y/x), x > 0), (atan(y/x) + pi, x < 0), (pi/2, y > 0), (3*pi/2, True)))"
+      }
+    },
+    "initial": {}
+  },
+  "assembly": {
+    "t": 0.0
+  },
+  "solve": {
+    "mode": "adaptive",
+    "linear_solver": {
+      "type": "simplicial_ldlt",
+      "options": {}
+    },
+    "static": {
+      "t": 0.0
+    },
+    "time": {
+      "t0": 0.0,
+      "t1": 1.0,
+      "snapshots": 50,
+      "method": {
+        "type": "implicit_euler",
+        "options": {}
+      },
+      "step": {
+        "type": "fixed_step",
+        "options": {
+          "dt": 0.01
+        }
+      }
+    },
+    "adaptive": {
+      "t": 0.0,
+      "tolerance": {
+        "absolute": null,
+        "relative": 0.1
+      },
+      "max_cycles": 30,
+      "max_nodes": 20000,
+      "estimator": {
+        "type": "residual_estimator",
+        "options": {
+          "triangle_degree": 4,
+          "edge_degree": 6
+        }
+      },
+      "marking": {
+        "type": "dorfler",
+        "options": {
+          "theta": 0.5
+        }
+      },
+      "refiner": {
+        "type": "newest_vertex_bisection",
+        "options": {
+          "max_points": 10000000
+        }
+      }
+    }
+  },
+  "view": {
+    "exact_solution": "(x^2 + y^2)^(1/3) * sin(2/3 * Piecewise((atan(y/x), x > 0), (atan(y/x) + pi, x < 0), (pi/2, y > 0), (3*pi/2, True)))"
+  }
+}

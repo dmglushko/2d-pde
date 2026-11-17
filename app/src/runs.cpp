@@ -3,7 +3,10 @@
 #include "problem_input.hpp"
 #include "views.hpp"
 
+#include "pde2d/adapt/adaptive_static_solver.hpp"
+#include "pde2d/adapt/mesh_refinement.hpp"
 #include "pde2d/fem/assembler.hpp"
+#include "pde2d/mesh/remesher.hpp"
 #include "pde2d/solve/integrator.hpp"
 #include "pde2d/solve/static_solver.hpp"
 
@@ -153,6 +156,110 @@ ChunkCostModel fit_over(std::span<const ChunkCost> recent) {
   return model;
 }
 
+// --- adaptive runs
+// ------------------------------------------------------------
+
+// The library's adaptive loop with one MeshRefinement. Its refusal of a
+// setting of the target (adaptive_static_solver: max_cycles must be ...)
+// is marked at that setting.
+adapt::AdaptiveStaticResult
+solve_adaptive(const SolveSetup &setup,
+               std::shared_ptr<const fem::MeshedProblem> problem) {
+  const auto refinement = std::make_shared<const adapt::MeshRefinement>(
+      setup.estimator, setup.marking,
+      std::make_shared<const mesh::Remesher>(setup.refiner));
+  const adapt::AdaptiveStaticSolver solver(
+      solve::StaticSolver(setup.linear_solver), {refinement});
+  try {
+    return solver.solve(std::move(problem), setup.target, setup.t);
+  } catch (const std::invalid_argument &error) {
+    const std::string_view message = error.what();
+    if (message.starts_with("adaptive_static_solver:"))
+      if (const std::string option =
+              named_option(message, solve_catalog().adaptive_settings);
+          !option.empty())
+        throw PathError("solve.adaptive" + option, std::string(message));
+    throw;
+  }
+}
+
+// The metric `name` of the report of `stage` among `reports`, or null.
+Json metric_of(std::span<const mesh::StageReport> reports,
+               std::string_view stage, std::string_view name) {
+  for (const mesh::StageReport &report : reports)
+    if (report.stage == stage) {
+      const auto found = report.metrics.find(std::string(name));
+      if (found != report.metrics.end())
+        return number_or_null(found->second);
+    }
+  return nullptr;
+}
+
+// Keeps an adaptive run's result: the last cycle's solution as its one
+// snapshot on the last mesh (under its own id), every cycle's solution,
+// the last estimate's indicators, and the summary.
+void publish_adaptive(Run &run, adapt::AdaptiveStaticResult result,
+                      std::mutex &run_lock) {
+  Json cycles = Json::array();
+  for (std::size_t k = 0; k < result.cycles.size(); ++k) {
+    const adapt::AdaptiveCycle &cycle = result.cycles[k];
+    const mesh::Mesh &mesh = *cycle.solution.mesh;
+    double seconds = 0.0;
+    for (const mesh::StageReport &report : cycle.reports)
+      seconds += report.time.count();
+    Json row = Json::object();
+    row["cycle"] = k + 1;
+    row["nodes"] = mesh.nodes.size();
+    row["triangles"] = mesh.triangles.size();
+    row["estimate"] =
+        cycle.estimate ? number_or_null(cycle.estimate->total) : Json(nullptr);
+    row["max_indicator"] =
+        cycle.estimate
+            ? metric_of(std::span(&cycle.estimate->report, 1),
+                        cycle.estimate->report.stage, "max_indicator")
+            : Json(nullptr);
+    // Not on the last cycle: the loop stopped before marking.
+    row["marked"] = metric_of(cycle.reports, "mesh_refinement", "marked");
+    row["residual"] = metric_of(cycle.reports, "static_solver", "residual");
+    row["seconds"] = seconds;
+    cycles.push_back(std::move(row));
+  }
+  Json summary = Json::object();
+  summary["stop_reason"] = adapt::to_string(result.stop_reason);
+  summary["tolerance"] =
+      metric_of(std::span(&result.report, 1), result.report.stage, "tolerance");
+  summary["cycles"] = std::move(cycles);
+  summary["mesh_stats"] = mesh_stats_json(*result.problem->mesh());
+
+  Json reports = Json::array();
+  reports.push_back(report_json(result.report));
+  for (const Json &report : reports_json(result.cycles.back().reports))
+    reports.push_back(report);
+
+  std::vector<Snapshot> kept;
+  for (adapt::AdaptiveCycle &cycle : result.cycles) {
+    cycle.solution.velocities = {};
+    kept.push_back(
+        std::make_shared<const solve::Solution>(std::move(cycle.solution)));
+  }
+  std::shared_ptr<const std::vector<double>> indicators;
+  if (result.cycles.back().estimate)
+    indicators = std::make_shared<const std::vector<double>>(
+        std::move(result.cycles.back().estimate->indicators));
+
+  const std::scoped_lock lock(run_lock);
+  run.meshed = result.problem;
+  run.mesh = result.problem->mesh();
+  run.mesh_id = run.adapted_mesh_id;
+  run.base["free_unknowns"] = result.problem->free_nodes().size();
+  Run::Published &out = run.published;
+  out.static_reports = std::move(reports);
+  out.adaptive = std::move(summary);
+  out.indicators = std::move(indicators);
+  publish_snapshot(out, *kept.back());
+  out.cycles = std::move(kept);
+  out.state = RunState::done;
+}
 } // namespace
 
 ChunkCostModel fit_chunk_cost(std::span<const ChunkCost> history) {
@@ -288,7 +395,11 @@ void combine_report(std::optional<mesh::StageReport> &total,
 // ---------------------------------------------------------------------
 
 RunSnapshots Run::snapshots() const {
-  return {.id = id, .mesh = mesh, .snapshots = published.snapshots};
+  return {.id = id,
+          .mesh = mesh,
+          .snapshots = published.snapshots,
+          .cycles = published.cycles,
+          .indicators = published.indicators};
 }
 
 std::size_t run_bytes(std::size_t nodes, std::size_t snapshots,
@@ -297,6 +408,14 @@ std::size_t run_bytes(std::size_t nodes, std::size_t snapshots,
   constexpr std::size_t per_snapshot = 128;
   const std::size_t state = nodes * 8 * (time_order == 2 ? 2 : 1);
   return snapshots * (nodes * 8 + per_snapshot) + state;
+}
+
+std::size_t adaptive_run_bytes(std::size_t max_nodes, std::size_t max_cycles) {
+  // Per node: its value (8), its point (16), about two triangles (24),
+  // two indicators (8) and some boundary edges; 64 is generous.
+  constexpr std::size_t per_node = 64;
+  constexpr std::size_t per_cycle = 512;
+  return max_cycles * (max_nodes * per_node + per_cycle);
 }
 
 void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
@@ -377,6 +496,13 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
     made->base["mode"] = "static";
     made->times = {made->setup.t};
     made->published.t = made->setup.t;
+  } else if (made->setup.mode == SolveMode::adaptive) {
+    made->base["mode"] = "adaptive";
+    made->times = {made->setup.t};
+    made->published.t = made->setup.t;
+    made->adapted_mesh_id = cache.new_mesh_id();
+    // The Mesh step's mesh it starts from (mesh_id becomes its last one).
+    made->base["start_mesh_id"] = made->mesh_id;
   } else {
     made->base["mode"] = "time";
     made->times = snapshot_times(made->setup);
@@ -391,6 +517,15 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
     }
     made->published.t = made->setup.t0;
   }
+  if (made->setup.mode == SolveMode::adaptive) {
+    // Bounded by the target (the library refuses a cycle or node count of
+    // 0, and a starting mesh above max_nodes, when the run starts).
+    const adapt::AdaptiveTarget &target = made->setup.target;
+    made->bytes = adaptive_run_bytes(
+        std::max(made->mesh->nodes.size(), target.max_nodes.value_or(0)),
+        std::max<std::size_t>(1, target.max_cycles.value_or(1)));
+    return made;
+  }
   made->bytes =
       run_bytes(made->mesh->nodes.size(), made->times.size(),
                 made->setup.mode == SolveMode::static_solve ? 0 : time_order);
@@ -398,6 +533,19 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
 }
 
 void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock) {
+  if (run.setup.mode == SolveMode::adaptive) {
+    try {
+      adapt::AdaptiveStaticResult result = staged(
+          "solve", [&] { return solve_adaptive(run.setup, run.meshed); });
+      publish_adaptive(run, std::move(result), run_lock);
+    } catch (const StageError &error) {
+      const std::scoped_lock lock(run_lock);
+      run.published.state = RunState::failed;
+      run.published.error = error;
+      throw;
+    }
+    return;
+  }
   if (run.setup.mode == SolveMode::static_solve) {
     try {
       solve::StaticResult result = staged("solve", [&] {
@@ -461,6 +609,16 @@ Json progress_json(const Run &run, std::size_t memory_budget) {
     out["reports"] = std::move(reports);
   } else
     out["reports"] = p.static_reports;
+  if (run.setup.mode == SolveMode::adaptive) {
+    Json adaptive = p.adaptive.is_null() ? Json::object() : p.adaptive;
+    // Where the indicators are: POST {"job"} to /api/solve/indicators.
+    adaptive["indicators"] =
+        p.indicators ? Json(p.indicators->size()) : Json(nullptr);
+    // The last mesh, whose arrays POST /api/mesh/arrays sends.
+    if (p.state == RunState::done)
+      adaptive["mesh"] = mesh_summary_json(*run.mesh, run.mesh_id);
+    out["adaptive"] = std::move(adaptive);
+  }
   // Where the values are: POST {"job", "first", "count"} to
   // /api/solve/values.
   const std::size_t nodes = run.mesh->nodes.size();

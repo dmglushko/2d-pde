@@ -208,6 +208,8 @@ export function labelWithInfo(label, description, tag = "div") {
   return [h("div", { class: "label-row" }, h(tag, { class: "label" }, label), info.button), info.panel];
 }
 
+// {absolute, relative}: a length bound (relative to the domain size) or
+// a tolerance (relative to the first error estimate).
 function lengthBoundInputs(spec, value, path, onChange) {
   const bound = { absolute: null, relative: null, ...(value ?? spec.default ?? {}) };
   const set = (key) => (v) => {
@@ -226,7 +228,7 @@ function lengthBoundInputs(spec, value, path, onChange) {
       onNumber: set("absolute"),
       onEmpty: () => set("absolute")(null),
     }),
-    h("span", {}, "× domain size"),
+    h("span", {}, spec.kind === "tolerance" ? "× first estimate" : "× domain size"),
     numberInput({
       value: bound.relative,
       label: `${spec.label}, relative`,
@@ -251,7 +253,7 @@ function choiceInput(spec, value, path, onChange) {
 export function optionField(spec, value, path, onChange) {
   let input;
   if (spec.kind === "choice") input = choiceInput(spec, value, path, onChange);
-  else if (spec.kind === "length_bound") input = lengthBoundInputs(spec, value, path, onChange);
+  else if (spec.kind === "length_bound" || spec.kind === "tolerance") input = lengthBoundInputs(spec, value, path, onChange);
   else
     input = numberInput({
       value: value ?? spec.default,

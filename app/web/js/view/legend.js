@@ -25,8 +25,8 @@ export function legendData(v) {
   if (current && colorBy === "quality") bar = { label: "smallest angle", table: colorTables().quality, low: "0°", high: `${QUALITY_MAX_DEGREES}°+`, reversed: true };
   const scale = v.shownScale;
   const fieldShown = mesh && field && (current || field.outdated);
-  if (fieldShown && scale && (colorBy === "field" || colorBy === "gradient")) {
-    const label = colorBy === "gradient" ? [gradientName(field.name), field.when].filter(Boolean).join(" ") : field.label;
+  if (fieldShown && scale && (colorBy === "field" || colorBy === "gradient" || (colorBy === "indicator" && v.indicatorLogs))) {
+    const label = colorBy === "gradient" ? [gradientName(field.name), field.when].filter(Boolean).join(" ") : colorBy === "indicator" ? `log₁₀ η (error indicator)${field.outdated ? " (outdated)" : ""}` : field.label;
     if (scale.kind === "constant") bar = { label, constant: formatNumber(scale.min, getDefaultDigits() + 2) };
     else if (scale.kind !== "empty")
       bar = {

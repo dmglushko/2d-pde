@@ -51,6 +51,7 @@ enum class ExportKind {
   solution_csv,
   solution_vtk,
   solution_vtk_zip,
+  solution_mesh_pde2d,
   provenance_json,
 };
 
