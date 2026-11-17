@@ -551,6 +551,15 @@ marked "architecture" below are decided.
   definite; the ratio of the smallest to the largest pivot is reported,
   not judged. A pure Neumann problem then gives one of its solutions
   without an error, as the Eigen solvers do (GitHub issue #32).
+- **The Cholesky factors −A when A is negative definite, with a warning**
+  (decided 2026-11-17): when every diagonal entry is negative (Δu = f
+  written with a_xx = +1), `SupernodalCholesky` factors −A and solves
+  with −b, which is exact, and says so as a warning ("worked, but…"); a
+  matrix with diagonal entries of both signs is indefinite and refused as
+  now. The licence question (CHOLMOD's supernodal module and ParU are GPL,
+  so distributed programs that link them are GPL-3) is postponed: GitHub
+  issue #38. Reusing the symbolic factorization when only the values
+  change: GitHub issue #39.
 - **Known limits of the SuiteSparse solvers, documented** (2026-11-17):
   OpenBLAS's thread count is one setting for the whole process, so a
   program that changes it during one of these solves can have its setting
