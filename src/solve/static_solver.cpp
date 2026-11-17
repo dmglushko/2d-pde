@@ -51,6 +51,8 @@ StaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
       static_cast<double>(meshed_problem->free_nodes().size());
   report.metrics["linear_iterations"] = static_cast<double>(solved.iterations);
   report.metrics["residual"] = solved.residual;
+  report.metrics["backward_error"] = solved.backward_error;
+  report.metrics["pivot_ratio"] = solved.pivot_ratio;
   report.metrics["linear_threads"] = static_cast<double>(solved.threads);
   report.time = std::chrono::steady_clock::now() - start;
   result.reports.push_back(std::move(report));

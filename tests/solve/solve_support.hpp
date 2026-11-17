@@ -49,37 +49,48 @@ inline std::shared_ptr<const fem::CsrMatrix> sparse(const Dense &dense) {
   return sparse(dense, dense.size());
 }
 
-// The unit square cut into n x n cells, each split by its diagonal from
-// (i, j) to (i + 1, j + 1). Node (i, j) is j (n + 1) + i, at (i / n, j / n).
-// The sides are the regions "bottom" (y = 0), "right" (x = 1), "top"
-// (y = 1) and "left" (x = 0).
-inline std::shared_ptr<const mesh::Mesh> unit_square(std::size_t n) {
+// The rectangle [0, width] x [0, height] cut into nx x ny cells, each
+// split by its diagonal from (i, j) to (i + 1, j + 1). Node (i, j) is
+// j (nx + 1) + i, at (i width / nx, j height / ny). The sides are the
+// regions "bottom" (y = 0), "right" (x = width), "top" (y = height) and
+// "left" (x = 0).
+inline std::shared_ptr<const mesh::Mesh>
+rectangle(std::size_t nx, std::size_t ny, double width, double height) {
   mesh::Mesh m;
-  const auto id = [n](std::size_t i, std::size_t j) { return j * (n + 1) + i; };
-  for (std::size_t j = 0; j <= n; ++j)
-    for (std::size_t i = 0; i <= n; ++i)
-      m.nodes.push_back({static_cast<double>(i) / static_cast<double>(n),
-                         static_cast<double>(j) / static_cast<double>(n)});
-  for (std::size_t j = 0; j < n; ++j)
-    for (std::size_t i = 0; i < n; ++i) {
+  const auto id = [nx](std::size_t i, std::size_t j) {
+    return j * (nx + 1) + i;
+  };
+  for (std::size_t j = 0; j <= ny; ++j)
+    for (std::size_t i = 0; i <= nx; ++i)
+      m.nodes.push_back(
+          {width * static_cast<double>(i) / static_cast<double>(nx),
+           height * static_cast<double>(j) / static_cast<double>(ny)});
+  for (std::size_t j = 0; j < ny; ++j)
+    for (std::size_t i = 0; i < nx; ++i) {
       m.triangles.push_back({{id(i, j), id(i + 1, j), id(i + 1, j + 1)}});
       m.triangles.push_back({{id(i, j), id(i + 1, j + 1), id(i, j + 1)}});
     }
   m.region_names = {"bottom", "right", "top", "left"};
-  // Counterclockwise around the square, the domain on the left.
-  for (std::size_t i = 0; i < n; ++i)
+  // Counterclockwise around the rectangle, the domain on the left.
+  for (std::size_t i = 0; i < nx; ++i)
     m.boundary_edges.push_back(
         {.nodes = {id(i, 0), id(i + 1, 0)}, .region = 0, .link = {}});
-  for (std::size_t j = 0; j < n; ++j)
+  for (std::size_t j = 0; j < ny; ++j)
     m.boundary_edges.push_back(
-        {.nodes = {id(n, j), id(n, j + 1)}, .region = 1, .link = {}});
-  for (std::size_t i = n; i > 0; --i)
+        {.nodes = {id(nx, j), id(nx, j + 1)}, .region = 1, .link = {}});
+  for (std::size_t i = nx; i > 0; --i)
     m.boundary_edges.push_back(
-        {.nodes = {id(i, n), id(i - 1, n)}, .region = 2, .link = {}});
-  for (std::size_t j = n; j > 0; --j)
+        {.nodes = {id(i, ny), id(i - 1, ny)}, .region = 2, .link = {}});
+  for (std::size_t j = ny; j > 0; --j)
     m.boundary_edges.push_back(
         {.nodes = {id(0, j), id(0, j - 1)}, .region = 3, .link = {}});
   return std::make_shared<const mesh::Mesh>(std::move(m));
+}
+
+// The unit square cut into n x n cells (rectangle(n, n, 1, 1)): node
+// (i, j) is j (n + 1) + i, at (i / n, j / n).
+inline std::shared_ptr<const mesh::Mesh> unit_square(std::size_t n) {
+  return rectangle(n, n, 1.0, 1.0);
 }
 
 // The largest difference between nodal values and a function at the nodes.

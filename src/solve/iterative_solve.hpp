@@ -105,6 +105,7 @@ public:
     // precision can reach for this matrix, or the method does not
     // converge for it).
     Eigen::VectorXd y = Eigen::VectorXd::Zero(b.size());
+    Eigen::VectorXd r(b.size());
     double previous_residual = std::numeric_limits<double>::infinity();
     std::size_t iterations = 0;
     bool converged = false;
@@ -127,7 +128,7 @@ public:
         finite = false;
         break;
       }
-      const Eigen::VectorXd r = b - matrix * y;
+      r = b - matrix * y;
       // b is scaled so that its largest entry is 1: its norm is >= 1 and
       // the squares below do not underflow for the parts that matter.
       result.residual = r.stableNorm() / b.stableNorm();
@@ -147,6 +148,12 @@ public:
     for (std::size_t i = 0; i < right_hand_side.size(); ++i)
       result.values[i] = scale * y[static_cast<Eigen::Index>(i)];
     finite = finite && all_finite(result.values);
+    // From the last measured residual r = b - A y of the scaled system;
+    // the backward error does not change with the scale.
+    if (finite)
+      result.backward_error = detail::backward_error(
+          r.cwiseAbs().maxCoeff(), max_row_sum(*matrix_),
+          y.cwiseAbs().maxCoeff(), b.cwiseAbs().maxCoeff());
     if (!converged || !finite) {
       std::ostringstream s;
       s << name_ << ": did not converge in " << result.iterations

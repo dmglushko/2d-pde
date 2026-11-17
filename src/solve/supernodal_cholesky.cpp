@@ -86,7 +86,8 @@ public:
                                            solver_name,
                                            status_text(c->status)));
     }
-    // CHOLMOD_NOT_POSDEF: a pivot that is not positive; factor_->minor is
+    // CHOLMOD_NOT_POSDEF: a pivot that is not positive (zero, also
+    // exactly zero for a singular matrix, or negative); factor_->minor is
     // its column (in the ordering), n when all pivots are positive.
     if (c->status == CHOLMOD_NOT_POSDEF ||
         static_cast<std::size_t>(factor_->minor) < n) {
@@ -94,21 +95,17 @@ public:
       free_factor();
       throw std::runtime_error(std::format(
           "{}: the matrix is not positive definite (the factorization "
-          "stopped at column {} of {}); for a negative definite matrix write "
-          "the equation with the opposite sign, for an indefinite one use "
-          "simplicial_ldlt or a LU solver",
+          "stopped at column {} of {}, at a pivot that is zero or negative); "
+          "for a negative definite matrix write the equation with the "
+          "opposite sign, for an indefinite one use simplicial_ldlt or a LU "
+          "solver",
           solver_name, column, n));
     }
     // (min diag L / max diag L)^2: the ratio of the smallest pivot to the
-    // largest, as for an LDL^T factorization.
-    const double rcond = cholmod_l_rcond(factor_, c);
-    if (detail::singular_to_working_precision(rcond, n)) {
-      free_factor();
-      throw std::runtime_error(std::format(
-          "{}: the matrix is singular to working precision (its smallest "
-          "pivot is {} times the largest, below n machine epsilons)",
-          solver_name, rcond));
-    }
+    // largest, as for an L D L^T factorization. Reported, not judged: a
+    // tiny positive pivot (a pure Neumann problem, a very ill-conditioned
+    // one) is accepted, and the backward error of each solve is checked.
+    pivot_ratio_ = cholmod_l_rcond(factor_, c);
   }
 
   ~PreparedSupernodalCholesky() override { free_factor(); }
@@ -125,6 +122,7 @@ public:
     if (n == 0)
       return result;
     result.threads = static_cast<std::size_t>(threads_);
+    result.pivot_ratio = pivot_ratio_;
     // Allocated before CHOLMOD's result exists, so nothing can throw
     // between its allocation and its release (review finding).
     result.values.resize(n);
@@ -166,6 +164,7 @@ private:
   // A pointer, so that the const solve() can use CHOLMOD's workspace.
   std::unique_ptr<Common> common_;
   cholmod_factor *factor_ = nullptr;
+  double pivot_ratio_ = 0.0; // 0 for an empty matrix
 };
 
 } // namespace

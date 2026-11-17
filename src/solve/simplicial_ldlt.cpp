@@ -38,6 +38,9 @@ public:
       throw std::runtime_error(
           "simplicial_ldlt: the factorization failed (a zero pivot: the "
           "matrix is singular, or indefinite and needs pivoting)");
+    // The pivots are the diagonal D; none is zero after a success.
+    const Eigen::VectorXd d = ldlt_.vectorD().cwiseAbs();
+    pivot_ratio_ = d.minCoeff() / d.maxCoeff();
   }
 
   LinearSolveResult
@@ -56,16 +59,23 @@ public:
       throw std::runtime_error(
           "simplicial_ldlt: the solution is not finite (the matrix is "
           "singular or nearly so)");
-    result.residual =
-        detail::relative_residual(*matrix_, right_hand_side, result.values);
+    const auto measures =
+        detail::measure_residual(*matrix_, right_hand_side, result.values);
+    result.residual = measures.relative_residual;
+    result.backward_error = measures.backward_error;
+    result.pivot_ratio = pivot_ratio_;
     // The check that makes LDL^T without pivoting safe: a tiny pivot of an
-    // indefinite matrix factorizes "successfully" and gives a wrong x.
-    if (!(result.residual <= options_.residual_tolerance))
+    // indefinite matrix factorizes "successfully" and gives a wrong x,
+    // with a large backward error (the growth of the factors). The
+    // relative residual is not checked: for an accurate x it is about
+    // machine epsilon times |A| |x| / |b|, which a large coefficient
+    // contrast makes large.
+    if (!(result.backward_error <= options_.residual_tolerance))
       throw std::runtime_error(std::format(
-          "simplicial_ldlt: the relative residual {} is above the tolerance "
-          "{} (the matrix is probably indefinite and needs pivoting; use "
-          "sparse_lu)",
-          result.residual, options_.residual_tolerance));
+          "simplicial_ldlt: the backward error {} is above the tolerance {} "
+          "(residual_tolerance; the matrix is probably indefinite and needs "
+          "pivoting; use sparse_lu or multifrontal_lu)",
+          result.backward_error, options_.residual_tolerance));
     return result;
   }
 
@@ -73,6 +83,7 @@ private:
   std::shared_ptr<const fem::CsrMatrix> matrix_;
   SimplicialLdltOptions options_;
   Ldlt ldlt_;
+  double pivot_ratio_ = 0.0; // min |D| / max |D|; 0 for an empty matrix
 };
 
 } // namespace
