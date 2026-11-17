@@ -50,6 +50,13 @@ cannot be stopped.
 - Possible shape: an optional callback in `IntegrationOutput` called after
   each step with the step record, returning whether to continue (or a
   cancellation token checked between steps).
+- **The adaptive loop** (2026-11-17): the app's adaptive solve is one
+  `AdaptiveStaticSolver::solve` call, so the page shows nothing until
+  every cycle is solved and cannot stop it (the app must not run the
+  loop itself: that would reimplement the library's stopping rules). A
+  callback after each cycle (its solution, estimate and mesh, returning
+  whether to go on) would give progress, Stop and the cycles as they
+  come.
 - **What chunks cost** (2026-11-16): each `integrate` call prepares the
   linear solver and assembles at its start again, so the app sizes chunks
   by their measured cost to keep that fixed cost a small share

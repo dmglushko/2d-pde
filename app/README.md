@@ -1,8 +1,9 @@
 # pde2d app
 
 A graphical interface for the pde2d library, in a browser: choose a
-domain, mesh it, write the problem, assemble it, solve it (statically or in
-time, with the snapshots shown while the run goes on), compare the result
+domain, mesh it, write the problem, assemble it, solve it (statically, in
+time with the snapshots shown while the run goes on, or adaptively,
+refining the mesh where the error is estimated), compare the result
 with an exact solution or another run, and export it (CSV, VTK for
 ParaView, Matrix Market, provenance). The same cases also run from the
 command line, alone or as parameter sweeps.
@@ -204,6 +205,20 @@ field, Ctrl+Z undoes the whole edit of the field.
    snapshots with a progress bar, and the picture the newest snapshot,
    unless you moved the time bar. **Stop** (in place of Solve while it
    runs) keeps what arrived; **Continue** goes on from there.
+   **Adaptive** solves statically at t, estimates the error of every
+   triangle (residual, Kelly or gradient-recovery estimator), marks some
+   (Dörfler, maximum, fixed fraction, equidistribution), refines them
+   (newest vertex bisection by default, or any refiner of the Mesh step)
+   and solves again, until the estimate is below the tolerance (absolute,
+   or relative to the first estimate) or the maximum cycles or nodes are
+   reached. The picture then shows the solution on the last mesh, and
+   the **Colour** menu offers **error indicator η** (log₁₀, per
+   triangle). **Adaptive cycles** lists each cycle's nodes N, estimate and
+   observed rate (e ~ N^−rate), with a log–log chart and an N^(−1/2)
+   slope; comparing with an exact solution adds each cycle's L2 error
+   (and an N^(−1) slope). **Export adapted mesh** saves the last mesh as
+   `.pde2d`, which opens as a mesh file. An adaptive solve runs in one
+   piece: it has no progress and no Stop.
    Changing the case stops a run. If the server is busy or does not
    answer for a moment, the page keeps asking (and says so); a snapshot,
    a difference or u(t) that could not be loaded says why beside it, with
@@ -303,7 +318,11 @@ time), the time series `solution_0000.vtk`, `solution_0001.vtk`, … with
 snapshots with their times; the page's export is the same as one zip,
 `solution-vtk.zip`), `provenance.json` (the whole case, its SHA-256, the
 app's version and git commit, and the run's report) and the assembled
-system (`stiffness.mtx`, `damping.mtx`, `mass.mtx`, `rhs.mtx`). Each
+system (`stiffness.mtx`, `damping.mtx`, `mass.mtx`, `rhs.mtx`); an
+adaptive solve (`app/examples/l_shape_adaptive.json`) also writes its
+last mesh, `solution-mesh.pde2d`, and its summary lists every cycle
+(`solve.adaptive.cycles`) and, with an exact solution, each cycle's error
+(`comparison.cycles`). Each
 file but `.pde2d` says what produced it where its format allows: `#`
 lines at the top of the CSV (read it with
 `pandas.read_csv("solution.csv", comment="#")`), `%` lines after the

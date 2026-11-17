@@ -1019,3 +1019,93 @@ guess).
   its curves; `drawing_incomplete`: an incomplete drawing after a
   reload), C++ (the locator on a region across the loop's start and on
   holes the library turned).
+
+## 2026-11-17: the adaptive solve
+
+The library gained `pde2d_adapt` (error estimators, marking strategies,
+`MeshRefinement`, `AdaptiveStaticSolver`) and two bisection refiners
+(newest vertex bisection, red-green-blue). The app offers them as follows.
+
+- **A third solve mode, `adaptive`**, beside `static` and `time`, rather
+  than a separate step: the loop ends in a static solution, which every
+  part of the Solve step already knows how to show, compare and export.
+  Its part of the solve section holds the target (`t`, `tolerance`,
+  `max_cycles`, `max_nodes`) and three slots (`estimator`, `marking`,
+  `refiner`), built from the catalog like every component; the page's
+  forms needed no new code beyond the option kind below.
+- **The refiner comes from the mesh catalog**, which gains
+  `newest_vertex_bisection` and `red_green_blue` (they are mesh refiners
+  too). The adaptive default is newest vertex bisection: it keeps the
+  parents and the angles bounded over many cycles (26.6° after 17 cycles
+  on the L-shape). Improvers are not offered for the adaptive refiner:
+  the flips and smoothing drop the parents, which the coming solution
+  transfer will need, and an adaptive mesh that is never flipped keeps
+  NVB's similarity classes. A missing slot is its default, and an older
+  case gets the default `adaptive` part without a notice (it is new, not
+  wrong).
+- **A new option kind `tolerance`** (`{"absolute", "relative"}`, the
+  relative part times the first estimate). The length bound's widget
+  is reused with its label "× first estimate"; reusing `length_bound`
+  itself would have said "× domain size".
+- **Every budget is required in the case** (`max_cycles` 10, `max_nodes`
+  50000 by default) although the library allows leaving them out: an
+  adaptive run without a node budget could fill the server's memory,
+  and the memory reservation needs a bound. The tolerance may be empty.
+- **One library call, no progress.** The run calls
+  `AdaptiveStaticSolver::solve` once and is done when started, like a
+  static solve. Running the cycles one by one in the app would give
+  progress and Stop, but only by reimplementing the loop's stopping
+  rules (tolerance from the first estimate, node budget before solving),
+  which the app must not do. Requested from the library instead
+  (library-requests.md, item 2). Typical runs take well under a second
+  (17 cycles to 2294 nodes: 0.13 s).
+- **The run's mesh is the last mesh, under an id of its own.** Every
+  reader of a run (values, probes, comparisons, exports) reads its
+  `RunSnapshots`, so replacing `mesh` and `mesh_id` once, under the run
+  lock, puts all of them on the adapted mesh at once; the stage cache
+  reserves the id (`new_mesh_id`) so ids never collide, and
+  `RunManager::mesh_of` serves its arrays like a reference run's mesh.
+  The alternative (a mesh per snapshot) would have touched every reader
+  and the page's snapshot machinery for no gain: only the last solution
+  is shown.
+- **Every cycle's solution is kept** (on its own mesh) so a comparison
+  with an exact solution gives each cycle's error: the chart of the
+  estimate and the true error against N is what adaptivity is about.
+  Memory: the reservation is `max_cycles × (max_nodes × 64 + 512)`
+  bytes, fixed when the run is made, generous because the meshes grow
+  geometrically (38 MB for the example's budgets of 30 cycles and 20000
+  nodes; it uses about 0.3 MB).
+- **Error indicators** travel as float32 per triangle
+  (`/api/solve/indicators`, run lock only), not in the progress JSON
+  (tens of thousands of numbers in an answer the page polls). The
+  picture colours them by log₁₀: they span decades, and a linear scale
+  shows only the largest few. A zero indicator takes the lowest colour.
+- **The picture draws an adaptive solution on its own mesh**
+  (`pictureMesh`) while the solution is shown; a field of the Assemble
+  step is still drawn on the Mesh step's mesh, and the Dirichlet layer
+  is hidden on the adapted mesh (its nodes are the Mesh step's). An
+  outdated adaptive result is drawn while the Mesh step's mesh is the
+  one it started from (`start_mesh_id`), as other results are while
+  their mesh is.
+- **The cycle table and chart** show N, the estimate and its observed
+  rate, and after a comparison the L2 error and its rate, with N^(−1/2)
+  and N^(−1) slopes: the rates a well-adapted P1 mesh reaches in the
+  energy and L2 norms. The max error and the marked count are in the
+  chart and a tooltip; with them as columns the table overflowed the
+  sidebar.
+- **Not offered for an adaptive result:** the reference comparison (two
+  adaptive runs end on different meshes; the server would refuse) and
+  the refinement study (halving the starting mesh of a loop that refines
+  itself measures little). A stop message after the tolerance was met is
+  not counted as a warning; one after a budget is.
+- **`solution-mesh.pde2d`**: the mesh the solution is on, so an adapted
+  mesh can be opened as a mesh file and solved again or refined further
+  (`.pde2d` keeps the vertex order, so newest vertex bisection continues
+  from it).
+- Example `l_shape_adaptive.json` (the corner singularity from a 28-node
+  mesh to the tolerance 0.1 × the first estimate in 17 cycles; L2 error
+  ∝ N^(−1)), with its entry in `example_checks.json`; tests in
+  `app_solve` (the catalog against the library, the mode read strictly
+  with paths, the L-shape's convergence, the refusals' paths),
+  `web.test.mjs` (`adaptiveRows`, the run sizes) and the browser
+  scenario `adaptive`.

@@ -65,7 +65,7 @@ flowchart LR
         EXPORTS["exports: table of kinds"]
         INPUT["catalog / domain_input / problem_input"]
     end
-    LIB["pde2d::pde2d (geometry, mesh, io, fem, solve)"]
+    LIB["pde2d::pde2d (geometry, mesh, io, fem, solve, adapt)"]
 
     PAGE -- "JSON and binary over HTTP" --> SERVER
     SERVER --> SESSION
@@ -100,7 +100,7 @@ flowchart LR
 | --- | --- |
 | `app/src/options.*` | `OptionSpec` (an option as the page sees it), `OptionReader` (reads a JSON object strictly against the specs), small JSON readers, `named_option` (the option a library message names), `request_job` / `request_count`, `error_json` |
 | `app/src/app_error.hpp` | `PathError` (input refused at a path), `StageError` (a stage failed: stage, kind, message, path), `staged`, `at_path` |
-| `app/src/catalog.hpp`, `mesh_catalog.cpp`, `solve_catalog.cpp`, `catalog_parts.hpp` | the mesh and solve catalogs: every component, its options with the library's defaults, a function that builds it; `build_mesh_setup`, `build_solve_setup` (the inactive mode's part checked, not built: `check_component`); the sections' key lists |
+| `app/src/catalog.hpp`, `mesh_catalog.cpp`, `solve_catalog.cpp`, `catalog_parts.hpp` | the mesh and solve catalogs (the solve catalog also holds the adaptive mode's estimators and markings; its refiners are the mesh catalog's): every component, its options with the library's defaults, a function that builds it; `build_mesh_setup`, `build_solve_setup` (the inactive mode's part checked, not built: `check_component`); the sections' key lists |
 | `app/src/case_format.*` | the case's format, version and keys, `case_migrations` (`migrate_vN_to_vN+1`, none yet), `migrate_case`, `check_case`, `CaseInput` (a checked, migrated case) |
 | `app/src/case_schema.*` | `case_schema()`: the JSON Schema generated from the catalogs and the readers' key lists |
 | `app/src/domain_input.*` | the `geometry` section: shapes, SVG, mesh files, drawings (`drawing.*`), region edits (`split_mesh_region_at_node` for a mesh file); the geometry view; `DomainFacts` |
@@ -109,7 +109,7 @@ flowchart LR
 | `app/src/problem_input.*` | the `problem` section: `build_problem`, `check_problem` (every error at once, with paths), the problem catalog and templates |
 | `app/src/presets.*` | problem presets: a complete problem and its solve settings for any geometry, scaled by `DomainFacts` |
 | `app/src/stage_cache.*` | `StageCache`: the last domain, mesh (with its id), `MeshedProblem` and assembly, keyed by the case sections; `assembly_settings`, `solve_key` |
-| `app/src/runs.*` | `SessionOptions`, `RunState`, `Run` (a solve: static, or a time run in chunks; its `published` part under the run lock), `RunSnapshots`, `ChunkCost`, `fit_chunk_cost`, `plan_chunk`, `MetricRule` and `combine_report`, `run_bytes`, `make_run`, `start_run`, `advance`, `progress_json`, `RunManager` (each client's run and reference run, bounded by count and bytes; runs that are gone and why) |
+| `app/src/runs.*` | `SessionOptions`, `RunState`, `Run` (a solve: static, adaptive, or a time run in chunks; its `published` part under the run lock), `RunSnapshots`, `ChunkCost`, `fit_chunk_cost`, `plan_chunk`, `MetricRule` and `combine_report`, `run_bytes`, `adaptive_run_bytes`, `make_run`, `start_run` (an adaptive run: `solve_adaptive`, `publish_adaptive`), `advance`, `progress_json`, `RunManager` (each client's run and reference run, bounded by count and bytes; runs that are gone and why) |
 | `app/src/field_eval.*` | expressions at the nodes, `lumped_weights`, `difference_stats`, `Comparison` (against an exact solution or the reference run), `PointLocator` (a grid over the mesh), `probe_series` |
 | `app/src/exports.*` | `ExportedFile` (content, a stream, or an archive's members), `ExportKind`, `ExportNeeds`, the table of export kinds with their writers, provenance, `case_hash` |
 | `app/src/zip.*`, `sha256.*`, `build_info.hpp` | a stored zip writer with CRC-32 (Zip64 past 4 GiB), SHA-256, the build's git commit (written at build time by `app/cmake/build_info.cmake`) |
@@ -156,7 +156,12 @@ must not be ignored silently), and a missing value means its default.
     "static": {"t": 0},
     "time": {"t0": 0, "t1": 1, "snapshots": 50,
              "method": {"type": "implicit_euler", "options": {}},
-             "step": {"type": "fixed_step", "options": {"dt": 0.01}}}
+             "step": {"type": "fixed_step", "options": {"dt": 0.01}}},
+    "adaptive": {"t": 0, "tolerance": {"absolute": null, "relative": 0.1},
+                 "max_cycles": 10, "max_nodes": 50000,
+                 "estimator": {"type": "residual_estimator", "options": {}},
+                 "marking": {"type": "dorfler", "options": {"theta": 0.5}},
+                 "refiner": {"type": "newest_vertex_bisection", "options": {}}}
   },
   "view": {"exact_solution": "x"}
 }
@@ -190,9 +195,19 @@ must not be ignored silently), and a missing value means its default.
   not set. `priority` is a whole number.
 - `assembly.max_time_order` (0, 1 or 2) is `Assembler::assemble`'s: which
   time terms are built.
-- `solve.mode` is `static` (`StaticSolver` at `static.t`) or `time`
-  (`Integrator` from `t0` to `t1` with `method` and `step`). The linear
-  solver serves both. Only the chosen mode's part is read into the
+- `solve.mode` is `static` (`StaticSolver` at `static.t`), `time`
+  (`Integrator` from `t0` to `t1` with `method` and `step`) or `adaptive`
+  (`AdaptiveStaticSolver` at `adaptive.t` with one `MeshRefinement` of
+  `estimator`, `marking` and a `Remesher` of `refiner`, toward the target
+  `tolerance`, `max_cycles`, `max_nodes`; see "Adaptive runs"). The
+  linear solver serves all three. `tolerance` is the option kind
+  `tolerance`: `{"absolute", "relative"}` like a length bound, the
+  relative part times the first cycle's estimate (`ErrorTolerance`); both
+  null is no tolerance. The adaptive refiners are the mesh catalog's; a
+  missing `estimator`, `marking` or `refiner` is the catalog's default
+  (residual, Dörfler, newest vertex bisection), and a case without an
+  `adaptive` part gets the default one (the page adds it without a
+  notice). Only the chosen mode's part is read into the
   library's objects; the other is kept as written, but checked for
   unknown keys and value types with their paths (`solve.time.snapshots:
   expected a whole number`, an unknown method type); a value only the
@@ -275,6 +290,7 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 | `POST /api/solve/current` | case | `{"run": progress}`: the client's current run when its inputs (geometry, mesh, problem and solve sections) are the case's, else `{"run": null}`; never starts or continues a run, never makes a client, the run lock only (a reloaded page finds its run with it) |
 | `POST /api/solve/stop` | `{"job"}` | stops the run after the chunk that is running (at once: it does not wait for it); its progress. A solve of the same inputs continues it |
 | `POST /api/solve/values` | `{"job", "first", "count"}` | snapshots `first` to `first + count` (ready ones only) in binary (never waits for a chunk) |
+| `POST /api/solve/indicators` | `{"job"}` | a done adaptive run's error indicators of its last cycle, float32, one per triangle of its mesh (the run lock only); another run: 409 `not_ready` |
 | `POST /api/solve/reference` | `{"job"}` | keeps the client's run (it must be done) as its reference run: `{"reference": {"job", "mode", "times", "mesh_id"}}`. It stays when the run is replaced |
 | `POST /api/solve/reference/clear` | `{}` | forgets the reference: `{"reference": null}` |
 | `POST /api/solve/compare` | `{"job", "exact": text}` or `{"job", "reference": true}` | the comparison in double (see "Comparisons") |
@@ -296,7 +312,16 @@ largest finite value in double, `null` for a snapshot without one),
 (ready), "nodes", "bytes"}`, and `memory`: `{"bytes"` (what the run keeps
 when done, its share of the budget), `"budget"}`. A time run adds `t0`,
 `t1`, `t` (reached) and `snapshots_total`; a failed one `error`. A static
-solve is `done` at once.
+solve is `done` at once, and so is an adaptive one, which adds
+`start_mesh_id` (the Mesh step's mesh it started from; `mesh_id` is its
+last mesh) and `adaptive`: `stop_reason` (`tolerance_met`, `max_cycles`,
+`node_budget`, `nothing_changed`), `tolerance` (resolved, or `null`),
+`cycles` (`{"cycle", "nodes", "triangles", "estimate", "max_indicator",
+"marked"` (`null` on the last), `"residual", "seconds"}`), `mesh_stats`
+of the last mesh, `mesh` (its summary, as `/api/mesh` gives it: the
+arrays come from `/api/mesh/arrays`) and `indicators` (their count, or
+`null`). Its `reports` are the `adaptive_static_solver` report, then the
+last cycle's.
 
 **Errors** are `{"error": {"stage", "kind", "message", "path"}}`.
 `message` is readable on its own; when the error concerns a field it
@@ -324,7 +349,9 @@ start of its text. Where the paths come from:
   loop); a coefficient at `problem.equation.a_xx` and so on; the mesh
   spec at `mesh.spec.max_edge_length...`; `--set` at the path it was
   given; a comparison's expression at `exact`; a probe point at
-  `points[i]`.
+  `points[i]`; the adaptive loop's refusal of a target setting
+  (`adaptive_static_solver: max_cycles must be at least 1`, a starting
+  mesh above `max_nodes`) at `solve.adaptive.max_cycles` and so on.
 
 | Status | When | `kind` |
 | --- | --- | --- |
@@ -386,6 +413,10 @@ reference run (`"reference": true`). The answer, all in double:
   snapshot at the same time (up to rounding); a static reference (one
   snapshot) stands for every time; a snapshot without a match is `null`.
 - The figures cover the snapshots ready when the call is made.
+- **An adaptive run** against an exact solution also gives `cycles`:
+  `{"cycle", "nodes", "max_abs", "rms", "l2"}` for every cycle's solution
+  on its own mesh (the last is the snapshot). A reference comparison of
+  two adaptive runs is refused like any other on two meshes.
 
 ## Probes
 
@@ -414,6 +445,7 @@ needs and its writer:
 | `rhs.mtx` | the assembly | b in Matrix Market `array` form |
 | `solution.csv` | a done run | x, y and u at every kept time (`u(t=...)` columns), one row per node, full doubles |
 | `solution.vtk` | a done run | VTK legacy ASCII `UNSTRUCTURED_GRID`: the nodes (z = 0), the triangles (`VTK_TRIANGLE`), and one `POINT_DATA` scalar array per kept snapshot, named `u(t=...)`; ParaView and VisIt open it |
+| `solution-mesh.pde2d` | a done run | the mesh the run's solution is on in `.pde2d` (an adaptive run's last mesh; the Mesh step's for the others), so it opens as a mesh file; `--output` writes it for an adaptive run |
 | `solution-vtk.zip` | a done run | a time series for ParaView, as a stored (uncompressed) zip: `solution_0000.vtk`, `solution_0001.vtk`, ... (each the mesh and one array `u`), `solution.vtk.series` (ParaView's JSON manifest: `{"file-series-version": "1.0", "files": [{"name", "time"}, ...]}`; ParaView opens it and plays the snapshots at their times) and `solution-vtk.provenance.json` (as `provenance.json`). `--output` writes these files into the directory instead of the zip |
 | `provenance.json` | the case | `{"format": "pde2d-app-provenance", "version": 1, "app" (`name`, `version`, `commit`, `dirty`), "library", "case_name", "case_sha256", "exported", "file", "case" (the full case as sent), "run"}`: the run is the client's done run of the case with its progress (reports included, without the values layout) and `started`, or `null` |
 
@@ -458,10 +490,12 @@ needs and its writer:
   an `id` (its key in the case), a `cardinality` (`one`, `optional` or
   `list`) and its `components`, each with `type`, `label`, `description`
   and `options`. An option has `name`, `label`, `description`, `kind`
-  (`number`, `integer`, `choice`, `length_bound`), `default`, and
+  (`number`, `integer`, `choice`, `length_bound`, `tolerance`), `default`, and
   `choices` or `unit` where they apply. The solve section has the
-  `linear_solver` slot and `modes` (`static`, `time`), each with its
-  `settings` and `slots` (`method` and `step` for `time`). Components of
+  `linear_solver` slot and `modes` (`static`, `time`, `adaptive`), each
+  with its `settings` and `slots` (`method` and `step` for `time`;
+  `estimator`, `marking` and `refiner` for `adaptive`, the refiners being
+  the mesh section's). Components of
   the solve section carry `traits`, read from the library's declarations
   of a default-built instance: a linear solver's `symmetric_matrix`
   requirement, a time method's supported `time_orders`.
@@ -762,6 +796,28 @@ there take the same steps.
 - What a chunk cannot do: show progress or stop inside one snapshot
   interval (library-requests.md, item 2).
 
+### Adaptive runs
+
+`start_run` of an adaptive run calls `AdaptiveStaticSolver::solve` once,
+under the session mutex (the library has no progress or cancellation
+for the loop: library-requests.md, item 2), and publishes under the run
+lock: the last cycle's solution as the run's one snapshot, the run's
+`meshed`, `mesh` and `mesh_id` replaced by the last problem, its mesh and
+`adapted_mesh_id` (an id the stage cache reserved when the run was made,
+`StageCache::new_mesh_id`, so `RunManager::mesh_of` serves its arrays
+while the run is kept), every cycle's solution (`Published::cycles`, in
+`RunSnapshots::cycles`: comparisons give each cycle's error), the last
+estimate's indicators and the summary. The library's loop is not
+reimplemented: the app passes the catalog's components and the target
+and reads the result.
+
+- **Memory**: an adaptive run reserves `adaptive_run_bytes(max(nodes,
+  max_nodes), max_cycles)` = cycles × (nodes × 64 + 512): every cycle's
+  values, mesh and indicators at the node budget (the real use is
+  smaller: the meshes grow geometrically).
+- Probes, values, comparisons and exports read the run's `RunSnapshots`,
+  so they are on the last mesh without knowing it is adapted.
+
 ## Locks
 
 Two locks (`session.hpp`, `runs.hpp`):
@@ -799,7 +855,8 @@ Two locks (`session.hpp`, `runs.hpp`):
 The kept runs of all clients (current and reference runs) together may
 reserve at most `SessionOptions::memory_budget` bytes (`--memory-budget`,
 default 1 GiB). A run's reservation is fixed when it is made
-(`run_bytes`): its snapshots (times + 1 for a time run, 1 for a static
+(`run_bytes`; for an adaptive run `adaptive_run_bytes`, see "Adaptive
+runs"): its snapshots (times + 1 for a time run, 1 for a static
 solve) × (8 bytes a node + 128) plus the state a chunk starts from (8
 bytes a node, twice for time order 2); the mesh and the stage cache are
 not counted.
@@ -931,6 +988,27 @@ reference run*: "Keep as reference" (a done, fresh run;
 reference" (max difference per snapshot, a chart for a run in time, "Show
 u − reference in the picture"), "Forget reference"; a refusal (another
 mesh, a run not done) shows the server's message in the section.
+
+**An adaptive result** (`panels/solve.js`, `updateCycles`; the result
+carries its own mesh, `data.mesh`, and its indicators, fetched with it in
+`actions.js`, `solveData`): the picture draws it on its own mesh while
+the solution is what is shown (`display.js`, `pictureMesh`; the Dirichlet
+layer is the Mesh step's mesh's and is hidden then); an outdated one is
+drawn while the Mesh step's mesh is still the one it started from
+(`start_mesh_id`). The stats give the cycles, why it stopped, the last
+mesh's nodes, estimate and smallest angle. **Adaptive cycles**: a table
+(cycle, N, the estimate and its observed rate, and once compared with
+an exact solution each cycle's L2 error and rate; `pure/study.js`,
+`adaptiveRows`: rate = log(e₁/e₂) / log(N₂/N₁)) and a log–log chart
+against N (estimate, L2 and max errors, N^(−1/2) through the first
+estimate, N^(−1) through the first L2 error). The Colour menu's **error
+indicator η** (enabled for an adaptive solution) colours each triangle
+by log₁₀ η_T of the last cycle (a zero indicator takes the lowest
+colour), with the range lock as for |∇| (`locked.indicator`) and η_T in
+the readout. **Export adapted mesh** (`solution-mesh.pde2d`). The
+reference section and the refinement study are not offered for an
+adaptive solve (another mesh each time; it refines itself). When it met
+its tolerance, the stop message is not counted as a warning.
 
 **Refinement study** (`refinement.js`, the Solve result, with an exact
 solution in the case): 3 to 5 levels of the mesh's max edge length (the
@@ -1116,7 +1194,10 @@ pde2d_app --run CASE.json --sweep PATH=V1,V2,... [--sweep ...] [--set ...] [--ou
   files (`solution_NNNN.vtk`, `solution.vtk.series`,
   `solution-vtk.provenance.json`), `provenance.json` and the system
   (`stiffness.mtx`, `damping.mtx`, `mass.mtx`, `rhs.mtx`), with the case
-  file's name in their provenance.
+  file's name in their provenance; for an adaptive solve also
+  `solution-mesh.pde2d`. With an exact solution, an adaptive run's
+  `comparison` keeps its own `nodes` (the last mesh's) and adds `cycles`
+  (each cycle's error), without `longest_edge`.
 - `--sweep PATH=V1,V2,...` (repeatable) runs the case once per
   combination of the values (each read like a `--set` VALUE; values are
   separated by commas, so a JSON value with a comma cannot be swept), the
