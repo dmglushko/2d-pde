@@ -61,7 +61,10 @@ Eigen 3.3 or later (`pde2d_solve`; header-only, found with
 directory on the first
 configure, for example `tools/test.sh
 -DSymEngine_DIR=$HOME/.local/opt/symengine-0.14/lib/cmake/symengine`; it
-is cached in the build directory), Node.js (optional: the viewer tests
+is cached in the build directory), OpenMP (`pde2d_fem` for assembly,
+`pde2d_solve` for Eigen's parallel matrix-vector product, a public
+requirement there so consumers that include Eigen match it; GCC's
+libgomp, found with `find_package(OpenMP)`), Node.js (optional: the viewer tests
 are skipped without it).
 `PDE2D_BUILD_EXAMPLES` (on by default) builds `examples/`.
 `PDE2D_BUILD_APP` (on by default) builds the app (`build/app/pde2d_app`,
@@ -83,7 +86,8 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   fem (and below), adapt may include solve, fem, mesh and geometry, never
   the reverse (and io and fem not each other, nor io and solve, nor adapt
   and io; nothing includes adapt). Heavy dependencies (Boost, Eigen,
-  SymEngine, libxml2) only in `.cpp` files, never in public headers.
+  SymEngine, libxml2, OpenMP's `<omp.h>`) only in `.cpp` files (and
+  private headers), never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
   headers in `src/<module>/`. Tests use only public headers. Narrow
   exception (accepted by the owner): a private helper that no public
@@ -240,13 +244,27 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   Never decide `always_symmetric` by comparing matrix values; values give
   only `symmetric_now`.
 - **Element block functions are pure** (`src/fem/element_blocks.hpp`):
-  no shared state, so only the driver in `assembler.cpp` would ever know
-  about threads. Elements are processed colour by colour, in index order
-  inside a colour; never sum into a slot in another order.
+  no shared state, so only the driver in `assembler.cpp` knows about
+  threads. Elements are processed colour by colour; inside a colour they
+  run on `AssemblerOptions::threads` threads (`for_each_in_colour`), which
+  is safe and bit for bit the same only because no two elements of a
+  colour share a node, so each slot gets at most one addition per colour.
+  Never sum into a slot in another order, never add a shared accumulator
+  or atomics, and never let an exception leave an OpenMP thread (catch
+  it; the colour rethrows the one of the lowest element index).
+- **Threads never change a result.** Assembly and the iterative solvers
+  give the same bits for every thread count (`tests/fem/assembly_threads.cpp`,
+  `tests/solve/threads.cpp`); the count is an option of the component
+  (default 1, 0 = `omp_get_num_procs()`, at most 1024), never a global.
+  Every Eigen computation in `pde2d_solve` runs inside a
+  `detail::EigenThreads` scope (`src/solve/eigen_threads.hpp`), which sets
+  the calling thread's own OpenMP count: the iterative solvers their
+  option, the direct solvers 1. Never call `Eigen::setNbThreads` (a
+  global) in the library.
 - **Assembly does no symbolic work.** Derivatives it needs (div A, U_D',
   U_D'') are compiled, and the isotropy of A decided, in the
   `MeshedProblem` constructor.
-- **Eigen stays in `src/solve/`** (`eigen_view.hpp`,
+- **Eigen stays in `src/solve/`** (`eigen_view.hpp`, `eigen_threads.hpp`,
   `iterative_solve.hpp` and the solver `.cpp` files); public headers use
   `fem::CsrMatrix` and `std::vector`/`std::span`.
 - **The integrator decides from declarations.** A method's supported time

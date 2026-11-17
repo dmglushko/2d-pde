@@ -18,7 +18,8 @@ using Solver = Eigen::ConjugateGradient<detail::RowMajorMatrix,
 
 detail::IterativeOptions iterative(const ConjugateGradientOptions &options) {
   return {.tolerance = options.tolerance,
-          .max_iterations = options.max_iterations};
+          .max_iterations = options.max_iterations,
+          .threads = options.threads};
 }
 
 } // namespace

@@ -3,9 +3,19 @@
 #include "pde2d/fem/assembled_problem.hpp"
 #include "pde2d/fem/meshed_problem.hpp"
 
+#include <cstddef>
 #include <memory>
 
 namespace pde2d::fem {
+
+struct AssemblerOptions {
+  // How many threads compute the elements of one colour at once: 1 runs
+  // in the calling thread without OpenMP, 0 means all hardware threads
+  // (the processors available to this process, omp_get_num_procs; not
+  // OMP_NUM_THREADS). At most 1024. The result is bit for bit the same
+  // for every count.
+  std::size_t threads = 1;
+};
 
 // Assembles a MeshedProblem at a time t into an AssembledProblem with P1
 // elements (docs/decisions.md, "Assembly"):
@@ -24,8 +34,14 @@ namespace pde2d::fem {
 //   skipped and their columns go to the operators' `dirichlet` matrices;
 // - triangles (and, in their own pass, boundary edges) are coloured
 //   greedily in index order so that no two of one colour share a node,
-//   and are processed colour by colour, in index order inside a colour.
-//   This slice runs in one thread; the result never depends on that.
+//   and are processed colour by colour. The elements of one colour are
+//   shared among AssemblerOptions::threads threads (OpenMP); they share no
+//   node, so every matrix slot and load entry receives at most one
+//   addition per colour, and the additions to it come in colour order
+//   whatever the thread count: the result is bit for bit the same for
+//   every count. Called from inside an OpenMP parallel region, it may
+//   run in one thread (nested parallelism is off by default); the result
+//   is the same.
 //
 // `max_time_order` says which time terms are built (docs/decisions.md,
 // "assemble takes a max_time_order"):
@@ -51,17 +67,26 @@ namespace pde2d::fem {
 // coefficient that is not finite at a quadrature point (naming it), and a
 // natural or dynamic condition whose beta_n + (beta_x, beta_y).n is zero
 // at a quadrature point of one of its edges (it cannot be solved for u_n).
+// With several threads, the elements of a colour are all computed before
+// an error is passed on, and it is the error of the element the serial
+// order meets first (the lowest index in the first colour that has one),
+// so the exception and its message do not depend on the thread count.
 //
 // The report (stage "assembly") has the time and the metrics free_nodes,
 // dirichlet_nodes, free_nonzeros, dirichlet_nonzeros, triangle_colours,
-// edge_colours, used_previous (0 or 1), max_time_order and, for mass,
+// edge_colours, used_previous (0 or 1), max_time_order, threads (the
+// count asked for, 0 resolved to the hardware threads), threads_used (the
+// most threads that actually ran in one colour: OpenMP may give fewer,
+// for example inside a caller's parallel region) and, for mass,
 // damping, stiffness and load, <name>_rebuilt: 1 when something of it was
 // computed in this call, 0 when it was reused from `previous` as a whole
 // or left out by max_time_order.
 class Assembler {
 public:
-  // No options in this slice.
-  Assembler() = default;
+  Assembler();
+  // Throws std::invalid_argument for more than 1024 threads.
+  explicit Assembler(AssemblerOptions options);
+  const AssemblerOptions &options() const { return options_; }
 
   [[nodiscard]] AssembledProblem
   assemble(std::shared_ptr<const MeshedProblem> meshed_problem, double t,
@@ -76,6 +101,9 @@ public:
   // written (fem::time_order(MeshedProblem)), when a boundary u_t term
   // vanishes because A is zero.
   [[nodiscard]] int time_order(const MeshedProblem &meshed_problem) const;
+
+private:
+  AssemblerOptions options_;
 };
 
 } // namespace pde2d::fem

@@ -13,6 +13,16 @@ struct ConjugateGradientOptions {
   // The solve throws std::runtime_error when it has not converged after
   // this many iterations; at least 1.
   std::size_t max_iterations = 1000;
+  // How many threads Eigen's sparse matrix-vector products may use: 1
+  // runs in the calling thread, 0 means all hardware threads (the
+  // processors available to this process, omp_get_num_procs; not
+  // OMP_NUM_THREADS). At most 1024. Eigen uses them only for matrices with
+  // more than 20000 nonzeros. The iterations and the answer are bit for
+  // bit the same for every count. The count is set per calling thread, so
+  // solves running at once in different threads keep their own counts,
+  // unless the program sets one for all with Eigen::setNbThreads (that
+  // count then wins; the answer is unchanged).
+  std::size_t threads = 1;
 };
 
 // The iterative conjugate gradient method with a diagonal (Jacobi)

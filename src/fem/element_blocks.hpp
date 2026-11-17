@@ -1,9 +1,9 @@
 #pragma once
 
 // Private: the element blocks of assembly. Computing a block is a pure
-// function of the element, the compiled problem and t (no shared state, so
-// a later slice may call it from several threads); scattering is done by
-// the caller (assembler.cpp).
+// function of the element, the compiled problem and t (no shared state:
+// the driver in assembler.cpp calls it from several threads at once);
+// scattering is done by the caller.
 
 #include "pde2d/fem/meshed_problem.hpp"
 #include "pde2d/geometry/point.hpp"

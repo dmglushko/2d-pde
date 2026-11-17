@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pde2d/fem/assembler.hpp"
 #include "pde2d/fem/meshed_problem.hpp"
 #include "pde2d/mesh/report.hpp"
 #include "pde2d/solve/linear_solver.hpp"
@@ -13,7 +14,8 @@ namespace pde2d::solve {
 struct StaticResult {
   Solution solution{};
   // "assembly" (the Assembler's report), then "static_solver": the time
-  // taken and the metrics free_unknowns, linear_iterations and residual.
+  // taken and the metrics free_unknowns, linear_iterations, residual and
+  // linear_threads (LinearSolveResult::threads).
   std::vector<mesh::StageReport> reports{};
 };
 
@@ -28,8 +30,11 @@ struct StaticResult {
 // (fem::Operator::always_symmetric, symmetric_now).
 class StaticSolver {
 public:
-  // Throws std::invalid_argument for a null linear solver.
-  explicit StaticSolver(std::shared_ptr<const LinearSolver> linear_solver);
+  // The assembler is made here with `assembler_options` (its thread
+  // count). Throws std::invalid_argument for a null linear solver and
+  // assembler options out of range.
+  explicit StaticSolver(std::shared_ptr<const LinearSolver> linear_solver,
+                        fem::AssemblerOptions assembler_options = {});
 
   // Throws std::invalid_argument for a null problem, a t that is not
   // finite, or a linear solver that requires a symmetric matrix when A is
@@ -42,6 +47,7 @@ public:
 
 private:
   std::shared_ptr<const LinearSolver> linear_solver_;
+  fem::Assembler assembler_;
 };
 
 } // namespace pde2d::solve

@@ -1,10 +1,12 @@
 #pragma once
 
 // Helpers for the assembly tests: small meshes, dense copies of sparse
-// matrices and a dense solver. None of them uses the assembly code.
+// matrices, a dense solver and a bit for bit comparison of assembled
+// problems. None of them uses the assembly code.
 
 #include "support/check.hpp"
 
+#include "pde2d/fem/assembled_problem.hpp"
 #include "pde2d/fem/csr_matrix.hpp"
 #include "pde2d/geometry/curve_geometry.hpp"
 #include "pde2d/mesh/cdt.hpp"
@@ -13,8 +15,12 @@
 #include "pde2d/mesh/mesher.hpp"
 #include "pde2d/mesh/ruppert.hpp"
 
+#include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -112,6 +118,36 @@ inline double triangle_area(const mesh::Mesh &m, const mesh::Triangle &t) {
   const auto &p = m.nodes[t.nodes[0]], &q = m.nodes[t.nodes[1]],
              &r = m.nodes[t.nodes[2]];
   return ((q.x - p.x) * (r.y - p.y) - (r.x - p.x) * (q.y - p.y)) / 2;
+}
+
+// The same bits in the same places (unlike ==, tells 0.0 from -0.0 and
+// matches a NaN with the same NaN).
+inline bool same_bits(std::span<const double> x, std::span<const double> y) {
+  return std::ranges::equal(x, y, [](double a, double b) {
+    return std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b);
+  });
+}
+
+// Every value and fact, bit for bit.
+inline bool same(const fem::Operator &a, const fem::Operator &b) {
+  return same_bits(a.free.values, b.free.values) &&
+         same_bits(a.dirichlet.values, b.dirichlet.values) &&
+         a.depends_on_t == b.depends_on_t && a.always_zero == b.always_zero &&
+         a.always_symmetric == b.always_symmetric && a.zero_now == b.zero_now &&
+         a.symmetric_now == b.symmetric_now;
+}
+
+inline bool same(const fem::AssembledProblem &a,
+                 const fem::AssembledProblem &b) {
+  return same(a.mass(), b.mass()) && same(a.damping(), b.damping()) &&
+         same(a.stiffness(), b.stiffness()) && same_bits(a.load(), b.load()) &&
+         same_bits(a.dirichlet_values(), b.dirichlet_values()) &&
+         same_bits(a.dirichlet_rates(), b.dirichlet_rates()) &&
+         same_bits(a.dirichlet_accelerations(), b.dirichlet_accelerations()) &&
+         same_bits(a.right_hand_side(), b.right_hand_side()) &&
+         a.load_depends_on_t() == b.load_depends_on_t() &&
+         a.right_hand_side_depends_on_t() == b.right_hand_side_depends_on_t() &&
+         a.time_order() == b.time_order();
 }
 
 } // namespace pde2d::test

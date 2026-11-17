@@ -6,6 +6,7 @@
 // residual and the error messages are the same. Includes Eigen: only the
 // solver .cpp files include this header.
 
+#include "eigen_threads.hpp"
 #include "eigen_view.hpp"
 #include "vectors.hpp"
 
@@ -29,29 +30,38 @@ namespace pde2d::solve::detail {
 struct IterativeOptions {
   double tolerance = 1e-10;
   std::size_t max_iterations = 1000;
+  std::size_t threads = 1;
 };
 
-// Throws std::invalid_argument for a tolerance outside (0, 1) or no
-// iterations, naming `solver`.
+// Throws std::invalid_argument for a tolerance outside (0, 1), no
+// iterations or too many threads, naming `solver`.
 inline void check_options(const IterativeOptions &options,
                           const std::string &solver) {
   if (!(options.tolerance > 0.0 && options.tolerance < 1.0))
     throw std::invalid_argument(solver + ": tolerance must be in (0, 1)");
   if (options.max_iterations < 1)
     throw std::invalid_argument(solver + ": max_iterations must be at least 1");
+  check_threads(options.threads, solver);
 }
 
 // `EigenSolver` is an Eigen iterative solver for RowMajorMatrix with a
 // diagonal preconditioner, for example Eigen::BiCGSTAB<RowMajorMatrix,
-// Eigen::DiagonalPreconditioner<double>>.
+// Eigen::DiagonalPreconditioner<double>>. Its matrix-vector products run
+// on options.threads threads (EigenThreads): the rows are shared among
+// the threads and each is summed by one of them, while the dot products,
+// norms and vector updates run in the calling thread (Eigen does not
+// parallelize them), so the iterations and the answer are bit for bit the
+// same for every thread count.
 template <class EigenSolver>
 class PreparedIterative final : public PreparedLinearSolver {
 public:
   PreparedIterative(std::shared_ptr<const fem::CsrMatrix> matrix,
                     const IterativeOptions &options, std::string name)
-      : matrix_(std::move(matrix)), options_(options), name_(std::move(name)) {
+      : matrix_(std::move(matrix)), options_(options), name_(std::move(name)),
+        threads_(resolve_threads(options.threads)) {
     if (matrix_->rows() == 0)
       return;
+    const EigenThreads scope(threads_);
     // Checks here, once, that the preconditioner can be built. Each solve
     // builds its own (see solve). Eigen keeps a view of the matrix's
     // arrays (no copy); matrix_ keeps them alive.
@@ -67,6 +77,8 @@ public:
     LinearSolveResult result;
     if (matrix_->rows() == 0)
       return result;
+    const EigenThreads scope(threads_);
+    result.threads = static_cast<std::size_t>(EigenThreads::in_use());
     // A zero right-hand side: x = 0 solves it exactly, with no iterations.
     const double scale = max_abs(right_hand_side);
     if (scale == 0.0) {
@@ -150,6 +162,7 @@ private:
   std::shared_ptr<const fem::CsrMatrix> matrix_;
   IterativeOptions options_;
   std::string name_;
+  int threads_; // options_.threads, 0 resolved
 };
 
 } // namespace pde2d::solve::detail

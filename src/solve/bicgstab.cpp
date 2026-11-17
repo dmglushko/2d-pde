@@ -14,7 +14,8 @@ using Solver = Eigen::BiCGSTAB<detail::RowMajorMatrix,
 
 detail::IterativeOptions iterative(const BiCgStabOptions &options) {
   return {.tolerance = options.tolerance,
-          .max_iterations = options.max_iterations};
+          .max_iterations = options.max_iterations,
+          .threads = options.threads};
 }
 
 } // namespace

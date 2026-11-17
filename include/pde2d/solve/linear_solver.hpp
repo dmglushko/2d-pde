@@ -41,6 +41,10 @@ struct LinearSolveResult {
   // The relative residual |b - A x| / |b| in the Euclidean norm, computed
   // from x after the solve (|b - A x| when b is zero).
   double residual = 0.0;
+  // The threads the solve's matrix-vector products could use (the
+  // iterative solvers' resolved `threads` option); 1 for a direct solver,
+  // which runs in one thread, and for an empty system.
+  std::size_t threads = 1;
 };
 
 // A solver prepared for one matrix. It holds the matrix (shared), so the
