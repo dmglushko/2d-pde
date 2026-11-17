@@ -821,7 +821,8 @@ coarsening, moving nodes or enrichment for now.
 - **Error indicators are one number per triangle** (decided 2026-11-15),
   the same length as `mesh.triangles`. Marking and refinement act on
   triangles.
-- **A separate library, `pde2d_adapt`**, depending on `pde2d_mesh` only.
+- **A separate library, `pde2d_adapt`**, depending on `pde2d_mesh` only
+  (since 2026-11-17 also on solve and fem, for the estimators and the loop).
 - **Marking strategies are components behind one interface**: maximum
   (θ · the largest indicator), Dörfler or bulk (the smallest set holding a
   fraction θ of the total squared error), fixed fraction (a fraction of
@@ -890,6 +891,50 @@ coarsening, moving nodes or enrichment for now.
   `set_longest_edges_as_refinement_edges` once on the starting mesh.
   Equally long edges are ordered by their node indices, the order of the
   bisection core, which both triangles of an edge agree on.
+- **Error estimation and the adaptive loop are built too** (decided
+  2026-11-17; on 2026-11-15 the estimation had stayed the owner's). The
+  work goes in slices: (1) the three estimators and the adaptive loop for
+  static problems; (2) the loop for time-dependent problems; (3) adaptive
+  time steps. The details are left to the implementation, for the owner
+  to accept.
+- **Everything adaptive stays in `pde2d_adapt`** (decided 2026-11-17):
+  estimators, marking and the adaptive loop. It may now depend on solve
+  and fem (and below). Refiners stay in the mesh module, shared with
+  meshing. *Why:* "adapt" covers all of the vision's adaptivity (later
+  coarsening, moving nodes, revising the solver), not only mesh
+  refinement.
+- **Where a setting goes** (decided 2026-11-17): a setting read by one
+  component only is that component's option (constructor); a setting of
+  the loop a driver runs, the same for every job, is the driver's option
+  (constructor); what describes one job (the problem, the time interval,
+  the target) is an argument of the call. This is how it already is:
+  `dt` in `FixedStepOptions`, the solver tolerance in `BiCgStabOptions`,
+  t0 and t1 and the snapshots in `integrate(...)`, `MeshSpec` in
+  `Mesher::run`.
+- **An adaptive loop is a driver above the solvers** (decided
+  2026-11-17). A general driver (name left to the implementation) takes a
+  solver and one or more adaptations; mesh refinement is one adaptation,
+  itself a component made of an estimator, a marker and the `Remesher`,
+  each with its own options (θ of the marker, ...). Later kinds of
+  adaptation plug in the same way. The job's target is an argument of
+  the call: a tolerance for the estimated error, a maximum number of
+  cycles, a node budget; for a time-dependent run also when to adapt:
+  after a time interval and/or after a number of steps, whichever comes
+  first (both optional, like a `LengthBound`). *Why:* `StaticSolver` and
+  `Integrator` work on one `MeshedProblem`; a new mesh makes a new one,
+  and the integrator already continues a run from a given state.
+- **One estimator component serves static and time-dependent problems**
+  (decided 2026-11-17): residual, Kelly and recovery (Zienkiewicz–Zhu),
+  one indicator per triangle. One method; its input is the solution and,
+  when the problem has time terms, u_t (and u_tt for time order 2). The
+  residual estimator adds the time terms to its residual (and throws when
+  a problem with time terms comes without them); Kelly and recovery ignore
+  them. *Why:* the algorithm is the same in both cases; only the residual
+  gains terms. The time error is not an estimator's job.
+- **Adaptive time steps are another `StepController`** (decided
+  2026-11-17), controlled by an estimate of each step's time error, with
+  rejected steps; the `StepController` interface is extended when it is
+  built.
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks
