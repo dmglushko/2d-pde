@@ -97,9 +97,9 @@ struct System {
 
 System system_of(const std::shared_ptr<const MeshedProblem> &meshed) {
   const auto assembled = Assembler().assemble(meshed, 0.0, nullptr, 0);
-  return {std::make_shared<const CsrMatrix>(assembled.stiffness().free),
-          {assembled.right_hand_side().begin(),
-           assembled.right_hand_side().end()}};
+  return {
+      std::make_shared<const CsrMatrix>(assembled.stiffness().free),
+      {assembled.right_hand_side().begin(), assembled.right_hand_side().end()}};
 }
 
 LinearSolveResult solve_with(const LinearSolver &solver, const System &s) {
@@ -121,8 +121,7 @@ void agrees(const LinearSolver &solver, const LinearSolver &reference,
 
 // 1, 2 and 4 threads: answers within a tight tolerance of each other,
 // each count reported; 1 thread twice gives the same bits.
-template <class Solver, class Options>
-void thread_counts(const System &s) {
+template <class Solver, class Options> void thread_counts(const System &s) {
   const auto serial = solve_with(Solver(Options{}), s);
   const auto again = solve_with(Solver(Options{.threads = 1}), s);
   check(same_bits(serial.values, again.values) &&
@@ -134,8 +133,7 @@ void thread_counts(const System &s) {
     const Solver solver(Options{.threads = threads});
     const auto parallel = solve_with(solver, s);
     check(parallel.threads == threads,
-          solver.name() + ": " + std::to_string(threads) +
-              " threads reported");
+          solver.name() + ": " + std::to_string(threads) + " threads reported");
     check(relative_difference(parallel.values, serial.values) < 1e-12,
           solver.name() + ": " + std::to_string(threads) +
               " threads agree with 1");
@@ -144,8 +142,9 @@ void thread_counts(const System &s) {
   }
 }
 
-IntegrationResult integrate_with(std::shared_ptr<const LinearSolver> solver,
-                                 const std::shared_ptr<const MeshedProblem> &p) {
+IntegrationResult
+integrate_with(std::shared_ptr<const LinearSolver> solver,
+               const std::shared_ptr<const MeshedProblem> &p) {
   return Integrator(std::make_shared<ImplicitMidpoint>(),
                     std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.05}),
                     std::move(solver))
@@ -179,7 +178,8 @@ int main() {
          // Negative definite: the equation written with a = 1.
          expect_throws<std::runtime_error>(
              [&] {
-               (void)SupernodalCholesky().prepare(system_of(problem("1")).matrix);
+               (void)SupernodalCholesky().prepare(
+                   system_of(problem("1")).matrix);
              },
              "supernodal_cholesky: the matrix is not positive definite (the "
              "factorization stopped at column 0 of");
@@ -188,12 +188,12 @@ int main() {
        [] {
          // Heat equation, symmetric step matrix M1 / dt + A / 2.
          const auto heat = problem("-1", "0", "0", "1");
-         const auto ldlt = integrate_with(std::make_shared<SimplicialLdlt>(),
-                                          heat);
-         const auto cholesky = integrate_with(
-             std::make_shared<SupernodalCholesky>(
-                 SupernodalCholeskyOptions{.threads = 2}),
-             heat);
+         const auto ldlt =
+             integrate_with(std::make_shared<SimplicialLdlt>(), heat);
+         const auto cholesky =
+             integrate_with(std::make_shared<SupernodalCholesky>(
+                                SupernodalCholeskyOptions{.threads = 2}),
+                            heat);
          check(relative_difference(cholesky.final.values, ldlt.final.values) <
                    1e-10,
                "Cholesky agrees with LDL^T");
@@ -203,8 +203,8 @@ int main() {
          const auto convection = problem("-1", "5", "0", "1");
          const auto lu =
              integrate_with(std::make_shared<SparseLu>(), convection);
-         const auto multifrontal = integrate_with(
-             std::make_shared<MultifrontalLu>(), convection);
+         const auto multifrontal =
+             integrate_with(std::make_shared<MultifrontalLu>(), convection);
          check(relative_difference(multifrontal.final.values, lu.final.values) <
                    1e-10,
                "MultifrontalLu agrees with SparseLu");

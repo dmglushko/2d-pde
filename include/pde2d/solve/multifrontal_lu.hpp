@@ -13,12 +13,14 @@ struct MultifrontalLuOptions {
   // How many threads the factorization and the solves may use: 1 runs in
   // the calling thread, 0 means all hardware threads (the processors
   // available to this process, omp_get_num_procs; not OMP_NUM_THREADS).
-  // At most 1024. They are OpenMP threads: the fronts of independent
-  // subtrees are factorized at once, and large dense updates are split
-  // among threads (the BLAS itself runs in one thread meanwhile). With
-  // more than one thread the order of the work is decided while it runs,
-  // so the answer may differ in the last digits between thread counts and
-  // between runs; with 1 thread it is the same, bit for bit, on every run.
+  // At most 1024. ParU runs that many OpenMP threads (the fronts of
+  // independent subtrees are factorized at once, and large dense updates
+  // are split among threads), each calling the BLAS (OpenBLAS), whose own
+  // pool gets the same count; so at times up to about twice `threads`
+  // threads are busy. With more than one thread the order of the work is
+  // decided while it runs, so the answer may differ in the last digits
+  // between thread counts and between runs; with 1 thread it is the same,
+  // bit for bit, on every run.
   std::size_t threads = 1;
 };
 
@@ -36,9 +38,10 @@ struct MultifrontalLuOptions {
 // relative residual against residual_tolerance, so it never returns an
 // unchecked answer.
 //
-// Threads: it sets OpenBLAS's process-wide thread count to 1 for the
-// duration of each factorization and solve, under the lock shared with
-// SupernodalCholesky (see there).
+// Threads: OpenBLAS has one thread count for the whole process, so this
+// solver sets it for the duration of each factorization and solve and
+// restores it afterwards, under the lock shared with SupernodalCholesky
+// (see there).
 class MultifrontalLu final : public LinearSolver {
 public:
   // Throws std::invalid_argument for options out of range.

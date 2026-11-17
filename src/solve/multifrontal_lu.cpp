@@ -80,12 +80,16 @@ public:
     const std::size_t n = matrix_->rows();
     if (n == 0)
       return; // nothing to factorize: every solve returns an empty vector
-    // ParU runs its own OpenMP threads, and its dense updates split among
-    // them, calling the BLAS from each; this SuiteSparse is built for a
-    // generic BLAS, so ParU does not set the BLAS threads itself. The BLAS
-    // runs in one thread, or every one of ParU's threads would start a
-    // pool of its own.
-    const detail::FactorizationThreads scope(threads_, 1);
+    // ParU runs `threads_` OpenMP threads (independent fronts at once, and
+    // large dense updates split into tasks), each calling the BLAS. This
+    // SuiteSparse is built for a generic BLAS, so ParU does not set the
+    // BLAS threads itself: the scope gives OpenBLAS the same count.
+    // OpenBLAS (pthreads) has one pool that its callers share, so at most
+    // about twice `threads_` threads are busy at once; measured on 2D and
+    // 3D problems with 4 threads, this is faster than a one-thread BLAS
+    // (factorization 0.78 s instead of 0.87 s in 2D, 2.2 s instead of
+    // 3.0 s in 3D).
+    const detail::FactorizationThreads scope(threads_, threads_);
     try {
       check(ParU_InitControl(&control_), "setting up");
       check(ParU_Set(PARU_CONTROL_MAX_THREADS,
@@ -143,7 +147,7 @@ public:
       return result;
     result.threads = static_cast<std::size_t>(threads_);
     {
-      const detail::FactorizationThreads scope(threads_, 1);
+      const detail::FactorizationThreads scope(threads_, threads_);
       // ParU reads b through a non-const pointer: give it a copy.
       std::vector<double> b(right_hand_side.begin(), right_hand_side.end());
       result.values.resize(n);
