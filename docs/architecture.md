@@ -127,7 +127,7 @@ flowchart BT
     MESH[pde2d_mesh]
     IO["pde2d_io · libxml2"]
     FEM["pde2d_fem · SymEngine, OpenMP"]
-    SOLVE["pde2d_solve · Eigen, OpenMP"]
+    SOLVE["pde2d_solve · Eigen, SuiteSparse, OpenBLAS, OpenMP"]
     ADAPT[pde2d_adapt]
 
     MESH --> GEO
@@ -156,7 +156,20 @@ is an option of each component that uses threads
 (`AssemblerOptions::threads`, `ConjugateGradientOptions::threads`,
 `BiCgStabOptions::threads`; default 1, 0 = all hardware threads, that is
 `omp_get_num_procs()`, the processors available to the process; at most
-1024); there is no global setting, and every count gives the same bits.
+1024); there is no global setting, and every count gives the same bits,
+except in the parallel direct solvers (below).
+
+SuiteSparse (CHOLMOD and ParU) gives `pde2d_solve` its parallel direct
+solvers, and OpenBLAS (the system BLAS, pthreads build) their dense
+kernels; both are linked privately and appear only in
+`src/solve/suitesparse.hpp`, `supernodal_cholesky.cpp`,
+`multifrontal_lu.cpp` and `factorization_threads.cpp`. SuiteSparse's
+headers declare C functions and non-inline C++ functions, so unlike
+Eigen they cannot give a program a differently compiled inline copy;
+nothing about them is a public requirement. CHOLMOD's CMake config asks
+for OpenMP's C component, so the project enables the C language; OpenBLAS
+is found with `find_library` (Ubuntu's OpenBLAS config file points at a
+wrong directory).
 
 ## What each object contains
 
@@ -590,8 +603,8 @@ module: it is a program over the public headers, described in
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`AssemblerOptions`, `Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`), `element_blocks.hpp` (assembly's pure element block functions) and `threads.hpp` (checking and resolving `AssemblerOptions::threads`; includes `<omp.h>`); `assembler.cpp` holds the driver (with the OpenMP loop over a colour), patterns, colouring and `detail::AssemblyInternals` |
-| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
-| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `eigen_threads.hpp` (checking and resolving a `threads` option; `detail::EigenThreads`, the scope every Eigen computation runs in) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`); `time_methods.cpp` holds the three time methods |
+| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`), `supernodal_cholesky.hpp` (`SupernodalCholeskyOptions`, `SupernodalCholesky`), `multifrontal_lu.hpp` (`MultifrontalLuOptions`, `MultifrontalLu`) |
+| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `threads.hpp` (checking and resolving a `threads` option; includes `<omp.h>`), `eigen_threads.hpp` (`detail::EigenThreads`, the scope every Eigen computation runs in), `factorization_threads.hpp` (`detail::FactorizationThreads`, the scope every SuiteSparse call runs in: a process-wide lock, OpenBLAS's count and the calling thread's OpenMP count; the OpenBLAS calls are in `factorization_threads.cpp`), `suitesparse.hpp` (what the two SuiteSparse solvers share: their options check, CHOLMOD's view of a `CsrMatrix` as the compressed columns of its transpose, the singularity rule, the checks of a result; includes `cholmod.h`) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the Eigen solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`), SuiteSparse only in `suitesparse.hpp`, `supernodal_cholesky.cpp` and `multifrontal_lu.cpp`; `time_methods.cpp` holds the three time methods |
 | `app/` | the graphical interface (`pde2d_app`): `src/` (case format with its migrations and generated schema, the geometry sources with the drawing and the boundary locator, the mesh and solve catalogs, the stage cache, runs in chunks per client under two locks, comparisons and probes, exporters with a stored zip writer, problem presets, `--set` and `--sweep`, local HTTP server), `web/` (the page, plain JS modules, with the geometry editor on the picture), `examples/` (cases), `Start pde2d app.cmd` and `start-app.sh` (double-click launcher), `tests/` (`browser/`: the page in headless Chrome; `example_checks.json`: the examples' expected figures), `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md`, its design `docs/app.md` and its decisions `docs/app-decisions.md` |
 | `include/pde2d/adapt/` | `error_estimator.hpp` (`ErrorEstimator`, `ErrorEstimate`, `TimeDerivatives`), `residual_estimator.hpp` (`ResidualEstimatorOptions`), `kelly_estimator.hpp` (`KellyEstimatorOptions`), `recovery_estimator.hpp` (`RecoveryEstimatorOptions`, `RecoveryNorm`), `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `adaptation.hpp` (`Adaptation`, `AdaptationCapabilities`, `AdaptationResult`, `SolvedState`), `mesh_refinement.hpp` (`MeshRefinement`), `adaptive_static_solver.hpp` (`AdaptiveStaticSolver`, `AdaptiveTarget`, `ErrorTolerance`, `StopReason`, `AdaptiveCycle`, `AdaptiveStaticResult`); refinement of marked triangles is `mesh::Remesher::refine` |
 | `src/adapt/` | `error_estimator.cpp` (the shared checks of `estimate`), `residual_estimators.cpp` (the residual terms, shared by the residual and Kelly estimators), `recovery_estimator.cpp`, `marking.cpp` (the shared checks and the four strategies), `mesh_refinement.cpp`, `adaptive_static_solver.cpp`; private header `estimator_geometry.hpp` (per-triangle area, diameter and gradient of u_h, interior edges with their two triangles, the triangle of each boundary edge, checked coefficient values, the check of a quadrature degree option) |
@@ -1391,9 +1404,9 @@ IntegrationResult r2 = integrator.integrate(meshed, 1.0, 2.0, {}, &r.final);
 std::shared_ptr<const CsrMatrix>)` returns a
 `std::unique_ptr<const PreparedLinearSolver>`, which holds the matrix and
 solves `solve(rhs) -> LinearSolveResult` (values, iterations, relative
-residual |b − Ax| / |b| computed after the solve, and `threads`: those the
-matrix-vector products could use, 1 for a direct solver) as often as
-needed.
+residual |b − Ax| / |b| computed after the solve, and `threads`: the
+resolved option of the iterative and the parallel direct solvers, 1 for
+the Eigen direct solvers) as often as needed.
 A solver declares `requirements()` (`LinearSolverRequirements{
 symmetric_matrix}`); `prepare` sees only values, so the callers (the
 `Integrator`, the `StaticSolver`, `Newmark::start`, `ImplicitEuler::start`)
@@ -1412,6 +1425,8 @@ detects its failure and throws `std::runtime_error`.
 | `BiCgStab` | nothing | `BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000, .threads = 1}`; Jacobi preconditioner; views our arrays through `Eigen::Map` without copying; starts from zero; non-convergence throws `std::runtime_error` |
 | `ConjugateGradient` | symmetric | Eigen's ConjugateGradient with Lower \| Upper and Jacobi; `ConjugateGradientOptions` as for `BiCgStab`; converges only for a positive definite matrix, otherwise it does not reach its tolerance and throws |
 | `SimplicialLdlt` | symmetric | Eigen's SimplicialLDLT with AMD (lower triangle, copied to column-major); no pivoting, so a zero pivot (singular, or indefinite needing pivots) throws `std::runtime_error` in `prepare`; a tiny pivot passes the factorization, so `solve` checks the relative residual against `SimplicialLdltOptions{.residual_tolerance = 1e-8}` and throws `std::runtime_error` above it |
+| `SupernodalCholesky` | symmetric | CHOLMOD's supernodal L Lᵀ (always supernodal; CHOLMOD's default ordering, AMD or METIS); reads the lower triangle through a view of our arrays (no copy); `SupernodalCholeskyOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for a matrix that is not positive definite (naming the column; negative definite included) or singular to working precision; `solve` checks the residual like `SimplicialLdlt` |
+| `MultifrontalLu` | nothing | ParU's multifrontal LU with threshold partial pivoting (UMFPACK's analysis, METIS, rows scaled by their largest entry); the matrix is copied once into compressed columns; `MultifrontalLuOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for a zero pivot or a matrix singular to working precision (a pure Neumann problem); `solve` checks the residual |
 
 The two iterative solvers share one prepared solver
 (`detail::PreparedIterative<EigenSolver>`, `src/solve/iterative_solve.hpp`):
@@ -1434,9 +1449,8 @@ is `omp_get_max_threads()` of the calling thread unless the program calls
 `Eigen::setNbThreads`. Every Eigen computation in `pde2d_solve` runs inside
 a `detail::EigenThreads` scope (`eigen_threads.hpp`), which sets the
 calling thread's own OpenMP count (`omp_set_num_threads`) and restores it
-afterwards: the iterative solvers set their option, the direct solvers 1
-(they stay serial; their parallel version needs a library still to be
-chosen). Nothing global is written, so solves running at once in
+afterwards: the iterative solvers set their option, the Eigen direct
+solvers 1 (they stay serial). Nothing global is written, so solves running at once in
 different threads keep their own counts; a program that calls
 `Eigen::setNbThreads` overrides them all (the answers do not change).
 The assembly report has `threads` (asked for) and `threads_used` (the most
@@ -1445,6 +1459,57 @@ example inside a caller's parallel region); no colour asks for more
 threads than it has elements. The bit-for-bit guarantee assumes the
 caller and OpenMP's worker threads use the same floating-point rounding
 mode (the default, round to nearest).
+
+**Threads in the parallel direct solvers.** `SupernodalCholesky` and
+`MultifrontalLu` take their threads from two places: OpenMP inside
+SuiteSparse (CHOLMOD's loops over a supernode's updates,
+`cholmod_common::nthreads_max`; ParU's tasks over independent fronts and
+over the blocks of a large dense update, `PARU_CONTROL_MAX_THREADS`, which
+ParU caps at the calling thread's `omp_get_max_threads()`), and the BLAS
+(OpenBLAS, which does the dense work on supernodes and fronts). Both get
+the resolved `threads`. OpenMP's count is set for the calling thread only,
+but OpenBLAS has one count for the process (`openblas_set_num_threads`),
+so every factorization and every solve runs inside a
+`detail::FactorizationThreads` scope: it takes a process-wide lock, sets
+both counts and restores them at the end. Two direct solves of this kind
+that would run at once in different threads run one after another, each
+with its own count for its whole run; code outside the library that calls
+OpenBLAS meanwhile sees the scope's count. Ubuntu's SuiteSparse is built
+for a generic BLAS, so ParU does not set the BLAS threads itself (its
+built-in OpenBLAS support is compiled out); under its OpenMP tasks the
+shared OpenBLAS pool may keep up to about twice `threads` threads busy,
+which measured faster than a one-thread BLAS. The answers may differ in
+the last digits between thread counts, and for ParU, which schedules its
+tasks while it runs, between runs; with 1 thread they are reproducible bit
+for bit (`tests/solve/parallel_direct.cpp`, also with two solves at once).
+
+**Singular to working precision.** A singular matrix rarely meets an
+exact zero pivot in floating point: a pure Neumann problem factorizes with
+a last pivot of about 1e-17 n times the largest. Both parallel direct
+solvers therefore count a factorization whose smallest pivot is below
+n·ε times its largest (`cholmod_l_rcond`, ParU's rcond estimate over the
+pivots of its fronts; a matrix of singletons only has no fronts and no
+estimate) as singular (`detail::singular_to_working_precision`); a
+matrix from a well-posed problem keeps pivots near 1/n.
+
+Times measured once (Ryzen 9 6900HX, WSL; best of three; `prepare` is the
+symbolic analysis and the numeric factorization) on the unit square cut
+into 550 × 550 × 2 triangles, 301401 unknowns, 2.1 million nonzeros:
+
+| Solver | Threads | `prepare` (s) | `solve` (s) |
+| --- | --- | --- | --- |
+| `SimplicialLdlt` | 1 | 1.87 | 0.047 |
+| `SupernodalCholesky` | 1 / 2 / 4 | 0.53 / 0.51 / 0.49 | 0.049 / 0.049 / 0.048 |
+| `SparseLu` (Poisson / convection) | 1 | 5.14 / 4.71 | 0.081 / 0.081 |
+| `MultifrontalLu` (Poisson) | 1 / 2 / 4 | 2.46 / 2.44 / 2.10 | 0.090 / 0.092 / 0.090 |
+| `MultifrontalLu` (convection) | 1 / 2 / 4 | 2.60 / 2.46 / 2.21 | 0.093 / 0.094 / 0.096 |
+
+In 2D the fronts are small (the largest separator has about 2√n
+unknowns), so most of `prepare` is the serial analysis (ordering and
+symbolic factorization: about 0.2 s of CHOLMOD's 0.5 s, 1.3 s of ParU's
+2.1 s) and the threads gain little. On a 3D Laplacian (45³ = 91125
+unknowns, large dense fronts) they do: `SupernodalCholesky` 1.56 / 1.21 /
+1.10 s, `MultifrontalLu` 4.13 / 3.00 / 2.58 s for 1 / 2 / 4 threads.
 
 **Solution** (`solution.hpp`). `Solution{mesh, time, values, velocities}`;
 `build_solution(meshed, free_values, t)` places the free values at

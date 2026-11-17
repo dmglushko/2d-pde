@@ -57,7 +57,11 @@ ctest --test-dir build -R mesh_pipeline --output-on-failure   # one test
 
 Dependencies: Boost (tests only), libxml2 development files (`pde2d_io`),
 Eigen 3.3 or later (`pde2d_solve`; header-only, found with
-`find_package(Eigen3)`), SymEngine 0.14 (`pde2d_fem`; give its config
+`find_package(Eigen3)`), SuiteSparse 7.12 with CHOLMOD and ParU and
+OpenBLAS (`pde2d_solve`, the parallel direct solvers; CMake config files
+of CHOLMOD and ParU, OpenBLAS found by `find_library`; OpenBLAS should
+be the system BLAS, the pthreads build; CHOLMOD's config needs the C
+language enabled), SymEngine 0.14 (`pde2d_fem`; give its config
 directory on the first
 configure, for example `tools/test.sh
 -DSymEngine_DIR=$HOME/.local/opt/symengine-0.14/lib/cmake/symengine`; it
@@ -86,8 +90,8 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   fem (and below), adapt may include solve, fem, mesh and geometry, never
   the reverse (and io and fem not each other, nor io and solve, nor adapt
   and io; nothing includes adapt). Heavy dependencies (Boost, Eigen,
-  SymEngine, libxml2, OpenMP's `<omp.h>`) only in `.cpp` files (and
-  private headers), never in public headers.
+  SymEngine, SuiteSparse, OpenBLAS, libxml2, OpenMP's `<omp.h>`) only in
+  `.cpp` files (and private headers), never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
   headers in `src/<module>/`. Tests use only public headers. Narrow
   exception (accepted by the owner): a private helper that no public
@@ -255,18 +259,33 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - **Threads never change a result.** Assembly and the iterative solvers
   give the same bits for every thread count (`tests/fem/assembly_threads.cpp`,
   `tests/solve/threads.cpp`); the count is an option of the component
-  (default 1, 0 = `omp_get_num_procs()`, at most 1024), never a global.
+  (default 1, 0 = `omp_get_num_procs()`, at most 1024; checked and
+  resolved by `src/solve/threads.hpp` in the solvers), never a global.
   Every Eigen computation in `pde2d_solve` runs inside a
   `detail::EigenThreads` scope (`src/solve/eigen_threads.hpp`), which sets
   the calling thread's own OpenMP count: the iterative solvers their
-  option, the direct solvers 1. Never call `Eigen::setNbThreads` (a
-  global) in the library.
+  option, the Eigen direct solvers 1. Never call `Eigen::setNbThreads` (a
+  global) in the library. The one accepted exception to "the same bits"
+  are the parallel direct solvers (`SupernodalCholesky`,
+  `MultifrontalLu`): their answers may differ in the last digits between
+  thread counts (and between runs for the LU), never with 1 thread
+  (`tests/solve/parallel_direct.cpp`). Every SuiteSparse call runs inside
+  a `detail::FactorizationThreads` scope
+  (`src/solve/factorization_threads.hpp`): it sets OpenBLAS's count (one
+  for the whole process) and the calling thread's OpenMP count, and holds
+  a process-wide lock so that two such solves never run at once. Never
+  call `openblas_set_num_threads` elsewhere.
 - **Assembly does no symbolic work.** Derivatives it needs (div A, U_D',
   U_D'') are compiled, and the isotropy of A decided, in the
   `MeshedProblem` constructor.
-- **Eigen stays in `src/solve/`** (`eigen_view.hpp`, `eigen_threads.hpp`,
-  `iterative_solve.hpp` and the solver `.cpp` files); public headers use
-  `fem::CsrMatrix` and `std::vector`/`std::span`.
+- **Eigen and SuiteSparse stay in `src/solve/`** (Eigen: `eigen_view.hpp`,
+  `eigen_threads.hpp`, `iterative_solve.hpp` and the solver `.cpp` files;
+  SuiteSparse: `suitesparse.hpp`, `supernodal_cholesky.cpp`,
+  `multifrontal_lu.cpp`); public headers use `fem::CsrMatrix` and
+  `std::vector`/`std::span`. Both are linked privately; OpenMP is a public
+  requirement only because a consumer that includes Eigen must compile
+  Eigen's inline functions with it (SuiteSparse's headers have no such
+  inline functions).
 - **The integrator decides from declarations.** A method's supported time
   orders come from `capabilities().supports(order)`, checked against
   `Assembler::time_order(meshed)` (formula facts, nothing evaluated);

@@ -50,7 +50,10 @@ Linux (or WSL) with CMake 3.25+ and a C++23 compiler. `pde2d_geometry`
 and `pde2d_mesh` have no external dependencies; `pde2d_io` needs the
 libxml2 development files (`libxml2-dev`), used privately to parse SVG;
 `pde2d_fem` needs SymEngine 0.14 (pass `-DSymEngine_DIR=<prefix>/lib/cmake/symengine`
-on the first configure if CMake does not find it).
+on the first configure if CMake does not find it); `pde2d_solve` needs
+Eigen 3.3+ (`libeigen3-dev`), SuiteSparse 7.12 with CHOLMOD and ParU
+(`libsuitesparse-dev`) and OpenBLAS (`libopenblas-dev`; it should also be
+the system BLAS, which gives the parallel direct solvers their speed).
 The tests need Boost (only the header-only Boost.Multiprecision, used as
 an independent oracle for the exact predicates); the viewer tests run
 when Node.js is installed. The app needs nlohmann/json
