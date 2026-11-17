@@ -23,7 +23,8 @@ Started 2026-11-11.
   magnitudes or constructions no real problem produces (coordinates of
   1e9 with tiny arcs, values near overflow or underflow, steps below the
   spacing of doubles) are not findings; they are fixed only when the fix
-  is trivial. Reviews are run by GPT-6.1 Sol at high effort.
+  is trivial. Reviews are run by GPT-6.2 Sol at high effort (since
+  2026-11-17, after a side-by-side review; before: GPT-6.1 Sol).
 
 ## Project
 
@@ -508,6 +509,22 @@ marked "architecture" below are decided.
   give the same results for every thread count (colours in a fixed order;
   each row of a matrix-vector product summed by one thread), and tests
   check it bit for bit.
+- **Details of the parallel slice, accepted 2026-11-17:** `threads` is a
+  `std::size_t` from 0 to 1024 (more throws: it catches a negative count
+  converted to unsigned); 0 means `omp_get_num_procs()` (the processors
+  this process may use, not `OMP_NUM_THREADS`), capped at 1024. An
+  exception inside a colour is rethrown after the colour, the one of the
+  lowest element index. One parallel loop per colour, never more threads
+  than the colour has elements. The solvers set the calling thread's own
+  OpenMP count for Eigen (not the global `Eigen::setNbThreads`), the
+  direct ones 1. Reports: assembly `threads` (asked) and `threads_used`
+  (ran), `static_solver` `linear_threads`, `integrator`
+  `assembly_threads` and `linear_threads`; `LinearSolveResult::threads`.
+  Bad counts throw in the `StaticSolver` and `Integrator` constructors.
+  OpenMP is a public requirement of `pde2d_solve` (a program that includes
+  Eigen must match it; a review finding). The bit-for-bit guarantee
+  assumes the default rounding mode. Building the sparsity pattern and
+  the colours stays serial (it runs once per mesh): GitHub issue #37.
 - **Parallel direct solvers come from SuiteSparse** (decided 2026-11-17;
   the owner left the library to the agents): new components named after
   the method, not the library (for example a supernodal Cholesky from
