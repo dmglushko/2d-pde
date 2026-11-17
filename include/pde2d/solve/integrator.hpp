@@ -51,8 +51,9 @@ struct IntegrationResult {
   // max_residual, assemblies, prepares (how often the linear solver was
   // prepared for a step matrix; not counting start(), which also does the
   // solve at t0 for time order 0), assemblies (counting the one at t0 only
-  // when the method's start reads it), snapshots and assembly_threads (the
-  // assembler's thread count, 0 resolved; see the "assembly" report).
+  // when the method's start reads it), snapshots, assembly_threads (the
+  // assembler's thread count, 0 resolved; see the "assembly" report) and
+  // linear_threads (the most threads the linear solver used in a step).
   mesh::StageReport report{};
 };
 

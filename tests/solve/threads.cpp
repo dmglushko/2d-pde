@@ -177,6 +177,9 @@ int main() {
          check(parallel.report.metrics.at("assembly_threads") == 4 &&
                    serial.report.metrics.at("assembly_threads") == 1,
                "assembly threads reported");
+         check(parallel.report.metrics.at("linear_threads") == 4 &&
+                   serial.report.metrics.at("linear_threads") == 1,
+               "linear solver threads reported");
        }},
       {"thread counts are checked",
        [] {

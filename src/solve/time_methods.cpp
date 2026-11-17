@@ -26,7 +26,9 @@ void TimeMethod::start(const fem::AssembledProblem &, const LinearSolver &,
 namespace {
 
 StepSolveInfo info(const LinearSolveResult &solved) {
-  return {.linear_iterations = solved.iterations, .residual = solved.residual};
+  return {.linear_iterations = solved.iterations,
+          .residual = solved.residual,
+          .linear_threads = solved.threads};
 }
 
 } // namespace

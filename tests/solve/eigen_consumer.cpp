@@ -29,8 +29,7 @@ int main() {
        }},
       {"the solver uses the threads it was given",
        [] {
-         BoundaryCondition zero{.alpha = Expression("1"),
-                                .g = Expression("0")};
+         BoundaryCondition zero{.alpha = Expression("1"), .g = Expression("0")};
          const auto problem = std::make_shared<const MeshedProblem>(
              pde2d::test::refined_l_shape(0.04),
              Problem{.equation = {.a_xx = Expression("-1"),

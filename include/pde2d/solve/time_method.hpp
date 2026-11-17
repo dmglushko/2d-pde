@@ -68,6 +68,8 @@ struct TimeState {
 struct StepSolveInfo {
   std::size_t linear_iterations = 0;
   double residual = 0.0;
+  // The threads the linear solver used (LinearSolveResult::threads).
+  std::size_t linear_threads = 1;
 };
 
 class TimeMethod {
