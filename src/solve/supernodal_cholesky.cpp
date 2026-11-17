@@ -139,9 +139,8 @@ public:
       dense_b.dtype = CHOLMOD_DOUBLE;
       cholmod_dense *x = cholmod_l_solve(CHOLMOD_A, factor_, &dense_b, c);
       if (!x)
-        throw std::runtime_error(std::format("{}: the solve failed ({})",
-                                             solver_name,
-                                             status_text(c->status)));
+        throw std::runtime_error(std::format(
+            "{}: the solve failed ({})", solver_name, status_text(c->status)));
       const auto *values = static_cast<const double *>(x->x);
       result.values.assign(values, values + n);
       cholmod_l_free_dense(&x, c);
@@ -172,8 +171,8 @@ SupernodalCholesky::SupernodalCholesky(SupernodalCholeskyOptions options)
   detail::check_options(direct(options_), name());
 }
 
-std::unique_ptr<const PreparedLinearSolver>
-SupernodalCholesky::prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const {
+std::unique_ptr<const PreparedLinearSolver> SupernodalCholesky::prepare(
+    std::shared_ptr<const fem::CsrMatrix> matrix) const {
   detail::check_matrix(matrix, name());
   return std::make_unique<const PreparedSupernodalCholesky>(std::move(matrix),
                                                             options_);

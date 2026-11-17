@@ -59,8 +59,7 @@ inline void check_options(const DirectOptions &options,
 // CHOLMOD's analysis and factorization only read the arrays (it sorts a
 // matrix only when `sorted` is false; our rows are sorted and unique), so
 // the const_casts never lead to a write.
-inline cholmod_sparse transposed_view(const fem::CsrMatrix &matrix,
-                                      int stype) {
+inline cholmod_sparse transposed_view(const fem::CsrMatrix &matrix, int stype) {
   const auto &pattern = *matrix.pattern;
   cholmod_sparse a{};
   a.nrow = pattern.columns;
@@ -86,8 +85,8 @@ inline cholmod_sparse transposed_view(const fem::CsrMatrix &matrix,
 // few epsilons times n instead (a pure Neumann problem: about 1e-17 n),
 // while a matrix from a well-posed problem keeps pivots near 1/n.
 inline bool singular_to_working_precision(double rcond, std::size_t n) {
-  return !(rcond >= static_cast<double>(n) *
-                        std::numeric_limits<double>::epsilon());
+  return !(rcond >=
+           static_cast<double>(n) * std::numeric_limits<double>::epsilon());
 }
 
 // The checks after a direct solve: the result is finite and its relative

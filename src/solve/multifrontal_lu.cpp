@@ -61,8 +61,7 @@ ColumnMatrix columns_of(const fem::CsrMatrix &matrix) {
   c.values.resize(pattern.nonzeros());
   std::vector<std::int64_t> next(c.offsets.begin(), c.offsets.end() - 1);
   for (std::size_t i = 0; i < pattern.rows; ++i)
-    for (auto s = pattern.row_offsets[i]; s < pattern.row_offsets[i + 1];
-         ++s) {
+    for (auto s = pattern.row_offsets[i]; s < pattern.row_offsets[i + 1]; ++s) {
       const auto slot = static_cast<std::size_t>(s);
       const auto at = static_cast<std::size_t>(
           next[static_cast<std::size_t>(pattern.column_indices[slot])]++);
@@ -109,12 +108,17 @@ public:
       check(ParU_Analyze(&a, &symbolic_, control_), "the analysis failed");
       check(ParU_Factorize(&a, symbolic_, &numeric_, control_),
             "the factorization failed");
-      // min |diag U| / max |diag U| of the scaled matrix.
+      // min |diag U| / max |diag U| of the scaled matrix, over the pivots
+      // of the fronts. The singletons (rows or columns with one entry left,
+      // eliminated before the fronts) are not in it; ParU reports their
+      // zeros as PARU_SINGULAR. A matrix made of singletons only has no
+      // fronts, and ParU then reports -1.
       double rcond = 0.0;
       check(ParU_Get(symbolic_, numeric_, PARU_GET_RCOND_ESTIMATE, &rcond,
                      control_),
             "reading the pivots");
-      if (detail::singular_to_working_precision(rcond, n))
+      const bool has_fronts = !(rcond < 0.0);
+      if (has_fronts && detail::singular_to_working_precision(rcond, n))
         throw std::runtime_error(std::format(
             "{}: the matrix is singular to working precision (its smallest "
             "pivot is {} times the largest, below n machine epsilons)",
@@ -156,8 +160,7 @@ private:
   static void check(ParU_Info info, const char *what) {
     if (info == PARU_SINGULAR)
       throw std::runtime_error(std::format(
-          "{}: the matrix is singular (a pivot is exactly zero)",
-          solver_name));
+          "{}: the matrix is singular (a pivot is exactly zero)", solver_name));
     if (info != PARU_SUCCESS)
       throw std::runtime_error(
           std::format("{}: {} ({})", solver_name, what, info_text(info)));
