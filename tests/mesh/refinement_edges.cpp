@@ -91,9 +91,9 @@ void run_delivers_longest_edges() {
   std::vector<Case> cases;
   cases.push_back({"cdt", Mesher(std::make_shared<ChordLengthDiscretizer>(),
                                  std::make_shared<Cdt>())});
-  cases.push_back({"ear clipping",
-                   Mesher(std::make_shared<ChordLengthDiscretizer>(),
-                          std::make_shared<EarClipping>())});
+  cases.push_back(
+      {"ear clipping", Mesher(std::make_shared<ChordLengthDiscretizer>(),
+                              std::make_shared<EarClipping>())});
   cases.push_back({"ruppert", Mesher(std::make_shared<ChordLengthDiscretizer>(),
                                      std::make_shared<Cdt>(),
                                      std::make_shared<Ruppert>())});
@@ -122,9 +122,8 @@ void run_delivers_longest_edges() {
   // Remesher::run rotates every triangle, also without a refiner.
   const Mesh turned = rotated(cdt.mesh);
   check(!all_longest_first(turned), "the rotated mesh is not ordered");
-  for (const auto &refiner :
-       std::vector<std::shared_ptr<const Refiner>>{nullptr,
-                                                   std::make_shared<Ruppert>()}) {
+  for (const auto &refiner : std::vector<std::shared_ptr<const Refiner>>{
+           nullptr, std::make_shared<Ruppert>()}) {
     const MeshResult r = Remesher(refiner).run(turned, spec);
     check_valid_mesh(r.mesh);
     check(all_longest_first(r.mesh), "Remesher::run: longest edges first");
@@ -198,8 +197,8 @@ void refine_reorders_what_flips_changed() {
       // With local flips the bisection runs on other triangles, so only
       // its pattern is known: input triangles keep their order, new
       // ones have the new node first.
-      const Nodes *order = final_pass ? known_order(bisected, v)
-                                      : known_order(input, v);
+      const Nodes *order =
+          final_pass ? known_order(bisected, v) : known_order(input, v);
       const bool bisection_order =
           order ? *order == v : !final_pass && v[0] >= in.nodes.size();
       if (!order && final_pass)
@@ -225,7 +224,8 @@ void refine_reorders_what_flips_changed() {
 // it made or changed get their longest edge first, the others keep their
 // order.
 void ruppert_refine_reorders_what_it_changed() {
-  const Mesh in = rotated(initial_mesh(l_shape(), 0.3, std::make_shared<Ruppert>()));
+  const Mesh in =
+      rotated(initial_mesh(l_shape(), 0.3, std::make_shared<Ruppert>()));
   const Marked marked{3};
   const RefinementResult r =
       Remesher(std::make_shared<Ruppert>()).refine(in, marked);
@@ -272,7 +272,8 @@ int main() {
       {"run delivers the longest edges", run_delivers_longest_edges},
       {"refine keeps untouched and bisection orders",
        refine_keeps_untouched_and_bisection_orders},
-      {"refine reorders what flips changed", refine_reorders_what_flips_changed},
+      {"refine reorders what flips changed",
+       refine_reorders_what_flips_changed},
       {"Ruppert's refine reorders what it changed",
        ruppert_refine_reorders_what_it_changed},
       {"a Mesher mesh needs no call", mesher_mesh_needs_no_call},
