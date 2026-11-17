@@ -109,7 +109,7 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | `Problem` | the equation's coefficients, boundary conditions by region name and initial conditions as `Expression`s (each with its facts), and the parameter values | a plain struct |
 | `MeshedProblem` | the mesh and the problem; every expression compiled to a function of (x, y, t) with its facts; the Dirichlet nodes and the node ↔ unknown tables; ∇·A and the time derivatives of the Dirichlet data | never |
 | `AssembledProblem` | at one time t: the operators mass, damping, stiffness (each a `free` and a `dirichlet` `CsrMatrix`), the load, the Dirichlet values, the right-hand side, its own facts, a report | never |
-| `LinearSolveResult` | one value per free unknown, iterations, relative residual, backward error, pivot ratio, threads | never |
+| `LinearSolveResult` | one value per free unknown, iterations, relative residual, backward error, pivot ratio, threads, warnings (`messages`) | never |
 | `Solution` | one value per mesh node, the mesh, the time (and, for time order 2, one velocity per node) | a plain struct |
 
 Every stage that does work also returns or holds a `StageReport` (time,
@@ -1409,8 +1409,15 @@ after the solve), `backward_error` (|b − Ax|∞ / (|A|∞ |x|∞ + |b|∞), |A
 the largest absolute row sum, from the same residual; every solver fills
 it), `pivot_ratio` (the smallest pivot over the largest, from
 `SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; 0 when not
-measured) and `threads` (the resolved option of the iterative and the
-parallel direct solvers, 1 for the Eigen direct solvers).
+measured), `threads` (the resolved option of the iterative and the
+parallel direct solvers, 1 for the Eigen direct solvers) and `messages`
+(warnings, "worked, but…", each naming the solver; empty except for
+`SupernodalCholesky` on a matrix it factored as −A). The `StaticSolver`
+copies them into its "static_solver" report; the `Integrator` passes its
+time method a private wrapper of the linear solver (`LoggingSolver` in
+`integrator.cpp`) whose prepared solvers log the messages of every solve,
+the steps' and those of `start()`, and its "integrator" report gets each
+distinct message once, in the order of first appearance.
 A solver declares `requirements()` (`LinearSolverRequirements{
 symmetric_matrix}`); `prepare` sees only values, so the callers (the
 `Integrator`, the `StaticSolver`, `Newmark::start`, `ImplicitEuler::start`)
@@ -1429,7 +1436,7 @@ detects its failure and throws `std::runtime_error`.
 | `BiCgStab` | nothing | `BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000, .threads = 1}`; Jacobi preconditioner; views our arrays through `Eigen::Map` without copying; starts from zero; non-convergence throws `std::runtime_error` |
 | `ConjugateGradient` | symmetric | Eigen's ConjugateGradient with Lower \| Upper and Jacobi; `ConjugateGradientOptions` as for `BiCgStab`; converges only for a positive definite matrix, otherwise it does not reach its tolerance and throws |
 | `SimplicialLdlt` | symmetric | Eigen's SimplicialLDLT with AMD (lower triangle, copied to column-major); no pivoting, so a zero pivot (singular, or indefinite needing pivots) throws `std::runtime_error` in `prepare`; a tiny pivot passes the factorization, so `solve` checks the backward error against `SimplicialLdltOptions{.residual_tolerance = 1e-8}` and throws `std::runtime_error` above it; pivot ratio min \|D\| / max \|D\| |
-| `SupernodalCholesky` | symmetric | CHOLMOD's supernodal L Lᵀ (always supernodal; CHOLMOD's default ordering, AMD or METIS); reads the lower triangle through a view of our arrays (no copy); `SupernodalCholeskyOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for a matrix that is not positive definite (a zero or negative pivot, naming the column; exactly singular and negative definite included); `solve` checks the backward error like `SimplicialLdlt`; pivot ratio `cholmod_l_rcond` ((min/max diag L)²) |
+| `SupernodalCholesky` | symmetric | CHOLMOD's supernodal L Lᵀ (always supernodal; CHOLMOD's default ordering, AMD or METIS); reads the lower triangle through a view of our arrays (no copy); `SupernodalCholeskyOptions{.residual_tolerance = 1e-8, .threads = 1}`; when every diagonal entry is negative (`CsrMatrix::entry(i, i) < 0`, a missing one counts as 0) `prepare` factors −A (a negated copy of the values on the same pattern, freed after the factorization) and `solve` solves −A x = −b (a negated copy of b, which CHOLMOD gets as a copy anyway), checks with A and b as given, and adds the warning "…the matrix is negative definite…, so -A was factored…; the answer is unchanged" to every result; `prepare` throws `std::runtime_error` for a matrix (or −A) that is not positive definite (a zero or negative pivot, naming the column; exactly singular, indefinite, a zero diagonal entry or one of each sign included); `solve` checks the backward error like `SimplicialLdlt`; pivot ratio `cholmod_l_rcond` ((min/max diag L)²) |
 | `MultifrontalLu` | nothing | ParU's multifrontal LU with threshold partial pivoting (UMFPACK's analysis, METIS, rows scaled by their largest entry); the matrix is copied once into compressed columns; `MultifrontalLuOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for an exact zero pivot (a front's or a singleton's); `solve` checks the backward error; pivot ratio over the diagonal of U of the scaled matrix, singletons included |
 
 The two iterative solvers share one prepared solver
@@ -1564,7 +1571,8 @@ can be continued.
 right_hand_side()` (= load − A_FD U_D at that order), and returns
 `StaticResult{solution, reports}` with the reports "assembly" and
 "static_solver" (free_unknowns, linear_iterations, residual,
-backward_error, pivot_ratio, linear_threads). `StaticSolver(linear_solver, AssemblerOptions = {})`:
+backward_error, pivot_ratio, linear_threads; its messages are the linear
+solver's, `LinearSolveResult::messages`). `StaticSolver(linear_solver, AssemblerOptions = {})`:
 it makes its assembler, with the given thread count, in its constructor.
 
 **Time methods** (`time_method.hpp`). A `TimeMethod` declares
@@ -1648,7 +1656,9 @@ history, report}`.
   steps, once per step. The summary becomes the report "integrator"
   (t0, t1, time_order, steps, rejected_steps, min_dt, max_dt,
   linear_iterations, max_linear_iterations, max_residual, assemblies,
-  prepares, snapshots, assembly_threads).
+  prepares, snapshots, assembly_threads, linear_threads), whose messages
+  are the linear solver's warnings of every solve of the call (also of
+  `start()`), each distinct one once, in the order they first appeared.
 - Continuing a run from `previous.final` gives the same values bit for
   bit for the first-order methods when the long run lands on the split
   time; for `Newmark` the acceleration is computed again at the split

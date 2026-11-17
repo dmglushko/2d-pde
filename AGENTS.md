@@ -316,6 +316,14 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   a tiny pivot is reported in `pivot_ratio`, never judged by a threshold
   (a pure Neumann problem gets one of its solutions). ParU's ratio must
   include its singleton pivots.
+- **The Cholesky factors −A for a negative diagonal, and says so.** When
+  every diagonal entry is negative, `SupernodalCholesky` factors a negated
+  copy and solves with −b; the checks use A and b as given, and every
+  result carries the warning in `LinearSolveResult::messages`. A solver's
+  warnings go only there (failures are exceptions); the `StaticSolver`
+  copies them into its report and the `Integrator` logs every solve's
+  through its private `LoggingSolver`, so a time method never has to pass
+  them on. A new caller that solves must put them in its report.
 - **Time methods use `right_hand_side()` as it is**: it already holds the
   whole lifting (load − A_FD U_D − B_FD U_D' − M2_FD U_D''). The static
   solver assembles with `max_time_order` 0, where it is load − A_FD U_D.
