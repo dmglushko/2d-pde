@@ -116,6 +116,12 @@ int main() {
                        std::to_string(order) + ": the same bits");
              check(metric(parallel, "threads") == static_cast<double>(threads),
                    "thread count reported");
+             // The comparison above means something only if the threads
+             // really ran (OMP_THREAD_LIMIT or a caller's parallel region
+             // could give fewer).
+             check(metric(parallel, "threads_used") ==
+                       static_cast<double>(threads),
+                   std::to_string(threads) + " threads really ran");
            }
          }
          // 0: all hardware threads (at least one).

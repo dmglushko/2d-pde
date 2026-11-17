@@ -75,14 +75,17 @@ struct AssemblerOptions {
 // The report (stage "assembly") has the time and the metrics free_nodes,
 // dirichlet_nodes, free_nonzeros, dirichlet_nonzeros, triangle_colours,
 // edge_colours, used_previous (0 or 1), max_time_order, threads (the
-// count used, 0 resolved to the hardware threads) and, for mass,
+// count asked for, 0 resolved to the hardware threads), threads_used (the
+// most threads that actually ran in one colour: OpenMP may give fewer,
+// for example inside a caller's parallel region) and, for mass,
 // damping, stiffness and load, <name>_rebuilt: 1 when something of it was
 // computed in this call, 0 when it was reused from `previous` as a whole
 // or left out by max_time_order.
 class Assembler {
 public:
+  Assembler();
   // Throws std::invalid_argument for more than 1024 threads.
-  explicit Assembler(AssemblerOptions options = {});
+  explicit Assembler(AssemblerOptions options);
   const AssemblerOptions &options() const { return options_; }
 
   [[nodiscard]] AssembledProblem

@@ -144,8 +144,13 @@ for programs that use the whole library, such as the app (`app/`,
 [app.md](app.md)), which sits on top and is never used by the library.
 
 OpenMP gives the threads: in `pde2d_fem` the assembly of one colour, in
-`pde2d_solve` Eigen's sparse matrix-vector product. It is linked privately
-and `<omp.h>` is included only from `.cpp` files and private headers
+`pde2d_solve` Eigen's sparse matrix-vector product. `pde2d_fem` links it
+privately; `pde2d_solve` makes it a public requirement, so a program that
+links it and includes Eigen itself compiles Eigen's inline functions with
+the same OpenMP setting (otherwise the linker may keep a serial copy of
+`Eigen::nbThreads()` and the solvers run on one thread;
+`tests/solve/eigen_consumer.cpp`). `<omp.h>` is included only from `.cpp`
+files and private headers
 (`src/fem/threads.hpp`, `src/solve/eigen_threads.hpp`). The thread count
 is an option of each component that uses threads
 (`AssemblerOptions::threads`, `ConjugateGradientOptions::threads`,
@@ -1434,6 +1439,12 @@ afterwards: the iterative solvers set their option, the direct solvers 1
 chosen). Nothing global is written, so solves running at once in
 different threads keep their own counts; a program that calls
 `Eigen::setNbThreads` overrides them all (the answers do not change).
+The assembly report has `threads` (asked for) and `threads_used` (the most
+threads that actually ran in one colour; OpenMP may give fewer, for
+example inside a caller's parallel region); no colour asks for more
+threads than it has elements. The bit-for-bit guarantee assumes the
+caller and OpenMP's worker threads use the same floating-point rounding
+mode (the default, round to nearest).
 
 **Solution** (`solution.hpp`). `Solution{mesh, time, values, velocities}`;
 `build_solution(meshed, free_values, t)` places the free values at

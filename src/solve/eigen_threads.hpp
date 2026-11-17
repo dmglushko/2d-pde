@@ -20,6 +20,7 @@
 #include <Eigen/Core>
 #include <omp.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -47,7 +48,7 @@ inline void check_threads(std::size_t threads, const std::string &solver) {
 // Assembler).
 inline int resolve_threads(std::size_t threads) {
   if (threads == 0)
-    return omp_get_num_procs();
+    return std::min(omp_get_num_procs(), static_cast<int>(max_threads));
   return static_cast<int>(threads);
 }
 

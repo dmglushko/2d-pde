@@ -371,33 +371,44 @@ void scatter(const detail::OperatorBlocks<N> &blocks,
 // exception does not leave a thread (that would terminate the program):
 // each is caught, and after the colour the one of the lowest position
 // (the lowest element index, so the one the plain loop would throw) is
-// thrown again.
+// thrown again. Returns the number of threads that actually ran (OpenMP
+// may give fewer than asked, for example inside a caller's parallel
+// region); no more threads are asked for than the colour has elements.
 template <class Body>
-void for_each_in_colour(const std::vector<std::size_t> &colour, int threads,
-                        const Body &body) {
+int for_each_in_colour(const std::vector<std::size_t> &colour, int threads,
+                       const Body &body) {
   if (threads <= 1 || colour.size() < 2) {
     for (const std::size_t index : colour)
       body(index);
-    return;
+    return 1;
   }
   std::exception_ptr error;
   std::size_t error_position = none;
+  int team = 1;
   const auto count = static_cast<std::ptrdiff_t>(colour.size());
-#pragma omp parallel for schedule(static) num_threads(threads)
-  for (std::ptrdiff_t position = 0; position < count; ++position) {
-    const auto at = static_cast<std::size_t>(position);
-    try {
-      body(colour[at]);
-    } catch (...) {
+  const int asked = static_cast<int>(
+      std::min(static_cast<std::size_t>(threads), colour.size()));
+#pragma omp parallel num_threads(asked)
+  {
+#pragma omp single nowait
+    team = omp_get_num_threads();
+#pragma omp for schedule(static)
+    for (std::ptrdiff_t position = 0; position < count; ++position) {
+      const auto at = static_cast<std::size_t>(position);
+      try {
+        body(colour[at]);
+      } catch (...) {
 #pragma omp critical(pde2d_assembly_error)
-      if (at < error_position) {
-        error_position = at;
-        error = std::current_exception();
+        if (at < error_position) {
+          error_position = at;
+          error = std::current_exception();
+        }
       }
     }
   }
   if (error)
     std::rethrow_exception(error);
+  return team;
 }
 
 OperatorValues zeros(const Structure &structure, bool needed) {
@@ -434,6 +445,8 @@ int order_of(bool mass_zero, bool damping_zero) {
 int AssembledProblem::time_order() const {
   return order_of(mass_.always_zero, damping_.always_zero);
 }
+
+Assembler::Assembler() : Assembler(AssemblerOptions{}) {}
 
 Assembler::Assembler(AssemblerOptions options) : options_(options) {
   detail::check_threads(options_.threads, "assembler");
@@ -507,6 +520,8 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
   // Triangles, colour by colour. Only this driver knows about threads:
   // the elements of one colour share no node (for_each_in_colour).
   const int threads = detail::resolve_threads(options_.threads);
+  // The most threads that actually ran in one colour.
+  int threads_used = 1;
   const TriangleTerms triangle_terms{.k = target(plan.k, reuse_stiffness),
                                      .c = target(plan.c, reuse_stiffness),
                                      .r = target(plan.r, reuse_stiffness),
@@ -519,49 +534,55 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
       triangle_terms.m2 != Target::skip || triangle_terms.f != Target::skip;
   if (any_triangle_term)
     for (const auto &colour_class : structure.triangle_colours)
-      for_each_in_colour(colour_class, threads, [&](std::size_t index) {
-        const auto &nodes = mesh.triangles[index].nodes;
-        const auto blocks = detail::triangle_blocks(
-            problem,
-            {mesh.nodes[nodes[0]], mesh.nodes[nodes[1]], mesh.nodes[nodes[2]]},
-            t, triangle_terms);
-        const auto where = destinations(structure, nodes);
-        scatter(blocks.constant, where, constant);
-        scatter(blocks.time, where, time);
-      });
+      threads_used = std::max(
+          threads_used,
+          for_each_in_colour(colour_class, threads, [&](std::size_t index) {
+            const auto &nodes = mesh.triangles[index].nodes;
+            const auto blocks = detail::triangle_blocks(problem,
+                                                        {mesh.nodes[nodes[0]],
+                                                         mesh.nodes[nodes[1]],
+                                                         mesh.nodes[nodes[2]]},
+                                                        t, triangle_terms);
+            const auto where = destinations(structure, nodes);
+            scatter(blocks.constant, where, constant);
+            scatter(blocks.time, where, time);
+          }));
   // Boundary edges of natural and dynamic conditions, colour by colour.
   for (const auto &colour_class : structure.edge_colours)
-    for_each_in_colour(colour_class, threads, [&](std::size_t index) {
-      const auto &edge = mesh.boundary_edges[index];
-      const auto &region = plan.regions[edge.region];
-      const EdgeTerms edge_terms{.s = target(region.s, reuse_stiffness),
-                                 .t = target(region.t, reuse_stiffness),
-                                 .d = target(region.d, reuse_damping),
-                                 .g = target(region.g, reuse_load)};
-      if (edge_terms.s == Target::skip && edge_terms.t == Target::skip &&
-          edge_terms.d == Target::skip && edge_terms.g == Target::skip) {
-        // Nothing to compute. The condition is still solved for u_n
-        // wherever A is not zero, so check that it can be at this t: always
-        // in a fresh assembly (every term can be zero, for example u_n = 0
-        // with an isotropic A, whose T is zero), and with `previous` when
-        // the normal coefficient depends on t (it was checked before
-        // otherwise). A Dirichlet region has no terms and no check.
-        const auto &condition = problem.conditions()[edge.region];
-        const bool solved_for_u_n =
-            condition.kind != ConditionKind::dirichlet && !plan.k.zero;
-        if (solved_for_u_n &&
-            (!before || condition.beta_n.facts().depends_on_t ||
-             condition.beta_x.facts().depends_on_t ||
-             condition.beta_y.facts().depends_on_t))
-          detail::edge_blocks(problem, edge.region, edge.nodes, t, edge_terms);
-        return;
-      }
-      const auto blocks =
-          detail::edge_blocks(problem, edge.region, edge.nodes, t, edge_terms);
-      const auto where = destinations(structure, edge.nodes);
-      scatter(blocks.constant, where, constant);
-      scatter(blocks.time, where, time);
-    });
+    threads_used = std::max(
+        threads_used,
+        for_each_in_colour(colour_class, threads, [&](std::size_t index) {
+          const auto &edge = mesh.boundary_edges[index];
+          const auto &region = plan.regions[edge.region];
+          const EdgeTerms edge_terms{.s = target(region.s, reuse_stiffness),
+                                     .t = target(region.t, reuse_stiffness),
+                                     .d = target(region.d, reuse_damping),
+                                     .g = target(region.g, reuse_load)};
+          if (edge_terms.s == Target::skip && edge_terms.t == Target::skip &&
+              edge_terms.d == Target::skip && edge_terms.g == Target::skip) {
+            // Nothing to compute. The condition is still solved for u_n
+            // wherever A is not zero, so check that it can be at this t: always
+            // in a fresh assembly (every term can be zero, for example u_n = 0
+            // with an isotropic A, whose T is zero), and with `previous` when
+            // the normal coefficient depends on t (it was checked before
+            // otherwise). A Dirichlet region has no terms and no check.
+            const auto &condition = problem.conditions()[edge.region];
+            const bool solved_for_u_n =
+                condition.kind != ConditionKind::dirichlet && !plan.k.zero;
+            if (solved_for_u_n &&
+                (!before || condition.beta_n.facts().depends_on_t ||
+                 condition.beta_x.facts().depends_on_t ||
+                 condition.beta_y.facts().depends_on_t))
+              detail::edge_blocks(problem, edge.region, edge.nodes, t,
+                                  edge_terms);
+            return;
+          }
+          const auto blocks = detail::edge_blocks(problem, edge.region,
+                                                  edge.nodes, t, edge_terms);
+          const auto where = destinations(structure, edge.nodes);
+          scatter(blocks.constant, where, constant);
+          scatter(blocks.time, where, time);
+        }));
 
   // Totals: the constant part, plus the time-dependent part when there is
   // one (then the constant part is kept for the next call).
@@ -695,6 +716,7 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
       {"used_previous", before ? 1.0 : 0.0},
       {"max_time_order", static_cast<double>(max_time_order)},
       {"threads", static_cast<double>(threads)},
+      {"threads_used", static_cast<double>(threads_used)},
       {"mass_rebuilt", rebuilt(plan.mass, reuse_mass, mass_level)},
       {"damping_rebuilt", rebuilt(plan.damping, reuse_damping, damping_level)},
       {"stiffness_rebuilt",

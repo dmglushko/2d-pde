@@ -62,8 +62,9 @@ directory on the first
 configure, for example `tools/test.sh
 -DSymEngine_DIR=$HOME/.local/opt/symengine-0.14/lib/cmake/symengine`; it
 is cached in the build directory), OpenMP (`pde2d_fem` for assembly,
-`pde2d_solve` for Eigen's parallel matrix-vector product; GCC's libgomp,
-found with `find_package(OpenMP)`), Node.js (optional: the viewer tests
+`pde2d_solve` for Eigen's parallel matrix-vector product, a public
+requirement there so consumers that include Eigen match it; GCC's
+libgomp, found with `find_package(OpenMP)`), Node.js (optional: the viewer tests
 are skipped without it).
 `PDE2D_BUILD_EXAMPLES` (on by default) builds `examples/`.
 `PDE2D_BUILD_APP` (on by default) builds the app (`build/app/pde2d_app`,

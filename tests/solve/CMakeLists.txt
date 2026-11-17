@@ -12,3 +12,7 @@ pde2d_add_test(NAME solve_review_start_needs SOURCE review_start_needs.cpp
                LIBS pde2d_solve)
 # Uses at most 4 threads.
 pde2d_add_test(NAME solve_threads SOURCE threads.cpp LIBS pde2d_solve)
+# A consumer that includes Eigen itself, at -O0 (review finding).
+pde2d_add_test(NAME solve_eigen_consumer SOURCE eigen_consumer.cpp
+               LIBS pde2d_solve Eigen3::Eigen)
+set_source_files_properties(eigen_consumer.cpp PROPERTIES COMPILE_OPTIONS -O0)

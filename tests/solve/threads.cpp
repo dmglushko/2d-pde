@@ -75,8 +75,9 @@ std::shared_ptr<const MeshedProblem> poisson(const char *b_x,
 }
 
 // Solves the static system of `problem` with `solver`.
-LinearSolveResult solve_with(const LinearSolver &solver,
-                             const std::shared_ptr<const MeshedProblem> &problem) {
+LinearSolveResult
+solve_with(const LinearSolver &solver,
+           const std::shared_ptr<const MeshedProblem> &problem) {
   const auto assembled = Assembler().assemble(problem, 0.0, nullptr, 0);
   check(assembled.stiffness().free.values.size() > 20000,
         "more than 20000 nonzeros: Eigen's product runs in parallel");
@@ -120,11 +121,10 @@ int main() {
        [] {
          const auto problem = poisson("0");
          const auto assembled = Assembler().assemble(problem, 0.0, nullptr, 0);
-         const auto solved =
-             SparseLu()
-                 .prepare(std::make_shared<const CsrMatrix>(
-                     assembled.stiffness().free))
-                 ->solve(assembled.right_hand_side());
+         const auto solved = SparseLu()
+                                 .prepare(std::make_shared<const CsrMatrix>(
+                                     assembled.stiffness().free))
+                                 ->solve(assembled.right_hand_side());
          check(solved.threads == 1, "1 thread");
        }},
       {"StaticSolver with threads: the same solution",
@@ -135,10 +135,10 @@ int main() {
                               ConjugateGradientOptions{.max_iterations = 5000}))
                  .solve(problem);
          const auto parallel =
-             StaticSolver(std::make_shared<ConjugateGradient>(
-                              ConjugateGradientOptions{.max_iterations = 5000,
-                                                       .threads = 4}),
-                          {.threads = 4})
+             StaticSolver(
+                 std::make_shared<ConjugateGradient>(ConjugateGradientOptions{
+                     .max_iterations = 5000, .threads = 4}),
+                 {.threads = 4})
                  .solve(problem);
          check(same_bits(parallel.solution.values, serial.solution.values),
                "the same bits");
@@ -156,14 +156,13 @@ int main() {
        [] {
          const auto problem = poisson("0", "1");
          const auto run = [&](std::size_t threads) {
-           return Integrator(std::make_shared<ImplicitEuler>(),
-                             std::make_shared<FixedStep>(
-                                 FixedStepOptions{.dt = 0.05}),
-                             std::make_shared<ConjugateGradient>(
-                                 ConjugateGradientOptions{
-                                     .max_iterations = 5000,
-                                     .threads = threads}),
-                             {.threads = threads})
+           return Integrator(
+                      std::make_shared<ImplicitEuler>(),
+                      std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.05}),
+                      std::make_shared<ConjugateGradient>(
+                          ConjugateGradientOptions{.max_iterations = 5000,
+                                                   .threads = threads}),
+                      {.threads = threads})
                .integrate(problem, 0.0, 0.2, {.keep_step_history = true});
          };
          const auto serial = run(1);
@@ -198,11 +197,10 @@ int main() {
                "assembler: threads must be at most 1024");
            expect_throws<std::invalid_argument>(
                [&] {
-                 (void)Integrator(std::make_shared<ImplicitEuler>(),
-                                  std::make_shared<FixedStep>(
-                                      FixedStepOptions{.dt = 0.1}),
-                                  std::make_shared<SparseLu>(),
-                                  {.threads = threads});
+                 (void)Integrator(
+                     std::make_shared<ImplicitEuler>(),
+                     std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.1}),
+                     std::make_shared<SparseLu>(), {.threads = threads});
                },
                "assembler: threads must be at most 1024");
          }
