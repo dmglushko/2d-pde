@@ -76,7 +76,7 @@ std::shared_ptr<const MeshOutcome> StageCache::mesh(const Json &case_json) {
     outcome->mesh = std::make_shared<const mesh::Mesh>(std::move(result.mesh));
     outcome->reports = std::move(result.reports);
     outcome->target_met = result.target_met;
-    outcome->longest_edge = result.longest_edge;
+    outcome->longest_edge = result.properties.longest_edge;
     outcome->max_edge_length = result.max_edge_length;
     outcome->domain_size = result.domain_size;
     mesh_ = std::move(outcome);
