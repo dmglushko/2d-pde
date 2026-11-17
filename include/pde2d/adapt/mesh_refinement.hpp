@@ -18,9 +18,12 @@ namespace pde2d::adapt {
 // estimate), the marking strategy's marked triangles, and
 // Remesher::refine of the solution's mesh. Nothing marked (all indicators
 // zero) changes nothing: the result has no mesh and the Remesher is not
-// called. Reports, in order: the estimator's, "mesh_refinement" (metrics
-// marked and triangles; a message naming the marking strategy), then
-// the Remesher's (pipeline, refiner, final passes).
+// called. A refinement that leaves the mesh as it was (marked triangles
+// waiting for a boundary edge that cannot be split) also gives no mesh,
+// with a message in "mesh_refinement", so the loop stops with
+// nothing_changed instead of repeating. Reports, in order: the estimator's,
+// "mesh_refinement" (metrics marked and triangles; a message naming the marking
+// strategy), then the Remesher's (pipeline, refiner, final passes).
 //
 // The refinement edges of newest vertex bisection and red-green-blue are
 // the stored vertex order (mesh.hpp): call

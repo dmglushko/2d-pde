@@ -19,12 +19,14 @@ namespace {
 using geometry::Point;
 
 // The exact degrees asked of quadrature.hpp (see residual_estimator.hpp):
-// with coefficients and data of degree at most 1, r and R_E are at most
-// quadratic (c u_h, m1 u_t, alpha u_h) and J_E is linear (A linear times
-// a constant gradient difference); the integrands are their squares.
+// with coefficients and data of degree at most 1 (and beta_hat_n
+// constant), r is at most quadratic (c u_h, m1 u_t), J_E linear (A linear
+// times a constant gradient difference) and R_E cubic (kappa_n, linear in
+// A, times the condition's residual, quadratic through alpha u_h); the
+// integrands are their squares.
 constexpr int element_degree = 4;
 constexpr int jump_degree = 2;
-constexpr int boundary_degree = 4;
+constexpr int boundary_degree = 6;
 
 // The squares of the three kinds of terms, per triangle.
 struct ResidualTerms {

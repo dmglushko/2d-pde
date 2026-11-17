@@ -19,6 +19,7 @@
 #include "pde2d/geometry/curve_geometry.hpp"
 #include "pde2d/mesh/cdt.hpp"
 #include "pde2d/mesh/chord_length_discretizer.hpp"
+#include "pde2d/mesh/curve_chain.hpp"
 #include "pde2d/mesh/mesher.hpp"
 #include "pde2d/mesh/newest_vertex_bisection.hpp"
 #include "pde2d/solve/sparse_lu.hpp"
@@ -286,6 +287,45 @@ void stops_when_nothing_changes() {
   check(r.problem == meshed, "the given problem");
 }
 
+// Review regression: one triangle whose bottom edge is linked to an arc
+// bulging in past the opposite vertex, so the boundary split policy cannot
+// split it and the refiner leaves the marked triangle as it is. The
+// adaptation reports no new mesh and the loop stops with nothing_changed,
+// with only a tolerance (before the fix it repeated without end).
+void stops_when_refinement_is_blocked() {
+  mesh::Mesh m;
+  m.nodes = {{0, 0}, {2, 0}, {1, 0.2}};
+  m.triangles = {{{0, 1, 2}}};
+  m.region_names = {"r"};
+  // (0,0) over (1,1) to (2,0).
+  m.chains = {mesh::CurveChain(std::vector<geometry::Curve>{
+      geometry::EllipticalArc{{1, 0}, 1, 1, 0, pi, -pi}})};
+  m.boundary_edges = {
+      mesh::BoundaryEdge{
+          {0, 1}, 0, mesh::CurveLink{0, 0, m.chains[0].length()}},
+      mesh::BoundaryEdge{{1, 2}, 0, std::nullopt},
+      mesh::BoundaryEdge{{2, 0}, 0, std::nullopt}};
+  mesh::set_longest_edges_as_refinement_edges(m);
+  const fem::Problem problem{
+      .equation = {.a_xx = Expression("-1"),
+                   .a_yy = Expression("-1"),
+                   .f = Expression("1")},
+      .boundary_conditions = {
+          {"r", {.alpha = Expression("1"), .g = Expression("0")}}}};
+  const auto meshed = std::make_shared<const fem::MeshedProblem>(
+      std::make_shared<const mesh::Mesh>(m), problem);
+  const AdaptiveStaticResult r =
+      dorfler_loop().solve(meshed, {.tolerance = {.absolute = 1e-9}});
+  check(r.stop_reason == StopReason::nothing_changed, "nothing changed");
+  check(r.cycles.size() == 1, "one cycle");
+  check(r.cycles.front().estimate->total > 0.0, "a positive estimate");
+  bool said = false;
+  for (const auto &report : r.cycles.back().reports)
+    for (const auto &message : report.messages)
+      said = said || message.starts_with("refinement changed nothing");
+  check(said, "the report says why");
+}
+
 // An adaptation that neither estimates nor changes anything.
 class Idle final : public Adaptation {
 public:
@@ -424,6 +464,7 @@ int main() {
       {"stops on max_cycles", stops_on_max_cycles},
       {"stops on the node budget", stops_on_node_budget},
       {"stops when nothing changes", stops_when_nothing_changes},
+      {"stops when refinement is blocked", stops_when_refinement_is_blocked},
       {"invalid configurations and targets", invalid_configurations},
   });
 }

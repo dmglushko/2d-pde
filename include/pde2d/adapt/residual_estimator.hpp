@@ -39,12 +39,14 @@ namespace pde2d::adapt {
 // zeros.
 //
 // Quadrature (quadrature.hpp), chosen so that each integral is exact when
-// the coefficients and the data are polynomials of degree at most 1 (then
-// r and R_E are at most quadratic and J_E linear): degree 4 on triangles
+// the coefficients and the data are polynomials of degree at most 1 and
+// beta_hat_n is constant (then r is at most quadratic, J_E linear and R_E
+// cubic, kappa_n / beta_hat_n times a quadratic): degree 4 on triangles
 // (6 points) for ||r||^2, degree 2 on edges (2 points) for ||J||^2 and
-// degree 4 on edges (3 points) for ||R||^2. Other data are integrated
-// approximately, which only changes the data oscillation part. The
-// degrees are fixed, not options.
+// degree 6 on edges (4 points) for ||R||^2. A beta_hat_n that varies
+// makes R_E rational, and other data are integrated approximately; that
+// only changes the data oscillation part. The degrees are fixed, not
+// options.
 //
 // Report metrics (besides the shared ones): element_part, jump_part,
 // boundary_part: the square roots of the sums of each kind of term

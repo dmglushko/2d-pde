@@ -351,6 +351,36 @@ void time_terms() {
   }
 }
 
+// Review regression: the boundary residual of an affine A and alpha is
+// cubic, so its square needs degree 6 on the edge. Two triangles of the
+// unit square, A = -(0.1 + x) I, f = 0, on the bottom (1 - x) u + u_n =
+// 1/6, Dirichlet u = x elsewhere (every node is Dirichlet), u_h = x. On
+// the bottom (n = (0, -1), u_n = 0, kappa_n = -(0.1 + x)) R = -(0.1 + x)
+// (1/6 - (1 - x) x); nothing else contributes, so the indicator of the
+// triangle on the bottom is the square root of the integral of R^2 over
+// [0, 1] (h_E = 1), 1031/378000 exactly (by hand, with fractions).
+void boundary_residual_exact_integral() {
+  const BoundaryCondition dirichlet{.alpha = e("1"), .g = e("x")};
+  const Problem problem{
+      .equation = {.a_xx = e("-(0.1 + x)"), .a_yy = e("-(0.1 + x)")},
+      .boundary_conditions = {
+          {"bottom", {.alpha = e("1 - x"), .beta_n = e("1"), .g = e("1/6")}},
+          {"right", dirichlet},
+          {"top", dirichlet},
+          {"left", dirichlet}}};
+  auto meshed =
+      std::make_shared<const MeshedProblem>(test::unit_square(1), problem);
+  const solve::Solution u =
+      interpolant(*meshed, [](double x, double) { return x; });
+  const double expected = std::sqrt(1031.0 / 378000.0);
+  for (const ErrorEstimate &estimate :
+       {ResidualEstimator().estimate(*meshed, u),
+        KellyEstimator().estimate(*meshed, u)}) {
+    near(estimate.total, expected, 1e-14,
+         estimate.report.stage + ": exact boundary integral");
+  }
+}
+
 void invalid_inputs() {
   const Problem poisson{.equation = {.a_xx = e("-1"), .a_yy = e("-1")},
                         .boundary_conditions = all({.alpha = e("1")})};
@@ -415,6 +445,8 @@ int main() {
       {"an exact P1 solution has zero indicators", exact_p1_solution},
       {"natural boundary residual", natural_boundary_residual},
       {"time terms of the residual estimator", time_terms},
+      {"boundary residual: exact integral of an affine A and alpha",
+       boundary_residual_exact_integral},
       {"invalid inputs", invalid_inputs},
   });
 }

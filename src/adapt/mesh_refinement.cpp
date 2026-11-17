@@ -7,6 +7,21 @@
 
 namespace pde2d::adapt {
 
+namespace {
+
+// The same nodes at the same places and the same triangles (improvers can
+// move nodes or flip edges without adding any).
+bool same_mesh(const mesh::Mesh &a, const mesh::Mesh &b) {
+  if (a.nodes != b.nodes || a.triangles.size() != b.triangles.size())
+    return false;
+  for (std::size_t t = 0; t < a.triangles.size(); ++t)
+    if (a.triangles[t].nodes != b.triangles[t].nodes)
+      return false;
+  return true;
+}
+
+} // namespace
+
 MeshRefinement::MeshRefinement(std::shared_ptr<const ErrorEstimator> estimator,
                                std::shared_ptr<const MarkingStrategy> marking,
                                std::shared_ptr<const mesh::Remesher> remesher)
@@ -57,11 +72,21 @@ AdaptationResult MeshRefinement::adapt(const SolvedState &state,
     result.reports.push_back(std::move(report));
     return result;
   }
+  const std::size_t own_report = result.reports.size();
   result.reports.push_back(std::move(report));
 
   mesh::RefinementResult refined = remesher_->refine(mesh, marked);
   for (auto &r : refined.reports)
     result.reports.push_back(std::move(r));
+  // A refiner may leave marked triangles as they are (one waiting for a
+  // boundary edge that cannot be split); a mesh that came back unchanged
+  // is no progress, and the loop must not take it as some.
+  if (same_mesh(refined.mesh, mesh)) {
+    result.reports[own_report].messages.push_back(
+        "refinement changed nothing (see the refiner's report): the mesh "
+        "is unchanged");
+    return result;
+  }
   result.mesh = std::make_shared<const mesh::Mesh>(std::move(refined.mesh));
   result.properties = refined.properties;
   result.parents = std::move(refined.parents);
