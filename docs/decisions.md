@@ -507,8 +507,17 @@ marked "architecture" below are decided.
   two runs can use different counts. Assembly and the iterative solvers
   give the same results for every thread count (colours in a fixed order;
   each row of a matrix-vector product summed by one thread), and tests
-  check it bit for bit. Direct solvers in parallel too: the library is
-  still to be chosen (Open).
+  check it bit for bit.
+- **Parallel direct solvers come from SuiteSparse** (decided 2026-11-17;
+  the owner left the library to the agents): new components named after
+  the method, not the library (for example a supernodal Cholesky from
+  CHOLMOD and a multifrontal LU from ParU), with `.threads` like the
+  iterative solvers; the Eigen direct solvers stay. SuiteSparse stays in
+  `.cpp` files, like Eigen. Their results may differ in the last digits
+  between thread counts (and between runs, if the library schedules
+  dynamically); the owner accepts that for these solvers, and their
+  header comments say so. Their speed comes from a threaded BLAS
+  (OpenBLAS).
 
 - **Weak form.** The second-order part is written as A : ∇²u with
   A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] and integrated by parts once:
@@ -1047,7 +1056,4 @@ coarsening, moving nodes or enrichment for now.
 
 ## Open
 
-- **Which library for parallel direct solvers** (raised 2026-11-17): the
-  owner wants direct solvers in parallel too, hidden in the `.cpp` files
-  like Eigen. The choice of library, and whether results may differ in the
-  last digits between thread counts, is open.
+- Nothing open right now.
