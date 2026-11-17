@@ -867,6 +867,17 @@ coarsening, moving nodes or enrichment for now.
   (default 10°, 0 never warns). Newest vertex bisection and red-green-blue
   have options with `max_points`. With nothing marked, `refine` returns
   the mesh unchanged and the final passes do not run.
+- **Newest vertex bisection and red-green-blue set the refinement edges
+  in `run` only** (decided 2026-11-17): `run(spec)` first makes each
+  triangle's longest edge its refinement edge, then refines; meshing
+  starts from a vertex order nobody chose for bisection (a triangulator,
+  Ruppert, flips), and from it the angles fall to about half of the
+  starting mesh's smallest (L-shape, h = 0.12: 2.9° instead of 6.0°).
+  `refine(marked)` never does: between cycles the stored vertex order is
+  the method's memory; the user calls
+  `set_longest_edges_as_refinement_edges` once on the starting mesh.
+  Equally long edges are ordered by their node indices, the order of the
+  bisection core, which both triangles of an edge agree on.
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks
@@ -908,10 +919,4 @@ coarsening, moving nodes or enrichment for now.
 
 ## Open
 
-- **When newest vertex bisection and red-green-blue set the refinement
-  edges** (raised 2026-11-17): proposed, `run(spec)` makes each
-  triangle's longest edge its refinement edge first, and `refine(marked)`
-  never does (the stored vertex order is the method's memory between
-  cycles; the user calls `set_longest_edges_as_refinement_edges` once on
-  the starting mesh). The owner first asked for a table of the refinement
-  methods.
+- Nothing open right now.

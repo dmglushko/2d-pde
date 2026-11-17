@@ -71,11 +71,15 @@ void validate(const Mesh &mesh);
 // Sets the refinement edge of every triangle to its longest edge: rotates
 // each triangle's vertices (keeping them counterclockwise) so that the
 // vertex opposite the longest edge comes first. Among equally long
-// longest edges (exactly equal squared lengths) the one whose opposite
-// vertex has the smallest node index is taken. Use it once on a mesh that
+// longest edges (exactly equal squared lengths) the edge with the larger
+// node indices (compared as (smaller, larger) pair) is taken: one order
+// of all edges that the two triangles of an edge agree on, so the
+// triangles waiting for each other's refinement edges cannot form a
+// cycle (the refiners use the same order). Use it once on a mesh that
 // did not come from bisection (from the Mesher with Ruppert or flips, a
-// file), before the first refinement by newest vertex bisection or
-// red-green-blue refinement. Throws std::invalid_argument for a node
+// file), before the first adaptive refinement (Remesher::refine) by
+// newest vertex bisection or red-green-blue refinement; their run() does
+// it itself. Throws std::invalid_argument for a node
 // index out of range.
 void set_longest_edges_as_refinement_edges(Mesh &mesh);
 

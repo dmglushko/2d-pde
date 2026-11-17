@@ -37,8 +37,12 @@ struct NewestVertexBisectionOptions {
 // still refined conformingly, but those triangles leave the pattern (the
 // metric "incompatible_splits" and a report message say so).
 //
-// run(): while a triangle has an edge longer than max_edge_length
-// (resolved against domain_size(mesh)), refine() all such triangles.
+// run(): first makes every triangle's longest edge its refinement edge
+// (as set_longest_edges_as_refinement_edges; metric
+// "refinement_edges_set"), then, while a triangle has an edge longer than
+// max_edge_length (resolved against domain_size(mesh)), refine() all such
+// triangles. refine() never resets the refinement edges: between
+// adaptive cycles the stored vertex order is the method's memory.
 //
 // Local improvers (it tolerates flips and node moves, though flips change
 // refinement edges) run after every split on the triangles it made.

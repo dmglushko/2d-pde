@@ -8,6 +8,8 @@
 #include "pde2d/mesh/ear_clipping.hpp"
 #include "pde2d/mesh/longest_edge_bisection.hpp"
 #include "pde2d/mesh/mesher.hpp"
+#include "pde2d/mesh/newest_vertex_bisection.hpp"
+#include "pde2d/mesh/red_green_blue_refinement.hpp"
 #include "pde2d/mesh/ruppert.hpp"
 
 #include <memory>
@@ -122,6 +124,29 @@ int main() {
          check(r.mesh.boundary_edges.size() > 20, "refiner split boundary");
          check_on_circle(r.mesh, "outer", {0, 0}, 1);
          check_on_circle(r.mesh, "inner", {0, 0}, 0.4);
+       }},
+      {"bisection_run_starts_from_longest_edges",
+       [] {
+         // CDT stores its triangles' vertices in no order chosen for
+         // bisection; run() first makes the longest edges the refinement
+         // edges, so refinement keeps the smallest angle of the starting
+         // mesh (from the CDT order it fell to about half of it here).
+         const double start = min_angle_degrees(
+             mesh_with(std::make_shared<Cdt>(), nullptr, l_shape(), 0.12).mesh);
+         for (auto refiner :
+              {std::shared_ptr<const Refiner>(
+                   std::make_shared<NewestVertexBisection>()),
+               std::shared_ptr<const Refiner>(
+                   std::make_shared<RedGreenBlueRefinement>())}) {
+           auto r =
+               mesh_with(std::make_shared<Cdt>(), refiner, l_shape(), 0.12);
+           check_valid_mesh(r.mesh);
+           check(r.target_met, "target met");
+           check(r.reports[3].metrics.at("refinement_edges_set") > 0,
+                 "some triangles were rotated");
+           check(min_angle_degrees(r.mesh) >= start - 1e-9,
+                 "no angle below the starting mesh's smallest");
+         }
        }},
       {"ruppert_holes_and_island",
        [] {

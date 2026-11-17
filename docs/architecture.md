@@ -1545,8 +1545,13 @@ the triangles they make (the newest vertex first, with
 a field in `Mesh`. The vertex order stays counterclockwise.
 `set_longest_edges_as_refinement_edges(mesh)` (`mesh.hpp`) rotates every
 triangle so that its longest edge is the refinement edge (ties: the
-opposite vertex with the smaller node index); call it once on a mesh from
-the Mesher, the Remesher or a file. Code that edits triangles (flips,
+edge order of the bisection core, squared length and then node indices,
+which both triangles of an edge agree on, so waiting triangles cannot
+cycle); call it once on a mesh from the Mesher, the Remesher or a file,
+before the first `Remesher::refine`. `run(spec)` of
+`NewestVertexBisection` and `RedGreenBlueRefinement` does it itself
+before refining (metric `refinement_edges_set`); `refine(marked)` never
+does, since between cycles the stored order is the method's memory. Code that edits triangles (flips,
 Ruppert, triangulators, Gmsh import) chooses vertex 0 freely: the mesh can
 still be refined, but the shape guarantee needs the call again.
 

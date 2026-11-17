@@ -50,8 +50,11 @@ struct RedGreenBlueRefinementOptions {
 // report). An initial mesh without such ears on curved parts (for example
 // from Ruppert) keeps the angles bounded in practice.
 //
-// run(): while a triangle has an edge longer than max_edge_length
-// (resolved against domain_size(mesh)), refine() all such triangles.
+// run(): as NewestVertexBisection::run, it first makes every triangle's
+// longest edge its refinement edge (metric "refinement_edges_set"), then,
+// while a triangle has an edge longer than max_edge_length (resolved
+// against domain_size(mesh)), refine() all such triangles. refine() never
+// resets the refinement edges.
 //
 // Local improvers run after every split and after each red division; a
 // triangle whose bisection pattern a local flip has changed keeps it

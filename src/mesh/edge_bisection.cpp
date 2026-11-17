@@ -568,6 +568,24 @@ void EdgeBisection::run(WorkingMesh &mesh, const MeshSpec &spec,
   report.metrics["max_edge_length"] = h;
   Counts counts;
   LocalImproverCalls local(local_improvers);
+  // A method that bisects at the stored refinement edges starts from the
+  // longest edges: meshing starts from a mesh whose vertex order nobody
+  // chose for bisection (a triangulator, Ruppert, flips), and from an
+  // arbitrary order the bisections make thin triangles. refine() never
+  // does this: between cycles the stored order is the method's memory.
+  if (rule_.first == BisectionRule::FirstBisection::refinement_edge) {
+    std::size_t reordered = 0;
+    for (std::size_t t = 0; t < mesh.triangles().size(); ++t) {
+      if (mesh.is_triangle_deleted(t))
+        continue;
+      const int longest = longest_local_edge(mesh, t);
+      if (longest != 0) {
+        mesh.set_refinement_edge(t, longest);
+        ++reordered;
+      }
+    }
+    report.metrics["refinement_edges_set"] = static_cast<double>(reordered);
+  }
   std::size_t steps = 0;
   // Each step refines every triangle with a long edge. The loop ends when
   // none is left, or when a step could split nothing (every long edge
