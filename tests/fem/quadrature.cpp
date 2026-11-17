@@ -31,8 +31,8 @@ double triangle_error(const TriangleRule &rule, int a, int b, int c) {
   for (const auto &p : rule.points)
     sum += p.weight * std::pow(p.barycentric[0], a) *
            std::pow(p.barycentric[1], b) * std::pow(p.barycentric[2], c);
-  const double exact =
-      2.0 * factorial(a) * factorial(b) * factorial(c) / factorial(a + b + c + 2);
+  const double exact = 2.0 * factorial(a) * factorial(b) * factorial(c) /
+                       factorial(a + b + c + 2);
   return std::abs(sum - exact);
 }
 
@@ -117,8 +117,8 @@ int main() {
          for (std::size_t q = 0; q < 3; ++q) {
            near(rule.points[q].weight, 1.0 / 3.0, 0, "weight 1/3");
            for (std::size_t i = 0; i < 3; ++i)
-             near(rule.points[q].barycentric[i],
-                  q == i ? 2.0 / 3.0 : 1.0 / 6.0, 0, "coordinate");
+             near(rule.points[q].barycentric[i], q == i ? 2.0 / 3.0 : 1.0 / 6.0,
+                  0, "coordinate");
          }
        }},
       {"edge_rules_exact",

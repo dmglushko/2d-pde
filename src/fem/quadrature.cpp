@@ -100,10 +100,9 @@ std::vector<EdgePoint> gauss_legendre(int n) {
 
 void check_degree(int degree, int max, const char *function) {
   if (degree < 0 || degree > max)
-    throw std::invalid_argument(std::string(function) + ": exact degree " +
-                                std::to_string(degree) +
-                                " is not available (0 to " +
-                                std::to_string(max) + ")");
+    throw std::invalid_argument(
+        std::string(function) + ": exact degree " + std::to_string(degree) +
+        " is not available (0 to " + std::to_string(max) + ")");
 }
 
 } // namespace

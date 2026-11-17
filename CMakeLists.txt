@@ -26,7 +26,6 @@ endif()
 add_subdirectory(src/geometry)
 add_subdirectory(src/mesh)
 add_subdirectory(src/io)
-add_subdirectory(src/adapt)
 
 # SymEngine parses and compiles expressions in pde2d_fem, only in its .cpp
 # files. Point CMake at an installation with -DSymEngine_DIR=<prefix>/lib/
@@ -43,6 +42,7 @@ add_subdirectory(src/fem)
 # .cpp files.
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 add_subdirectory(src/solve)
+add_subdirectory(src/adapt)
 
 # The whole library as one target: link pde2d::pde2d to use every module.
 # The modules stay separate libraries (one per module, dependencies one
