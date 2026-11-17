@@ -71,19 +71,17 @@ inline double weighted_square(const std::array<geometry::Point, 3> &p,
 
 // sqrt of the sum over the triangles of the integral of
 // (grad u - grad u_h) . W (grad u - grad u_h).
-inline double energy_error(const mesh::Mesh &m,
-                           const std::vector<double> &values,
-                           const Gradient &exact,
-                           const Weight &weight = identity_weight,
-                           std::optional<geometry::Point> singular = {},
-                           int depth = 8) {
+inline double
+energy_error(const mesh::Mesh &m, const std::vector<double> &values,
+             const Gradient &exact, const Weight &weight = identity_weight,
+             std::optional<geometry::Point> singular = {}, int depth = 8) {
   double sum = 0.0;
   for (const auto &triangle : m.triangles) {
     std::array<geometry::Point, 3> p{};
     for (std::size_t i = 0; i < 3; ++i)
       p[i] = m.nodes[triangle.nodes[i]];
-    const double det =
-        (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y);
+    const double det = (p[1].x - p[0].x) * (p[2].y - p[0].y) -
+                       (p[2].x - p[0].x) * (p[1].y - p[0].y);
     geometry::Point g{};
     for (std::size_t i = 0; i < 3; ++i) {
       const auto &pj = p[(i + 1) % 3], &pk = p[(i + 2) % 3];

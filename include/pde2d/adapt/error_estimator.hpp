@@ -62,10 +62,10 @@ public:
 private:
   // Called by estimate() with a checked input. Returns one indicator per
   // triangle and may add metrics and messages to `report`.
-  virtual std::vector<double>
-  indicators(const fem::MeshedProblem &problem, const solve::Solution &solution,
-             const TimeDerivatives &derivatives,
-             mesh::StageReport &report) const = 0;
+  virtual std::vector<double> indicators(const fem::MeshedProblem &problem,
+                                         const solve::Solution &solution,
+                                         const TimeDerivatives &derivatives,
+                                         mesh::StageReport &report) const = 0;
 };
 
 } // namespace pde2d::adapt

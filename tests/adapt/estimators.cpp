@@ -49,9 +49,9 @@ solve::Solution solve_static(const std::shared_ptr<const MeshedProblem> &p) {
 }
 
 // The nodal values of f on the problem's mesh, as a Solution at t.
-solve::Solution
-interpolant(const MeshedProblem &p,
-            const std::function<double(double, double)> &f, double t = 0.0) {
+solve::Solution interpolant(const MeshedProblem &p,
+                            const std::function<double(double, double)> &f,
+                            double t = 0.0) {
   solve::Solution s{.mesh = p.mesh(), .time = t};
   for (const auto &n : p.mesh()->nodes)
     s.values.push_back(f(n.x, n.y));
@@ -66,9 +66,8 @@ struct Level {
 };
 
 // Totals and the true error on unit_square(n) for n = 8, 16, 32, 64.
-std::vector<Level>
-levels(const Problem &problem, const test::Gradient &exact,
-       const test::Weight &weight, const char *name) {
+std::vector<Level> levels(const Problem &problem, const test::Gradient &exact,
+                          const test::Weight &weight, const char *name) {
   std::vector<Level> out;
   for (std::size_t n : {8, 16, 32, 64}) {
     auto meshed =
@@ -82,10 +81,9 @@ levels(const Problem &problem, const test::Gradient &exact,
     l.kelly = KellyEstimator().estimate(*meshed, u).total;
     l.recovery = RecoveryEstimator().estimate(*meshed, u).total;
     std::cout << "INFO " << name << " n = " << n << ": error " << l.error
-              << ", effectivity residual " << l.residual / l.error
-              << ", kelly " << l.kelly / l.error << ", recovery "
-              << l.recovery / l.error << ", boundary part " << l.boundary_part
-              << '\n';
+              << ", effectivity residual " << l.residual / l.error << ", kelly "
+              << l.kelly / l.error << ", recovery " << l.recovery / l.error
+              << ", boundary part " << l.boundary_part << '\n';
     out.push_back(l);
   }
   return out;
@@ -107,11 +105,11 @@ void check_rates(const std::vector<Level> &ls) {
 
 // -Laplace u = 2 pi^2 sin(pi x) sin(pi y), u = 0 on the boundary.
 void smooth_dirichlet() {
-  const Problem problem{
-      .equation = {.a_xx = e("-1"),
-                   .a_yy = e("-1"),
-                   .f = e("2*pi^2*sin(pi*x)*sin(pi*y)")},
-      .boundary_conditions = all({.alpha = e("1"), .g = e("0")})};
+  const Problem problem{.equation = {.a_xx = e("-1"),
+                                     .a_yy = e("-1"),
+                                     .f = e("2*pi^2*sin(pi*x)*sin(pi*y)")},
+                        .boundary_conditions =
+                            all({.alpha = e("1"), .g = e("0")})};
   const double pi = std::numbers::pi;
   const auto ls = levels(
       problem,
@@ -202,27 +200,25 @@ Problem linear_problem(const char *right_g) {
                    .b_y = e("-1"),
                    .c = e("-1"),
                    .f = e("-2 - 2*x - 3*y")},
-      .boundary_conditions = {
-          {"bottom", dirichlet},
-          {"left", dirichlet},
-          // u_n = u_x = 2 on x = 1, as a Neumann condition.
-          {"right", {.beta_n = e("1"), .g = e(right_g)}},
-          // 2 u + u_n + 0.5 u_x = 2 u + 3 + 1 on y = 1.
-          {"top",
-           {.alpha = e("2"),
-            .beta_n = e("1"),
-            .beta_x = e("0.5"),
-            .g = e("6 + 4*x + 6*y")}}}};
+      .boundary_conditions = {{"bottom", dirichlet},
+                              {"left", dirichlet},
+                              // u_n = u_x = 2 on x = 1, as a Neumann condition.
+                              {"right", {.beta_n = e("1"), .g = e(right_g)}},
+                              // 2 u + u_n + 0.5 u_x = 2 u + 3 + 1 on y = 1.
+                              {"top",
+                               {.alpha = e("2"),
+                                .beta_n = e("1"),
+                                .beta_x = e("0.5"),
+                                .g = e("6 + 4*x + 6*y")}}}};
 }
 
 void exact_p1_solution() {
   auto meshed = std::make_shared<const MeshedProblem>(test::unit_square(4),
                                                       linear_problem("2"));
   const solve::Solution u = solve_static(meshed);
-  check(test::max_nodal_error(*meshed->mesh(), u.values,
-                              [](double x, double y) {
-                                return 1 + 2 * x + 3 * y;
-                              }) < 1e-12,
+  check(test::max_nodal_error(
+            *meshed->mesh(), u.values,
+            [](double x, double y) { return 1 + 2 * x + 3 * y; }) < 1e-12,
         "u_h is u");
   const ResidualEstimator residual;
   const KellyEstimator kelly;
@@ -309,13 +305,12 @@ void time_terms() {
   // m1 = m2 = 1, u_tt = 1: r = -(x + 1); integral of (x + 1)^2 over T0 is
   // 17/12, over T1 11/12.
   {
-    const Problem problem{
-        .equation = {.a_xx = e("-1"),
-                     .a_yy = e("-1"),
-                     .m1 = e("1"),
-                     .m2 = e("1")},
-        .boundary_conditions = all(dirichlet),
-        .initial = {.u = e("x"), .u_t = e("0")}};
+    const Problem problem{.equation = {.a_xx = e("-1"),
+                                       .a_yy = e("-1"),
+                                       .m1 = e("1"),
+                                       .m2 = e("1")},
+                          .boundary_conditions = all(dirichlet),
+                          .initial = {.u = e("x"), .u_t = e("0")}};
     const MeshedProblem meshed(square, problem);
     const solve::Solution u =
         interpolant(meshed, [](double x, double) { return x; });
@@ -333,13 +328,11 @@ void time_terms() {
   {
     const Problem problem{
         .equation = {.a_xx = e("-1"), .a_yy = e("-1")},
-        .boundary_conditions = {{"bottom", dirichlet},
-                                {"top", dirichlet},
-                                {"left", dirichlet},
-                                {"right",
-                                 {.beta_n = e("1"),
-                                  .gamma = e("1"),
-                                  .g = e("1")}}},
+        .boundary_conditions =
+            {{"bottom", dirichlet},
+             {"top", dirichlet},
+             {"left", dirichlet},
+             {"right", {.beta_n = e("1"), .gamma = e("1"), .g = e("1")}}},
         .initial = {.u = e("x")}};
     const MeshedProblem meshed(square, problem);
     const solve::Solution u =
@@ -393,7 +386,8 @@ void invalid_inputs() {
   const Problem reaction{.equation = {.c = e("1"), .f = e("x")},
                          .boundary_conditions = all({.alpha = e("1")})};
   const MeshedProblem no_a(square, reaction);
-  const solve::Solution v = interpolant(no_a, [](double x, double) { return x; });
+  const solve::Solution v =
+      interpolant(no_a, [](double x, double) { return x; });
   expect_throws<std::invalid_argument>(
       [&] { (void)RecoveryEstimator().estimate(no_a, v); },
       "the energy norm needs A, which is zero");
@@ -408,11 +402,8 @@ void invalid_inputs() {
       [&] { (void)RecoveryEstimator().estimate(indefinite, u); },
       "A is indefinite at");
   expect_throws<std::invalid_argument>(
-      [] {
-        (void)RecoveryEstimator({.norm = static_cast<RecoveryNorm>(7)});
-      },
+      [] { (void)RecoveryEstimator({.norm = static_cast<RecoveryNorm>(7)}); },
       "RecoveryEstimatorOptions::norm must be");
-
 }
 
 } // namespace

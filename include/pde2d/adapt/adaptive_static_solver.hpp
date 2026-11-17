@@ -99,9 +99,9 @@ class AdaptiveStaticSolver {
 public:
   // Throws std::invalid_argument without adaptations, for a null one, and
   // when more than one declares changes_mesh.
-  AdaptiveStaticSolver(solve::StaticSolver solver,
-                       std::vector<std::shared_ptr<const Adaptation>>
-                           adaptations);
+  AdaptiveStaticSolver(
+      solve::StaticSolver solver,
+      std::vector<std::shared_ptr<const Adaptation>> adaptations);
 
   // Runs the loop from `problem` (its mesh is the starting mesh) at time
   // t. Throws std::invalid_argument for a null problem, a t that is not

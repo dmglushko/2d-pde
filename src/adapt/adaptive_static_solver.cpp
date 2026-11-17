@@ -104,8 +104,7 @@ AdaptiveStaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> problem,
       target.tolerance.absolute || target.tolerance.relative;
   if (has_tolerance && !estimating)
     throw std::invalid_argument(std::format(
-        "{}: a tolerance needs an adaptation that estimates the error",
-        stage));
+        "{}: a tolerance needs an adaptation that estimates the error", stage));
   if (target.max_nodes && problem->mesh()->nodes.size() > *target.max_nodes)
     throw std::invalid_argument(std::format(
         "{}: the starting mesh has {} nodes, more than max_nodes = {}", stage,
@@ -149,8 +148,8 @@ AdaptiveStaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> problem,
       std::shared_ptr<const mesh::Mesh> next;
       for (const auto &adaptation : adaptations_) {
         const bool own = adaptation.get() == estimating;
-        AdaptationResult adapted = adaptation->adapt(
-            state, own ? &*current.estimate : nullptr);
+        AdaptationResult adapted =
+            adaptation->adapt(state, own ? &*current.estimate : nullptr);
         for (auto &r : adapted.reports)
           current.reports.push_back(std::move(r));
         if (adapted.mesh)
@@ -165,8 +164,8 @@ AdaptiveStaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> problem,
                           "max_nodes = {}; it was not solved",
                           next->nodes.size(), *target.max_nodes);
       } else {
-        auto next_problem =
-            std::make_shared<const fem::MeshedProblem>(next, problem->problem());
+        auto next_problem = std::make_shared<const fem::MeshedProblem>(
+            next, problem->problem());
         problem_report = next_problem->report();
         problem = std::move(next_problem);
       }

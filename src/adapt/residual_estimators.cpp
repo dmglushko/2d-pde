@@ -140,8 +140,7 @@ ResidualTerms residual_terms(const fem::MeshedProblem &problem,
   const fem::EdgeRule rule = fem::edge_rule(boundary_degree);
   for (std::size_t k = 0; k < mesh.boundary_edges.size(); ++k) {
     const mesh::BoundaryEdge &edge = mesh.boundary_edges[k];
-    const fem::CompiledCondition &condition =
-        problem.conditions()[edge.region];
+    const fem::CompiledCondition &condition = problem.conditions()[edge.region];
     if (condition.kind == fem::ConditionKind::dirichlet)
       continue;
     const std::string &region = mesh.region_names[edge.region];
@@ -162,8 +161,8 @@ ResidualTerms residual_terms(const fem::MeshedProblem &problem,
       const auto c = [&](const fem::CompiledExpression &coefficient,
                          const char *label) {
         return detail::coefficient_value(
-            coefficient, std::format("{}: region '{}'", who, region),
-            label, p, t);
+            coefficient, std::format("{}: region '{}'", who, region), label, p,
+            t);
       };
       const double kappa_n = flux_at(e, who, p, t)(n, n);
       const double beta_x = c(condition.beta_x, "beta_x");
@@ -180,14 +179,13 @@ ResidualTerms residual_terms(const fem::MeshedProblem &problem,
         continue; // no flux, so no residual
       const double u_here = (1.0 - q.s) * u[ia] + q.s * u[ib];
       double residual = c(condition.g, "g") -
-                        c(condition.alpha, "alpha") * u_here -
-                        beta_n * u_n -
+                        c(condition.alpha, "alpha") * u_here - beta_n * u_n -
                         c(condition.beta_tau, "beta_tau") * u_tau -
                         beta_x * gradient.x - beta_y * gradient.y;
       if (use_gamma)
-        residual -= c(condition.gamma, "gamma") *
-                    ((1.0 - q.s) * derivatives.u_t[ia] +
-                     q.s * derivatives.u_t[ib]);
+        residual -=
+            c(condition.gamma, "gamma") *
+            ((1.0 - q.s) * derivatives.u_t[ia] + q.s * derivatives.u_t[ib]);
       const double flux_residual = kappa_n / beta_n_hat * residual;
       sum += q.weight * flux_residual * flux_residual;
     }
@@ -205,11 +203,9 @@ double root_of_sum(const std::vector<double> &squares) {
 
 } // namespace
 
-std::vector<double>
-ResidualEstimator::indicators(const fem::MeshedProblem &problem,
-                              const solve::Solution &solution,
-                              const TimeDerivatives &derivatives,
-                              mesh::StageReport &report) const {
+std::vector<double> ResidualEstimator::indicators(
+    const fem::MeshedProblem &problem, const solve::Solution &solution,
+    const TimeDerivatives &derivatives, mesh::StageReport &report) const {
   const fem::CompiledEquation &e = problem.equation();
   bool dynamic = false;
   for (const auto &condition : problem.conditions())
@@ -237,11 +233,9 @@ ResidualEstimator::indicators(const fem::MeshedProblem &problem,
   return eta;
 }
 
-std::vector<double>
-KellyEstimator::indicators(const fem::MeshedProblem &problem,
-                           const solve::Solution &solution,
-                           const TimeDerivatives & /*derivatives*/,
-                           mesh::StageReport &report) const {
+std::vector<double> KellyEstimator::indicators(
+    const fem::MeshedProblem &problem, const solve::Solution &solution,
+    const TimeDerivatives & /*derivatives*/, mesh::StageReport &report) const {
   const ResidualTerms terms =
       residual_terms(problem, solution, {}, false, name());
   std::vector<double> eta(terms.jump.size());

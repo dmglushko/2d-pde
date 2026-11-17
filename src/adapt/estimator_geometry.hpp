@@ -20,8 +20,8 @@ namespace pde2d::adapt::detail {
 struct TriangleData {
   std::array<geometry::Point, 3> nodes{};
   double area = 0.0;
-  double diameter = 0.0;          // the longest edge
-  geometry::Point gradient{};     // grad u_h, constant on the triangle
+  double diameter = 0.0;      // the longest edge
+  geometry::Point gradient{}; // grad u_h, constant on the triangle
 };
 
 // One TriangleData per triangle of the mesh, with u_h from `values` (one

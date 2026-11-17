@@ -15,15 +15,15 @@ MeshRefinement::MeshRefinement(std::shared_ptr<const ErrorEstimator> estimator,
   if (!estimator_)
     throw std::invalid_argument("mesh_refinement: the estimator is null");
   if (!marking_)
-    throw std::invalid_argument("mesh_refinement: the marking strategy is null");
+    throw std::invalid_argument(
+        "mesh_refinement: the marking strategy is null");
   if (!remesher_)
     throw std::invalid_argument("mesh_refinement: the remesher is null");
 }
 
 std::optional<ErrorEstimate>
 MeshRefinement::estimate(const SolvedState &state) const {
-  return estimator_->estimate(state.problem, state.solution,
-                              state.derivatives);
+  return estimator_->estimate(state.problem, state.solution, state.derivatives);
 }
 
 AdaptationResult MeshRefinement::adapt(const SolvedState &state,
@@ -33,10 +33,10 @@ AdaptationResult MeshRefinement::adapt(const SolvedState &state,
     throw std::invalid_argument(
         "mesh_refinement: the solution is not on the problem's mesh");
   AdaptationResult result;
-  result.estimate = estimate ? *estimate
-                             : estimator_->estimate(state.problem,
-                                                    state.solution,
-                                                    state.derivatives);
+  result.estimate = estimate
+                        ? *estimate
+                        : estimator_->estimate(state.problem, state.solution,
+                                               state.derivatives);
   if (result.estimate->indicators.size() != mesh.triangles.size())
     throw std::invalid_argument(std::format(
         "mesh_refinement: the estimate has {} indicators for {} triangles",

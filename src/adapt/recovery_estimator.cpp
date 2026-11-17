@@ -46,9 +46,9 @@ RecoveryEstimator::indicators(const fem::MeshedProblem &problem,
   const bool energy = options_.norm == RecoveryNorm::energy;
   if (energy && e.a_xx.facts().zero && e.a_xy.facts().zero &&
       e.a_yy.facts().zero)
-    throw std::invalid_argument(
-        name() + ": the energy norm needs A, which is zero; use "
-                 "RecoveryNorm::gradient");
+    throw std::invalid_argument(name() +
+                                ": the energy norm needs A, which is zero; use "
+                                "RecoveryNorm::gradient");
 
   const std::vector<detail::TriangleData> data =
       detail::triangle_data(mesh, solution.values, name());
@@ -98,8 +98,9 @@ RecoveryEstimator::indicators(const fem::MeshedProblem &problem,
               "{}: A is indefinite at ({}, {}), t = {} (a_xx a_yy - a_xy^2 / "
               "4 < 0), so it has no energy norm; use RecoveryNorm::gradient",
               name(), p.x, p.y, t));
-        value = std::abs(difference.x * (xx * difference.x + xy * difference.y) +
-                         difference.y * (xy * difference.x + yy * difference.y));
+        value =
+            std::abs(difference.x * (xx * difference.x + xy * difference.y) +
+                     difference.y * (xy * difference.x + yy * difference.y));
       }
       sum += q.weight * value;
     }
