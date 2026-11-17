@@ -108,8 +108,11 @@ public:
   // finite, a target with nothing set, a tolerance value or budget that
   // is not finite and positive (max_cycles, max_nodes at least 1), a
   // tolerance when no adaptation estimates, and a starting mesh with more
-  // nodes than max_nodes; passes on the exceptions of the solver, the
-  // adaptations and the MeshedProblem constructor.
+  // nodes than max_nodes; throws std::runtime_error when an adaptation
+  // breaks its declarations (declares estimates_error but gives no
+  // estimate, returns a mesh without declaring changes_mesh); passes on
+  // the exceptions of the solver, the adaptations and the MeshedProblem
+  // constructor.
   [[nodiscard]] AdaptiveStaticResult
   solve(std::shared_ptr<const fem::MeshedProblem> problem,
         const AdaptiveTarget &target, double t = 0.0) const;

@@ -130,8 +130,13 @@ AdaptiveStaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> problem,
     const SolvedState state{.problem = *problem,
                             .solution = current.solution,
                             .derivatives = {.u_t = zeros, .u_tt = zeros}};
-    if (estimating)
+    if (estimating) {
       current.estimate = estimating->estimate(state);
+      if (!current.estimate)
+        throw std::runtime_error(
+            std::format("{}: {} declares estimates_error but gave no estimate",
+                        stage, estimating->name()));
+    }
     if (has_tolerance && !tolerance)
       tolerance = resolve(target.tolerance, current.estimate->total);
 
@@ -152,6 +157,10 @@ AdaptiveStaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> problem,
             adaptation->adapt(state, own ? &*current.estimate : nullptr);
         for (auto &r : adapted.reports)
           current.reports.push_back(std::move(r));
+        if (adapted.mesh && !adaptation->capabilities().changes_mesh)
+          throw std::runtime_error(std::format(
+              "{}: {} returned a mesh but does not declare changes_mesh", stage,
+              adaptation->name()));
         if (adapted.mesh)
           next = std::move(adapted.mesh);
       }

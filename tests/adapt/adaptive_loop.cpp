@@ -52,9 +52,10 @@ std::shared_ptr<const mesh::Mesh> l_shape_mesh(double h) {
         {geometry::Line{p[i], p[(i + 1) % p.size()]}, regions[i]});
   mesh::Mesher mesher(std::make_shared<mesh::ChordLengthDiscretizer>(),
                       std::make_shared<mesh::Cdt>());
-  mesh::Mesh m =
-      mesher.run(geometry::CurveGeometry({loop}), {.max_edge_length = {.absolute = h}})
-          .mesh;
+  mesh::Mesh m = mesher
+                     .run(geometry::CurveGeometry({loop}),
+                          {.max_edge_length = {.absolute = h}})
+                     .mesh;
   // Once, on the starting mesh: newest vertex bisection then keeps its
   // refinement edges from cycle to cycle.
   mesh::set_longest_edges_as_refinement_edges(m);
@@ -68,16 +69,15 @@ fem::Problem singular_problem() {
   const auto dirichlet = [](const char *g) {
     return fem::BoundaryCondition{.alpha = Expression("1"), .g = Expression(g)};
   };
-  return {
-      .equation = {.a_xx = Expression("-1"), .a_yy = Expression("-1")},
-      .boundary_conditions = {
-          {"corner_x", dirichlet("0")},
-          {"corner_y", dirichlet("0")},
-          {"right", dirichlet("(1 + y^2)^(1/3)*sin(2/3*atan(y))")},
-          {"top", dirichlet("(1 + x^2)^(1/3)*sin(2/3*(pi/2 - atan(x)))")},
-          {"left", dirichlet("(1 + y^2)^(1/3)*sin(2/3*(pi - atan(y)))")},
-          {"bottom",
-           dirichlet("(1 + x^2)^(1/3)*sin(2/3*(3*pi/2 + atan(x)))")}}};
+  return {.equation = {.a_xx = Expression("-1"), .a_yy = Expression("-1")},
+          .boundary_conditions = {
+              {"corner_x", dirichlet("0")},
+              {"corner_y", dirichlet("0")},
+              {"right", dirichlet("(1 + y^2)^(1/3)*sin(2/3*atan(y))")},
+              {"top", dirichlet("(1 + x^2)^(1/3)*sin(2/3*(pi/2 - atan(x)))")},
+              {"left", dirichlet("(1 + y^2)^(1/3)*sin(2/3*(pi - atan(y)))")},
+              {"bottom",
+               dirichlet("(1 + x^2)^(1/3)*sin(2/3*(3*pi/2 + atan(x)))")}}};
 }
 
 // grad u = 2/3 r^(-1/3) (sin(-theta / 3), cos(-theta / 3)).
@@ -153,23 +153,21 @@ Run run(const AdaptiveStaticSolver &solver, std::size_t max_nodes,
 // Adaptive refinement (residual estimator, Dörfler 0.5, NVB) against
 // uniform refinement (every triangle marked) up to 20000 nodes.
 void l_shape_rates() {
-  const Run adaptive =
-      run(loop(std::make_shared<ResidualEstimator>(),
-               std::make_shared<DorflerMarking>(DorflerMarkingOptions{
-                   .theta = 0.5})),
-          20000, "adaptive");
-  const Run uniform =
-      run(loop(std::make_shared<ResidualEstimator>(),
-               std::make_shared<MaximumMarking>(
-                   MaximumMarkingOptions{.theta = 0.0})),
-          20000, "uniform");
+  const Run adaptive = run(loop(std::make_shared<ResidualEstimator>(),
+                                std::make_shared<DorflerMarking>(
+                                    DorflerMarkingOptions{.theta = 0.5})),
+                           20000, "adaptive");
+  const Run uniform = run(loop(std::make_shared<ResidualEstimator>(),
+                               std::make_shared<MaximumMarking>(
+                                   MaximumMarkingOptions{.theta = 0.0})),
+                          20000, "uniform");
   // Rates over the second half of the cycles (pre-asymptotic first).
-  const double a = slope(adaptive.nodes, adaptive.errors,
-                         adaptive.nodes.size() / 2);
+  const double a =
+      slope(adaptive.nodes, adaptive.errors, adaptive.nodes.size() / 2);
   const double u =
       slope(uniform.nodes, uniform.errors, uniform.nodes.size() / 2);
-  const double ae = slope(adaptive.nodes, adaptive.estimates,
-                          adaptive.nodes.size() / 2);
+  const double ae =
+      slope(adaptive.nodes, adaptive.estimates, adaptive.nodes.size() / 2);
   std::cout << "INFO rates: adaptive error " << a << ", adaptive estimate "
             << ae << ", uniform error " << u << '\n';
   check(a < -0.42 && a > -0.6, "adaptive: about N^(-1/2)");
@@ -245,7 +243,8 @@ void stops_on_max_cycles() {
   // Later cycles start with the report of the problem the loop built.
   check(r.cycles[1].reports.front().stage == "meshed_problem", "rebuilt");
   check(r.cycles[0].reports.front().stage == "assembly", "given problem");
-  const AdaptiveStaticResult once = dorfler_loop().solve(start(), {.max_cycles = 1});
+  const AdaptiveStaticResult once =
+      dorfler_loop().solve(start(), {.max_cycles = 1});
   check(once.cycles.size() == 1 && once.stop_reason == StopReason::max_cycles,
         "one cycle");
 }
@@ -298,6 +297,35 @@ public:
   AdaptationResult adapt(const SolvedState &,
                          const ErrorEstimate *) const override {
     return {};
+  }
+};
+
+// Adaptations that break their declarations.
+class NoEstimate final : public Adaptation {
+public:
+  std::string name() const override { return "no_estimate"; }
+  AdaptationCapabilities capabilities() const override {
+    return {.estimates_error = true};
+  }
+  std::optional<ErrorEstimate> estimate(const SolvedState &) const override {
+    return std::nullopt;
+  }
+  AdaptationResult adapt(const SolvedState &,
+                         const ErrorEstimate *) const override {
+    return {};
+  }
+};
+
+class UndeclaredMesh final : public Adaptation {
+public:
+  std::string name() const override { return "undeclared_mesh"; }
+  AdaptationCapabilities capabilities() const override { return {}; }
+  std::optional<ErrorEstimate> estimate(const SolvedState &) const override {
+    return std::nullopt;
+  }
+  AdaptationResult adapt(const SolvedState &state,
+                         const ErrorEstimate *) const override {
+    return {.mesh = state.problem.mesh()};
   }
 };
 
@@ -364,6 +392,18 @@ void invalid_configurations() {
   const AdaptiveStaticResult r = idle.solve(problem, {.max_cycles = 3});
   check(r.stop_reason == StopReason::nothing_changed, "idle changes nothing");
   check(!r.cycles.front().estimate, "no estimate");
+  expect_throws<std::runtime_error>(
+      [&] {
+        (void)AdaptiveStaticSolver(solver, {std::make_shared<NoEstimate>()})
+            .solve(problem, {.max_cycles = 2});
+      },
+      "no_estimate declares estimates_error but gave no estimate");
+  expect_throws<std::runtime_error>(
+      [&] {
+        (void)AdaptiveStaticSolver(solver, {std::make_shared<UndeclaredMesh>()})
+            .solve(problem, {.max_cycles = 2});
+      },
+      "undeclared_mesh returned a mesh but does not declare changes_mesh");
   // An adaptation that does not change the mesh may join one that does.
   const AdaptiveStaticSolver both(solver,
                                   {std::make_shared<Idle>(), refinement});

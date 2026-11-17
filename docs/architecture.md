@@ -20,7 +20,7 @@ of the file is the detailed text.
 | What are the stages of meshing? | [Meshing pipeline](#meshing-pipeline) |
 | In what order does a time step run? | [One time step](#one-time-step) |
 | Which interfaces exist and what implements them? | [Interfaces and their components](#interfaces-and-their-components) |
-| How does adaptive refinement go round (estimate, mark, refine)? | [Adaptive refinement](#adaptive-refinement-marking-in-pde2d_adapt-refinement-in-pde2d_mesh) |
+| How does adaptive refinement go round (estimate, mark, refine)? | [Adaptive refinement](#adaptive-refinement-estimation-marking-and-the-loop-in-pde2d_adapt-refinement-in-pde2d_mesh) |
 
 ## Data flow
 
@@ -92,8 +92,11 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | Linear solver | `requirements()` checked by the caller, then `prepare(matrix)`, then `solve(rhs)` | a `CsrMatrix` (for the check: its `always_symmetric` or `symmetric_now` fact, or `is_symmetric` of its values), a right-hand side | `LinearSolveResult` | `pde2d_solve` |
 | Time method | `advance(assembled, dt, prepared, state)` | one `AssembledProblem` (at the method's evaluation point), the prepared solver, the state, dt | the next state (through a linear solve) | `pde2d_solve` |
 | Building the solution | `build_solution(meshed, free_values, t)` | the short vector, `MeshedProblem` | `Solution` | `pde2d_solve` |
-| Marking | `MarkingStrategy::mark(mesh, indicators)` | `Mesh`, one error indicator per triangle (the owner's estimate) | the marked triangles | `pde2d_adapt` |
+| Error estimation | `ErrorEstimator::estimate(meshed, solution, derivatives)` | `MeshedProblem`, a `Solution` on its mesh, u_t and u_tt when the estimator needs them | `ErrorEstimate`: one indicator per triangle, the total, a report | `pde2d_adapt` |
+| Marking | `MarkingStrategy::mark(mesh, indicators)` | `Mesh`, one error indicator per triangle | the marked triangles | `pde2d_adapt` |
 | Refinement | `Remesher::refine(mesh, marked)` | `Mesh`, marked triangles | `RefinementResult`: the finer `Mesh`, reports, `properties`, optional `Parents` | `pde2d_mesh` |
+| Adaptation | `Adaptation::estimate(state)`, `adapt(state, estimate)` (`MeshRefinement`: estimate, mark, `Remesher::refine`) | a `SolvedState` (problem, solution, derivatives) | `AdaptationResult`: a new `Mesh` or none, properties, parents, the estimate, reports | `pde2d_adapt` |
+| Adaptive loop (static) | `AdaptiveStaticSolver::solve(meshed, target, t)` | `MeshedProblem` (its mesh is the start), `AdaptiveTarget` | `AdaptiveStaticResult`: every cycle's solution, estimate and reports, the last problem, why it stopped | `pde2d_adapt` |
 | Mesh properties | `measure(mesh, warning_angle_degrees)` | `Mesh` | `MeshProperties`: counts, smallest/largest angle, shortest/longest edge, triangles below the warning angle | `pde2d_mesh` |
 
 ### Data
@@ -131,12 +134,12 @@ flowchart BT
     IO --> MESH
     FEM --> MESH
     SOLVE --> FEM
-    ADAPT --> MESH
+    ADAPT --> SOLVE
 ```
 
-`pde2d_io` and `pde2d_fem` do not use each other. `pde2d_adapt` uses only
-`pde2d_mesh` (and `pde2d_geometry` through it); fem and solve do not use
-it, nor it them. The interface target `pde2d::pde2d` links all of them
+`pde2d_io` and `pde2d_fem` do not use each other. `pde2d_adapt` uses
+`pde2d_solve` (and through it fem, mesh and geometry) for the estimators
+and the adaptive loop; nothing uses it, and it does not use io. The interface target `pde2d::pde2d` links all of them
 for programs that use the whole library, such as the app (`app/`,
 [app.md](app.md)), which sits on top and is never used by the library.
 
@@ -511,6 +514,10 @@ flowchart LR
         MKS --- DRM[DorflerMarking]
         MKS --- FFM[FixedFractionMarking]
         MKS --- EQM[EquidistributionMarking]
+        EST([ErrorEstimator]) --- RES[ResidualEstimator]
+        EST --- KEL[KellyEstimator]
+        EST --- REC[RecoveryEstimator]
+        ADP([Adaptation]) --- MR[MeshRefinement]
     end
 ```
 
@@ -532,7 +539,7 @@ include/pde2d/adapt/      src/adapt/      ->  library pde2d_adapt
 
 `pde2d_mesh` depends on `pde2d_geometry`, and `pde2d_io` and `pde2d_fem`
 each on `pde2d_mesh` (so on both), `pde2d_solve` on `pde2d_fem`, and
-`pde2d_adapt` on `pde2d_mesh` only, never the reverse. Public headers are in
+`pde2d_adapt` on `pde2d_solve` (and below), never the reverse. Public headers are in
 `include/pde2d/<module>/`; everything in `src/` is private, including the
 private headers there (`src/mesh/*.hpp`, `src/io/*.hpp`, `src/fem/*.hpp`,
 `src/solve/*.hpp`).
@@ -570,9 +577,9 @@ module: it is a program over the public headers, described in
 | `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
 | `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `iterative_solve.hpp` and the solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`); `time_methods.cpp` holds the three time methods |
 | `app/` | the graphical interface (`pde2d_app`): `src/` (case format with its migrations and generated schema, the geometry sources with the drawing and the boundary locator, the mesh and solve catalogs, the stage cache, runs in chunks per client under two locks, comparisons and probes, exporters with a stored zip writer, problem presets, `--set` and `--sweep`, local HTTP server), `web/` (the page, plain JS modules, with the geometry editor on the picture), `examples/` (cases), `Start pde2d app.cmd` and `start-app.sh` (double-click launcher), `tests/` (`browser/`: the page in headless Chrome; `example_checks.json`: the examples' expected figures), `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md`, its design `docs/app.md` and its decisions `docs/app-decisions.md` |
-| `include/pde2d/adapt/` | `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`); refinement of marked triangles is `mesh::Remesher::refine` |
-| `src/adapt/` | `marking.cpp` (the shared checks and the four strategies) |
-| `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files; `tests/mesh/refinement_checks.hpp` holds the oracles of a refinement result (also used by `tests/adapt/cycles.cpp`) |
+| `include/pde2d/adapt/` | `error_estimator.hpp` (`ErrorEstimator`, `ErrorEstimate`, `TimeDerivatives`), `residual_estimator.hpp`, `kelly_estimator.hpp`, `recovery_estimator.hpp` (`RecoveryEstimatorOptions`, `RecoveryNorm`), `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `adaptation.hpp` (`Adaptation`, `AdaptationCapabilities`, `AdaptationResult`, `SolvedState`), `mesh_refinement.hpp` (`MeshRefinement`), `adaptive_static_solver.hpp` (`AdaptiveStaticSolver`, `AdaptiveTarget`, `ErrorTolerance`, `StopReason`, `AdaptiveCycle`, `AdaptiveStaticResult`); refinement of marked triangles is `mesh::Remesher::refine` |
+| `src/adapt/` | `error_estimator.cpp` (the shared checks of `estimate`), `residual_estimators.cpp` (the residual terms, shared by the residual and Kelly estimators), `recovery_estimator.cpp`, `marking.cpp` (the shared checks and the four strategies), `mesh_refinement.cpp`, `adaptive_static_solver.cpp`; private header `estimator_geometry.hpp` (per-triangle area, diameter and gradient of u_h, interior edges with their two triangles, the triangle of each boundary edge, checked coefficient values) |
+| `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files; `tests/mesh/refinement_checks.hpp` holds the oracles of a refinement result (also used by `tests/adapt/cycles.cpp`); `tests/adapt/estimator_support.hpp` computes the true energy error of a P1 solution (exact gradients, subdivision at a singular point) |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
 | `examples/` | `mesh_viewer/produce_mesh.cpp` (meshes a plate with a hole, writes `.pde2d`), the viewer's startup example files (from the old code) |
@@ -1476,50 +1483,51 @@ history, report}`.
   time; for `Newmark` the acceleration is computed again at the split
   time, so equal to rounding.
 
-## Adaptive refinement (marking in `pde2d_adapt`, refinement in `pde2d_mesh`)
+## Adaptive refinement (estimation, marking and the loop in `pde2d_adapt`, refinement in `pde2d_mesh`)
 
-Adaptive refinement goes round three steps. The first, the error
-estimate, is the owner's and not in the library (dashed). Marking
-strategies are components of `pde2d_adapt`; refinement is
-`Remesher::refine`, with the same refiners as meshing.
+Adaptive refinement goes round three steps: estimate, mark, refine.
+Estimators and marking strategies are components of `pde2d_adapt`;
+refinement is `Remesher::refine`, with the same refiners as meshing.
+`MeshRefinement` puts the three together as one `Adaptation`, and the
+`AdaptiveStaticSolver` runs the loop for static problems.
 
 ```mermaid
 flowchart LR
-    EST["estimate (the owner's)"]
+    SOLVE["StaticSolver::solve"]
+    EST["ErrorEstimator::estimate"]
+    STOP{"target met or<br/>a budget reached?"}
     MK["MarkingStrategy::mark"]
     RF["Remesher::refine"]
+    NEW["MeshedProblem(new mesh, same Problem)"]
+    MP([MeshedProblem])
     SOL([Solution])
-    ETA([one indicator per triangle])
-    MKD([marked triangles])
-    M([Mesh])
-    RR(["RefinementResult: Mesh, reports, properties, optional parents"])
+    ETA(["ErrorEstimate: one indicator per triangle, total"])
+    OUT(["AdaptiveStaticResult"])
 
-    SOL -.-> EST
-    M -.-> EST
-    EST -.-> ETA
-    ETA --> MK
-    M --> MK
-    MK --> MKD
-    MKD --> RF
-    M --> RF
-    RF --> RR
-    RR -. next cycle .-> M
-
-    classDef owner stroke-dasharray: 5 5
-    class EST owner
+    MP --> SOLVE --> SOL --> EST --> ETA --> STOP
+    STOP -- yes --> OUT
+    STOP -- no --> MK --> RF --> NEW --> MP
+    subgraph MeshRefinement
+        EST
+        MK
+        RF
+    end
 ```
 
 ```cpp
 Mesh mesh = Mesher(...).run(geometry, spec).mesh;
 set_longest_edges_as_refinement_edges(mesh); // once, before the first cycle
-const DorflerMarking marking({.theta = 0.5});
-const Remesher refinement(std::make_shared<NewestVertexBisection>());
-for (int cycle = 0; cycle < 10; ++cycle) {
-  std::vector<double> eta = /* the owner's estimate on mesh */;
-  RefinementResult r = refinement.refine(mesh, marking.mark(mesh, eta));
-  // r.parents (if present): transfer the solution; else point location.
-  mesh = std::move(r.mesh);
-}
+auto meshed = std::make_shared<const MeshedProblem>(
+    std::make_shared<const Mesh>(std::move(mesh)), problem);
+auto refinement = std::make_shared<MeshRefinement>(
+    std::make_shared<ResidualEstimator>(),
+    std::make_shared<DorflerMarking>(DorflerMarkingOptions{.theta = 0.5}),
+    std::make_shared<Remesher>(std::make_shared<NewestVertexBisection>()));
+const AdaptiveStaticSolver adaptive(StaticSolver(std::make_shared<SparseLu>()),
+                                    {refinement});
+AdaptiveStaticResult r = adaptive.solve(
+    meshed, {.tolerance = {.relative = 0.01}, .max_nodes = 100000});
+// r.cycles.back().solution, r.stop_reason, r.report
 ```
 
 ### Marking
@@ -1670,6 +1678,99 @@ so), so the mesh comes back unchanged. `refined_by_closure` counts every
 unmarked input triangle that changed, including those a re-triangulating
 boundary split replaced. Dörfler marking with θ = 1 marks every positive
 indicator.
+
+### Error estimators
+
+`ErrorEstimator::estimate(meshed, solution, derivatives)` is not
+virtual: it checks the input (the solution on the problem's mesh object,
+one finite value per node; u_t and u_tt in `TimeDerivatives` each empty
+or one finite value per node; else `std::invalid_argument`), times the
+work, asks the estimator's private `indicators()` for one η_T per
+triangle, and returns `ErrorEstimate{indicators, total, report}` with
+total = √(Σ η_T²) and the report metrics `triangles`, `total`,
+`max_indicator` (plus the estimator's own). The time is
+`solution.time`. All integrals use `fem/quadrature.hpp` with the degree
+named in the code.
+
+| Estimator | η_T² | Needs | Quadrature (exact degree) |
+| --- | --- | --- | --- |
+| `ResidualEstimator` | h_T² ‖r‖²_T + Σ_interior ½ h_E ‖J‖²_E + Σ_natural/dynamic h_E ‖R‖²_E | u_t when m1 ≠ 0 or a region is dynamic (A ≠ 0), u_tt when m2 ≠ 0 (zero as written); missing: `std::invalid_argument` | triangles 4, jumps 2, boundary 4: exact for data of degree ≤ 1 |
+| `KellyEstimator` | Σ_interior ½ h_E ‖J‖²_E + Σ_natural/dynamic h_E ‖R‖²_E, R without γ u_t | nothing | jumps 2, boundary 4 |
+| `RecoveryEstimator` | ∫_T (G − ∇u_h)·W(G − ∇u_h), G the area-weighted nodal average of ∇u_h, linear between nodes; W = \|A\| (`RecoveryNorm::energy`, default) or I (`gradient`) | nothing | triangles 3 |
+
+With A = [[a_xx, a_xy/2], [a_xy/2, a_yy]], h_T the longest edge and h_E
+the edge length: r = f − b·∇u_h − c u_h − m1 u_t − m2 u_tt (the
+second-order part cancels exactly for P1: div(A∇u_h) = (∇·A)·∇u_h,
+which the −(∇·A)·∇u term of the weak form removes); J = n·A(∇u_h|T −
+∇u_h|T′) on an interior edge; on a natural or dynamic edge R =
+κ_n/β̂_n · (g − α u_h − β_n ∂_n u_h − β_τ ∂_τ u_h − β_x ∂_x u_h − β_y ∂_y
+u_h − γ u_t), the flux the condition prescribes minus the flux of u_h
+(the same κ_n and β̂_n as assembly; β̂_n = 0 throws). Dirichlet edges
+add nothing; with A zero as written there are no edge terms. Report
+metrics: `element_part`, `jump_part`, `boundary_part` (√ of the sums of
+each kind; the Kelly estimator has the last two). The energy norm takes
+|e·A e| at each point, which is e·|A|e when A is definite or
+semidefinite there; an indefinite A (a_xx a_yy − a_xy²/4 < 0 beyond
+rounding) or A zero as written throws, naming `RecoveryNorm::gradient`.
+
+The private `estimator_geometry.hpp` computes, once per call, the area,
+diameter and gradient of u_h of each triangle and the edge topology
+(interior edges from sorting the triangle edges by their node pair, the
+triangle of each boundary edge), in index order.
+
+### Adaptations and the adaptive loop
+
+An `Adaptation` (`adaptation.hpp`) improves the discretization after a
+solve, in two steps a driver can test its target between:
+`estimate(state)` (its own `ErrorEstimate`, or nothing) and `adapt(state,
+estimate)` (`estimate` is what `estimate()` gave for the same state, or
+null to estimate itself). The state is a `SolvedState{problem, solution,
+derivatives}`. It declares `AdaptationCapabilities{estimates_error,
+changes_mesh}`; drivers read these, never the type. `AdaptationResult`
+holds the new mesh (null when unchanged), its `MeshProperties` and
+`Parents` (when kept), the estimate and the reports.
+
+`MeshRefinement(estimator, marking, remesher)` (both capabilities):
+estimate (or the given one, which must have one indicator per triangle),
+`marking.mark`, `remesher.refine` of the solution's mesh. Nothing marked
+leaves the mesh unchanged without calling the Remesher. Reports: the
+estimator's, `mesh_refinement` (metrics `triangles`, `marked`; messages
+naming the marking strategy and "nothing marked"), then the Remesher's.
+
+`AdaptiveStaticSolver(static_solver, adaptations)` throws without
+adaptations, for a null one, and when more than one declares
+`changes_mesh` (all act on the same solved state until solutions can be
+transferred). `solve(meshed, target, t = 0)`:
+
+1. solve with the `StaticSolver` at t; the derivatives passed on are
+   zeros (a steady state);
+2. the cycle's estimate is that of the first adaptation declaring
+   `estimates_error` (none: no estimate, and a tolerance throws);
+3. stop with `tolerance_met` when its total ≤ the tolerance (the smaller
+   of `absolute` and `relative` × the first cycle's total), else with
+   `max_cycles` on the `max_cycles`-th solve;
+4. every adaptation adapts in order (the estimating one gets its
+   estimate); no new mesh: `nothing_changed`; a new mesh with more nodes
+   than `max_nodes`: `node_budget`, the mesh is discarded unsolved;
+5. otherwise a new `MeshedProblem` from the same `Problem` on the new
+   mesh, and the next cycle.
+
+`AdaptiveTarget{tolerance, max_cycles, max_nodes}` needs at least one;
+values must be finite and positive (counts at least 1), and a starting
+mesh above `max_nodes` throws. `AdaptiveStaticResult` holds every
+`AdaptiveCycle{solution, estimate, reports}` (reports: `meshed_problem`
+for problems the loop built, the static solver's, then the
+adaptations'), the last cycle's problem, the `StopReason` (`to_string`)
+and the report `adaptive_static_solver` (metrics `cycles`, `nodes`,
+`triangles`, `estimate`, `tolerance`; the message "stopped: <reason>:
+...").
+
+Measured (tests): on the unit square with u = sin πx sin πy the residual
+estimator's effectivity is 5.5–5.6 and the recovery estimator's tends to
+1 (1.018 → 1.003 from n = 8 to 64); every total converges like h. On
+the L-shape with u = r^(2/3) sin(2θ/3), Dörfler θ = 0.5 and newest
+vertex bisection give energy error ∝ N^(−0.53) (residual, Kelly and
+recovery estimators alike), uniform refinement N^(−0.33).
 
 ## Determinism
 

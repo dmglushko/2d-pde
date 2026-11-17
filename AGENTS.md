@@ -2,8 +2,9 @@
 
 C++23 library (compiled, not header-only) for 2D geometry, triangle
 meshing, their file formats, the problem description, its P1 finite
-element assembly, its static and time-dependent solution, and marking and
-refinement for adaptive refinement: a
+element assembly, its static and time-dependent solution, and error
+estimation, marking, refinement and the adaptive loop for static
+problems: a
 from-scratch rewrite for one linear scalar PDE with P1 finite elements.
 Read [docs/vision.md](docs/vision.md) (direction), then the sections of
 [docs/decisions.md](docs/decisions.md) (the owner's decisions: your
@@ -79,9 +80,9 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   target `pde2d::pde2d` only bundles them, and nothing in the library
   depends on `app/`. Dependencies point one way: mesh may include
   geometry, io and fem may include mesh and geometry, solve may include
-  fem (and below), adapt only mesh and geometry, never the reverse (and io
-  and fem not each other, nor io and solve, nor adapt and io, fem or
-  solve). Heavy dependencies (Boost, Eigen,
+  fem (and below), adapt may include solve, fem, mesh and geometry, never
+  the reverse (and io and fem not each other, nor io and solve, nor adapt
+  and io; nothing includes adapt). Heavy dependencies (Boost, Eigen,
   SymEngine, libxml2) only in `.cpp` files, never in public headers.
 - Public headers in `include/pde2d/<module>/`; private code and private
   headers in `src/<module>/`. Tests use only public headers. Narrow
@@ -304,10 +305,22 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   every new node lies on an input edge, every output triangle names its
   input parent, and input nodes keep their indices: keep these when
   changing the core, the solution transfer will rely on them.
+- **The estimators' residual follows assembly's weak form.** The element
+  residual is f - b . grad u_h - c u_h - m1 u_t - m2 u_tt (the A and div A
+  parts cancel for P1), the jump is that of (A grad u_h) . n, and the
+  boundary residual of a natural or dynamic edge is kappa_n / beta_n_hat
+  times the condition's residual as written. Change them together with
+  assembly's signs (`src/fem/element_blocks.cpp`). Every integral takes
+  its rule from `quadrature.hpp` with a degree named in the code.
+- **Drivers decide from declarations.** The `AdaptiveStaticSolver` reads
+  `Adaptation::capabilities()` (`estimates_error`, `changes_mesh`): the
+  cycle's estimate is that of the first adaptation that estimates, and at
+  most one adaptation may change the mesh until a solution can be
+  transferred. Never test an adaptation's or estimator's type.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   adaptive time stepping, explicit time methods,
   handling pure Neumann problems, well-posedness
-  checks, error estimators, an adaptive loop driver, coarsening and
+  checks, the adaptive loop for time-dependent problems, coarsening and
   solution transfer, callables, anisotropic meshing, planners,
   the simple-options facade, Gmsh export, reading the old boundary
   context of `.pde2d` files as curve links. Do not add them unless a task
