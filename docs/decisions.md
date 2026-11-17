@@ -536,6 +536,27 @@ marked "architecture" below are decided.
   header comments say so. Their speed comes from a threaded BLAS
   (OpenBLAS).
 
+- **Direct solvers check the backward error, not the relative residual**
+  (decided 2026-11-17, after a review finding: a correct solve of a
+  problem with a coefficient contrast of 10^6 was refused, because b − Ax
+  computed in doubles has a rounding error of about ε‖A‖‖x‖): the check
+  against `residual_tolerance` uses ‖b − Ax‖ / (‖A‖‖x‖ + ‖b‖), for
+  `SupernodalCholesky`, `MultifrontalLu` and `SimplicialLdlt`; the result
+  also reports it (`backward_error`), and `residual` stays the relative
+  residual.
+- **Direct solvers refuse only exact singularity** (decided 2026-11-17,
+  after a review finding: the rule "smallest pivot below n·ε times the
+  largest" refused a valid, very ill-conditioned problem): they throw on
+  an exact zero pivot and the Cholesky when the matrix is not positive
+  definite; the ratio of the smallest to the largest pivot is reported,
+  not judged. A pure Neumann problem then gives one of its solutions
+  without an error, as the Eigen solvers do (GitHub issue #32).
+- **Known limits of the SuiteSparse solvers, documented** (2026-11-17):
+  OpenBLAS's thread count is one setting for the whole process, so a
+  program that changes it during one of these solves can have its setting
+  overwritten; Ubuntu's ParU replaces the global `operator new` of every
+  program that links it (an installed `std::new_handler` is skipped when
+  memory runs out).
 - **Weak form.** The second-order part is written as A : ∇²u with
   A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] and integrated by parts once:
   ∫ (A:∇²u) v = −∫ ∇v·A∇u − ∫ (∇·A)·∇u v + ∮ v (A∇u)·n. The term ∇·A
