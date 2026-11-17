@@ -1,7 +1,5 @@
 #include "pde2d/solve/static_solver.hpp"
 
-#include "pde2d/fem/assembler.hpp"
-
 #include "requirements.hpp"
 #include "vectors.hpp"
 
@@ -12,8 +10,9 @@
 
 namespace pde2d::solve {
 
-StaticSolver::StaticSolver(std::shared_ptr<const LinearSolver> linear_solver)
-    : linear_solver_(std::move(linear_solver)) {
+StaticSolver::StaticSolver(std::shared_ptr<const LinearSolver> linear_solver,
+                           fem::AssemblerOptions assembler_options)
+    : linear_solver_(std::move(linear_solver)), assembler_(assembler_options) {
   if (!linear_solver_)
     throw std::invalid_argument("static_solver: the linear solver is null");
 }
@@ -29,8 +28,8 @@ StaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // Time order 0: only A and the load are built, and only U_D is
   // evaluated, so right_hand_side() is load - A_FD U_D and no derivative of
   // the boundary data is needed (d/dt sqrt(t) at t = 0, issue #35).
-  const fem::AssembledProblem assembled = fem::Assembler().assemble(
-      meshed_problem, t, nullptr, /*max_time_order=*/0);
+  const fem::AssembledProblem assembled =
+      assembler_.assemble(meshed_problem, t, nullptr, /*max_time_order=*/0);
   const auto start = std::chrono::steady_clock::now();
 
   const fem::Operator &stiffness = assembled.stiffness();
@@ -52,6 +51,7 @@ StaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
       static_cast<double>(meshed_problem->free_nodes().size());
   report.metrics["linear_iterations"] = static_cast<double>(solved.iterations);
   report.metrics["residual"] = solved.residual;
+  report.metrics["linear_threads"] = static_cast<double>(solved.threads);
   report.time = std::chrono::steady_clock::now() - start;
   result.reports.push_back(std::move(report));
   return result;

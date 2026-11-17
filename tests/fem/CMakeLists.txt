@@ -13,6 +13,9 @@ target_include_directories(fem_derivative PRIVATE
                            ${PROJECT_SOURCE_DIR}/src/fem)
 pde2d_add_test(NAME fem_csr_matrix SOURCE csr_matrix.cpp LIBS pde2d_fem)
 pde2d_add_test(NAME fem_assembly SOURCE assembly.cpp LIBS pde2d_fem)
+# Uses at most 4 threads (and once all hardware threads).
+pde2d_add_test(NAME fem_assembly_threads SOURCE assembly_threads.cpp
+               LIBS pde2d_fem)
 pde2d_add_test(NAME fem_assembly_convergence SOURCE assembly_convergence.cpp
                LIBS pde2d_fem)
 pde2d_add_test(NAME fem_quadrature SOURCE quadrature.cpp LIBS pde2d_fem)

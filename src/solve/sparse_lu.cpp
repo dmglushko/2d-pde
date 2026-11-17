@@ -1,5 +1,6 @@
 #include "pde2d/solve/sparse_lu.hpp"
 
+#include "eigen_threads.hpp"
 #include "eigen_view.hpp"
 #include "vectors.hpp"
 
@@ -26,6 +27,9 @@ public:
       : matrix_(std::move(matrix)) {
     if (matrix_->rows() == 0)
       return; // nothing to factorize: every solve returns an empty vector
+    // Direct solvers run in one thread (docs/decisions.md: their parallel
+    // version needs a library still to be chosen).
+    const detail::EigenThreads scope(1);
     const ColumnMajorMatrix a = detail::view(*matrix_);
     lu_.analyzePattern(a);
     lu_.factorize(a);
@@ -41,6 +45,7 @@ public:
     LinearSolveResult result;
     if (matrix_->rows() == 0)
       return result;
+    const detail::EigenThreads scope(1);
     const Eigen::VectorXd x = lu_.solve(detail::view(right_hand_side));
     if (lu_.info() != Eigen::Success)
       throw std::runtime_error("sparse_lu: the solve failed");

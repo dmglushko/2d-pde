@@ -36,6 +36,11 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.0 AND NOT DEFINED
   set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 endif()
 find_package(SymEngine 0.14 CONFIG REQUIRED)
+# OpenMP gives the threads of assembly (pde2d_fem) and of Eigen's sparse
+# matrix-vector product in the iterative solvers (pde2d_solve). It is
+# linked privately and <omp.h> is included only from .cpp files and
+# private headers, never from a public header.
+find_package(OpenMP REQUIRED COMPONENTS CXX)
 add_subdirectory(src/fem)
 
 # Eigen 3 (header-only) solves the linear systems in pde2d_solve, only in its

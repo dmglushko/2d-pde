@@ -170,9 +170,10 @@ struct Summary {
 
 Integrator::Integrator(std::shared_ptr<const TimeMethod> method,
                        std::shared_ptr<const StepController> step_controller,
-                       std::shared_ptr<const LinearSolver> linear_solver)
+                       std::shared_ptr<const LinearSolver> linear_solver,
+                       fem::AssemblerOptions assembler_options)
     : method_(std::move(method)), step_controller_(std::move(step_controller)),
-      linear_solver_(std::move(linear_solver)) {
+      linear_solver_(std::move(linear_solver)), assembler_(assembler_options) {
   if (!method_)
     throw std::invalid_argument("integrator: the time method is null");
   if (!step_controller_)
@@ -198,7 +199,7 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // 1. The time order, from assembly's formula facts without evaluating
   // anything (d/dt sqrt(t) may be infinite at t0), against the method's
   // declaration.
-  const fem::Assembler assembler;
+  const fem::Assembler &assembler = assembler_;
   const int time_order = assembler.time_order(meshed);
   if (!method_->capabilities().supports(time_order)) {
     std::string message = method_->name() + " does not support time order " +
@@ -360,6 +361,9 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   m["assemblies"] = static_cast<double>(assemblies);
   m["prepares"] = static_cast<double>(prepares);
   m["snapshots"] = static_cast<double>(result.snapshots.size());
+  // Every run assembles at least once (t1 > t0 gives a step); the count is
+  // read from the assembly's own report.
+  m["assembly_threads"] = current->report().metrics.at("threads");
   report.time = Clock::now() - start;
   return result;
 }

@@ -20,6 +20,7 @@ using pde2d::test::Dense;
 using pde2d::test::dense;
 using pde2d::test::expect_throws;
 using pde2d::test::near;
+using pde2d::test::same;
 
 namespace {
 
@@ -173,29 +174,6 @@ std::vector<std::size_t> dirichlet_node_list(const MeshedProblem &problem) {
   for (const auto &entry : problem.dirichlet_nodes())
     nodes.push_back(entry.node);
   return nodes;
-}
-
-bool same(const Operator &a, const Operator &b) {
-  return a.free.values == b.free.values &&
-         a.dirichlet.values == b.dirichlet.values &&
-         a.depends_on_t == b.depends_on_t && a.always_zero == b.always_zero &&
-         a.always_symmetric == b.always_symmetric && a.zero_now == b.zero_now &&
-         a.symmetric_now == b.symmetric_now;
-}
-
-bool same(const AssembledProblem &a, const AssembledProblem &b) {
-  const auto eq = [](std::span<const double> x, std::span<const double> y) {
-    return std::ranges::equal(x, y);
-  };
-  return same(a.mass(), b.mass()) && same(a.damping(), b.damping()) &&
-         same(a.stiffness(), b.stiffness()) && eq(a.load(), b.load()) &&
-         eq(a.dirichlet_values(), b.dirichlet_values()) &&
-         eq(a.dirichlet_rates(), b.dirichlet_rates()) &&
-         eq(a.dirichlet_accelerations(), b.dirichlet_accelerations()) &&
-         eq(a.right_hand_side(), b.right_hand_side()) &&
-         a.load_depends_on_t() == b.load_depends_on_t() &&
-         a.right_hand_side_depends_on_t() == b.right_hand_side_depends_on_t() &&
-         a.time_order() == b.time_order();
 }
 
 double metric(const AssembledProblem &a, const std::string &name) {

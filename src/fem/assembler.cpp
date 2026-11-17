@@ -1,10 +1,13 @@
 #include "pde2d/fem/assembler.hpp"
 
 #include "element_blocks.hpp"
+#include "threads.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
+#include <exception>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -360,6 +363,43 @@ void scatter(const detail::OperatorBlocks<N> &blocks,
         target.load[where.rows[i]] += blocks.load[i];
 }
 
+// Calls body(element) for every element of one colour (in index order).
+// With one thread it is a plain loop. With more, OpenMP shares the
+// elements among the threads: they share no node, so no slot or load
+// entry gets two additions in one colour, and the order of the additions
+// to each one (colour by colour) is the same for every thread count. An
+// exception does not leave a thread (that would terminate the program):
+// each is caught, and after the colour the one of the lowest position
+// (the lowest element index, so the one the plain loop would throw) is
+// thrown again.
+template <class Body>
+void for_each_in_colour(const std::vector<std::size_t> &colour, int threads,
+                        const Body &body) {
+  if (threads <= 1 || colour.size() < 2) {
+    for (const std::size_t index : colour)
+      body(index);
+    return;
+  }
+  std::exception_ptr error;
+  std::size_t error_position = none;
+  const auto count = static_cast<std::ptrdiff_t>(colour.size());
+#pragma omp parallel for schedule(static) num_threads(threads)
+  for (std::ptrdiff_t position = 0; position < count; ++position) {
+    const auto at = static_cast<std::size_t>(position);
+    try {
+      body(colour[at]);
+    } catch (...) {
+#pragma omp critical(pde2d_assembly_error)
+      if (at < error_position) {
+        error_position = at;
+        error = std::current_exception();
+      }
+    }
+  }
+  if (error)
+    std::rethrow_exception(error);
+}
+
 OperatorValues zeros(const Structure &structure, bool needed) {
   if (!needed)
     return {};
@@ -393,6 +433,10 @@ int order_of(bool mass_zero, bool damping_zero) {
 
 int AssembledProblem::time_order() const {
   return order_of(mass_.always_zero, damping_.always_zero);
+}
+
+Assembler::Assembler(AssemblerOptions options) : options_(options) {
+  detail::check_threads(options_.threads, "assembler");
 }
 
 int Assembler::time_order(const MeshedProblem &meshed_problem) const {
@@ -460,8 +504,9 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
   if (timed(plan.load))
     time.load.assign(problem.free_nodes().size(), 0.0);
 
-  // Triangles, colour by colour. Only this driver would know about
-  // threads: the elements of one colour share no node.
+  // Triangles, colour by colour. Only this driver knows about threads:
+  // the elements of one colour share no node (for_each_in_colour).
+  const int threads = detail::resolve_threads(options_.threads);
   const TriangleTerms triangle_terms{.k = target(plan.k, reuse_stiffness),
                                      .c = target(plan.c, reuse_stiffness),
                                      .r = target(plan.r, reuse_stiffness),
@@ -474,7 +519,7 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
       triangle_terms.m2 != Target::skip || triangle_terms.f != Target::skip;
   if (any_triangle_term)
     for (const auto &colour_class : structure.triangle_colours)
-      for (const std::size_t index : colour_class) {
+      for_each_in_colour(colour_class, threads, [&](std::size_t index) {
         const auto &nodes = mesh.triangles[index].nodes;
         const auto blocks = detail::triangle_blocks(
             problem,
@@ -483,10 +528,10 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
         const auto where = destinations(structure, nodes);
         scatter(blocks.constant, where, constant);
         scatter(blocks.time, where, time);
-      }
+      });
   // Boundary edges of natural and dynamic conditions, colour by colour.
   for (const auto &colour_class : structure.edge_colours)
-    for (const std::size_t index : colour_class) {
+    for_each_in_colour(colour_class, threads, [&](std::size_t index) {
       const auto &edge = mesh.boundary_edges[index];
       const auto &region = plan.regions[edge.region];
       const EdgeTerms edge_terms{.s = target(region.s, reuse_stiffness),
@@ -509,14 +554,14 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
              condition.beta_x.facts().depends_on_t ||
              condition.beta_y.facts().depends_on_t))
           detail::edge_blocks(problem, edge.region, edge.nodes, t, edge_terms);
-        continue;
+        return;
       }
       const auto blocks =
           detail::edge_blocks(problem, edge.region, edge.nodes, t, edge_terms);
       const auto where = destinations(structure, edge.nodes);
       scatter(blocks.constant, where, constant);
       scatter(blocks.time, where, time);
-    }
+    });
 
   // Totals: the constant part, plus the time-dependent part when there is
   // one (then the constant part is kept for the next call).
@@ -649,6 +694,7 @@ Assembler::assemble(std::shared_ptr<const MeshedProblem> meshed_problem,
       {"edge_colours", static_cast<double>(structure.edge_colours.size())},
       {"used_previous", before ? 1.0 : 0.0},
       {"max_time_order", static_cast<double>(max_time_order)},
+      {"threads", static_cast<double>(threads)},
       {"mass_rebuilt", rebuilt(plan.mass, reuse_mass, mass_level)},
       {"damping_rebuilt", rebuilt(plan.damping, reuse_damping, damping_level)},
       {"stiffness_rebuilt",

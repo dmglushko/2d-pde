@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pde2d/fem/assembler.hpp"
 #include "pde2d/fem/meshed_problem.hpp"
 #include "pde2d/mesh/report.hpp"
 #include "pde2d/solve/linear_solver.hpp"
@@ -50,7 +51,8 @@ struct IntegrationResult {
   // max_residual, assemblies, prepares (how often the linear solver was
   // prepared for a step matrix; not counting start(), which also does the
   // solve at t0 for time order 0), assemblies (counting the one at t0 only
-  // when the method's start reads it) and snapshots.
+  // when the method's start reads it), snapshots and assembly_threads (the
+  // assembler's thread count, 0 resolved; see the "assembly" report).
   mesh::StageReport report{};
 };
 
@@ -59,10 +61,13 @@ struct IntegrationResult {
 // integrate().
 class Integrator {
 public:
-  // Throws std::invalid_argument for a null component.
+  // The assembler is made here with `assembler_options` (its thread
+  // count). Throws std::invalid_argument for a null component and
+  // assembler options out of range.
   Integrator(std::shared_ptr<const TimeMethod> method,
              std::shared_ptr<const StepController> step_controller,
-             std::shared_ptr<const LinearSolver> linear_solver);
+             std::shared_ptr<const LinearSolver> linear_solver,
+             fem::AssemblerOptions assembler_options = {});
 
   // Integrates from t0 to t1 > t0:
   //
@@ -123,6 +128,7 @@ private:
   std::shared_ptr<const TimeMethod> method_;
   std::shared_ptr<const StepController> step_controller_;
   std::shared_ptr<const LinearSolver> linear_solver_;
+  fem::Assembler assembler_;
 };
 
 } // namespace pde2d::solve
