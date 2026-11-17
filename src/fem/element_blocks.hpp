@@ -47,9 +47,8 @@ template <std::size_t N> struct ElementBlocks {
   OperatorBlocks<N> constant{}, time{};
 };
 
-// The blocks of a counterclockwise triangle with the 3-point rule at the
-// points with barycentric coordinates (2/3, 1/6, 1/6) and their
-// rotations, weight area / 3 each (exact for degree 2). Throws
+// The blocks of a counterclockwise triangle with triangle_rule(2) of
+// quadrature.hpp (the 3 points (2/3, 1/6, 1/6) and rotations). Throws
 // std::invalid_argument when a coefficient a term needs is not finite at a
 // quadrature point.
 ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
@@ -58,8 +57,8 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
 
 // The blocks of a boundary edge from node a to node b (the domain on its
 // left) of region `region`, whose condition is natural or dynamic, with
-// 2-point Gauss-Legendre. Node indices are only for messages. Throws
-// std::invalid_argument for a coefficient that is not finite at a
+// edge_rule(3) (2-point Gauss-Legendre). Node indices are only for messages.
+// Throws std::invalid_argument for a coefficient that is not finite at a
 // quadrature point, and when beta_n + (beta_x, beta_y).n is zero there.
 ElementBlocks<2> edge_blocks(const MeshedProblem &problem, std::size_t region,
                              const std::array<std::size_t, 2> &nodes, double t,

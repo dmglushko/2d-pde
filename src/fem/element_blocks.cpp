@@ -1,5 +1,7 @@
 #include "element_blocks.hpp"
 
+#include "pde2d/fem/quadrature.hpp"
+
 #include <cmath>
 #include <format>
 #include <stdexcept>
@@ -8,6 +10,13 @@
 namespace pde2d::fem::detail {
 
 namespace {
+
+// The exact degrees assembly asks for (quadrature.hpp). P1 basis functions
+// are linear, so a mass-like block with a constant coefficient is a degree
+// 2 integrand: the 3-point rule on triangles, and on edges 2-point
+// Gauss-Legendre, which is exact for degree 3.
+constexpr int triangle_degree = 2;
+constexpr int edge_degree = 3;
 
 using geometry::Point;
 
@@ -84,31 +93,34 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
         "for double arithmetic: its area or its gradients are not finite "
         "positive numbers",
         p0.x, p0.y, p1.x, p1.y, p2.x, p2.y));
-  // Quadrature: barycentric (2/3, 1/6, 1/6) and its rotations.
-  std::array<std::array<double, 3>, 3> lambda{};
-  std::array<Point, 3> point{};
-  for (std::size_t q = 0; q < 3; ++q) {
-    for (std::size_t i = 0; i < 3; ++i)
-      lambda[q][i] = q == i ? 2.0 / 3.0 : 1.0 / 6.0;
-    point[q] = {lambda[q][0] * p0.x + lambda[q][1] * p1.x + lambda[q][2] * p2.x,
-                lambda[q][0] * p0.y + lambda[q][1] * p1.y +
-                    lambda[q][2] * p2.y};
-  }
-  const double weight = area / 3.0;
+  // Quadrature (quadrature.hpp): the barycentric coordinates of a point
+  // are the values of the three basis functions there.
+  // Computed where used: cheaper than storing them per triangle.
+  const TriangleRule rule = triangle_rule(triangle_degree);
+  const std::size_t points = rule.points.size();
+  const auto lambda = [&](std::size_t q) -> const std::array<double, 3> & {
+    return rule.points[q].barycentric;
+  };
+  const auto point = [&](std::size_t q) {
+    return point_at(rule.points[q].barycentric, nodes);
+  };
+  const auto weight = [&](std::size_t q) {
+    return area * rule.points[q].weight;
+  };
 
   // K: integral of grad phi_i . A grad phi_j, A = [[a_xx, a_xy/2],
   // [a_xy/2, a_yy]].
   if (auto *d = destination(out, terms.k)) {
     Block3 k{};
-    for (std::size_t q = 0; q < 3; ++q) {
+    for (std::size_t q = 0; q < points; ++q) {
       // The weight goes in first, so that a sum of large coefficients
       // does not overflow before it is scaled down.
       const double xx =
-          weight * value(e.a_xx, equation_label("a_xx"), point[q], t);
+          weight(q) * value(e.a_xx, equation_label("a_xx"), point(q), t);
       const double xy =
-          weight * value(e.a_xy, equation_label("a_xy"), point[q], t) / 2;
+          weight(q) * value(e.a_xy, equation_label("a_xy"), point(q), t) / 2;
       const double yy =
-          weight * value(e.a_yy, equation_label("a_yy"), point[q], t);
+          weight(q) * value(e.a_yy, equation_label("a_yy"), point(q), t);
       for (std::size_t i = 0; i < 3; ++i)
         for (std::size_t j = 0; j < 3; ++j) {
           const Point &gi = gradient[i], &gj = gradient[j];
@@ -121,29 +133,29 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
   // C: integral of (b - div A) . grad phi_j phi_i.
   if (auto *d = destination(out, terms.c)) {
     Block3 c{};
-    for (std::size_t q = 0; q < 3; ++q) {
+    for (std::size_t q = 0; q < points; ++q) {
       const double bx =
-          value(e.b_x, equation_label("b_x"), point[q], t) -
+          value(e.b_x, equation_label("b_x"), point(q), t) -
           value(
               divergence.x,
               [] {
                 return std::string(
                     "Equation: the x component of the divergence of A");
               },
-              point[q], t);
+              point(q), t);
       const double by =
-          value(e.b_y, equation_label("b_y"), point[q], t) -
+          value(e.b_y, equation_label("b_y"), point(q), t) -
           value(
               divergence.y,
               [] {
                 return std::string(
                     "Equation: the y component of the divergence of A");
               },
-              point[q], t);
+              point(q), t);
       for (std::size_t i = 0; i < 3; ++i)
         for (std::size_t j = 0; j < 3; ++j)
-          c[i][j] +=
-              weight * lambda[q][i] * (bx * gradient[j].x + by * gradient[j].y);
+          c[i][j] += weight(q) * lambda(q)[i] *
+                     (bx * gradient[j].x + by * gradient[j].y);
     }
     add(d->stiffness, 1.0, c);
   }
@@ -151,11 +163,11 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
   const auto mass_like = [&](const CompiledExpression &coefficient,
                              const char *name) {
     Block3 m{};
-    for (std::size_t q = 0; q < 3; ++q) {
-      const double v = value(coefficient, equation_label(name), point[q], t);
+    for (std::size_t q = 0; q < points; ++q) {
+      const double v = value(coefficient, equation_label(name), point(q), t);
       for (std::size_t i = 0; i < 3; ++i)
         for (std::size_t j = 0; j < 3; ++j)
-          m[i][j] += weight * v * lambda[q][i] * lambda[q][j];
+          m[i][j] += weight(q) * v * lambda(q)[i] * lambda(q)[j];
     }
     return m;
   };
@@ -168,10 +180,10 @@ ElementBlocks<3> triangle_blocks(const MeshedProblem &problem,
   // F: integral of f phi_i.
   if (auto *d = destination(out, terms.f)) {
     std::array<double, 3> f{};
-    for (std::size_t q = 0; q < 3; ++q) {
-      const double v = value(e.f, equation_label("f"), point[q], t);
+    for (std::size_t q = 0; q < points; ++q) {
+      const double v = value(e.f, equation_label("f"), point(q), t);
       for (std::size_t i = 0; i < 3; ++i)
-        f[i] += weight * v * lambda[q][i];
+        f[i] += weight(q) * v * lambda(q)[i];
     }
     for (std::size_t i = 0; i < 3; ++i)
       d->load[i] += f[i];
@@ -206,17 +218,15 @@ ElementBlocks<2> edge_blocks(const MeshedProblem &problem, std::size_t region,
   const Point n{tau.y, -tau.x};
   // d/dtau of phi_a = 1 - s and phi_b = s.
   const std::array<double, 2> phi_tau{-1.0 / length, 1.0 / length};
-  // 2-point Gauss-Legendre on [0, 1]: s = 1/2 -+ 1/(2 sqrt 3), weight
-  // length / 2 each.
-  const double offset = 0.5 / std::sqrt(3.0);
-  const std::array<double, 2> s{0.5 - offset, 0.5 + offset};
-  const double weight = length / 2.0;
+  // Quadrature (quadrature.hpp): Gauss-Legendre along the edge.
+  const EdgeRule rule = edge_rule(edge_degree);
 
   Block2 s_block{}, t_block{}, d_block{};
   std::array<double, 2> g_block{};
-  for (std::size_t q = 0; q < 2; ++q) {
-    const Point p{a.x + s[q] * (b.x - a.x), a.y + s[q] * (b.y - a.y)};
-    const std::array<double, 2> phi{1.0 - s[q], s[q]};
+  for (const EdgePoint &point : rule.points) {
+    const Point p = point_at(point.s, a, b);
+    const std::array<double, 2> phi{1.0 - point.s, point.s};
+    const double weight = length * point.weight;
     // (A grad u).n = kappa_n u_n + kappa_tau u_tau.
     const double xx = value(e.a_xx, equation_label("a_xx"), p, t);
     const double xy = value(e.a_xy, equation_label("a_xy"), p, t) / 2;

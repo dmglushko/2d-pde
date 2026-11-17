@@ -587,6 +587,18 @@ marked "architecture" below are decided.
   a 3-point rule on triangles (exact for degree 2) and 2-point
   Gauss–Legendre on edges. *Why:* it keeps P1's convergence rates and is
   exact for constant-coefficient mass matrices.
+- **One table of quadrature rules, the degree chosen per computation**
+  (decided 2026-11-17, for the error estimators): every rule lives in the
+  public `fem/quadrature.hpp` (`triangle_rule(exact_degree)`,
+  `edge_rule(exact_degree)`: the cheapest rule exact for that degree;
+  triangles up to 5, edges up to 9). Each computation names the degree it
+  needs in its code (assembly 2 on triangles, 3 on edges, unchanged);
+  there is no global quadrature setting. *Why:* different integrals need
+  different degrees (one setting wastes work or integrates too little, and
+  would change assembly), and one table means one set of weights to get
+  right. Whether an estimator offers its degree as an option is decided
+  with the estimators. The adaptive Simpson integration of curve lengths
+  in geometry is not a quadrature rule and stays there.
 - **Eight choices of the assembly implementation, accepted 2026-11-14:**
   1. `Assembler::assemble(meshed_problem, t, previous)` takes `previous` as
      a plain pointer to const, null by default. It is only read during the

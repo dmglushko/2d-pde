@@ -13,8 +13,9 @@ namespace pde2d::fem {
 // - one sparsity pattern for the free columns and one for the Dirichlet
 //   columns, from one loop over the triangles; every matrix shares them;
 // - element blocks in full (3 x 3 per triangle, 2 x 2 per boundary edge),
-//   with a 3-point rule on triangles (exact for degree 2) and 2-point
-//   Gauss-Legendre on edges; one pass over the triangles computes the
+//   with the rules of quadrature.hpp: exact degree 2 on triangles (3
+//   points) and 3 on edges (2-point Gauss-Legendre); one pass over the
+//   triangles computes the
 //   blocks of every matrix that is built;
 // - natural and dynamic conditions are solved for u_n on each straight
 //   edge and substituted into (A grad u).n (this needs beta_n plus the

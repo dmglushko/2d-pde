@@ -15,3 +15,4 @@ pde2d_add_test(NAME fem_csr_matrix SOURCE csr_matrix.cpp LIBS pde2d_fem)
 pde2d_add_test(NAME fem_assembly SOURCE assembly.cpp LIBS pde2d_fem)
 pde2d_add_test(NAME fem_assembly_convergence SOURCE assembly_convergence.cpp
                LIBS pde2d_fem)
+pde2d_add_test(NAME fem_quadrature SOURCE quadrature.cpp LIBS pde2d_fem)
