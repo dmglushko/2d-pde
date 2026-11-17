@@ -496,6 +496,19 @@ marked "architecture" below are decided.
   `Assembler`, default 1** (decided 2026-11-12), added in a later slice.
   The serial path already goes colour by colour, so the thread count never
   changes the result.
+- **Parallel assembly and iterative solvers are built now** (decided
+  2026-11-17). Threads come from OpenMP (Eigen's sparse matrix-vector
+  product uses it too). The thread count is an option of each component
+  that uses threads: `AssemblerOptions{.threads}`, and `.threads` in the
+  options of `ConjugateGradient` and `BiCgStab`; default 1, 0 means all
+  hardware threads. `StaticSolver` and `Integrator` take `AssemblerOptions`
+  in their constructors, since they create the assembler. *Why:* a setting
+  read by one component is that component's option; no global state, and
+  two runs can use different counts. Assembly and the iterative solvers
+  give the same results for every thread count (colours in a fixed order;
+  each row of a matrix-vector product summed by one thread), and tests
+  check it bit for bit. Direct solvers in parallel too: the library is
+  still to be chosen (Open).
 
 - **Weak form.** The second-order part is written as A : ∇²u with
   A = [[a_xx, a_xy/2], [a_xy/2, a_yy]] and integrated by parts once:
@@ -980,6 +993,19 @@ coarsening, moving nodes or enrichment for now.
   memory between cycles. A `.pde2d` file keeps its order (it may be a
   saved mesh in the middle of adaptation). The function stays public for
   meshes built by hand.
+- **Details of the refinement-edge change, accepted 2026-11-17:**
+  `WorkingMesh` remembers each triangle's vertex order as constructed or
+  as `set_refinement_edge` last left it, and `Remesher::refine` reorders
+  (longest edge first) exactly the triangles whose order differs from that
+  record: flips, insertions, re-triangulating boundary splits; moving a
+  node keeps the order. `Remesher::run` reorders every triangle (a mesh
+  just made is a starting mesh, also after newest vertex bisection). The
+  pipeline report gains the metric `refinement_edges_set`. NVB and RGB
+  `run` still set the longest edges before refining (for input that is
+  not from the Mesher). `KellyEstimatorOptions{.edge_degree = 6}`; the
+  jumps use the edge degree. A cycle of waiting refinement edges stays
+  possible on a mesh mixing flipped and bisected triangles; it is
+  conforming and reported (`incompatible_splits`).
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks
@@ -1021,4 +1047,7 @@ coarsening, moving nodes or enrichment for now.
 
 ## Open
 
-- Nothing open right now.
+- **Which library for parallel direct solvers** (raised 2026-11-17): the
+  owner wants direct solvers in parallel too, hidden in the `.cpp` files
+  like Eigen. The choice of library, and whether results may differ in the
+  last digits between thread counts, is open.
