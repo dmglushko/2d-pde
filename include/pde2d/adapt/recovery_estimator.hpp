@@ -21,6 +21,11 @@ enum class RecoveryNorm {
 
 struct RecoveryEstimatorOptions {
   RecoveryNorm norm = RecoveryNorm::energy;
+  // The exact degree of the triangle quadrature rule
+  // (fem/quadrature.hpp), in [0, fem::max_triangle_degree]. The default 3
+  // is exact when A is a polynomial of degree at most 1 (G - grad u_h is
+  // linear, so the integrand is a cubic).
+  int triangle_degree = 3;
 };
 
 // The recovery (Zienkiewicz-Zhu) error estimator. The recovered gradient G
@@ -33,14 +38,16 @@ struct RecoveryEstimatorOptions {
 // W = |A| or the identity (RecoveryNorm). On structured meshes the
 // averaged gradient is superconvergent at interior nodes, so the total
 // tends to the true error in the same norm (effectivity -> 1).
-// Quadrature: degree 3 on triangles (6 points), exact when A is a
-// polynomial of degree at most 1 (G - grad u_h is linear).
+// Quadrature: the triangle rule of quadrature.hpp of the exact degree
+// RecoveryEstimatorOptions::triangle_degree (default 3: 6 points, exact
+// when A is a polynomial of degree at most 1).
 // No derivatives are needed (given ones are ignored); boundary conditions
 // play no part. Report metrics (besides the shared ones): none.
 class RecoveryEstimator final : public ErrorEstimator {
 public:
   // Throws std::invalid_argument for a norm that is not one of the
-  // RecoveryNorm values.
+  // RecoveryNorm values, or a triangle_degree that quadrature.hpp has no
+  // rule for (below 0 or above fem::max_triangle_degree).
   explicit RecoveryEstimator(RecoveryEstimatorOptions options = {});
   const RecoveryEstimatorOptions &options() const { return options_; }
   std::string name() const override { return "recovery_estimator"; }

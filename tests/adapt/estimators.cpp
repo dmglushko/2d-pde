@@ -12,6 +12,7 @@
 #include "pde2d/adapt/recovery_estimator.hpp"
 #include "pde2d/adapt/residual_estimator.hpp"
 #include "pde2d/fem/meshed_problem.hpp"
+#include "pde2d/fem/quadrature.hpp"
 #include "pde2d/solve/sparse_lu.hpp"
 #include "pde2d/solve/static_solver.hpp"
 
@@ -379,6 +380,54 @@ void boundary_residual_exact_integral() {
     near(estimate.total, expected, 1e-14,
          estimate.report.stage + ": exact boundary integral");
   }
+  // The edge degree is an option: degree 4 (3 Gauss points) is not exact
+  // for the sextic R^2, so the result moves away from the exact value.
+  for (const ErrorEstimate &estimate :
+       {ResidualEstimator({.edge_degree = 4}).estimate(*meshed, u),
+        KellyEstimator({.edge_degree = 4}).estimate(*meshed, u)})
+    check(std::abs(estimate.total - expected) > 1e-8,
+          estimate.report.stage + ": edge_degree 4 is not exact for R^2");
+}
+
+// A degree that quadrature.hpp has no rule for is refused in the
+// constructor; the largest ones are accepted.
+void quadrature_degree_options() {
+  check(ResidualEstimator().options().triangle_degree == 4 &&
+            ResidualEstimator().options().edge_degree == 6,
+        "residual defaults 4 and 6");
+  check(KellyEstimator().options().edge_degree == 6, "Kelly default 6");
+  check(RecoveryEstimator().options().triangle_degree == 3,
+        "recovery default 3");
+  (void)ResidualEstimator(
+      {.triangle_degree = max_triangle_degree, .edge_degree = 0});
+  (void)ResidualEstimator(
+      {.triangle_degree = 0, .edge_degree = max_edge_degree});
+  (void)KellyEstimator({.edge_degree = max_edge_degree});
+  (void)RecoveryEstimator({.triangle_degree = max_triangle_degree});
+  expect_throws<std::invalid_argument>(
+      [] { (void)ResidualEstimator({.triangle_degree = -1}); },
+      "ResidualEstimatorOptions::triangle_degree must be in [0, 5]");
+  expect_throws<std::invalid_argument>(
+      [] {
+        (void)ResidualEstimator({.triangle_degree = max_triangle_degree + 1});
+      },
+      "ResidualEstimatorOptions::triangle_degree must be in [0, 5] (the "
+      "exact degrees of the rules in fem/quadrature.hpp), got 6");
+  expect_throws<std::invalid_argument>(
+      [] { (void)ResidualEstimator({.edge_degree = max_edge_degree + 1}); },
+      "ResidualEstimatorOptions::edge_degree must be in [0, 9]");
+  expect_throws<std::invalid_argument>(
+      [] { (void)KellyEstimator({.edge_degree = -1}); },
+      "KellyEstimatorOptions::edge_degree must be in [0, 9]");
+  expect_throws<std::invalid_argument>(
+      [] { (void)KellyEstimator({.edge_degree = 10}); },
+      "KellyEstimatorOptions::edge_degree must be in [0, 9]");
+  expect_throws<std::invalid_argument>(
+      [] { (void)RecoveryEstimator({.triangle_degree = -1}); },
+      "RecoveryEstimatorOptions::triangle_degree must be in [0, 5]");
+  expect_throws<std::invalid_argument>(
+      [] { (void)RecoveryEstimator({.triangle_degree = 6}); },
+      "RecoveryEstimatorOptions::triangle_degree must be in [0, 5]");
 }
 
 void invalid_inputs() {
@@ -447,6 +496,7 @@ int main() {
       {"time terms of the residual estimator", time_terms},
       {"boundary residual: exact integral of an affine A and alpha",
        boundary_residual_exact_integral},
+      {"quadrature degree options", quadrature_degree_options},
       {"invalid inputs", invalid_inputs},
   });
 }

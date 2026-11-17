@@ -14,10 +14,6 @@ namespace {
 
 using geometry::Point;
 
-// (G - grad u_h) is linear on a triangle, so its square times an A of
-// degree at most 1 is a cubic.
-constexpr int recovery_degree = 3;
-
 // Relative size below which a negative determinant of A is rounding.
 constexpr double definiteness_tolerance = 1e-12;
 
@@ -25,14 +21,16 @@ constexpr double definiteness_tolerance = 1e-12;
 
 RecoveryEstimator::RecoveryEstimator(RecoveryEstimatorOptions options)
     : options_(options) {
-  switch (options_.norm) {
-  case RecoveryNorm::energy:
-  case RecoveryNorm::gradient:
-    return;
-  }
-  throw std::invalid_argument(
-      "RecoveryEstimatorOptions::norm must be RecoveryNorm::energy or "
-      "RecoveryNorm::gradient");
+  if (options_.norm != RecoveryNorm::energy &&
+      options_.norm != RecoveryNorm::gradient)
+    throw std::invalid_argument(
+        "RecoveryEstimatorOptions::norm must be RecoveryNorm::energy or "
+        "RecoveryNorm::gradient");
+  // (G - grad u_h) is linear on a triangle, so its square times an A of
+  // degree at most 1 is a cubic: the default degree 3 is exact.
+  detail::check_quadrature_degree(options_.triangle_degree,
+                                  fem::max_triangle_degree,
+                                  "RecoveryEstimatorOptions::triangle_degree");
 }
 
 std::vector<double>
@@ -69,7 +67,7 @@ RecoveryEstimator::indicators(const fem::MeshedProblem &problem,
       recovered[i].y /= weight[i];
     }
 
-  const fem::TriangleRule rule = fem::triangle_rule(recovery_degree);
+  const fem::TriangleRule rule = fem::triangle_rule(options_.triangle_degree);
   std::vector<double> eta(data.size());
   for (std::size_t tri = 0; tri < data.size(); ++tri) {
     const detail::TriangleData &d = data[tri];

@@ -98,4 +98,12 @@ double coefficient_value(const fem::CompiledExpression &coefficient,
   return v;
 }
 
+void check_quadrature_degree(int degree, int max, const char *option) {
+  if (degree < 0 || degree > max)
+    throw std::invalid_argument(
+        std::format("{} must be in [0, {}] (the exact degrees of the rules in "
+                    "fem/quadrature.hpp), got {}",
+                    option, max, degree));
+}
+
 } // namespace pde2d::adapt::detail

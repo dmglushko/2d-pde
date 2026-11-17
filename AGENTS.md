@@ -311,7 +311,9 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   boundary residual of a natural or dynamic edge is kappa_n / beta_n_hat
   times the condition's residual as written. Change them together with
   assembly's signs (`src/fem/element_blocks.cpp`). Every integral takes
-  its rule from `quadrature.hpp` with a degree named in the code.
+  its rule from `quadrature.hpp`; an estimator's degrees are its options
+  (`triangle_degree`, `edge_degree`, checked in its constructor), with
+  defaults exact for coefficients and data of degree at most 1.
 - **Drivers decide from declarations.** The `AdaptiveStaticSolver` reads
   `Adaptation::capabilities()` (`estimates_error`, `changes_mesh`): the
   cycle's estimate is that of the first adaptation that estimates, and at

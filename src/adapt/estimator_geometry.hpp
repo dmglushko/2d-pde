@@ -56,4 +56,10 @@ double coefficient_value(const fem::CompiledExpression &coefficient,
                          const std::string &who, const char *label,
                          const geometry::Point &p, double t);
 
+// Checks an estimator option naming the exact degree of a quadrature rule:
+// throws std::invalid_argument unless 0 <= degree <= max (the largest
+// degree quadrature.hpp has a rule for), naming the option (for example
+// "ResidualEstimatorOptions::edge_degree").
+void check_quadrature_degree(int degree, int max, const char *option);
+
 } // namespace pde2d::adapt::detail

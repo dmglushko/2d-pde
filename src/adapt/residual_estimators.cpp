@@ -18,15 +18,17 @@ namespace {
 
 using geometry::Point;
 
-// The exact degrees asked of quadrature.hpp (see residual_estimator.hpp):
-// with coefficients and data of degree at most 1 (and beta_hat_n
-// constant), r is at most quadratic (c u_h, m1 u_t), J_E linear (A linear
-// times a constant gradient difference) and R_E cubic (kappa_n, linear in
-// A, times the condition's residual, quadratic through alpha u_h); the
-// integrands are their squares.
-constexpr int element_degree = 4;
-constexpr int jump_degree = 2;
-constexpr int boundary_degree = 6;
+// The exact degrees asked of quadrature.hpp come from the options (see
+// residual_estimator.hpp): with coefficients and data of degree at most 1
+// (and beta_hat_n constant), r is at most quadratic (c u_h, m1 u_t), J_E
+// linear (A linear times a constant gradient difference) and R_E cubic
+// (kappa_n, linear in A, times the condition's residual, quadratic through
+// alpha u_h); the integrands are their squares, so the defaults 4 on
+// triangles and 6 on edges are exact.
+struct Degrees {
+  int triangle = 0; // the element residual (residual estimator only)
+  int edge = 0;     // jumps and boundary residuals
+};
 
 // The squares of the three kinds of terms, per triangle.
 struct ResidualTerms {
@@ -65,7 +67,8 @@ Flux flux_at(const fem::CompiledEquation &e, const std::string &who,
 ResidualTerms residual_terms(const fem::MeshedProblem &problem,
                              const solve::Solution &solution,
                              const TimeDerivatives &derivatives,
-                             bool with_element, const std::string &who) {
+                             bool with_element, Degrees degrees,
+                             const std::string &who) {
   const mesh::Mesh &mesh = *problem.mesh();
   const fem::CompiledEquation &e = problem.equation();
   const double t = solution.time;
@@ -84,7 +87,7 @@ ResidualTerms residual_terms(const fem::MeshedProblem &problem,
 
   // Element residual r = f - b . grad u_h - c u_h - m1 u_t - m2 u_tt.
   if (with_element) {
-    const fem::TriangleRule rule = fem::triangle_rule(element_degree);
+    const fem::TriangleRule rule = fem::triangle_rule(degrees.triangle);
     for (std::size_t tri = 0; tri < triangles; ++tri) {
       const detail::TriangleData &d = data[tri];
       const auto &nodes = mesh.triangles[tri].nodes;
@@ -118,7 +121,7 @@ ResidualTerms residual_terms(const fem::MeshedProblem &problem,
 
   // Jumps of the flux across interior edges, half to each side.
   {
-    const fem::EdgeRule rule = fem::edge_rule(jump_degree);
+    const fem::EdgeRule rule = fem::edge_rule(degrees.edge);
     for (const detail::InteriorEdge &edge : topology.interior) {
       const Point a = mesh.nodes[edge.a], b = mesh.nodes[edge.b];
       const double length = std::hypot(b.x - a.x, b.y - a.y);
@@ -139,7 +142,7 @@ ResidualTerms residual_terms(const fem::MeshedProblem &problem,
   }
 
   // Residuals of natural and dynamic conditions.
-  const fem::EdgeRule rule = fem::edge_rule(boundary_degree);
+  const fem::EdgeRule rule = fem::edge_rule(degrees.edge);
   for (std::size_t k = 0; k < mesh.boundary_edges.size(); ++k) {
     const mesh::BoundaryEdge &edge = mesh.boundary_edges[k];
     const fem::CompiledCondition &condition = problem.conditions()[edge.region];
@@ -205,6 +208,21 @@ double root_of_sum(const std::vector<double> &squares) {
 
 } // namespace
 
+ResidualEstimator::ResidualEstimator(ResidualEstimatorOptions options)
+    : options_(options) {
+  detail::check_quadrature_degree(options_.triangle_degree,
+                                  fem::max_triangle_degree,
+                                  "ResidualEstimatorOptions::triangle_degree");
+  detail::check_quadrature_degree(options_.edge_degree, fem::max_edge_degree,
+                                  "ResidualEstimatorOptions::edge_degree");
+}
+
+KellyEstimator::KellyEstimator(KellyEstimatorOptions options)
+    : options_(options) {
+  detail::check_quadrature_degree(options_.edge_degree, fem::max_edge_degree,
+                                  "KellyEstimatorOptions::edge_degree");
+}
+
 std::vector<double> ResidualEstimator::indicators(
     const fem::MeshedProblem &problem, const solve::Solution &solution,
     const TimeDerivatives &derivatives, mesh::StageReport &report) const {
@@ -224,8 +242,10 @@ std::vector<double> ResidualEstimator::indicators(
         name() + ": the problem has a term in u_tt (m2), so u_tt is needed "
                  "(zeros for a static solution)");
 
-  const ResidualTerms terms =
-      residual_terms(problem, solution, derivatives, true, name());
+  const ResidualTerms terms = residual_terms(
+      problem, solution, derivatives, true,
+      {.triangle = options_.triangle_degree, .edge = options_.edge_degree},
+      name());
   std::vector<double> eta(terms.element.size());
   for (std::size_t t = 0; t < eta.size(); ++t)
     eta[t] = std::sqrt(terms.element[t] + terms.jump[t] + terms.boundary[t]);
@@ -238,8 +258,8 @@ std::vector<double> ResidualEstimator::indicators(
 std::vector<double> KellyEstimator::indicators(
     const fem::MeshedProblem &problem, const solve::Solution &solution,
     const TimeDerivatives & /*derivatives*/, mesh::StageReport &report) const {
-  const ResidualTerms terms =
-      residual_terms(problem, solution, {}, false, name());
+  const ResidualTerms terms = residual_terms(
+      problem, solution, {}, false, {.edge = options_.edge_degree}, name());
   std::vector<double> eta(terms.jump.size());
   for (std::size_t t = 0; t < eta.size(); ++t)
     eta[t] = std::sqrt(terms.jump[t] + terms.boundary[t]);
