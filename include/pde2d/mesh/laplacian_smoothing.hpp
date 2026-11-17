@@ -30,7 +30,7 @@ public:
   }
   ImproverUse use() const override { return options_.use; }
   const FinalImprover *as_final() const override { return this; }
-  void run(WorkingMesh &mesh, const MeshSpec &spec,
+  void run(WorkingMesh &mesh, const MeshSpec *spec,
            StageReport &report) const override;
 
 private:

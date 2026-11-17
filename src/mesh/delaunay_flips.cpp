@@ -4,7 +4,7 @@
 
 namespace pde2d::mesh {
 
-void DelaunayFlips::run(WorkingMesh &mesh, const MeshSpec &,
+void DelaunayFlips::run(WorkingMesh &mesh, const MeshSpec *,
                         StageReport &report) const {
   report.metrics["flips"] = static_cast<double>(flip_to_delaunay(mesh));
 }

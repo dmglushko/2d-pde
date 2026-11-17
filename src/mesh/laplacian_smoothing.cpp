@@ -13,7 +13,7 @@ LaplacianSmoothing::LaplacianSmoothing(LaplacianSmoothingOptions options)
         "LaplacianSmoothingOptions::iterations must be at least 1");
 }
 
-void LaplacianSmoothing::run(WorkingMesh &mesh, const MeshSpec &,
+void LaplacianSmoothing::run(WorkingMesh &mesh, const MeshSpec *,
                              StageReport &report) const {
   std::size_t moves = 0, rejected = 0;
   for (int pass = 0; pass < options_.iterations; ++pass)

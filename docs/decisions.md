@@ -255,7 +255,11 @@ Started 2026-11-11.
   `as_final()` a `const FinalImprover*`, `nullptr` for a role it does not
   have. `LocalImprover::improve_around(mesh, touched)` is called by a
   refiner after each change and returns its number of changes;
-  `FinalImprover::run(mesh, spec, report)` is a pass over the whole mesh.
+  `FinalImprover::run(mesh, spec, report)` is a pass over the whole mesh;
+  `spec` is a pointer, null when there is no size target
+  (`Remesher::refine`; decided 2026-11-17 instead of a made-up spec with
+  an infinite length, so a future pass that needs a size cannot be
+  misled).
   *Why:* the object answers what it can do (a declaration, not a type check),
   the pointer hands over the object to call, and a class with only one of
   the two roles still fits in the list. A whole-mesh pass after every split
@@ -789,6 +793,11 @@ Discussed in a side chat on 2026-11-12; the first slice was built on
   evaluated the Dirichlet rate at t0, so u = √t on the boundary stopped a
   wave run whose method never uses it. The full-node `initial_values` and
   `initial_velocities` stay for other uses.
+- **Accepted 2026-11-17 (slice 3 details):** the values of a step matrix
+  are compared for symmetry only when the solver requires symmetry and the
+  formula facts cannot promise it (one pass over the matrix per prepare);
+  Newmark's start does nothing when there are no free unknowns (an empty
+  M₂ is not "zero at t0").
 
 ## Adaptivity: marking and refinement
 
@@ -843,6 +852,31 @@ coarsening, moving nodes or enrichment for now.
   node) only when no component made them untrue; an improver that flips
   or moves nodes drops them, and a solution is then transferred by point
   location. Keeping the parents that stay valid is GitHub issue #36.
+- **Details of the refiners, accepted 2026-11-17:** newest vertex
+  bisection splits a marked triangle once (its refinement edge, two
+  children); red-green-blue splits it into four. A red split that a curve
+  point would fold is done with the bisection pattern instead and counted
+  as `red_not_possible` (both patterns belong to red-green-blue; no
+  fallback to another method). A cycle of refinement edges is broken by
+  one split out of order, counted as `incompatible_splits`.
+  `keeps_parents` is declared by each refiner and improver.
+  `Remesher::refine` returns its own `RefinementResult` (mesh, reports,
+  properties, optional parents; no `target_met`), throws without a
+  refiner, and validates its output. `MeshResult::longest_edge` is gone:
+  it is read from `properties`. The warning angle lies in [0°, 60°]
+  (default 10°, 0 never warns). Newest vertex bisection and red-green-blue
+  have options with `max_points`. With nothing marked, `refine` returns
+  the mesh unchanged and the final passes do not run.
+- **Details of the marking strategies, accepted 2026-11-17:** the
+  interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
+  `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks
+  the indicators (one per triangle, none negative or NaN) and then calls
+  the strategy's own selection. The result is the sorted triangle
+  indices. An indicator of 0 is never marked. Defaults: maximum θ = 0.5,
+  Dörfler θ = 0.5, fixed fraction 0.3; equidistribution has no default
+  tolerance. Fixed fraction rounds the count to nearest. Dörfler divides
+  the indicators by the largest before squaring (θ = 1 marks every
+  positive indicator).
 
 ## Deferred
 
@@ -874,4 +908,10 @@ coarsening, moving nodes or enrichment for now.
 
 ## Open
 
-- Nothing open right now.
+- **When newest vertex bisection and red-green-blue set the refinement
+  edges** (raised 2026-11-17): proposed, `run(spec)` makes each
+  triangle's longest edge its refinement edge first, and `refine(marked)`
+  never does (the stored vertex order is the method's memory between
+  cycles; the user calls `set_longest_edges_as_refinement_edges` once on
+  the starting mesh). The owner first asked for a table of the refinement
+  methods.

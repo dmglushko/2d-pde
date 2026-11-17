@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -304,7 +303,7 @@ MeshResult Remesher::run(WorkingMesh mesh, const MeshSpec &spec) const {
     StageReport report;
     detail::timed_stage(
         report, improvers_[plan_.final_passes[k]]->name(),
-        [&](auto &r) { final_improvers_[k]->run(mesh, spec, r); });
+        [&](auto &r) { final_improvers_[k]->run(mesh, &spec, r); });
     result.reports.push_back(std::move(report));
   }
   result.mesh = mesh.to_mesh();
@@ -349,9 +348,6 @@ Remesher::refine(const Mesh &mesh,
   if (working.has_deleted())
     parents.reset();
   working.compact();
-  // Final passes have no length target in refinement.
-  const MeshSpec no_target{
-      .max_edge_length = {.absolute = std::numeric_limits<double>::max()}};
   // Nothing marked: the refiner changed nothing, and the final passes do
   // not run either. They would change a mesh nobody asked to change, and
   // the plan's notes (such as "already Delaunay after the refiner") assume
@@ -365,7 +361,7 @@ Remesher::refine(const Mesh &mesh,
     StageReport pass;
     detail::timed_stage(
         pass, improvers_[plan_.final_passes[k]]->name(),
-        [&](auto &r) { final_improvers_[k]->run(working, no_target, r); });
+        [&](auto &r) { final_improvers_[k]->run(working, nullptr, r); });
     result.reports.push_back(std::move(pass));
   }
   result.mesh = working.to_mesh();

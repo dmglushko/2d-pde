@@ -862,7 +862,7 @@ class Improver            { std::string name(); ImproverEffects effects();
                             const FinalImprover *as_final(); }; // or null
 class LocalImprover       { std::string name();
                             size_t improve_around(mesh, touched); };
-class FinalImprover       { void run(mesh, spec, report); };
+class FinalImprover       { void run(mesh, spec, report); }; // spec null in refine
 ```
 
 Declarations:
@@ -1650,8 +1650,8 @@ names each component that dropped them ("parents dropped: delaunay_flips
 (`std::invalid_argument`, "Remesher::refine: the input mesh is not
 valid: ...") and the marked indices (out of range: `std::invalid_argument`);
 needs a refiner; runs the refiner's `refine` with the planned local
-improvers, compacts, runs the final passes (with a `MeshSpec` that has no
-effective length bound, since refinement has no length target),
+improvers, compacts, runs the final passes (with a null `MeshSpec`,
+since refinement has no length target),
 validates the result (a curve point bulging into another part of the mesh
 is a `std::runtime_error`), measures it, and decides the parents.
 Reports: pipeline, refiner, final passes. With nothing marked the refiner

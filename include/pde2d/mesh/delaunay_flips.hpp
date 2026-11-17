@@ -32,7 +32,7 @@ public:
   ImproverUse use() const override { return options_.use; }
   const LocalImprover *as_local() const override { return this; }
   const FinalImprover *as_final() const override { return this; }
-  void run(WorkingMesh &mesh, const MeshSpec &spec,
+  void run(WorkingMesh &mesh, const MeshSpec *spec,
            StageReport &report) const override;
   std::size_t
   improve_around(WorkingMesh &mesh,

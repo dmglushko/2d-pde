@@ -109,7 +109,10 @@ public:
 class FinalImprover {
 public:
   virtual ~FinalImprover() = default;
-  virtual void run(WorkingMesh &mesh, const MeshSpec &spec,
+  // spec is the size target of the run, or null when there is none
+  // (Remesher::refine refines marked triangles, not towards a size). A
+  // pass that needs a size must handle null.
+  virtual void run(WorkingMesh &mesh, const MeshSpec *spec,
                    StageReport &report) const = 0;
 };
 

@@ -31,7 +31,7 @@ int main() {
          auto w = refined(l_shape(), 0.2);
          check(!is_delaunay(w.to_mesh()), "bisection output is not Delaunay");
          StageReport r;
-         DelaunayFlips().run(w, {.max_edge_length = {.absolute = 0.2}}, r);
+         DelaunayFlips().run(w, nullptr, r);
          Mesh m = w.to_mesh();
          check_valid_mesh(m);
          check(is_delaunay(m), "Delaunay after the pass");
@@ -43,8 +43,7 @@ int main() {
          auto w = refined(annulus(1, 0.4), 0.15);
          Mesh before = w.to_mesh();
          StageReport r;
-         LaplacianSmoothing({.iterations = 5})
-             .run(w, {.max_edge_length = {.absolute = 0.15}}, r);
+         LaplacianSmoothing({.iterations = 5}).run(w, nullptr, r);
          Mesh after = w.to_mesh();
          check_valid_mesh(after);
          for (auto v : boundary_nodes(before))

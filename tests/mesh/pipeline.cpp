@@ -86,7 +86,7 @@ public:
   const FinalImprover *as_final() const override {
     return final_ ? this : nullptr;
   }
-  void run(WorkingMesh &, const MeshSpec &, StageReport &) const override {}
+  void run(WorkingMesh &, const MeshSpec *, StageReport &) const override {}
   std::size_t improve_around(WorkingMesh &,
                              std::span<const std::size_t>) const override {
     return 1;
