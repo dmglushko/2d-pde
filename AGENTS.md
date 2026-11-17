@@ -306,6 +306,16 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - **No fallbacks between methods or solvers**: one that cannot handle a
   problem throws with the reason (and may name alternatives); it never
   switches to another.
+- **Direct solvers check the backward error and refuse only exact
+  singularity.** `SimplicialLdlt`, `SupernodalCholesky` and
+  `MultifrontalLu` compare `LinearSolveResult::backward_error`
+  (|b − Ax|∞ / (|A|∞ |x|∞ + |b|∞), from `detail::measure_residual`) with
+  `residual_tolerance`, never the relative residual (`residual`, which a
+  coefficient contrast makes large for an accurate answer). They throw on
+  an exact zero pivot (the Cholesky on any pivot that is not positive);
+  a tiny pivot is reported in `pivot_ratio`, never judged by a threshold
+  (a pure Neumann problem gets one of its solutions). ParU's ratio must
+  include its singleton pivots.
 - **Time methods use `right_hand_side()` as it is**: it already holds the
   whole lifting (load − A_FD U_D − B_FD U_D' − M2_FD U_D''). The static
   solver assembles with `max_time_order` 0, where it is load − A_FD U_D.
