@@ -35,26 +35,27 @@ std::shared_ptr<const pde2d::mesh::Mesh> l_shape() {
 // tangential part, a dynamic condition and an oblique Neumann condition.
 // Time order 2.
 Problem every_term() {
-  return {.equation = {.a_xx = e("2 + t"),
-                       .a_xy = e("0.5"),
-                       .a_yy = e("1 + x^2"),
-                       .b_x = e("1"),
-                       .b_y = e("-y*t"),
-                       .c = e("1 + sin(t)"),
-                       .m1 = e("1 + x"),
-                       .m2 = e("1 + t^2"),
-                       .f = e("x*y + t")},
-          .boundary_conditions =
-              {{"bottom", {.alpha = e("1"), .g = e("exp(t)*(1 + x)")}},
-               {"right",
-                {.alpha = e("1"),
-                 .beta_n = e("1"),
-                 .beta_tau = e("0.5"),
-                 .g = e("t*y")}},
-               {"inner", {.beta_n = e("1"), .gamma = e("1 + t"), .g = e("x")}},
-               {"top", {.beta_n = e("1"), .beta_x = e("0.3"), .g = e("cos(t)")}},
-               {"left", {.alpha = e("1"), .g = e("y*t")}}},
-          .initial = {.u = e("0"), .u_t = e("0")}};
+  return {
+      .equation = {.a_xx = e("2 + t"),
+                   .a_xy = e("0.5"),
+                   .a_yy = e("1 + x^2"),
+                   .b_x = e("1"),
+                   .b_y = e("-y*t"),
+                   .c = e("1 + sin(t)"),
+                   .m1 = e("1 + x"),
+                   .m2 = e("1 + t^2"),
+                   .f = e("x*y + t")},
+      .boundary_conditions =
+          {{"bottom", {.alpha = e("1"), .g = e("exp(t)*(1 + x)")}},
+           {"right",
+            {.alpha = e("1"),
+             .beta_n = e("1"),
+             .beta_tau = e("0.5"),
+             .g = e("t*y")}},
+           {"inner", {.beta_n = e("1"), .gamma = e("1 + t"), .g = e("x")}},
+           {"top", {.beta_n = e("1"), .beta_x = e("0.3"), .g = e("cos(t)")}},
+           {"left", {.alpha = e("1"), .g = e("y*t")}}},
+      .initial = {.u = e("0"), .u_t = e("0")}};
 }
 
 std::shared_ptr<const MeshedProblem> meshed(const Problem &problem) {
@@ -113,8 +114,7 @@ int main() {
              check(same(parallel, serial),
                    std::to_string(threads) + " threads, max_time_order " +
                        std::to_string(order) + ": the same bits");
-             check(metric(parallel, "threads") ==
-                       static_cast<double>(threads),
+             check(metric(parallel, "threads") == static_cast<double>(threads),
                    "thread count reported");
            }
          }

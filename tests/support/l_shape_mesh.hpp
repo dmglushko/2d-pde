@@ -31,11 +31,10 @@ inline std::shared_ptr<const mesh::Mesh> refined_l_shape(double h) {
                  {Line{p2, p3}, "inner"},  {Line{p3, p4}, "inner"},
                  {Line{p4, p5}, "top"},    {Line{p5, p0}, "left"}};
   const geometry::CurveGeometry geometry({loop});
-  auto result =
-      mesh::Mesher(std::make_shared<mesh::ChordLengthDiscretizer>(),
-                   std::make_shared<mesh::Cdt>(),
-                   std::make_shared<mesh::LongestEdgeBisection>())
-          .run(geometry, {.max_edge_length = {.absolute = h}});
+  auto result = mesh::Mesher(std::make_shared<mesh::ChordLengthDiscretizer>(),
+                             std::make_shared<mesh::Cdt>(),
+                             std::make_shared<mesh::LongestEdgeBisection>())
+                    .run(geometry, {.max_edge_length = {.absolute = h}});
   check(result.target_met, "the mesh meets its edge length");
   return std::make_shared<const mesh::Mesh>(std::move(result.mesh));
 }

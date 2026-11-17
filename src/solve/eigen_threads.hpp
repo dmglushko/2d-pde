@@ -36,7 +36,8 @@ inline constexpr std::size_t max_threads = 1024;
 inline void check_threads(std::size_t threads, const std::string &solver) {
   if (threads > max_threads)
     throw std::invalid_argument(solver + ": threads must be at most " +
-                                std::to_string(max_threads) + " (0 means all "
+                                std::to_string(max_threads) +
+                                " (0 means all "
                                 "hardware threads), not " +
                                 std::to_string(threads));
 }

@@ -55,7 +55,7 @@ void publish_snapshot(Run::Published &out, solve::Solution solution) {
       std::make_shared<const solve::Solution>(std::move(solution)));
 }
 
-constexpr std::array<MetricRule, 13> metric_rules{{
+constexpr std::array<MetricRule, 14> metric_rules{{
     {"t0", Combine::first},
     {"t1", Combine::last},
     {"time_order", Combine::last},
@@ -69,6 +69,7 @@ constexpr std::array<MetricRule, 13> metric_rules{{
     {"assemblies", Combine::sum},
     {"prepares", Combine::sum},
     {"snapshots", Combine::sum},
+    {"assembly_threads", Combine::last},
 }};
 
 // The run's sections, for provenance.

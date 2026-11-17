@@ -126,8 +126,8 @@ flowchart BT
     GEO[pde2d_geometry]
     MESH[pde2d_mesh]
     IO["pde2d_io · libxml2"]
-    FEM["pde2d_fem · SymEngine"]
-    SOLVE["pde2d_solve · Eigen"]
+    FEM["pde2d_fem · SymEngine, OpenMP"]
+    SOLVE["pde2d_solve · Eigen, OpenMP"]
     ADAPT[pde2d_adapt]
 
     MESH --> GEO
@@ -142,6 +142,16 @@ flowchart BT
 and the adaptive loop; nothing uses it, and it does not use io. The interface target `pde2d::pde2d` links all of them
 for programs that use the whole library, such as the app (`app/`,
 [app.md](app.md)), which sits on top and is never used by the library.
+
+OpenMP gives the threads: in `pde2d_fem` the assembly of one colour, in
+`pde2d_solve` Eigen's sparse matrix-vector product. It is linked privately
+and `<omp.h>` is included only from `.cpp` files and private headers
+(`src/fem/threads.hpp`, `src/solve/eigen_threads.hpp`). The thread count
+is an option of each component that uses threads
+(`AssemblerOptions::threads`, `ConjugateGradientOptions::threads`,
+`BiCgStabOptions::threads`; default 1, 0 = all hardware threads, that is
+`omp_get_num_procs()`, the processors available to the process; at most
+1024); there is no global setting, and every count gives the same bits.
 
 ## What each object contains
 
@@ -394,7 +404,8 @@ flowchart TD
   assembling, so it equals `assemble(...).time_order()` at every t.
 - The code has three pieces: computing a block (`element_blocks.cpp`, no
   shared state), scattering it, and the driver that loops over colours
-  (`assembler.cpp`). Only the driver would ever know about threads.
+  (`assembler.cpp`). Only the driver knows about threads: it shares the
+  elements of one colour among `AssemblerOptions::threads` threads.
 
 ## Meshing pipeline
 
@@ -572,15 +583,15 @@ module: it is a program over the public headers, described in
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) and `edge_bisection.hpp` (the bisection core shared by the three bisection refiners: marked edges, closure, division patterns, parents, the `run` loop; `detail::check_marked`) and `refinement_edges.hpp` (the longest-edge tie order `detail::longest_local_edge`, shared by the core and `set_longest_edges_as_refinement_edges`; `detail::set_longest_edges_as_refinement_edges` of a working mesh, for all triangles or those whose order an edit chose; `RefinementEdgeRecord`, a friend of `WorkingMesh`); `bisection_refiners.cpp` holds the three bisection refiners (each a rule for the core) |
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
-| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
-| `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`) and `element_blocks.hpp` (assembly's pure element block functions); `assembler.cpp` holds the driver, patterns, colouring and `detail::AssemblyInternals` |
+| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`AssemblerOptions`, `Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
+| `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`), `element_blocks.hpp` (assembly's pure element block functions) and `threads.hpp` (checking and resolving `AssemblerOptions::threads`; includes `<omp.h>`); `assembler.cpp` holds the driver (with the OpenMP loop over a colour), patterns, colouring and `detail::AssemblyInternals` |
 | `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`) |
-| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `iterative_solve.hpp` and the solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`); `time_methods.cpp` holds the three time methods |
+| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `eigen_threads.hpp` (checking and resolving a `threads` option; `detail::EigenThreads`, the scope every Eigen computation runs in) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`); `time_methods.cpp` holds the three time methods |
 | `app/` | the graphical interface (`pde2d_app`): `src/` (case format with its migrations and generated schema, the geometry sources with the drawing and the boundary locator, the mesh and solve catalogs, the stage cache, runs in chunks per client under two locks, comparisons and probes, exporters with a stored zip writer, problem presets, `--set` and `--sweep`, local HTTP server), `web/` (the page, plain JS modules, with the geometry editor on the picture), `examples/` (cases), `Start pde2d app.cmd` and `start-app.sh` (double-click launcher), `tests/` (`browser/`: the page in headless Chrome; `example_checks.json`: the examples' expected figures), `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md`, its design `docs/app.md` and its decisions `docs/app-decisions.md` |
 | `include/pde2d/adapt/` | `error_estimator.hpp` (`ErrorEstimator`, `ErrorEstimate`, `TimeDerivatives`), `residual_estimator.hpp` (`ResidualEstimatorOptions`), `kelly_estimator.hpp` (`KellyEstimatorOptions`), `recovery_estimator.hpp` (`RecoveryEstimatorOptions`, `RecoveryNorm`), `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `adaptation.hpp` (`Adaptation`, `AdaptationCapabilities`, `AdaptationResult`, `SolvedState`), `mesh_refinement.hpp` (`MeshRefinement`), `adaptive_static_solver.hpp` (`AdaptiveStaticSolver`, `AdaptiveTarget`, `ErrorTolerance`, `StopReason`, `AdaptiveCycle`, `AdaptiveStaticResult`); refinement of marked triangles is `mesh::Remesher::refine` |
 | `src/adapt/` | `error_estimator.cpp` (the shared checks of `estimate`), `residual_estimators.cpp` (the residual terms, shared by the residual and Kelly estimators), `recovery_estimator.cpp`, `marking.cpp` (the shared checks and the four strategies), `mesh_refinement.cpp`, `adaptive_static_solver.cpp`; private header `estimator_geometry.hpp` (per-triangle area, diameter and gradient of u_h, interior edges with their two triangles, the triangle of each boundary edge, checked coefficient values, the check of a quadrature degree option) |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files; `tests/mesh/refinement_checks.hpp` holds the oracles of a refinement result (also used by `tests/adapt/cycles.cpp`); `tests/adapt/estimator_support.hpp` computes the true energy error of a P1 solution (exact gradients, subdivision at a singular point) |
-| `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries) |
+| `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries), `l_shape_mesh.hpp` (an L-shape with many colours, for the threaded tests `tests/fem/assembly_threads.cpp` and `tests/solve/threads.cpp`) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
 | `examples/` | `mesh_viewer/produce_mesh.cpp` (meshes a plate with a hole, writes `.pde2d`), the viewer's startup example files (from the old code) |
 | `docs/` | `decisions.md`, `architecture.md`, `vision.md`, `formats/pde2d-mesh.md` (the `.pde2d` format) |
@@ -1224,6 +1235,8 @@ AssembledProblem a = assembler.assemble(meshed, 0.0);
 AssembledProblem b = assembler.assemble(meshed, 0.1, &a); // reuses a
 // Only A and the load, and only U_D (no U_D', U_D''): time order 0.
 AssembledProblem c = assembler.assemble(meshed, 0.0, nullptr, 0);
+// The elements of each colour on 4 threads: the same bits as a.
+AssembledProblem d = Assembler({.threads = 4}).assemble(meshed, 0.0);
 ```
 
 The system in the free unknowns (`MeshedProblem::free_nodes()`, the
@@ -1318,8 +1331,16 @@ nothing); a greedy colouring of the triangles in index order (the smallest
 colour not used by an earlier triangle sharing a node) and, in a separate
 pass, of the boundary edges.
 
-**Building.** The driver loops over the colours, inside a colour in index
-order. For each element it calls a pure block function
+**Building.** The driver loops over the colours. With one thread it runs
+the elements of a colour in index order; with more
+(`Assembler(AssemblerOptions{.threads = n})`), an OpenMP loop shares them
+among n threads (`for_each_in_colour`). The elements of a colour share no
+node, so each slot of a matrix and each load entry receives at most one
+addition per colour, and the additions to it come in colour order for
+every thread count: the result is the same bit for bit. An exception (a
+coefficient that is not finite) cannot leave an OpenMP thread; each is
+caught, and after the colour the one with the lowest element index is
+thrown again, which is the one the serial loop throws. For each element it calls a pure block function
 (`detail::triangle_blocks`, `detail::edge_blocks` in
 `src/fem/element_blocks.cpp`), which computes the full 3 x 3 (2 x 2)
 blocks of the requested terms, summed per operator and split into a
@@ -1338,7 +1359,8 @@ assembly at that t and `max_time_order`.
 
 **Report** ("assembly"): time; metrics `free_nodes`, `dirichlet_nodes`,
 `free_nonzeros`, `dirichlet_nonzeros`, `triangle_colours`, `edge_colours`,
-`used_previous`, `max_time_order`, and `mass_rebuilt`, `damping_rebuilt`,
+`used_previous`, `max_time_order`, `threads` (the count used, 0
+resolved), and `mass_rebuilt`, `damping_rebuilt`,
 `stiffness_rebuilt`, `load_rebuilt` (1 when something of it was computed,
 0 when reused whole or left out by `max_time_order`).
 
@@ -1364,7 +1386,9 @@ IntegrationResult r2 = integrator.integrate(meshed, 1.0, 2.0, {}, &r.final);
 std::shared_ptr<const CsrMatrix>)` returns a
 `std::unique_ptr<const PreparedLinearSolver>`, which holds the matrix and
 solves `solve(rhs) -> LinearSolveResult` (values, iterations, relative
-residual |b − Ax| / |b| computed after the solve) as often as needed.
+residual |b − Ax| / |b| computed after the solve, and `threads`: those the
+matrix-vector products could use, 1 for a direct solver) as often as
+needed.
 A solver declares `requirements()` (`LinearSolverRequirements{
 symmetric_matrix}`); `prepare` sees only values, so the callers (the
 `Integrator`, the `StaticSolver`, `Newmark::start`, `ImplicitEuler::start`)
@@ -1380,7 +1404,7 @@ detects its failure and throws `std::runtime_error`.
 | Solver | Requires | What it is |
 | --- | --- | --- |
 | `SparseLu` | nothing | Eigen's SparseLU with COLAMD; the matrix is copied once into Eigen's column-major format; a zero pivot throws `std::runtime_error` in `prepare`, a result that is not finite throws in `solve` |
-| `BiCgStab` | nothing | `BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000}`; Jacobi preconditioner; views our arrays through `Eigen::Map` without copying; starts from zero; non-convergence throws `std::runtime_error` |
+| `BiCgStab` | nothing | `BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000, .threads = 1}`; Jacobi preconditioner; views our arrays through `Eigen::Map` without copying; starts from zero; non-convergence throws `std::runtime_error` |
 | `ConjugateGradient` | symmetric | Eigen's ConjugateGradient with Lower \| Upper and Jacobi; `ConjugateGradientOptions` as for `BiCgStab`; converges only for a positive definite matrix, otherwise it does not reach its tolerance and throws |
 | `SimplicialLdlt` | symmetric | Eigen's SimplicialLDLT with AMD (lower triangle, copied to column-major); no pivoting, so a zero pivot (singular, or indefinite needing pivots) throws `std::runtime_error` in `prepare`; a tiny pivot passes the factorization, so `solve` checks the relative residual against `SimplicialLdltOptions{.residual_tolerance = 1e-8}` and throws `std::runtime_error` above it |
 
@@ -1390,7 +1414,26 @@ the right-hand side is scaled so that a tiny one still converges, a zero
 one gives x = 0 with no iterations, and the measured residual decides
 convergence (restarts while they halve it). An empty (0 × 0) system has an
 empty solution. Eigen appears only in `src/solve/eigen_view.hpp`,
-`src/solve/iterative_solve.hpp` and the solver `.cpp` files.
+`src/solve/eigen_threads.hpp`, `src/solve/iterative_solve.hpp` and the
+solver `.cpp` files.
+
+**Threads in the solvers.** `pde2d_solve` is compiled with OpenMP, so
+Eigen runs its row-major sparse matrix times vector product in parallel
+(only above 20000 nonzeros): the rows are shared among the threads and
+each row is summed by one of them, so the product is the same for every
+count; the dot products, norms, vector updates and the Jacobi
+preconditioner are not parallelized by Eigen. So the iterations and the
+answer of `BiCgStab` and `ConjugateGradient` are the same bit for bit for
+every `threads`. Eigen reads the count from `Eigen::nbThreads()`, which
+is `omp_get_max_threads()` of the calling thread unless the program calls
+`Eigen::setNbThreads`. Every Eigen computation in `pde2d_solve` runs inside
+a `detail::EigenThreads` scope (`eigen_threads.hpp`), which sets the
+calling thread's own OpenMP count (`omp_set_num_threads`) and restores it
+afterwards: the iterative solvers set their option, the direct solvers 1
+(they stay serial; their parallel version needs a library still to be
+chosen). Nothing global is written, so solves running at once in
+different threads keep their own counts; a program that calls
+`Eigen::setNbThreads` overrides them all (the answers do not change).
 
 **Solution** (`solution.hpp`). `Solution{mesh, time, values, velocities}`;
 `build_solution(meshed, free_values, t)` places the free values at
@@ -1404,7 +1447,9 @@ can be continued.
 `stiffness().always_symmetric`, else `stiffness().symmetric_now`, solves `stiffness().free · U =
 right_hand_side()` (= load − A_FD U_D at that order), and returns
 `StaticResult{solution, reports}` with the reports "assembly" and
-"static_solver" (free_unknowns, linear_iterations, residual).
+"static_solver" (free_unknowns, linear_iterations, residual,
+linear_threads). `StaticSolver(linear_solver, AssemblerOptions = {})`:
+it makes its assembler, with the given thread count, in its constructor.
 
 **Time methods** (`time_method.hpp`). A `TimeMethod` declares
 `capabilities()` (`TimeMethodCapabilities{time_order_0, time_order_1,
@@ -1447,7 +1492,8 @@ fallback).
 `StepController::next_step(t)`; `FixedStep({.dt = ...})`.
 
 **Integrator** (`integrator.hpp`). `Integrator(method, step_controller,
-linear_solver)`; `integrate(meshed, t0, t1, IntegrationOutput, const
+linear_solver, AssemblerOptions = {})` (it makes its assembler with these
+options); `integrate(meshed, t0, t1, IntegrationOutput, const
 Solution *initial = nullptr) -> IntegrationResult{final, snapshots,
 history, report}`.
 
@@ -1486,7 +1532,7 @@ history, report}`.
   steps, once per step. The summary becomes the report "integrator"
   (t0, t1, time_order, steps, rejected_steps, min_dt, max_dt,
   linear_iterations, max_linear_iterations, max_residual, assemblies,
-  prepares, snapshots).
+  prepares, snapshots, assembly_threads).
 - Continuing a run from `previous.final` gives the same values bit for
   bit for the first-order methods when the long run lands on the split
   time; for `Newmark` the acceleration is computed again at the split
@@ -1820,3 +1866,9 @@ The same input gives the same mesh, bit for bit. Marking orders equal
 indicators by triangle index; refinement marks edges in the order of the
 marked triangles (sorted, repetitions removed) and splits them in that
 order, each after the edges it waits for.
+
+Threads never change a result: assembly shares only the elements of one
+colour among threads (no slot gets two additions in one colour), and the
+iterative solvers' matrix-vector product sums each row in one thread;
+`tests/fem/assembly_threads.cpp` and `tests/solve/threads.cpp` compare
+1, 2 and 4 threads bit for bit.

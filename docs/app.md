@@ -737,7 +737,8 @@ there take the same steps.
   `linear_iterations`, `assemblies`, `prepares`, `snapshots` add up;
   `max_linear_iterations`, `max_residual` take the largest; `min_dt` and
   `max_dt` the smallest and largest over the chunks that took steps; `t0`
-  is the first's, `t1` and `time_order` the last's; `chunks` is added. A
+  is the first's, `t1`, `time_order` and `assembly_threads` the last's;
+  `chunks` is added. A
   metric without a rule is an error (a test checks that the rules are
   exactly the integrator's metrics). `prepares` counts one per chunk at
   least.
