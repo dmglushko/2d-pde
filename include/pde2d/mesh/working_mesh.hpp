@@ -19,6 +19,9 @@ namespace detail {
 // The steps of the library's boundary split policy (private, in
 // src/mesh/boundary_split_steps.*). They edit the mesh's internals.
 struct BoundarySplitSteps;
+// Reads which triangles still have the vertex order last set for them
+// (private, in src/mesh/refinement_edges.*).
+struct RefinementEdgeRecord;
 } // namespace detail
 
 // "No such triangle / edge / node".
@@ -83,7 +86,12 @@ struct BoundarySplitResult {
 // vertex 0 (see the convention in mesh.hpp). The edits here choose vertex
 // 0 of the triangles they change freely; the bisection refiners then put
 // the new node first (set_refinement_edge), and nothing reorders a
-// triangle it does not change.
+// triangle it does not change. The mesh remembers, per triangle, the
+// vertex order the constructor received or set_refinement_edge last
+// gave it, so the Remesher can tell the triangles whose order an edit
+// chose (a flip, an insertion, a re-triangulating boundary split) from
+// those a bisection ordered and those nothing touched; it gives only the
+// former their longest edge as refinement edge after refine().
 class WorkingMesh {
 public:
   using TriangleNodes = std::array<std::size_t, 3>;
@@ -182,7 +190,8 @@ public:
 
   // Rotates the vertices of the triangle (it stays counterclockwise, and
   // the same triangle) so that its edge `edge` becomes edge 0, its
-  // refinement edge. Neighbours follow; nothing else changes.
+  // refinement edge, and records this order as set (see above).
+  // Neighbours follow; nothing else changes.
   void set_refinement_edge(std::size_t triangle, int edge);
 
   // Moves an interior node if every triangle around it stays
@@ -202,6 +211,7 @@ public:
 
 private:
   friend struct detail::BoundarySplitSteps;
+  friend struct detail::RefinementEdgeRecord;
 
   void set_node_triangles(std::size_t t);
   void replace_neighbour(std::size_t triangle, std::size_t old_neighbour,
@@ -217,6 +227,10 @@ private:
   std::vector<std::string> region_names_;
   std::vector<CurveChain> chains_;
   std::vector<bool> unsplittable_; // per boundary edge
+  // Per triangle, its vertices as the constructor received them or
+  // set_refinement_edge last left them; triangles added later have no
+  // entry until set_refinement_edge gives them one.
+  std::vector<TriangleNodes> set_orders_;
   std::size_t deleted_triangles_ = 0;
 };
 

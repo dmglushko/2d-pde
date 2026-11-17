@@ -281,9 +281,11 @@ int main() {
                                         p.messages.end()) ==
                    mesher.plan().warnings,
                "then the warnings");
-         check(p.metrics.size() == 2, "two metrics");
+         check(p.metrics.size() == 3, "three metrics");
          near(p.metrics.at("local_improvers"), 1, 0, "one local improver");
          near(p.metrics.at("final_passes"), 3, 0, "three final passes");
+         check(p.metrics.contains("refinement_edges_set"),
+               "and the run's rotated triangles");
          check(p.time.count() >= 0, "time of the planning");
          // The refiner received exactly the resolved local improvers.
          check(r.reports[3].messages ==

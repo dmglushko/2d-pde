@@ -21,7 +21,9 @@ struct MesherOptions {
 //   BoundaryDiscretizer -> InitialTriangulator -> Refiner (optional)
 //   -> Improvers.
 // The last two run in an internal Remesher, which resolves the improvers'
-// use modes; the reports of a run start with its "pipeline" report.
+// use modes; the reports of a run start with its "pipeline" report. As
+// Remesher::run, the output mesh has each triangle's longest edge as its
+// refinement edge (ready for adaptive refinement).
 class Mesher {
 public:
   // Resolves the improvers' use modes against the refiner (warnings go to

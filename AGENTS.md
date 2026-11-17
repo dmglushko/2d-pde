@@ -292,9 +292,18 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   that copies a `Mesh` must keep each triangle's vertex order as it is
   (to_mesh/from_mesh, compact, the `.pde2d` round trip and refinement
   do); code that builds or edits triangles (flips, Ruppert, triangulators,
-  the boundary split policy, Gmsh import) may choose vertex 0 freely, and
-  the user then calls `set_longest_edges_as_refinement_edges` again.
-  Never reorder the vertices of an untouched triangle.
+  the boundary split policy, Gmsh import) may choose vertex 0 freely
+  inside the library. **The library delivers the order; users never call
+  `set_longest_edges_as_refinement_edges`** (it is public only for meshes
+  built by hand): `Remesher::run` (so the `Mesher`) and Gmsh import rotate
+  every triangle to its longest edge, `Remesher::refine` only the
+  triangles whose order an edit chose (the `WorkingMesh` remembers the
+  order its constructor received or `set_refinement_edge` last gave; a
+  triangle that differs was made or changed by an edit), all through
+  `src/mesh/refinement_edges.*`, after the final passes. A bisection must
+  order every triangle it makes with `set_refinement_edge`, or the
+  Remesher will reorder it. `.pde2d` import keeps the file's order. Never
+  reorder the vertices of an untouched triangle.
 - **Refinement has one rule for boundary points.** A boundary edge is
   split only by `split_boundary_edge` (the boundary split policy), also in
   `refine`; if the policy re-triangulates, the parents are dropped and the

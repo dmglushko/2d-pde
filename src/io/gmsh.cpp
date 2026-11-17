@@ -465,11 +465,16 @@ mesh::Mesh build_mesh(const File &f) {
   for (const auto &e : boundary)
     m.boundary_edges.push_back(
         {{index[e.a], index[e.b]}, region_of.at(e.physical), std::nullopt});
+  mesh::Mesh result;
   try {
-    return mesh::WorkingMesh::from_mesh(m).to_mesh();
+    result = mesh::WorkingMesh::from_mesh(m).to_mesh();
   } catch (const std::invalid_argument &e) {
     fail(std::string("invalid mesh: ") + e.what());
   }
+  // Gmsh chose the vertex order; the mesh is delivered ready for adaptive
+  // refinement, with each triangle's longest edge as its refinement edge.
+  mesh::set_longest_edges_as_refinement_edges(result);
+  return result;
 }
 
 } // namespace

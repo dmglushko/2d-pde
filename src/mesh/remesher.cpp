@@ -4,6 +4,7 @@
 #include "pde2d/mesh/domain_size.hpp"
 
 #include "loop_chains.hpp"
+#include "refinement_edges.hpp"
 #include "stage.hpp"
 
 #include <algorithm>
@@ -306,6 +307,11 @@ MeshResult Remesher::run(WorkingMesh mesh, const MeshSpec &spec) const {
         [&](auto &r) { final_improvers_[k]->run(mesh, &spec, r); });
     result.reports.push_back(std::move(report));
   }
+  // The mesh is delivered ready for adaptive refinement: nobody chose its
+  // vertex order for bisection (a triangulator, Ruppert, flips).
+  result.reports.front().metrics["refinement_edges_set"] =
+      static_cast<double>(detail::set_longest_edges_as_refinement_edges(
+          mesh, detail::RefinementEdgeScope::all));
   result.mesh = mesh.to_mesh();
   result.properties = finish(result.mesh, result.reports.front());
   // The target is read from the one measurement of the final mesh.
@@ -364,6 +370,13 @@ Remesher::refine(const Mesh &mesh,
         [&](auto &r) { final_improvers_[k]->run(working, nullptr, r); });
     result.reports.push_back(std::move(pass));
   }
+  // Only the triangles whose vertex order an edit chose (flips, insertions,
+  // a re-triangulating boundary split) get their longest edge as
+  // refinement edge; those a bisection made and those nothing touched keep
+  // their order, newest vertex bisection's memory between cycles.
+  result.reports.front().metrics["refinement_edges_set"] =
+      static_cast<double>(detail::set_longest_edges_as_refinement_edges(
+          working, detail::RefinementEdgeScope::edited_order));
   result.mesh = working.to_mesh();
   // A curve point bulging out of the mesh can reach another part of it,
   // which the boundary split policy does not check (a known gap); a

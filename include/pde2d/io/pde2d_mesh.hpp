@@ -37,7 +37,10 @@ void export_pde2d(const mesh::Mesh &mesh, const std::filesystem::path &path);
 // The mesh is validated like a WorkingMesh, and versions 2 to 4 must have
 // one boundary loop; version 5 groups must each be one closed loop. The
 // result has no chains or links, and its boundary edges are in walking
-// order (as WorkingMesh::to_mesh lists them).
+// order (as WorkingMesh::to_mesh lists them). Triangles keep the vertex
+// order of the file, which export_pde2d writes as it is: their refinement
+// edges (mesh.hpp) survive the round trip, so a mesh saved in the middle of
+// adaptive refinement continues with newest vertex bisection's memory.
 //
 // Throws std::invalid_argument for a malformed or invalid file,
 // std::runtime_error if the file cannot be read.

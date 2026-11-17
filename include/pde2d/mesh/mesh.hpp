@@ -22,10 +22,16 @@ namespace pde2d::mesh {
 // vertex order stays counterclockwise; only which vertex comes first
 // carries the information. Code that copies a mesh keeps every vertex
 // order (to_mesh/from_mesh, the .pde2d round trip and refinement do).
-// Code that builds or edits triangles (flips, Ruppert, a triangulator, a
-// Gmsh import) chooses vertex 0 freely, which keeps every mesh valid for
-// refinement but loses the shape guarantee of newest vertex bisection;
-// call set_longest_edges_as_refinement_edges() after such a change.
+//
+// The library delivers the order: the Mesher and Remesher::run end by
+// making every triangle's longest edge its refinement edge, Gmsh import
+// does it too, and Remesher::refine does it for the triangles whose order
+// an edit chose (flips, Ruppert's insertions, a re-triangulating boundary
+// split) while the triangles a bisection made and the untouched ones keep
+// theirs. A .pde2d file keeps the order it was saved with. Only a mesh
+// built or edited by hand needs set_longest_edges_as_refinement_edges()
+// before newest vertex bisection or red-green-blue refinement; without
+// it the mesh can still be refined, but loses their shape guarantee.
 struct Triangle {
   std::array<std::size_t, 3> nodes{};
 };
@@ -75,12 +81,12 @@ void validate(const Mesh &mesh);
 // node indices (compared as (smaller, larger) pair) is taken: one order
 // of all edges that the two triangles of an edge agree on, so the
 // triangles waiting for each other's refinement edges cannot form a
-// cycle (the refiners use the same order). Use it once on a mesh that
-// did not come from bisection (from the Mesher with Ruppert or flips, a
-// file), before the first adaptive refinement (Remesher::refine) by
-// newest vertex bisection or red-green-blue refinement; their run() does
-// it itself. Throws std::invalid_argument for a node
-// index out of range.
+// cycle (the refiners use the same order). The Mesher, the Remesher and
+// Gmsh import already deliver this order (see the convention above); use
+// it on a mesh built or edited by hand, before the first adaptive
+// refinement (Remesher::refine) by newest vertex bisection or red-green-
+// blue refinement. Throws std::invalid_argument for a node index out of
+// range.
 void set_longest_edges_as_refinement_edges(Mesh &mesh);
 
 } // namespace pde2d::mesh

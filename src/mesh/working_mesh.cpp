@@ -159,6 +159,7 @@ WorkingMesh::WorkingMesh(std::vector<Point> nodes,
   for (std::size_t t = 0; t < triangles_.size(); ++t)
     set_node_triangles(t);
   unsplittable_.assign(boundary_edges_.size(), false);
+  set_orders_ = triangles_;
 }
 
 WorkingMesh WorkingMesh::from_mesh(const Mesh &mesh) {
@@ -453,6 +454,9 @@ void WorkingMesh::set_refinement_edge(std::size_t t, int edge) {
   auto n = neighbours_[t];
   triangles_[t] = {v[i], v[next(i)], v[prev(i)]};
   neighbours_[t] = {n[i], n[next(i)], n[prev(i)]};
+  if (set_orders_.size() <= t)
+    set_orders_.resize(triangles_.size(), {no_index, no_index, no_index});
+  set_orders_[t] = triangles_[t];
 }
 
 bool WorkingMesh::try_move_node(std::size_t node, Point p) {
@@ -480,6 +484,12 @@ void WorkingMesh::compact() {
   std::vector<std::size_t> node_map(nodes_.size(), no_index),
       triangle_map(triangles_.size(), no_index);
   std::size_t n = 0, m = 0;
+  // Whether each triangle keeps its set order, read before renumbering
+  // (the recorded orders name the old node indices).
+  std::vector<bool> as_set(triangles_.size(), false);
+  for (std::size_t t = 0; t < triangles_.size(); ++t)
+    as_set[t] = t < set_orders_.size() && set_orders_[t] == triangles_[t];
+  std::vector<bool> compact_as_set;
   for (std::size_t v = 0; v < nodes_.size(); ++v)
     if (!is_node_deleted(v)) {
       node_map[v] = n;
@@ -493,6 +503,7 @@ void WorkingMesh::compact() {
       triangle_map[t] = m;
       triangles_[m] = triangles_[t];
       neighbours_[m] = neighbours_[t];
+      compact_as_set.push_back(as_set[t]);
       ++m;
     }
   nodes_.resize(n);
@@ -511,6 +522,10 @@ void WorkingMesh::compact() {
   for (auto &e : boundary_edges_)
     for (auto &v : e.nodes)
       v = node_map[v];
+  set_orders_.assign(m, {no_index, no_index, no_index});
+  for (std::size_t t = 0; t < m; ++t)
+    if (compact_as_set[t])
+      set_orders_[t] = triangles_[t];
   deleted_triangles_ = 0;
 }
 

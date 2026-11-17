@@ -57,9 +57,8 @@ std::shared_ptr<const mesh::Mesh> l_shape_mesh(double h) {
                      .run(geometry::CurveGeometry({loop}),
                           {.max_edge_length = {.absolute = h}})
                      .mesh;
-  // Once, on the starting mesh: newest vertex bisection then keeps its
-  // refinement edges from cycle to cycle.
-  mesh::set_longest_edges_as_refinement_edges(m);
+  // The Mesher delivers the longest edges as refinement edges; newest
+  // vertex bisection then keeps them from cycle to cycle.
   return std::make_shared<const mesh::Mesh>(std::move(m));
 }
 

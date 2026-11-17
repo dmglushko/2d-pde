@@ -32,7 +32,9 @@ std::vector<double> peaked(const Mesh &m, Point corner) {
   return eta;
 }
 
-// Twelve Dörfler cycles on the L-shape towards its re-entrant corner:
+// Twelve Dörfler cycles on the L-shape towards its re-entrant corner,
+// starting directly from the Mesher's mesh (CDT; no call to
+// set_longest_edges_as_refinement_edges: the Mesher delivers the order):
 // every result passes the oracles, the shapes stay in at most four
 // similarity classes per initial triangle (newest vertex, red-green-blue)
 // and the smallest angle does not drop after the first cycles.

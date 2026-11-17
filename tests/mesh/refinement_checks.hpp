@@ -57,16 +57,15 @@ inline const mesh::StageReport &refiner_report(const RefinementResult &r) {
 }
 
 // A mesh of the geometry (chord-length discretizer and CDT, by default no
-// refiner), with its refinement edges set to the longest edges.
-// With a refiner (for example Ruppert) the mesh also has interior nodes.
+// refiner), as the Mesher delivers it: its refinement edges are the
+// longest edges, without a call by hand. With a refiner (for example
+// Ruppert) the mesh also has interior nodes.
 inline Mesh
 initial_mesh(const geometry::CurveGeometry &g, double h,
              std::shared_ptr<const mesh::Refiner> refiner = nullptr) {
   mesh::Mesher mesher(std::make_shared<mesh::ChordLengthDiscretizer>(),
                       std::make_shared<mesh::Cdt>(), std::move(refiner));
-  Mesh m = mesher.run(g, {.max_edge_length = {.absolute = h}}).mesh;
-  mesh::set_longest_edges_as_refinement_edges(m);
-  return m;
+  return mesher.run(g, {.max_edge_length = {.absolute = h}}).mesh;
 }
 
 inline std::array<Point, 3> corners(const Mesh &m, std::size_t t) {

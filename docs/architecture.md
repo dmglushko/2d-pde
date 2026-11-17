@@ -569,7 +569,7 @@ module: it is a program over the public headers, described in
 | `include/pde2d/geometry/` | `point.hpp`, `predicates.hpp` (exact `orient`, `incircle`), `bounding_box.hpp` (`BoundingBox`), `curve.hpp` (the curve kinds with their core methods, the `CurveKind` concept, `Curve`, functions built on the core), `polygon.hpp`, `curve_geometry.hpp` (`Loop`, `CurveGeometry`), `shapes.hpp` |
 | `src/geometry/` | their implementation; `predicates.cpp` is Shewchuk's adaptive arithmetic, compiled with `-fno-fast-math -ffp-contract=off` |
 | `include/pde2d/mesh/` | `mesh.hpp` (output `Mesh`, with optional chains and links; the refinement edge convention and `set_longest_edges_as_refinement_edges`), `mesh_spec.hpp` (`LengthBound`, `MeshSpec`), `domain_size.hpp` (what relative lengths multiply), `mesh_properties.hpp` (`MeshProperties`, `measure`, `default_warning_angle_degrees`), `curve_chain.hpp` (`CurveChain`, `CurveLink`, `default_corner_angle_degrees`), `boundary_polygon.hpp`, `working_mesh.hpp`, `report.hpp` (`StageReport`, `Parents`, `MeshResult`, `RefinementResult`), `components.hpp` (interfaces, improver roles, capabilities, `ImproverUse`, `PipelinePlan`, `plan_pipeline`), `delaunay.hpp` (shared flip routines), one header per component (the refiners `ruppert.hpp`, `longest_edge_bisection.hpp`, `newest_vertex_bisection.hpp`, `red_green_blue_refinement.hpp`), `remesher.hpp` (`RemesherOptions`, `Remesher` with `run` and `refine`), `mesher.hpp` (`MesherOptions`, `Mesher`) |
-| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) and `edge_bisection.hpp` (the bisection core shared by the three bisection refiners: marked edges, closure, division patterns, parents, the `run` loop; `detail::check_marked`); `bisection_refiners.cpp` holds the three bisection refiners (each a rule for the core) |
+| `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) and `edge_bisection.hpp` (the bisection core shared by the three bisection refiners: marked edges, closure, division patterns, parents, the `run` loop; `detail::check_marked`) and `refinement_edges.hpp` (the longest-edge tie order `detail::longest_local_edge`, shared by the core and `set_longest_edges_as_refinement_edges`; `detail::set_longest_edges_as_refinement_edges` of a working mesh, for all triangles or those whose order an edit chose; `RefinementEdgeRecord`, a friend of `WorkingMesh`); `bisection_refiners.cpp` holds the three bisection refiners (each a rule for the core) |
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
@@ -761,6 +761,13 @@ geometry, so both build the same chains.
   `set_refinement_edge(t, edge)` rotates a triangle's vertices (and
   neighbours) so that `edge` becomes edge 0, its refinement edge. An edit that would
   invert a triangle throws and leaves the mesh unchanged.
+- **Set vertex orders.** The mesh remembers, privately, each triangle's
+  vertices as the constructor received them or `set_refinement_edge`
+  last left them (kept through `compact()`). A triangle whose vertices
+  differ now had its order chosen by an edit (a flip, an insertion, a
+  re-triangulating boundary split); moving a node changes no order. The
+  private `src/mesh/refinement_edges.*` (a friend, `RefinementEdgeRecord`)
+  reads this for `Remesher::refine` (see "Refinement edges").
 - **Deletions.** Splitting a curved boundary edge may delete triangles and
   nodes. They stay as tombstones (`is_triangle_deleted`,
   `is_node_deleted`), so indices held by a refiner stay valid and new
@@ -909,7 +916,9 @@ the front of its reports. Its first message is the plan in words ("plan:
 refiner ruppert; local: none; final: delaunay_flips,
 laplacian_smoothing", or "plan: no refiner; ..."), followed by the
 warnings; its metrics are `local_improvers` and `final_passes` (counts),
-and its `time` is the time the planning took. Like every report it keeps
+and a run adds `refinement_edges_set` (the triangles it rotated to their
+longest edge, see "Refinement edges"); its `time` is the time the
+planning took. Like every report it keeps
 its structured fields, so times can be summed. The refiner calls
 the local improvers after each change and reports the sum of their
 returned counts as `local_improver_changes` (and one
@@ -994,8 +1003,8 @@ opened, read or written throws `std::runtime_error`.
 | `export_svg` | `svg.hpp` | points written as (x, −y), so `import_svg(export_svg(g))` gives the same numbers back; one `<path>` per run of one region in a loop; arcs in pieces of at most 90°; id = region name if unique and a valid XML id, else `pde2d_run_<k>` with `data-region`; shortest exact numbers |
 | `export_mesh_svg` | `svg.hpp` | nodes drawn at (x, −y), the right way up like `export_svg`; triangles (light fill, grey edges) and one coloured `<path>` per region with `data-region` and a `<title>`; no nodes, no links |
 | `export_pde2d` | `pde2d_mesh.hpp` | the old `PDE2D_MESH` format (`docs/formats/pde2d-mesh.md`): version 2 for one loop, 5 with `RESULT 0` for several; outer loop (through the lexicographically smallest boundary node) first; links dropped |
-| `import_pde2d` | `pde2d_mesh.hpp` | versions 2–5; v1 and untagged edges rejected; result trailers checked and ignored; validated like a `WorkingMesh` (with the geometric check); records read as they come, never allocated for a claimed count first; no links |
-| `import_gmsh` | `gmsh.hpp` | MSH 4.1 and 2.2 ASCII; 3-node triangles only; boundary edges must lie on line elements of one physical group of dimension 1 (its name, or `physical_<tag>`); triangles made counterclockwise; unused nodes dropped; no links |
+| `import_pde2d` | `pde2d_mesh.hpp` | versions 2–5; v1 and untagged edges rejected; result trailers checked and ignored; validated like a `WorkingMesh` (with the geometric check); records read as they come, never allocated for a claimed count first; triangles keep the file's vertex order (their refinement edges); no links |
+| `import_gmsh` | `gmsh.hpp` | MSH 4.1 and 2.2 ASCII; 3-node triangles only; boundary edges must lie on line elements of one physical group of dimension 1 (its name, or `physical_<tag>`); triangles made counterclockwise, each rotated to its longest edge as refinement edge (`set_longest_edges_as_refinement_edges`); unused nodes dropped; no links |
 
 Imported meshes have no chains or links, so the `Remesher` splits their
 boundary edges at chord midpoints unless it is given the geometry.
@@ -1515,8 +1524,7 @@ flowchart LR
 ```
 
 ```cpp
-Mesh mesh = Mesher(...).run(geometry, spec).mesh;
-set_longest_edges_as_refinement_edges(mesh); // once, before the first cycle
+Mesh mesh = Mesher(...).run(geometry, spec).mesh; // longest edges first
 auto meshed = std::make_shared<const MeshedProblem>(
     std::make_shared<const Mesh>(std::move(mesh)), problem);
 auto refinement = std::make_shared<MeshRefinement>(
@@ -1560,13 +1568,37 @@ a field in `Mesh`. The vertex order stays counterclockwise.
 triangle so that its longest edge is the refinement edge (ties: the
 edge order of the bisection core, squared length and then node indices,
 which both triangles of an edge agree on, so waiting triangles cannot
-cycle); call it once on a mesh from the Mesher, the Remesher or a file,
-before the first `Remesher::refine`. `run(spec)` of
-`NewestVertexBisection` and `RedGreenBlueRefinement` does it itself
-before refining (metric `refinement_edges_set`); `refine(marked)` never
-does, since between cycles the stored order is the method's memory. Code that edits triangles (flips,
-Ruppert, triangulators, Gmsh import) chooses vertex 0 freely: the mesh can
-still be refined, but the shape guarantee needs the call again.
+cycle; one private function, `detail::longest_local_edge` in
+`src/mesh/refinement_edges.hpp`, serves both).
+
+**The library delivers the order; the user never calls the function**
+(except on a mesh built or edited by hand):
+
+| Where | Which triangles get their longest edge first |
+| --- | --- |
+| `Mesher::run`, `Remesher::run` (all three forms) | every triangle, after the final passes, before `to_mesh` and the one measurement |
+| `Remesher::refine` | only the triangles whose vertex order an edit chose, during the refiner or a final pass: made or changed by flips (local or final Delaunay flips; the red division's flip is followed by `set_refinement_edge`, so red children keep the red order), Ruppert's insertions and flips, a re-triangulating boundary split. Triangles a bisection made (newest vertex first, `set_refinement_edge`) and input triangles nothing touched keep their order: newest vertex bisection's memory between cycles. Moving a node (Laplacian smoothing) keeps the order |
+| `import_gmsh` | every triangle |
+| `import_pde2d` | none: a file keeps its order (it may be a mesh saved in the middle of adaptation) |
+
+How `refine` knows which triangles: the `WorkingMesh` records each
+triangle's vertices as its constructor received them (`from_mesh`: the
+input order) or as `set_refinement_edge` last left them; a triangle whose
+vertices now differ was made or changed by an edit that chose vertex 0
+freely. The Remesher calls the private
+`detail::set_longest_edges_as_refinement_edges(working, scope)` (scope
+`all` for `run`, `edited_order` for `refine`) after the final passes; it
+rotates with `set_refinement_edge`. The pipeline report's metric
+`refinement_edges_set` counts the triangles whose vertex 0 changed (0
+for a bisection refiner without improvers).
+
+`run(spec)` of `NewestVertexBisection` and `RedGreenBlueRefinement` also
+sets the longest edges before refining (metric `refinement_edges_set` in
+their report), since its input may be any mesh; `refine(marked)` never
+does, since between cycles the stored order is the method's memory.
+Code that edits triangles (flips, Ruppert, triangulators, Gmsh import)
+chooses vertex 0 freely inside the library; the order is delivered at
+the end of each of the calls above.
 
 ### Refiners refine marked triangles
 
@@ -1624,8 +1656,8 @@ half each cycle, NVB does not (see `red_green_blue_refinement.hpp`); the
 mesh properties' warning shows it.
 
 Special cases, each reported: triangles whose refinement edges wait for
-each other in a cycle (possible only with refinement edges not set by
-bisection or `set_longest_edges_as_refinement_edges`) have one edge split
+each other in a cycle (possible only with refinement edges set neither by
+bisection nor to the longest edges, as on a mesh built by hand) have one edge split
 out of order, so the mesh stays conforming but those triangles leave the
 bisection pattern (`incompatible_splits`); an unsplittable boundary edge
 leaves the triangles waiting for it unrefined (`unsplittable_edges`); a
@@ -1669,8 +1701,9 @@ names each component that dropped them ("parents dropped: delaunay_flips
 valid: ...") and the marked indices (out of range: `std::invalid_argument`);
 needs a refiner; runs the refiner's `refine` with the planned local
 improvers, compacts, runs the final passes (with a null `MeshSpec`,
-since refinement has no length target),
-validates the result (a curve point bulging into another part of the mesh
+since refinement has no length target), gives the triangles whose order
+an edit chose their longest edge as refinement edge (see "Refinement
+edges"), validates the result (a curve point bulging into another part of the mesh
 is a `std::runtime_error`), measures it, and decides the parents.
 Reports: pipeline, refiner, final passes. With nothing marked the refiner
 changes nothing and the final passes do not run (the pipeline report says

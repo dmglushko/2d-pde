@@ -19,6 +19,7 @@ add_library(pde2d_mesh
   mesh_properties.cpp
   mesh_validity.cpp
   mesher.cpp
+  refinement_edges.cpp
   remesher.cpp
   ruppert.cpp
   working_mesh.cpp)

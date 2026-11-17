@@ -30,19 +30,22 @@ struct NewestVertexBisectionOptions {
 //
 // Shape guarantee, away from curved boundaries: the triangles made by
 // repeated refinement fall into at most four similarity classes per
-// triangle of the mesh whose refinement edges were set (for example by
-// set_longest_edges_as_refinement_edges), so their angles stay bounded
-// below. Refinement edges that wait for each other in a cycle (possible
-// only when they were not set that way, for example after flips) are
-// still refined conformingly, but those triangles leave the pattern (the
-// metric "incompatible_splits" and a report message say so).
+// triangle of the mesh whose refinement edges were set to its longest
+// edges (as the Mesher, the Remesher and Gmsh import deliver them, or
+// set_longest_edges_as_refinement_edges for a mesh built by hand), so
+// their angles stay bounded below. Refinement edges that wait for each
+// other in a cycle (possible only when they were not set that way, for
+// example on a hand-built mesh) are still refined conformingly, but those
+// triangles leave the pattern (the metric "incompatible_splits" and a report
+// message say so).
 //
 // run(): first makes every triangle's longest edge its refinement edge
 // (as set_longest_edges_as_refinement_edges; metric
 // "refinement_edges_set"), then, while a triangle has an edge longer than
 // max_edge_length (resolved against domain_size(mesh)), refine() all such
 // triangles. refine() never resets the refinement edges: between
-// adaptive cycles the stored vertex order is the method's memory.
+// adaptive cycles the stored vertex order is the method's memory (the
+// Remesher reorders only the triangles an improver made or changed).
 //
 // Local improvers (it tolerates flips and node moves, though flips change
 // refinement edges) run after every split on the triangles it made.

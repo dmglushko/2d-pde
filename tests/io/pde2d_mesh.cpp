@@ -91,6 +91,19 @@ int main() {
            check(!e.link, "no link");
          check(to_text(back) == text, "stable");
        }},
+      {"vertex_order_round_trip",
+       [] {
+         // A saved mesh in the middle of adaptation keeps its refinement
+         // edges: every triangle rotated away from its longest edge comes
+         // back exactly as it was written, not reordered.
+         Mesh m = mesh_of(geometry::rectangle_with_semicircle(3, 1), 0.3);
+         for (auto &t : m.triangles)
+           t.nodes = {t.nodes[1], t.nodes[2], t.nodes[0]};
+         Mesh ordered = m;
+         mesh::set_longest_edges_as_refinement_edges(ordered);
+         check(!same_mesh(ordered, m), "not the longest edges");
+         check(same_mesh(from_text(to_text(m)), m), "the order is kept");
+       }},
       {"holes_and_islands_are_version_5",
        [] {
          Mesh m = mesh_of(holes_and_island(), 0.5);

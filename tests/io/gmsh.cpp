@@ -39,6 +39,15 @@ std::string replace(std::string s, const std::string &from,
   return s;
 }
 
+// Gmsh import delivers each triangle's longest edge as its refinement
+// edge: the public function (tested in tests/mesh/refinement.cpp) then
+// changes nothing.
+void check_longest_edges_first(const Mesh &m) {
+  Mesh ordered = m;
+  mesh::set_longest_edges_as_refinement_edges(ordered);
+  check(same_mesh(ordered, m), "longest edges are the refinement edges");
+}
+
 // The unit square split into four triangles around its center (node tags
 // 1-4 the corners, 5 the center); see data/square_v41.msh.
 void check_square(const Mesh &m) {
@@ -63,6 +72,7 @@ void check_square(const Mesh &m) {
         "domain on the left");
   check(m.chains.empty(), "no links");
   near(mesh_area(m), 1, 1e-15, "area");
+  check_longest_edges_first(m);
 }
 
 } // namespace
@@ -82,6 +92,7 @@ int main() {
        [] {
          Mesh m = io::import_gmsh(data("square_with_hole_v22.msh"));
          check_valid_mesh(m);
+         check_longest_edges_first(m);
          check(m.region_names == std::vector<std::string>{"outer", "hole"},
                "regions");
          near(mesh_area(m), 8, 1e-15, "area 9 - 1");

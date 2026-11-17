@@ -1,6 +1,7 @@
 #include "edge_bisection.hpp"
 
 #include "local_improvers.hpp"
+#include "refinement_edges.hpp"
 
 #include "pde2d/mesh/domain_size.hpp"
 
@@ -10,7 +11,6 @@
 #include <numeric>
 #include <set>
 #include <stdexcept>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -57,23 +57,12 @@ int local_edge(const WorkingMesh &mesh, std::size_t t, std::size_t a,
   throw std::logic_error("edge bisection: an edge is not in its triangle");
 }
 
-// A strict total order on edges: squared length, then node indices. It
-// makes "the longest edge" unique, so the closure of longest edges cannot
-// cycle (along a chain of waiting triangles the edges grow strictly).
-using EdgeKey = std::tuple<double, std::size_t, std::size_t>;
-
-EdgeKey edge_key(const WorkingMesh &mesh, std::size_t t, int i) {
-  auto [a, b] = edge_nodes(mesh, t, i);
-  Point d = mesh.nodes()[a] - mesh.nodes()[b];
-  return {geometry::dot(d, d), std::min(a, b), std::max(a, b)};
-}
-
+// A strict total order on edges: squared length, then node indices
+// (refinement_edges.hpp). It makes "the longest edge" unique, so the
+// closure of longest edges cannot cycle (along a chain of waiting
+// triangles the edges grow strictly).
 int longest_local_edge(const WorkingMesh &mesh, std::size_t t) {
-  int best = 0;
-  for (int i = 1; i < 3; ++i)
-    if (edge_key(mesh, t, i) > edge_key(mesh, t, best))
-      best = i;
-  return best;
+  return detail::longest_local_edge(mesh.triangles()[t], mesh.nodes());
 }
 
 double longest_length(const WorkingMesh &mesh, std::size_t t) {
@@ -488,8 +477,9 @@ void record(const Counts &c, const BisectionRule &rule, StageReport &report) {
         "their side, because the triangles waited for each other in a "
         "cycle (refinement edges that are not compatible): those triangles "
         "are bisected, but not by the newest vertex pattern. Call "
-        "set_longest_edges_as_refinement_edges on a mesh that did not come "
-        "from bisection");
+        "set_longest_edges_as_refinement_edges on a mesh built or edited by "
+        "hand (the Mesher, the Remesher and Gmsh import deliver that "
+        "order)");
   if (c.red_not_possible > 0)
     report.messages.push_back(
         std::to_string(c.red_not_possible) +
@@ -573,19 +563,9 @@ void EdgeBisection::run(WorkingMesh &mesh, const MeshSpec &spec,
   // chose for bisection (a triangulator, Ruppert, flips), and from an
   // arbitrary order the bisections make thin triangles. refine() never
   // does this: between cycles the stored order is the method's memory.
-  if (rule_.first == BisectionRule::FirstBisection::refinement_edge) {
-    std::size_t reordered = 0;
-    for (std::size_t t = 0; t < mesh.triangles().size(); ++t) {
-      if (mesh.is_triangle_deleted(t))
-        continue;
-      const int longest = longest_local_edge(mesh, t);
-      if (longest != 0) {
-        mesh.set_refinement_edge(t, longest);
-        ++reordered;
-      }
-    }
-    report.metrics["refinement_edges_set"] = static_cast<double>(reordered);
-  }
+  if (rule_.first == BisectionRule::FirstBisection::refinement_edge)
+    report.metrics["refinement_edges_set"] = static_cast<double>(
+        set_longest_edges_as_refinement_edges(mesh, RefinementEdgeScope::all));
   std::size_t steps = 0;
   // Each step refines every triangle with a long edge. The loop ends when
   // none is left, or when a step could split nothing (every long edge

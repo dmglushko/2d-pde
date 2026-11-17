@@ -91,10 +91,11 @@ struct AdaptiveStaticResult {
 // adaptation may change the mesh (declared by changes_mesh): all act on
 // the same solved state.
 //
-// Refinement edges: the loop never reorders triangles. For newest vertex
-// bisection or red-green-blue, call
-// mesh::set_longest_edges_as_refinement_edges once on the starting mesh,
-// before building the MeshedProblem passed to solve().
+// Refinement edges: the loop never reorders triangles itself. A starting
+// mesh from the Mesher, the Remesher or Gmsh import is ready for newest
+// vertex bisection or red-green-blue (longest edges as refinement edges);
+// a mesh built by hand needs mesh::set_longest_edges_as_refinement_edges
+// once, before building the MeshedProblem passed to solve().
 class AdaptiveStaticSolver {
 public:
   // Throws std::invalid_argument without adaptations, for a null one, and

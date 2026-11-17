@@ -23,9 +23,12 @@ namespace pde2d::io {
 //   their physical tag.
 // - Nodes must lie in the plane z = 0. Nodes used by no triangle are
 //   dropped; the others keep their file order. Triangles are made
-//   counterclockwise and boundary edges are oriented with the domain on
-//   their left. The mesh is validated like a WorkingMesh; it has no chains
-//   or links, and its boundary edges are in walking order.
+//   counterclockwise, each rotated so that its longest edge is its
+//   refinement edge (set_longest_edges_as_refinement_edges, mesh.hpp: the
+//   mesh is ready for adaptive refinement), and boundary edges are
+//   oriented with the domain on their left. The mesh is validated like a
+//   WorkingMesh; it has no chains or links, and its boundary edges are in
+//   walking order.
 // - Binary files, partitioned meshes and other versions are rejected.
 //
 // Throws std::invalid_argument for a malformed, unsupported or invalid

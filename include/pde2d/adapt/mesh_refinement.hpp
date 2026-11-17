@@ -26,10 +26,13 @@ namespace pde2d::adapt {
 // strategy), then the Remesher's (pipeline, refiner, final passes).
 //
 // The refinement edges of newest vertex bisection and red-green-blue are
-// the stored vertex order (mesh.hpp): call
-// mesh::set_longest_edges_as_refinement_edges once on the starting mesh,
-// before building the first MeshedProblem; this adaptation never resets
-// them, since between cycles the order is the method's memory.
+// the stored vertex order (mesh.hpp). A starting mesh from the Mesher,
+// the Remesher or Gmsh import already has its longest edges as
+// refinement edges (a mesh built by hand needs
+// mesh::set_longest_edges_as_refinement_edges once); this adaptation never
+// resets them, since between cycles the order is the method's memory, and
+// Remesher::refine reorders only the triangles an improver made or
+// changed.
 class MeshRefinement final : public Adaptation {
 public:
   // Throws std::invalid_argument for a null component.

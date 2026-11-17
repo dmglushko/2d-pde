@@ -2,6 +2,8 @@
 #include "pde2d/mesh/mesh_spec.hpp"
 #include "pde2d/mesh/working_mesh.hpp"
 
+#include "refinement_edges.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -9,7 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <tuple>
 
 namespace pde2d::mesh {
 
@@ -50,18 +51,9 @@ void set_longest_edges_as_refinement_edges(Mesh &mesh) {
         throw std::invalid_argument(
             "set_longest_edges_as_refinement_edges: triangle " +
             std::to_string(t) + " uses a node index out of range");
-    // The edge opposite vertex i, ordered by squared length, then by its
-    // node indices: one order for all edges, which both triangles of an
-    // edge agree on (the bisection refiners use the same).
-    auto opposite_key = [&](std::size_t i) {
-      const std::size_t a = v[(i + 1) % 3], b = v[(i + 2) % 3];
-      geometry::Point d = mesh.nodes[a] - mesh.nodes[b];
-      return std::tuple{geometry::dot(d, d), std::min(a, b), std::max(a, b)};
-    };
-    std::size_t first = 0;
-    for (std::size_t i = 1; i < 3; ++i)
-      if (opposite_key(i) > opposite_key(first))
-        first = i;
+    // The order of all edges the bisection refiners use too.
+    const auto first =
+        static_cast<std::size_t>(detail::longest_local_edge(v, mesh.nodes));
     // A rotation keeps the triangle counterclockwise.
     v = {v[first], v[(first + 1) % 3], v[(first + 2) % 3]};
   }

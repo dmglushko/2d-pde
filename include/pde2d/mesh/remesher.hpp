@@ -28,6 +28,16 @@ struct RemesherOptions {
 // met"; refine() refines marked triangles once (adaptive refinement). Both
 // measure the final mesh once (MeshProperties, after the last improver).
 //
+// Both deliver the refinement-edge order (mesh.hpp) after the final
+// passes: run() makes every triangle's longest edge its refinement edge;
+// refine() does so only for the triangles whose vertex order an edit chose
+// (made or changed by a flip, an insertion such as Ruppert's, or a
+// re-triangulating boundary split, during the refiner or a final pass),
+// while the triangles a bisection made and those nothing touched keep
+// their order, newest vertex bisection's memory between cycles. Moving a
+// node (smoothing) keeps a triangle's order. The pipeline report's metric
+// "refinement_edges_set" counts the triangles whose vertex 0 changed.
+//
 // The first report of every run is the "pipeline" report: the plan
 // resolved at construction and its warnings (see pipeline_report()), and
 // after the run the warnings about the final mesh: triangles below the
@@ -95,8 +105,9 @@ public:
   // message is the plan in words, for example "plan: refiner ruppert;
   // local: none; final: delaunay_flips, laplacian_smoothing" ("no refiner"
   // without one); the plan's warnings follow as further messages. Metrics:
-  // "local_improvers" and "final_passes" (counts). Its time is the time
-  // the plan took to resolve.
+  // "local_improvers" and "final_passes" (counts); a run adds
+  // "refinement_edges_set". Its time is the time the plan took to
+  // resolve.
   const StageReport &pipeline_report() const { return pipeline_report_; }
 
 private:
