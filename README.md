@@ -4,8 +4,7 @@ A C++23 library, written to learn from, for two-dimensional geometry,
 triangle meshing and their file formats, heading towards one linear scalar PDE solved with P1
 finite elements.
 
-This is a from-scratch rewrite. The previous header-only code is on the
-branch `archive/header-only-v1`, kept for reference only.
+This is a from-scratch rewrite.
 
 What exists now:
 

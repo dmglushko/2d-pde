@@ -5,8 +5,7 @@ what was decided and why. Agents implement what is here. They do not decide
 anything that is missing: they raise it with the owner. Proposals and open
 questions are listed separately at the end.
 
-Started 2026-11-11. The previous header-only code is on the branch
-`archive/header-only-v1`, kept for reference only.
+Started 2026-11-11.
 
 ## Process
 
@@ -58,9 +57,9 @@ Started 2026-11-11. The previous header-only code is on the branch
   target; the modules stay separate libraries. *Why:* the owner wants a
   working interface to enter settings and see results without
   overseeing its details.
-- **The archive is a reference, not a source.** Agents may port
-  self-contained, well-tested pieces (the exact geometric predicates and the
-  curve math). Everything else is written fresh to this design. *Why:* the
+- **Only the predicates and curve math were ported** from the previous
+  code (self-contained, well-tested pieces). Everything else is written
+  fresh to this design. *Why:* the
   owner must not again inherit code they don't understand.
 - **Scope: one linear scalar PDE with P1 elements.**
 - **Input is symbolic only (SymEngine). No callables in v1, not even where no

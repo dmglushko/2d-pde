@@ -608,7 +608,7 @@ Curve operations are of three sorts:
   `overloaded{...}`, one handler per kind and no catch-all, so a new kind
   does not compile until it is handled there.
 
-The formulas are ported from the archive. `orient` and `incircle`
+The formulas are ported from the previous code. `orient` and `incircle`
 are exact predicates: Shewchuk's adaptive-precision `orient2d` and
 `incircle` (floating-point filter, then exact expansion arithmetic in
 stages), with a slow exact-integer evaluation for the rare undecided case

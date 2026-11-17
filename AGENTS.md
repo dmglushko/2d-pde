@@ -40,12 +40,8 @@ The table of files (which header holds which type, the private headers,
 tests, tools) is in [docs/architecture.md](docs/architecture.md#files).
 Look up the rows you need there; `ls` shows the rest.
 
-The previous code is on the branch `archive/header-only-v1`. It is a
-reference, not a source: only the predicates and curve math were ported.
-Read it with `git show archive/header-only-v1:<path>`; do not check it out
-in this checkout. The mesh viewer and its example files were copied from
-it unchanged; keep them unchanged (the `.pde2d` format must stay readable
-by them).
+The mesh viewer and its example files come from the previous code; keep
+them unchanged (the `.pde2d` format must stay readable by them).
 
 ## Build and test
 

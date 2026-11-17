@@ -1,8 +1,7 @@
 # `PDE2D_MESH` text format
 
 Single source of truth for the mesh file format. The format is kept
-exactly as the previous code (branch `archive/header-only-v1`) defined it,
-so the mesh viewer works unchanged (decided: "`.pde2d` keeps the old
+exactly as the previous code defined it, so the mesh viewer works unchanged (decided: "`.pde2d` keeps the old
 format"). Two parsers implement it in this repository and must stay in
 sync with this page:
 
@@ -20,7 +19,7 @@ readable, update both parsers and this page, and add a fixture exercised
 by the C++ and the JavaScript tests (`tests/io/viewer_reads_export.cjs`
 reads the version 5 file written by `examples/mesh_viewer/produce_mesh`).
 The sections below describe the format as the previous code wrote it; the
-names of its C++ files and types refer to the archive.
+names of its C++ files and types refer to that code.
 
 ## Lexical rules
 

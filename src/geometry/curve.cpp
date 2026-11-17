@@ -11,8 +11,8 @@
 #include <variant>
 #include <vector>
 
-// The formulas are ported from the archive
-// (cpp/discretization/curve_segment.hpp and curve_length.hpp). Each kind's
+// The formulas are ported from the previous code (its
+// cpp/discretization/curve_segment.hpp and curve_length.hpp). Each kind's
 // methods are together in its own section.
 namespace pde2d::geometry {
 namespace {
