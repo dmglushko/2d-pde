@@ -54,6 +54,11 @@ struct IntegrationResult {
   // when the method's start reads it), snapshots, assembly_threads (the
   // assembler's thread count, 0 resolved; see the "assembly" report) and
   // linear_threads (the most threads the linear solver used in a step).
+  // Its messages are the linear solver's warnings
+  // (LinearSolveResult::messages) of every solve of the call, the steps'
+  // and those a method's start() does: each distinct message once, in the
+  // order they first appeared (SupernodalCholesky's, when it factored -A,
+  // once however many steps it solved).
   mesh::StageReport report{};
 };
 

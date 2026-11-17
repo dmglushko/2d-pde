@@ -16,7 +16,9 @@ struct StaticResult {
   // "assembly" (the Assembler's report), then "static_solver": the time
   // taken and the metrics free_unknowns, linear_iterations, residual,
   // backward_error, pivot_ratio (0 when the linear solver does not measure
-  // it) and linear_threads (LinearSolveResult::threads).
+  // it) and linear_threads (LinearSolveResult::threads); its messages are
+  // the linear solver's (LinearSolveResult::messages: for example
+  // SupernodalCholesky's when it factored -A).
   std::vector<mesh::StageReport> reports{};
 };
 

@@ -66,6 +66,13 @@ struct LinearSolveResult {
   // the Eigen direct solvers (SparseLu, SimplicialLdlt), which run in one
   // thread, and for an empty system.
   std::size_t threads = 1;
+  // Warnings: the solve worked, but the caller should know something
+  // (failures are exceptions). Each names the solver. Empty for most
+  // solves; SupernodalCholesky gives one on every solve with a matrix it
+  // prepared as negative definite (it factored -A). The StaticSolver puts
+  // them in its "static_solver" report, the Integrator each distinct one
+  // once in its "integrator" report.
+  std::vector<std::string> messages{};
 };
 
 // A solver prepared for one matrix. It holds the matrix (shared), so the

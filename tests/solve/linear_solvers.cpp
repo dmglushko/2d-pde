@@ -13,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 // Small systems with known solutions: b is computed by hand from a chosen
@@ -325,19 +326,63 @@ int main() {
       {"SupernodalCholesky throws on a matrix that is not positive definite",
        [] {
          // Indefinite with a zero diagonal, indefinite with nonzero pivots
-         // (which LDL^T handles), negative definite, singular.
-         for (const Dense &a : {indefinite, Dense{{2, 1}, {1, -3}},
-                                Dense{{-2, 1}, {1, -2}}, Dense{{1, 2}, {2, 4}}})
+         // (which LDL^T handles), singular.
+         for (const Dense &a :
+              {indefinite, Dense{{2, 1}, {1, -3}}, Dense{{1, 2}, {2, 4}}})
            expect_throws<std::runtime_error>(
                [&] { (void)SupernodalCholesky().prepare(sparse(a)); },
-               "supernodal_cholesky: the matrix is not positive definite");
+               "supernodal_cholesky: the matrix is not positive definite (the "
+               "factorization stopped at column");
          // Positive semidefinite (singular), with an exact zero pivot.
          expect_throws<std::runtime_error>(
              [] {
                (void)SupernodalCholesky().prepare(
                    sparse({{1, -1, 0}, {-1, 2, -1}, {0, -1, 1}}));
              },
-             "at a pivot that is zero or negative); for a negative definite");
+             "at a pivot that is zero or negative); for an indefinite matrix "
+             "use simplicial_ldlt or a LU solver");
+         // A negative diagonal: -A is factored. Negative semidefinite
+         // (singular) and indefinite (-A has a negative pivot): refused.
+         for (const Dense &a : {Dense{{-1, 1, 0}, {1, -2, 1}, {0, 1, -1}},
+                                Dense{{-1, 2}, {2, -1}}})
+           expect_throws<std::runtime_error>(
+               [&] { (void)SupernodalCholesky().prepare(sparse(a)); },
+               "supernodal_cholesky: the matrix is not positive definite, and "
+               "not negative definite although its diagonal is negative (the "
+               "factorization of -A stopped at column");
+       }},
+      {"SupernodalCholesky solves a negative definite system, with a warning",
+       [] {
+         // -A is factored: the same x as the Eigen LU on A, a warning on
+         // every solve, the residual measured with A and b.
+         const Dense a = {{-4, 1, 0}, {1, -4, 1}, {0, 1, -4}};
+         const std::vector<double> b = {1, -2, 3};
+         const auto prepared = SupernodalCholesky().prepare(sparse(a));
+         const auto lu = SparseLu().prepare(sparse(a))->solve(b);
+         for (int i = 0; i < 2; ++i) {
+           const auto r = prepared->solve(b);
+           for (std::size_t k = 0; k < 3; ++k)
+             near(r.values[k], lu.values[k], 1e-14, "the same x");
+           check(r.residual < 1e-14, "the residual with A and b");
+           check(r.messages.size() == 1 &&
+                     r.messages[0].starts_with(
+                         "supernodal_cholesky: the matrix is negative "
+                         "definite") &&
+                     r.messages[0].find("-A was factored") != std::string::npos,
+                 "the warning on every solve");
+         }
+         // No message for the positive definite form, nor from the other
+         // solvers.
+         Dense minus_a = a;
+         for (auto &row : minus_a)
+           for (double &value : row)
+             value = -value;
+         check(SupernodalCholesky()
+                   .prepare(sparse(minus_a))
+                   ->solve(b)
+                   .messages.empty(),
+               "no message for a positive definite matrix");
+         check(lu.messages.empty(), "no message from sparse_lu");
        }},
       {"every solver reports its backward error",
        [] {

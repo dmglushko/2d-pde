@@ -1,8 +1,11 @@
 // The parallel direct solvers (SupernodalCholesky, MultifrontalLu) on
 // assembled problems (docs/decisions.md, "Parallel direct solvers come from
 // SuiteSparse"): their solutions agree with the Eigen direct solvers', they
-// refuse what they cannot handle, and the thread count changes the answer
-// at most in the last digits, never with 1 thread. At most 4 threads.
+// refuse what they cannot handle, the Cholesky solves a negative definite
+// matrix by factoring -A and warns ("The Cholesky factors -A when A is
+// negative definite, with a warning"), and the thread count changes the
+// answer at most in the last digits, never with 1 thread. At most 4
+// threads.
 
 #include "solve_support.hpp"
 #include "support/check.hpp"
@@ -63,6 +66,11 @@ double relative_difference(std::span<const double> x,
   return difference / scale;
 }
 
+// The start of SupernodalCholesky's warning when it factored -A.
+constexpr const char *negative_warning =
+    "supernodal_cholesky: the matrix is negative definite (every diagonal "
+    "entry is negative";
+
 std::shared_ptr<const pde2d::mesh::Mesh> l_shape() {
   static const auto mesh = pde2d::test::refined_l_shape(0.04);
   return mesh;
@@ -72,19 +80,20 @@ const std::vector<std::string> sides = {"bottom", "right", "inner", "top",
                                         "left"};
 
 // a (u_xx + u_yy) + b_x u_x + c u + m1 u_t = f on the L-shape, u = 0 on
-// the whole boundary (or u_n = 0 with `neumann`). a = -1 gives a positive
-// definite matrix, a = 1 a negative definite one; b_x not 0 makes it
-// non-symmetric; c below minus the first eigenvalue of -Laplace (about
-// 9.6) makes it indefinite.
+// the whole boundary (or u_n = 0 with `neumann`), f = 1 + sin(t) x (its
+// negative with `negate_f`). a = -1 gives a positive definite matrix, a = 1
+// a negative definite one; b_x not 0 makes it non-symmetric; c below minus
+// the first eigenvalue of -Laplace (about 9.6) makes it indefinite (for
+// a = 1: c above it).
 std::shared_ptr<const MeshedProblem>
 problem(const char *a, const char *b_x = "0", const char *c = "0",
-        const char *m1 = "0", bool neumann = false) {
+        const char *m1 = "0", bool neumann = false, bool negate_f = false) {
   Problem p{.equation = {.a_xx = e(a),
                          .a_yy = e(a),
                          .b_x = e(b_x),
                          .c = e(c),
                          .m1 = e(m1),
-                         .f = e("1 + sin(t)*x")},
+                         .f = e(negate_f ? "-(1 + sin(t)*x)" : "1 + sin(t)*x")},
             .initial = {.u = e("x*y")}};
   for (const auto &side : sides)
     p.boundary_conditions.emplace(
@@ -230,15 +239,134 @@ int main() {
          agrees(MultifrontalLu(), SparseLu(), s);
          expect_throws<std::runtime_error>(
              [&] { (void)SupernodalCholesky().prepare(s.matrix); },
-             "supernodal_cholesky: the matrix is not positive definite");
-         // Negative definite: the equation written with a = 1.
+             "supernodal_cholesky: the matrix is not positive definite (the "
+             "factorization stopped at column");
+       }},
+      {"Cholesky refuses diagonals of both signs, a zero one, and an "
+       "indefinite matrix with a negative diagonal",
+       [] {
+         // Diagonal entries of both signs: factored as it is, refused at
+         // its negative pivot.
          expect_throws<std::runtime_error>(
-             [&] {
-               (void)SupernodalCholesky().prepare(
-                   system_of(problem("1")).matrix);
+             [] {
+               (void)SupernodalCholesky().prepare(pde2d::test::sparse(
+                   {{-2.0, 1.0, 0.0}, {1.0, -3.0, 1.0}, {0.0, 1.0, 4.0}}));
              },
              "supernodal_cholesky: the matrix is not positive definite (the "
-             "factorization stopped at column 0 of");
+             "factorization stopped at column");
+         // A zero diagonal entry (missing from the pattern), the others
+         // negative: also factored as it is.
+         expect_throws<std::runtime_error>(
+             [] {
+               (void)SupernodalCholesky().prepare(
+                   pde2d::test::sparse({{-2.0, 1.0}, {1.0, 0.0}}));
+             },
+             "supernodal_cholesky: the matrix is not positive definite (the "
+             "factorization stopped at column");
+         // Every diagonal entry negative, but indefinite (u_xx + u_yy + 40 u
+         // = f: c above the first eigenvalue of -Laplace): -A is factored
+         // and refused.
+         const auto s = system_of(problem("1", "0", "40"));
+         bool negative = true;
+         for (std::size_t i = 0; i < s.matrix->rows(); ++i)
+           negative = negative && s.matrix->entry(i, i) < 0.0;
+         check(negative, "every diagonal entry is negative");
+         expect_throws<std::runtime_error>(
+             [&] { (void)SupernodalCholesky().prepare(s.matrix); },
+             "supernodal_cholesky: the matrix is not positive definite, and "
+             "not negative definite although its diagonal is negative (the "
+             "factorization of -A stopped at column");
+       }},
+      {"a negative definite matrix: Cholesky factors -A, with a warning",
+       [] {
+         // u_xx + u_yy = -(1 + sin(t) x) is -u_xx - u_yy = 1 + sin(t) x
+         // written with the opposite sign: a = 1 gives a negative definite
+         // matrix.
+         const auto negative = problem("1", "0", "0", "0", false, true);
+         const auto positive = problem("-1");
+         const auto cholesky =
+             StaticSolver(std::make_shared<SupernodalCholesky>(
+                              SupernodalCholeskyOptions{.threads = 2}))
+                 .solve(negative);
+         const auto ldlt =
+             StaticSolver(std::make_shared<SimplicialLdlt>()).solve(positive);
+         check(relative_difference(cholesky.solution.values,
+                                   ldlt.solution.values) < 1e-12,
+               "the same answer as simplicial_ldlt on the positive form");
+         const auto &report = cholesky.reports.at(1);
+         check(report.stage == "static_solver", "the static solver's report");
+         check(report.messages.size() == 1 &&
+                   report.messages[0].find(negative_warning) == 0,
+               "one warning in the static solver's report");
+         check(report.metrics.at("backward_error") < 1e-14,
+               "the backward error, measured with A and b as given");
+         check(ldlt.reports.at(1).messages.empty(),
+               "no message from simplicial_ldlt");
+         // The positive form: no message.
+         const auto plain = StaticSolver(std::make_shared<SupernodalCholesky>())
+                                .solve(positive);
+         check(plain.reports.at(1).messages.empty(),
+               "no message for a positive definite matrix");
+         check(relative_difference(plain.solution.values,
+                                   cholesky.solution.values) < 1e-12,
+               "the same answer from both forms");
+         // Every solve of the prepared solver carries the warning.
+         const auto s = system_of(negative);
+         const auto prepared = SupernodalCholesky().prepare(s.matrix);
+         for (int i = 0; i < 2; ++i) {
+           const auto result = prepared->solve(s.right_hand_side);
+           check(result.messages.size() == 1 &&
+                     result.messages[0].find(negative_warning) == 0,
+                 "a warning on every solve");
+           check(result.residual < 1e-10 && result.backward_error < 1e-14,
+                 "an accurate answer");
+           check(result.pivot_ratio > 0.0, "a pivot ratio");
+         }
+       }},
+      {"a negative definite step matrix: the warning once in the integrator's "
+       "report",
+       [] {
+         // The heat equation u_t - u_xx - u_yy = f written as -u_t + u_xx +
+         // u_yy = -f: the midpoint step matrix -M1 / dt - K / 2 is negative
+         // definite. dt = 0.05 to t1 = 0.22: four steps of 0.05, one of
+         // 0.02, so the solver is prepared twice and solves five times.
+         const auto negative = problem("1", "0", "0", "-1", false, true);
+         const auto positive = problem("-1", "0", "0", "1");
+         const auto run = [](std::shared_ptr<const LinearSolver> solver,
+                             const std::shared_ptr<const MeshedProblem> &p) {
+           return Integrator(
+                      std::make_shared<ImplicitMidpoint>(),
+                      std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.05}),
+                      std::move(solver))
+               .integrate(p, 0.0, 0.22);
+         };
+         const auto cholesky =
+             run(std::make_shared<SupernodalCholesky>(), negative);
+         const auto ldlt = run(std::make_shared<SimplicialLdlt>(), positive);
+         check(cholesky.report.metrics.at("steps") == 5 &&
+                   cholesky.report.metrics.at("prepares") == 2,
+               "five steps, two prepares");
+         check(relative_difference(cholesky.final.values, ldlt.final.values) <
+                   1e-12,
+               "the same answer as simplicial_ldlt on the positive form");
+         check(cholesky.report.messages.size() == 1 &&
+                   cholesky.report.messages[0].find(negative_warning) == 0,
+               "the warning once in the integrator's report");
+         check(ldlt.report.messages.empty(), "no message from simplicial_ldlt");
+         check(run(std::make_shared<SupernodalCholesky>(), positive)
+                   .report.messages.empty(),
+               "no message for a positive definite step matrix");
+         // Time order 0 with ImplicitEuler: its start() solves with A at t0,
+         // then each step again; the warning still once.
+         const auto static_negative = problem("1", "0", "0", "0", false, true);
+         const auto euler = Integrator(std::make_shared<ImplicitEuler>(),
+                                       std::make_shared<FixedStep>(
+                                           FixedStepOptions{.dt = 0.1}),
+                                       std::make_shared<SupernodalCholesky>())
+                                .integrate(static_negative, 0.0, 0.3);
+         check(euler.report.messages.size() == 1 &&
+                   euler.report.messages[0].find(negative_warning) == 0,
+               "time order 0: the warning once");
        }},
       {"time steps: both agree with the Eigen solvers",
        [] {

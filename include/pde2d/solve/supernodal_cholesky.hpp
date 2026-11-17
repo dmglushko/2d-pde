@@ -22,17 +22,29 @@ struct SupernodalCholeskyOptions {
   std::size_t threads = 1;
 };
 
-// A direct solver for symmetric positive definite sparse matrices: a
-// supernodal Cholesky factorization L L^T (CHOLMOD) with a fill-reducing
-// ordering (CHOLMOD's default: AMD, or METIS when AMD fills much). The
-// supernodes are dense blocks, factorized with the BLAS, which is where
-// the threads work. It reads only the lower triangle, so it requires a
-// symmetric matrix (requirements()).
+// A direct solver for symmetric definite sparse matrices: a supernodal
+// Cholesky factorization L L^T (CHOLMOD) with a fill-reducing ordering
+// (CHOLMOD's default: AMD, or METIS when AMD fills much). The supernodes
+// are dense blocks, factorized with the BLAS, which is where the threads
+// work. It reads only the lower triangle, so it requires a symmetric
+// matrix (requirements()).
 //
-// prepare() factorizes and throws std::runtime_error when the matrix is
-// not positive definite: a pivot is zero (an exactly singular matrix) or
-// negative (a negative definite matrix, for example from an equation
-// written with positive a_xx and a_yy, or an indefinite one). A tiny
+// A negative definite matrix (an equation written with positive a_xx and
+// a_yy, such as u_xx + u_yy = f, gives one) is solved too: when every
+// diagonal entry of the matrix is negative, prepare() factors -A instead
+// and every solve solves -A x = -b, which has the same x (negating is
+// exact). The cost: a negated copy of the matrix's values (one double per
+// stored entry, on the same pattern) while prepare() factorizes, and n
+// negations per solve. The result of every such solve carries a warning in
+// LinearSolveResult::messages ("... -A was factored ...; the answer is
+// unchanged"); its residual and backward error are measured with A and b
+// as given. A matrix with a zero diagonal entry or diagonal entries of
+// both signs is factored as it is (it cannot be definite, and is refused
+// below).
+//
+// prepare() factorizes and throws std::runtime_error when the matrix (or
+// -A, for a negative diagonal) is not positive definite: a pivot is zero
+// (an exactly singular matrix) or negative (an indefinite matrix). A tiny
 // positive pivot is accepted: the ratio of the smallest pivot to the
 // largest is reported (LinearSolveResult::pivot_ratio), not judged, so a
 // pure Neumann problem whose last pivot rounds to a tiny positive number
