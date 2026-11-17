@@ -1,7 +1,9 @@
 # Agent guide: app/
 
-The graphical interface of pde2d. Read [docs/app.md](../docs/app.md)
-first (shape, case format, API, catalog, runs: what is true now), then
+The graphical interface of pde2d. Read the sections of
+[docs/app.md](../docs/app.md) (shape, case format, API, catalog, runs:
+what is true now) that cover what your task touches, found by their
+headings, rather than the whole file; then
 [README.md](README.md) (how it is used); the reasons are in
 [docs/app-decisions.md](../docs/app-decisions.md).
 
