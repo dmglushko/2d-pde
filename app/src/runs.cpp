@@ -52,7 +52,10 @@ void publish_snapshot(Run::Published &out, solve::Solution solution) {
       low = std::isnan(low) ? value : std::min(low, value);
       high = std::isnan(high) ? value : std::max(high, value);
     }
+  // A snapshot keeps only u: the velocities and Newmark's accelerations
+  // are the next chunk's state (Run::last), not something a reader needs.
   solution.velocities = {};
+  solution.accelerations = {};
   out.minima.push_back(low);
   out.maxima.push_back(high);
   out.snapshots.push_back(
@@ -546,7 +549,8 @@ std::size_t run_bytes(std::size_t nodes, std::size_t snapshots,
                       int time_order) {
   // A snapshot: its values and what holds them (Solution, shared_ptr).
   constexpr std::size_t per_snapshot = 128;
-  const std::size_t state = nodes * 8 * (time_order == 2 ? 2 : 1);
+  // u, and for time order 2 u_t and (Newmark) u_tt.
+  const std::size_t state = nodes * 8 * (time_order == 2 ? 3 : 1);
   return snapshots * (nodes * 8 + per_snapshot) + state;
 }
 

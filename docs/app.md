@@ -959,7 +959,9 @@ default 1 GiB). A run's reservation is fixed when it is made
 (`run_bytes`; for an adaptive run `adaptive_run_bytes`, in time
 `adaptive_time_run_bytes`, see "Adaptive runs"): its snapshots (times + 1 for a time run, 1 for a static
 solve) × (8 bytes a node + 128) plus the state a chunk starts from (8
-bytes a node, twice for time order 2); the mesh and the stage cache are
+bytes a node, three times for time order 2: u_t and Newmark's u_tt,
+which the state carries so that a chunk continues without Newmark's
+start); the mesh and the stage cache are
 not counted.
 
 - **Before a run starts** (after its setup is read, before anything is

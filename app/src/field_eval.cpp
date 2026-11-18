@@ -367,15 +367,15 @@ Json probe_series(const RunSnapshots &run, const Json &points) {
     std::vector<std::optional<PointLocator::Found>> found;
     for (const PointLocator &locator : locators)
       found.push_back(locator.locate(p));
-    // Inside the last mesh's triangle (meshes only grow by refinement, so
-    // a point is inside all of them or none, up to rounding).
+    // `inside` and `triangle` are the last mesh's; a snapshot whose mesh
+    // misses the point (a refined curved boundary moves a little) is null.
     const auto &last = found[mesh_of.empty() ? 0 : mesh_of.back()];
     item["inside"] = last.has_value();
     item["triangle"] = last ? Json(last->triangle) : Json(nullptr);
     Json values = Json::array();
     if (last)
-      for (std::size_t k = 0; k < run.snapshots.size(); ++k) {
-        const auto &at = found[mesh_of[k]];
+      for (std::size_t s = 0; s < run.snapshots.size(); ++s) {
+        const auto &at = found[mesh_of[s]];
         if (!at) {
           values.push_back(nullptr);
           continue;
@@ -384,7 +384,7 @@ Json probe_series(const RunSnapshots &run, const Json &points) {
         for (int v = 0; v < 3; ++v)
           value +=
               at->weights[static_cast<std::size_t>(v)] *
-              run.snapshots[k]->values[at->nodes[static_cast<std::size_t>(v)]];
+              run.snapshots[s]->values[at->nodes[static_cast<std::size_t>(v)]];
         values.push_back(number_or_null(value));
       }
     item["values"] = std::move(values);

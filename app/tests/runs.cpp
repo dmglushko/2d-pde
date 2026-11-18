@@ -202,18 +202,11 @@ int main() {
                              single(wave_case(method)), method + ", order 2");
          }
        }},
-      {"Newmark: chunks recompute the acceleration, so the snapshots are "
-       "close",
+      {"Newmark: chunks continue from the carried acceleration, so the "
+       "snapshots are the same bit for bit",
        [] {
-         const Values a = chunked(wave_case("newmark"));
-         const Values b = single(wave_case("newmark"));
-         check(a.size() == b.size(), "as many snapshots");
-         double difference = 0.0;
-         for (std::size_t k = 0; k < a.size(); ++k)
-           for (std::size_t i = 0; i < a[k].size(); ++i)
-             difference = std::max(difference, std::abs(a[k][i] - b[k][i]));
-         check(difference <= 1e-8 * largest(b),
-               "difference " + std::to_string(difference));
+         check_identical(chunked(wave_case("newmark")),
+                         single(wave_case("newmark")), "newmark");
        }},
       {"the chunks' reports add up to the one call's",
        [] {

@@ -48,10 +48,10 @@ cannot be stopped.
   "Runs in chunks"). This needs no library change.
 - **What is still missing:** progress and cancellation inside a chunk. A
   run with few snapshots and many steps per interval still answers only
-  at each snapshot, and Stop waits for the chunk. Newmark's chunks also
-  recompute the acceleration at each start (the `Solution` carries no
-  acceleration), so they match one call only up to rounding. A static
-  solve has no progress at all.
+  at each snapshot, and Stop waits for the chunk. (Newmark's chunks
+  continue from the acceleration the `Solution` now carries, 2026-11-18,
+  so they equal one call bit for bit.) A static solve has no progress at
+  all.
 - Possible shape: an optional callback in `IntegrationOutput` called after
   each step with the step record, returning whether to continue (or a
   cancellation token checked between steps).
