@@ -580,6 +580,14 @@ marked "architecture" below are decided.
   so distributed programs that link them are GPL-3) is postponed: GitHub
   issue #38. Reusing the symbolic factorization when only the values
   change: GitHub issue #39.
+- **A tiny pivot ratio is a warning; the integrator reports the worst
+  solve** (decided 2026-11-18): a direct solver whose `pivot_ratio` is
+  below 1e-10 adds a warning to `LinearSolveResult::messages` (the matrix
+  is nearly singular, so the answer may have few correct digits); the
+  answer is still returned. The integrator's report shows the largest
+  `backward_error` and the smallest measured `pivot_ratio` over all its
+  solves. *Why:* "refuse only exact singularity" otherwise returns a
+  hopeless answer (one correct digit) without any sign but a number.
 - **Known limits of the SuiteSparse solvers, documented** (2026-11-17):
   OpenBLAS's thread count is one setting for the whole process, so a
   program that changes it during one of these solves can have its setting
