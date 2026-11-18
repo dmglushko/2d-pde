@@ -12,11 +12,21 @@ namespace pde2d::solve {
 // an indefinite one that needs pivoting).
 //
 // Without pivoting, a tiny pivot of an indefinite matrix passes the
-// factorization but gives a wrong answer. So solve() measures the relative
-// residual |b - A x| / |b| of every result and throws std::runtime_error
-// when it is above residual_tolerance (or the result is not finite): it
-// never returns an unchecked answer.
+// factorization but gives a wrong answer. So solve() measures the
+// normwise backward error |b - A x| / (|A| |x| + |b|) (infinity norms;
+// LinearSolveResult::backward_error) of every result and throws
+// std::runtime_error when it is above residual_tolerance (or the result is
+// not finite): it never returns an unchecked answer. The backward error,
+// not the relative residual |b - A x| / |b|, is checked because the
+// residual of an accurate answer is rounding of size machine epsilon times
+// |A| |x|, which a coefficient contrast of 1e6 makes larger than |b| times
+// any useful tolerance. Every result also reports the ratio of the
+// smallest pivot |D_ii| to the largest (pivot_ratio), which is not
+// judged; below 1e-10 the result carries a warning in its messages (the
+// matrix is nearly singular).
 struct SimplicialLdltOptions {
+  // The bound on the backward error of every solve (the name is kept from
+  // when it bounded the relative residual); in (0, 1).
   double residual_tolerance = 1e-8;
 };
 

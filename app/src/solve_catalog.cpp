@@ -99,11 +99,12 @@ SolveCatalog make_solve_catalog() {
          .description =
              "An LDL^T factorization without pivoting (Eigen's "
              "SimplicialLDLT). Needs a symmetric matrix; every result's "
-             "residual is checked.",
+             "backward error is checked.",
          .options = {plain_option(
              "residual_tolerance", "Residual tolerance",
-             "A solve whose relative residual is above this fails (a tiny "
-             "pivot of an indefinite matrix); in (0, 1).",
+             "A solve whose backward error |b - A x| / (|A| |x| + |b|) is "
+             "above this fails (a tiny pivot of an indefinite matrix); in "
+             "(0, 1).",
              OptionKind::number, defaults.residual_tolerance)},
          .make = [](const OptionReader &options)
              -> std::shared_ptr<const solve::LinearSolver> {

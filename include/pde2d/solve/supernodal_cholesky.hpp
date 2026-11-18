@@ -7,8 +7,10 @@
 namespace pde2d::solve {
 
 struct SupernodalCholeskyOptions {
-  // Every solve measures the relative residual |b - A x| / |b| and throws
-  // std::runtime_error above this; in (0, 1).
+  // Every solve measures the normwise backward error |b - A x| / (|A| |x| +
+  // |b|) (infinity norms; LinearSolveResult::backward_error) and throws
+  // std::runtime_error above this; in (0, 1). (The name is kept from when
+  // it bounded the relative residual.)
   double residual_tolerance = 1e-8;
   // How many threads the factorization and the solves may use: 1 runs in
   // the calling thread, 0 means all hardware threads (the processors
@@ -20,26 +22,55 @@ struct SupernodalCholeskyOptions {
   std::size_t threads = 1;
 };
 
-// A direct solver for symmetric positive definite sparse matrices: a
-// supernodal Cholesky factorization L L^T (CHOLMOD) with a fill-reducing
-// ordering (CHOLMOD's default: AMD, or METIS when AMD fills much). The
-// supernodes are dense blocks, factorized with the BLAS, which is where
-// the threads work. It reads only the lower triangle, so it requires a
-// symmetric matrix (requirements()).
+// A direct solver for symmetric definite sparse matrices: a supernodal
+// Cholesky factorization L L^T (CHOLMOD) with a fill-reducing ordering
+// (CHOLMOD's default: AMD, or METIS when AMD fills much). The supernodes
+// are dense blocks, factorized with the BLAS, which is where the threads
+// work. It reads only the lower triangle, so it requires a symmetric
+// matrix (requirements()).
 //
-// prepare() factorizes and throws std::runtime_error when the matrix is
-// not positive definite (a negative definite matrix, for example from an
-// equation written with positive a_xx and a_yy, is not either) or is
-// singular to working precision (its smallest pivot is below n machine
-// epsilons times the largest). Every solve checks its relative residual
-// against residual_tolerance, so it never returns an unchecked answer.
+// A negative definite matrix (an equation written with positive a_xx and
+// a_yy, such as u_xx + u_yy = f, gives one) is solved too: when every
+// diagonal entry of the matrix is negative, prepare() factors -A instead
+// and every solve solves -A x = -b, which has the same x (negating is
+// exact). The cost: a negated copy of the matrix's values (one double per
+// stored entry, on the same pattern) while prepare() factorizes, and n
+// negations per solve. The result of every such solve carries a warning in
+// LinearSolveResult::messages ("... -A was factored ...; the answer is
+// unchanged"); its residual and backward error are measured with A and b
+// as given. A matrix with a zero diagonal entry or diagonal entries of
+// both signs is factored as it is (it cannot be definite, and is refused
+// below).
+//
+// prepare() factorizes and throws std::runtime_error when the matrix (or
+// -A, for a negative diagonal) is not positive definite: a pivot is zero
+// (an exactly singular matrix) or negative (an indefinite matrix). A tiny
+// positive pivot is accepted: the ratio of the smallest pivot to the
+// largest is reported (LinearSolveResult::pivot_ratio, with a warning in
+// the messages below 1e-10), not judged, so a
+// pure Neumann problem whose last pivot rounds to a tiny positive number
+// gets one of its solutions, and a very ill-conditioned but well-posed
+// problem is solved. Every solve checks its backward error against
+// residual_tolerance, so it never returns an unchecked answer; the
+// relative residual |b - A x| / |b| is reported but not checked (for an
+// accurate answer it is machine epsilon times |A| |x| / |b|, which a
+// coefficient contrast of 1e6 makes large).
 //
 // Threads: OpenBLAS has one thread count for the whole process, so this
 // solver sets it for the duration of each factorization and solve and
 // restores it afterwards, under a lock shared with MultifrontalLu: their
 // factorizations and solves that would run at once in different threads
 // run one after another. Other code that calls OpenBLAS during that time
-// sees this solver's count.
+// sees this solver's count, and a program that sets OpenBLAS's count
+// (openblas_set_num_threads) during one of these solves can have its
+// setting overwritten when the solve restores the count it found.
+//
+// Linking: Ubuntu's SuiteSparse 7.12 builds ParU (which pde2d_solve links
+// for MultifrontalLu) with its own global operator new(std::size_t) and
+// operator delete(void *), so
+// every program that links pde2d_solve allocates through them; on
+// allocation failure they throw std::bad_alloc at once, skipping a
+// std::new_handler the program installed.
 class SupernodalCholesky final : public LinearSolver {
 public:
   // Throws std::invalid_argument for options out of range.

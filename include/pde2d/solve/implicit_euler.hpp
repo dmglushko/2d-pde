@@ -44,6 +44,11 @@ public:
   StartNeeds start_needs(int time_order) const override {
     return time_order == 0 ? StartNeeds::static_part : StartNeeds::nothing;
   }
+  // At time order 2 the step is M2 (V1 - V0) / dt + B V1 + A U1 = b(t1),
+  // so (V1 - V0) / dt is the acceleration at the step's end.
+  bool velocity_quotient_is_acceleration(int time_order) const override {
+    return time_order == 2;
+  }
   // Called only for time order 0: the state at t0 is the static solution.
   void start(const fem::AssembledProblem &problem,
              const LinearSolver &linear_solver,

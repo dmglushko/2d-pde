@@ -86,8 +86,12 @@ const Json &traits(const Json &components, const std::string &type) {
 }
 
 // The default case with every boundary condition Dirichlet u = g.
+// The equation is given by its coefficients (-u_xx - u_yy = 1), which the
+// tests change one by one.
 Json dirichlet_case(const std::string &g) {
   Json case_json = app::Session::default_case();
+  case_json["problem"]["equation"] = {
+      {"a_xx", "-1"}, {"a_yy", "-1"}, {"f", "1"}};
   for (auto &[region, condition] :
        case_json["problem"]["boundary_conditions"].items())
     condition = {{"alpha", "1"}, {"g", g}};

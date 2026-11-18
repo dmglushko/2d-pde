@@ -3,8 +3,8 @@
 C++23 library (compiled, not header-only) for 2D geometry, triangle
 meshing, their file formats, the problem description, its P1 finite
 element assembly, its static and time-dependent solution, and error
-estimation, marking, refinement and the adaptive loop for static
-problems: a
+estimation, marking, refinement, solution transfer and the adaptive
+loops for static and time-dependent problems: a
 from-scratch rewrite for one linear scalar PDE with P1 finite elements.
 Read [docs/vision.md](docs/vision.md) (direction), then the sections of
 [docs/decisions.md](docs/decisions.md) (the owner's decisions: your
@@ -293,8 +293,12 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   assembly at t0 and no `start` call, `static_part`: `max_time_order` 0,
   `whole_problem`: 2); whether to prepare the linear solver again comes
   from dt and the operators' `depends_on_t` / `always_zero` for the
-  non-zero weights of `step_matrix_weights(dt)`. Never test a method's
-  type or name.
+  non-zero weights of `step_matrix_weights(dt)`; whether `Solution`s
+  carry accelerations, and whether a run given them skips the start,
+  from `keeps_acceleration(order)`; whether a step's velocity quotient
+  may serve as the acceleration at its end, from
+  `velocity_quotient_is_acceleration(order)`. Never test a method's type
+  or name.
 - **Linear solvers declare requirements; callers check them** before
   every `prepare` (`detail::check_requirements`): a symmetry requirement
   is met when the matrix is always symmetric by the facts or symmetric
@@ -306,6 +310,46 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
 - **No fallbacks between methods or solvers**: one that cannot handle a
   problem throws with the reason (and may name alternatives); it never
   switches to another.
+- **Direct solvers check the backward error and refuse only exact
+  singularity.** `SimplicialLdlt`, `SupernodalCholesky` and
+  `MultifrontalLu` compare `LinearSolveResult::backward_error`
+  (|b − Ax|∞ / (|A|∞ |x|∞ + |b|∞), from `detail::measure_residual`) with
+  `residual_tolerance`, never the relative residual (`residual`, which a
+  coefficient contrast makes large for an accurate answer). They throw on
+  an exact zero pivot (the Cholesky on any pivot that is not positive);
+  a tiny pivot is reported in `pivot_ratio`, never refused by a
+  threshold (a pure Neumann problem gets one of its solutions); below
+  `detail::small_pivot_ratio` (1e-10, the one place: `src/solve/pivot_ratio.hpp`)
+  the result carries the warning of `detail::pivot_ratio_warning`, made
+  once per prepared solver; its text names the solver and the threshold,
+  never the ratio (that is `pivot_ratio`), so it is the same on every
+  solve of a solver and an integrator that prepares at every step reports
+  it once. ParU's ratio must
+  include its singleton pivots, and no NaN may enter it: a zero row is
+  refused before ParU sees the matrix, a zero singleton before dividing.
+  A residual entry that is not finite gives a NaN backward error
+  (`detail::max_abs` keeps NaN), which every check rejects.
+- **The Cholesky factors −A for a negative diagonal, and says so.** When
+  every diagonal entry is negative, `SupernodalCholesky` factors a negated
+  copy and solves with −b; the checks use A and b as given, and every
+  result carries the warning in `LinearSolveResult::messages`. A solver's
+  warnings go only there (failures are exceptions); the `StaticSolver`
+  copies them into its report and the `Integrator` logs every solve's
+  through its private `LoggingSolver`, so a time method never has to pass
+  them on. A new caller that solves must put them in its report. The
+  Integrator's log (`SolveLog`) is shared per-run state behind a mutex
+  (held only to add or copy, never during a solve): a time method may
+  solve from several threads at once and keep a prepared solver beyond
+  `integrate()`. The report's `max_backward_error` and `min_pivot_ratio`
+  come from that log (every solve, `start()`'s too), never from
+  `StepSolveInfo`, and are read with its messages in one snapshot (one
+  lock), never under separate locks.
+- **Public result structs grow at the end.** A new member of a public
+  result struct (`LinearSolveResult`, `IntegrationResult`, and the
+  others) goes after the last one, so that positional initializations
+  keep their meaning: `LinearSolveResult` keeps values, iterations,
+  residual, threads first, `IntegrationResult` final, snapshots,
+  history, report (both tested positionally).
 - **Time methods use `right_hand_side()` as it is**: it already holds the
   whole lifting (load − A_FD U_D − B_FD U_D' − M2_FD U_D''). The static
   solver assembles with `max_time_order` 0, where it is load − A_FD U_D.
@@ -316,11 +360,18 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   dynamic condition) and either can be a zero operator. Only `Newmark`'s
   `start` solves with M2, and fails with a message naming the methods that
   need no acceleration (first when M2 is `zero_now` at t0, then when the
-  solve fails).
+  solve fails). A run continued from a `Solution` with accelerations does
+  not call it (so Newmark continues bit for bit, also where M2 is zero);
+  keep the accelerations in every `Solution` the Integrator returns for a
+  method that keeps them.
 - **Step times are anchor + k·dt**, not sums, and steps land exactly on
   snapshot times and t1, so a continued run (`integrate(meshed, t1, t2,
   output, &previous.final)`) matches one long run that lands on t1 (bit
   for bit for the first-order methods; `tests/solve/time_integration.cpp`).
+  A run stopped by `max_steps` continues the same stretch only when given
+  its `IntegrationResult::anchor` (`StepAnchor`). A quotient of the last
+  step divides by the step's own length (`FreeState::dt`), never by a
+  difference of times (a landing keeps the nominal dt).
 - **A triangle's refinement edge is the edge opposite its vertex 0**
   (the convention in `include/pde2d/mesh/mesh.hpp`). The bisection
   refiners read it from the vertex order and write it into every triangle
@@ -350,7 +401,7 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `std::runtime_error` if it overlaps itself. When parents are kept,
   every new node lies on an input edge, every output triangle names its
   input parent, and input nodes keep their indices: keep these when
-  changing the core, the solution transfer will rely on them.
+  changing the core, the solution transfer relies on them.
 - **The estimators' residual follows assembly's weak form.** The element
   residual is f - b . grad u_h - c u_h - m1 u_t - m2 u_tt (the A and div A
   parts cancel for P1), the jump is that of (A grad u_h) . n, and the
@@ -360,16 +411,50 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   its rule from `quadrature.hpp`; an estimator's degrees are its options
   (`triangle_degree`, `edge_degree`, checked in its constructor), with
   defaults exact for coefficients and data of degree at most 1.
-- **Drivers decide from declarations.** The `AdaptiveStaticSolver` reads
-  `Adaptation::capabilities()` (`estimates_error`, `changes_mesh`): the
-  cycle's estimate is that of the first adaptation that estimates, and at
-  most one adaptation may change the mesh until a solution can be
-  transferred. Never test an adaptation's or estimator's type.
+- **Drivers decide from declarations.** The `AdaptiveStaticSolver` and
+  the `AdaptiveIntegrator` read `Adaptation::capabilities()`
+  (`estimates_error`, `changes_mesh`): the cycle's estimate is that of
+  the first adaptation that estimates, and at most one adaptation may
+  change the mesh (all act on the same solved state). Never test an
+  adaptation's or estimator's type.
+- **A solution moves to a new mesh only by `transfer_solution`**
+  (`src/adapt/solution_transfer.cpp`): interpolation through the parents
+  when they are kept, else point location with the private
+  `detail::PointLocator` (never `WorkingMesh::locate`, which can cycle:
+  issue #22); Dirichlet nodes from the new `MeshedProblem`. Without
+  parents a boundary node takes its old boundary point through its curve
+  link, else on the old loop matched to its own (never the nearest point
+  of another wall); keep that when changing the transfer. The
+  `AdaptiveIntegrator` integrates in pieces with `Integrator::integrate`
+  (its `max_steps` and `keep_before_last_step`), never re-implementing
+  the step times, and continues a piece on the same problem from its
+  `final` so that a run without refinement equals one integrate() call
+  landing on the adaptation times; an adaptation time near a snapshot
+  time is that time. `before_last_step` is a `FreeState` (free unknowns,
+  no boundary data evaluated), requested only for a piece that can end
+  in an adaptation; at the Dirichlet nodes u_tt is the boundary data's
+  acceleration at t, never a quotient that needs the rate at t − dt.
+  Where only the method changes (after damping steps, before the
+  adaptation time) the next piece continues the damping piece's
+  `anchor`, so damping steps never change the step times.
+  The transfer moves accelerations like velocities. Damping steps after
+  a transfer run only when `AdaptiveIntegratorOptions::damping_steps` asks
+  for them, as their own piece with `Integrator::with_method`; never
+  switch methods for any other reason (no fallback). After damping
+  steps at time order 2 the state (and a snapshot at that time) carries
+  the acceleration the damping method declares: its own if it
+  `keeps_acceleration`, else its last step's velocity quotient if it
+  declares `velocity_quotient_is_acceleration` (implicit Euler), so a
+  method that keeps one continues without its start; any other damping
+  method ahead of such a method is refused before the first step
+  (`std::invalid_argument` naming both), never given a wrong
+  acceleration.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   adaptive time stepping, explicit time methods,
   handling pure Neumann problems, well-posedness
-  checks, the adaptive loop for time-dependent problems, coarsening and
-  solution transfer, callables, anisotropic meshing, planners,
+  checks, coarsening, L2 projection for the solution transfer,
+  re-integrating a piece after refining, callables, anisotropic meshing,
+  planners,
   the simple-options facade, Gmsh export, reading the old boundary
   context of `.pde2d` files as curve links. Do not add them unless a task
   asks.

@@ -43,22 +43,17 @@
   },
   "problem": {
     "equation": {
-      "m1": "1",
-      "a_xx": "-k",
-      "a_yy": "-k",
-      "f": "0"
+      "text": "u_t - div(k*grad(u)) = 0"
     },
     "parameters": {
       "k": 0.1
     },
     "boundary_conditions": {
       "outer": {
-        "alpha": "1",
-        "g": "0"
+        "text": "u = 0"
       },
       "inner": {
-        "alpha": "1",
-        "g": "1 - exp(-t)"
+        "text": "u = 1 - exp(-t)"
       }
     },
     "initial": {

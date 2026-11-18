@@ -687,6 +687,59 @@ void lands_on_snapshots() {
   check(every.history.empty(), "no history unless asked");
 }
 
+// max_steps ends a run early; before_last_step is the state one step
+// before the end. Steps of 1/16 are exact in binary, so the times compare
+// exactly.
+void stops_after_max_steps() {
+  for (const auto &problem : {heat_problem(), wave_problem()}) {
+    const auto m = meshed(problem);
+    const auto i = integrator(std::make_shared<ImplicitMidpoint>(), 1.0 / 16);
+    const auto whole = i.integrate(
+        m, 0.0, 1.0, {.keep_step_history = true, .snapshot_every = 1});
+    const auto part = i.integrate(m, 0.0, 1.0,
+                                  {.keep_step_history = true,
+                                   .snapshot_times = {0.25, 0.75},
+                                   .keep_before_last_step = true},
+                                  nullptr, 5);
+    check(part.final.time == 5.0 / 16, "ends after 5 steps");
+    check(part.history.size() == 5, "5 step records");
+    check(part.report.metrics.at("t_end") == 5.0 / 16, "t_end");
+    check(part.report.metrics.at("t1") == 1.0, "t1 as asked");
+    check(part.snapshots.size() == 1 && part.snapshots[0].time == 0.25,
+          "only the snapshot times reached");
+    check(part.final.values == whole.snapshots[4].values,
+          "the same state as the long run after 5 steps");
+    check(part.before_last_step && part.before_last_step->time == 4.0 / 16,
+          "the state before the last step");
+    // In the free unknowns: no boundary data is evaluated for it.
+    const auto &free_nodes = m->free_nodes();
+    const Solution &after_4 = whole.snapshots[3];
+    const FreeState &before = *part.before_last_step;
+    check(before.values.size() == free_nodes.size() &&
+              before.velocities.size() ==
+                  (after_4.velocities.empty() ? 0 : free_nodes.size()),
+          "free values, and free velocities for time order 2 only");
+    for (std::size_t k = 0; k < free_nodes.size(); ++k) {
+      check(before.values[k] == after_4.values[free_nodes[k]],
+            "the values after 4 steps");
+      if (!before.velocities.empty())
+        check(before.velocities[k] == after_4.velocities[free_nodes[k]],
+              "the velocities after 4 steps");
+    }
+    // Reaching t1 first: max_steps does not matter; before_last_step is
+    // the start of the step that landed on t1.
+    const auto reached =
+        i.integrate(m, 0.0, 1.0, {.keep_before_last_step = true}, nullptr, 100);
+    check(reached.final.time == 1.0, "t1 reached before max_steps");
+    check(reached.before_last_step->time == 15.0 / 16, "the last step's start");
+    check(reached.final.values == whole.final.values, "the same final state");
+    check(!whole.before_last_step, "not kept unless asked");
+    expect_throws<std::invalid_argument>(
+        [&] { (void)i.integrate(m, 0.0, 1.0, {}, nullptr, 0); },
+        "max_steps must be at least 1");
+  }
+}
+
 void continues_runs() {
   // First order: bit for bit, when the long run lands on the split time.
   for (const auto &method : std::vector<std::shared_ptr<const TimeMethod>>{
@@ -703,19 +756,83 @@ void continues_runs() {
             "continued run equals one long run");
     }
   }
-  // Newmark: the acceleration is computed again from the equation at the
-  // split time, so equal to rounding.
+  // Newmark keeps its acceleration in the Solutions it returns, and a run
+  // continued from one takes it instead of calling start(): bit for bit,
+  // like the first-order methods.
   const auto m = meshed(wave_problem());
   const auto i = integrator(std::make_shared<Newmark>(), 0.1);
   const auto whole = i.integrate(m, 0.0, 1.0, {.snapshot_times = {0.5}});
   const auto first = i.integrate(m, 0.0, 0.5);
   check(!first.final.velocities.empty(), "the final solution has velocities");
+  check(first.final.accelerations.size() == m->mesh()->nodes.size() &&
+            whole.snapshots[0].accelerations.size() == m->mesh()->nodes.size(),
+        "and accelerations, also the snapshots");
+  // At the Dirichlet nodes the boundary data's acceleration.
+  for (std::size_t k = 0; k < m->dirichlet_nodes().size(); ++k)
+    check(first.final.accelerations[m->dirichlet_nodes()[k].node] ==
+              m->dirichlet_acceleration(k, 0.5),
+          "the Dirichlet acceleration");
   const auto second = i.integrate(m, 0.5, 1.0, {}, &first.final);
+  check(second.final.values == whole.final.values &&
+            second.final.velocities == whole.final.velocities &&
+            second.final.accelerations == whole.final.accelerations,
+        "Newmark: the continued run equals one long run");
+  // No start: nothing is assembled at the continuation time.
+  check(second.report.metrics.at("assemblies") ==
+            second.report.metrics.at("steps"),
+        "one assembly per step, none at t0");
+  // Without the accelerations, start() computes them again (to rounding).
+  Solution without = first.final;
+  without.accelerations.clear();
+  const auto restarted = i.integrate(m, 0.5, 1.0, {}, &without);
+  check(restarted.report.metrics.at("assemblies") ==
+            restarted.report.metrics.at("steps") + 1,
+        "start() assembles at t0");
   for (std::size_t k = 0; k < whole.final.values.size(); ++k) {
-    near(second.final.values[k], whole.final.values[k], 1e-12, "values");
-    near(second.final.velocities[k], whole.final.velocities[k], 1e-11,
+    near(restarted.final.values[k], whole.final.values[k], 1e-12, "values");
+    near(restarted.final.velocities[k], whole.final.velocities[k], 1e-11,
          "velocities");
   }
+  // A method that keeps no acceleration returns none, and ignores given
+  // ones.
+  const auto euler = integrator(std::make_shared<ImplicitEuler>(), 0.1);
+  const auto euler_first = euler.integrate(m, 0.0, 0.5);
+  check(euler_first.final.accelerations.empty(),
+        "implicit Euler returns no accelerations");
+  check(euler.integrate(m, 0.5, 1.0, {}, &first.final).final.values ==
+            euler.integrate(m, 0.5, 1.0, {}, &without).final.values,
+        "implicit Euler ignores accelerations");
+}
+
+// The review case: (t - 0.5)^2 u_tt + 0.1 u_t - (u_xx + u_yy) = f with the
+// wave's u. M2 is zero at t = 0.5, so Newmark could not start there; a run
+// continued at 0.5 takes the carried acceleration and equals one long run.
+void newmark_continues_where_m2_vanishes() {
+  Problem problem = wave_problem();
+  const std::string u_t = "-2*" + p + "*sin(2*t) + 3*" + q + "*cos(3*t)";
+  const std::string u_tt = "-4*" + p + "*cos(2*t) - 9*" + q + "*sin(3*t)";
+  problem.equation.m2 = e("(t - 0.5)^2");
+  problem.equation.f = e("(t - 0.5)^2*(" + u_tt + ") + 0.1*(" + u_t + ")");
+  const auto m = meshed(problem);
+  const auto i = integrator(std::make_shared<Newmark>(), 1.0 / 16);
+  const auto whole = i.integrate(m, 0.0, 1.0, {.snapshot_times = {0.5}});
+  const auto first = i.integrate(m, 0.0, 0.5);
+  const auto second = i.integrate(m, 0.5, 1.0, {}, &first.final);
+  check(second.final.values == whole.final.values &&
+            second.final.velocities == whole.final.velocities,
+        "continued at t = 0.5 equals one long run");
+  const double error = pde2d::test::max_nodal_error(
+      *m->mesh(), whole.final.values,
+      [](double x, double y) { return wave_exact(x, y, 1.0); });
+  std::cout << "newmark with m2 = (t - 0.5)^2, dt = 1/16: error at t = 1 "
+            << error << '\n';
+  check(error < 0.05, "Newmark follows the solution through m2 = 0");
+  // Restarting there needs M2 at t = 0.5, which is zero.
+  Solution without = first.final;
+  without.accelerations.clear();
+  expect_throws<std::runtime_error>(
+      [&] { (void)i.integrate(m, 0.5, 1.0, {}, &without); },
+      "M2 is zero at t0 = 0.5");
 }
 
 void checks_input() {
@@ -747,6 +864,19 @@ void checks_input() {
             .integrate(wave, 0.0, 1.0, {}, &steady.solution);
       },
       "velocities");
+  // Accelerations of the wrong size or not finite, for a method that keeps
+  // them.
+  const auto newmark = integrator(std::make_shared<Newmark>(), 0.1);
+  Solution wave_start = newmark.integrate(wave, 0.0, 0.1).final;
+  wave_start.accelerations.pop_back();
+  expect_throws<std::invalid_argument>(
+      [&] { (void)newmark.integrate(wave, 0.1, 0.2, {}, &wave_start); },
+      "accelerations for");
+  wave_start.accelerations.push_back(0.0);
+  wave_start.accelerations[wave->free_nodes()[0]] = std::nan("");
+  expect_throws<std::invalid_argument>(
+      [&] { (void)newmark.integrate(wave, 0.1, 0.2, {}, &wave_start); },
+      "not finite");
   expect_throws<std::invalid_argument>([] { FixedStep({.dt = 0.0}); },
                                        "dt must be finite and positive");
   expect_throws<std::invalid_argument>(
@@ -758,10 +888,102 @@ void checks_input() {
       "time method is null");
 }
 
+// The members that existed before before_last_step keep their order: a
+// positional initialization written then means the same (review finding).
+void integration_result_keeps_its_order() {
+  Solution final{.time = 1.0, .values = {2.0}};
+  std::vector<Solution> snapshots(2);
+  std::vector<StepRecord> history(3);
+  pde2d::mesh::StageReport report;
+  report.stage = "integrator";
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+  const IntegrationResult r{final, snapshots, history, report};
+#pragma GCC diagnostic pop
+  check(r.final.time == 1.0 && r.final.values == std::vector<double>{2.0} &&
+            r.snapshots.size() == 2 && r.history.size() == 3 &&
+            r.report.stage == "integrator",
+        "final, snapshots, history, report");
+  check(!r.before_last_step, "the new member keeps its default");
+  // Solution: mesh, time, values, velocities, then accelerations.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+  const Solution s{nullptr, 2.0, {1.0}, {3.0}};
+#pragma GCC diagnostic pop
+  check(s.time == 2.0 && s.values == std::vector<double>{1.0} &&
+            s.velocities == std::vector<double>{3.0} && s.accelerations.empty(),
+        "Solution keeps its positional order");
+}
+
+// A run stopped by max_steps and continued with its anchor takes the step
+// times of one long run, bit for bit; without the anchor the continued
+// run starts a new stretch at its t0 and its times differ by rounding
+// (3 * 0.1 + 0.1 is not 4 * 0.1). The step length a landing kept is in
+// before_last_step. A bad anchor throws.
+void continues_a_stretch() {
+  const auto m = meshed(constant_heat_problem());
+  const auto i = integrator(std::make_shared<ImplicitEuler>(), 0.1);
+  const IntegrationOutput history{.keep_step_history = true};
+  const auto whole = i.integrate(m, 0.0, 1.0, history);
+  check(whole.anchor.time == 1.0 && whole.anchor.dt == 0.1 &&
+            whole.anchor.steps == 0,
+        "after landing on t1 the stretch starts there");
+  const auto part = i.integrate(m, 0.0, 1.0, history, nullptr, 3);
+  check(part.anchor.time == 0.0 && part.anchor.dt == 0.1 &&
+            part.anchor.steps == 3 && part.final.time == 3 * 0.1,
+        "3 steps of the stretch from 0");
+  const auto rest = i.integrate(m, part.final.time, 1.0, history, &part.final,
+                                std::nullopt, &part.anchor);
+  check(part.history.size() + rest.history.size() == whole.history.size(),
+        "as many steps");
+  for (std::size_t k = 0; k < whole.history.size(); ++k) {
+    const StepRecord &r =
+        k < 3 ? part.history[k] : rest.history[k - part.history.size()];
+    check(r.t == whole.history[k].t && r.dt == whole.history[k].dt,
+          "the step times of one long run");
+  }
+  check(rest.final.values == whole.final.values, "the same final state");
+  const auto restarted =
+      i.integrate(m, part.final.time, 1.0, history, &part.final);
+  bool differs = false;
+  for (std::size_t k = 0; k + 1 < restarted.history.size(); ++k)
+    differs = differs || restarted.history[k].t != whole.history[k + 3].t;
+  check(differs, "without the anchor a new stretch starts at t0");
+
+  // A step that lands within 1e-9 dt of t1 keeps its nominal length.
+  const double t1 = 0.5000000002;
+  const auto landed = integrator(std::make_shared<ImplicitEuler>(), 0.25)
+                          .integrate(m, 0.0, t1,
+                                     {.keep_step_history = true,
+                                      .keep_before_last_step = true});
+  check(landed.final.time == t1 && landed.history.back().dt == 0.25,
+        "landed on t1 with the nominal step");
+  check(landed.before_last_step->time == 0.25 &&
+            landed.before_last_step->dt == 0.25 && t1 - 0.25 != 0.25,
+        "before_last_step has the step's length, not the difference of the "
+        "times");
+
+  const StepAnchor elsewhere{.time = 0.0, .dt = 0.1, .steps = 2};
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)i.integrate(m, part.final.time, 1.0, {}, &part.final,
+                          std::nullopt, &elsewhere);
+      },
+      "the step anchor stands at 0 + 2 * 0.1");
+  const StepAnchor no_dt{.time = 0.0, .dt = 0.0, .steps = 3};
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)i.integrate(m, 0.0, 1.0, {}, nullptr, std::nullopt, &no_dt);
+      },
+      "the step anchor needs a finite time and a finite dt");
+}
+
 } // namespace
 
 int main() {
   return pde2d::test::run({
+      {"IntegrationResult and Solution keep their positional order",
+       integration_result_keeps_its_order},
       {"implicit Euler converges at first order in time",
        [] {
          time_rate(std::make_shared<ImplicitEuler>(), heat_problem(),
@@ -831,6 +1053,12 @@ int main() {
        mass_zero_at_start},
       {"snapshots land exactly on their times", lands_on_snapshots},
       {"a continued run equals one long run", continues_runs},
+      {"a run continued with its anchor keeps the step times",
+       continues_a_stretch},
+      {"Newmark continues at a time where M2 vanishes",
+       newmark_continues_where_m2_vanishes},
+      {"max_steps ends a run early; the state before the last step",
+       stops_after_max_steps},
       {"the integrator checks its input", checks_input},
   });
 }

@@ -398,6 +398,26 @@ Started 2026-11-11.
   a derivative) and `data_depends_on_t` (f or g). They describe stage 1
   only, not the assembled system, and are computed by functions, never
   stored. "Zero" means zero as written.
+- **Equations and conditions can be written as one line** (decided
+  2026-11-18): `parse_equation(text)` and `parse_condition(text)`
+  (`equation_text.hpp`) read lines such as `u_t - div(k*grad(u)) = 1`,
+  `-∇·(k∇u) = f` or `k*u_n + h*u = h*u_out` into the existing `Equation`
+  and `BoundaryCondition`; `equation_text` and `condition_text` print
+  them back in the coefficient form. Operators by name (grad, div, lap,
+  dot) and with nabla (∇, ∇·, ∇², Δ), vectors and matrices; in a
+  condition the normal n and tangent tau. The divergence form is expanded
+  into the coefficient form (b = −∇k), with the coefficients'
+  derivatives taken by the one derivative function; assembly, the
+  solvers and the estimators are unchanged. A line that is not linear in
+  u, has a third derivative or a space derivative of u_t, or a condition
+  whose derivatives depend on the normal in another way (an anisotropic
+  flux (A∇u)·n) is refused with a message quoting the part. *Why:* the
+  owner wants to type the equation as it is written on paper; the
+  coefficients need symbolic derivatives, which only the library may
+  take, and keeping `Equation` as it is leaves every reader of it
+  unchanged. Alternatives not taken: a `text` member in `Equation` (two
+  forms that readers would have to choose between) and a divergence form
+  that assembly integrates directly (a much larger change).
 - **Well-posedness checks are deferred.**
 
 ## Problem combined with a mesh
@@ -551,6 +571,23 @@ marked "architecture" below are decided.
   definite; the ratio of the smallest to the largest pivot is reported,
   not judged. A pure Neumann problem then gives one of its solutions
   without an error, as the Eigen solvers do (GitHub issue #32).
+- **The Cholesky factors −A when A is negative definite, with a warning**
+  (decided 2026-11-17): when every diagonal entry is negative (Δu = f
+  written with a_xx = +1), `SupernodalCholesky` factors −A and solves
+  with −b, which is exact, and says so as a warning ("worked, but…"); a
+  matrix with diagonal entries of both signs is indefinite and refused as
+  now. The licence question (CHOLMOD's supernodal module and ParU are GPL,
+  so distributed programs that link them are GPL-3) is postponed: GitHub
+  issue #38. Reusing the symbolic factorization when only the values
+  change: GitHub issue #39.
+- **A tiny pivot ratio is a warning; the integrator reports the worst
+  solve** (decided 2026-11-18): a direct solver whose `pivot_ratio` is
+  below 1e-10 adds a warning to `LinearSolveResult::messages` (the matrix
+  is nearly singular, so the answer may have few correct digits); the
+  answer is still returned. The integrator's report shows the largest
+  `backward_error` and the smallest measured `pivot_ratio` over all its
+  solves. *Why:* "refuse only exact singularity" otherwise returns a
+  hopeless answer (one correct digit) without any sign but a number.
 - **Known limits of the SuiteSparse solvers, documented** (2026-11-17):
   OpenBLAS's thread count is one setting for the whole process, so a
   program that changes it during one of these solves can have its setting
@@ -1053,6 +1090,44 @@ coarsening, moving nodes or enrichment for now.
   jumps use the edge degree. A cycle of waiting refinement edges stays
   possible on a mesh mixing flipped and bisected triangles; it is
   conforming and reported (`incompatible_splits`).
+- **Details of slice 2 (the adaptive loop in time), accepted 2026-11-18:**
+  `transfer_solution` lives in `pde2d_adapt` and takes the new
+  `MeshedProblem` (Dirichlet nodes get g and g_t); a new node on a curved
+  boundary gets the average of its parent edge's ends (no extrapolation);
+  without parents a private bucket-grid point location finds the old
+  triangle, boundary nodes take their old boundary point on the same loop
+  (through the curve links when they exist), a node outside the old mesh
+  the nearest old boundary point. `Integrator::integrate` takes
+  `max_steps`, for the "every n steps" rule. u_t comes from the last step
+  ((u(t) − u(t − dt))/dt; for time order 2 the velocities and their
+  quotient, u_tt at Dirichlet nodes from the boundary data). At each
+  adaptation time the loop estimates and, above the tolerance, refines
+  once and continues (no re-solving; a relative tolerance is relative to
+  the first estimate). The schedule is "after an interval and/or n steps,
+  whichever comes first", steps landing on snapshots count, an adaptation
+  time near a snapshot time becomes it, no adaptation at t1. The node
+  budget and `max_refinements` stop adapting for the rest of the run,
+  which still reaches t1. Only `snapshot_times`, not `snapshot_every`.
+  The result is a list of pieces plus the joined snapshots and steps. At
+  most one adaptation changes the mesh. Public result structs grow at the
+  end.
+- **Newmark's acceleration is carried across pieces** (decided
+  2026-11-18, after a review finding: restarting Newmark at a piece
+  boundary solved M2 u_tt = … again and failed where M2 was singular at
+  that time): `Solution` gains optional accelerations, filled by the
+  integrator for a method that keeps u_tt; a run continued from such a
+  solution does not call `start()` and uses them; the transfer moves them
+  like the velocities. Continuation is then exact for Newmark too.
+- **Damping steps after a transfer, as an explicit option** (decided
+  2026-11-18): methods that do not damp (implicit midpoint, Newmark) keep
+  the interpolation error a transfer leaves in the finest modes, so
+  adaptive runs with them were worse than uniform ones. The adaptive loop
+  gets an option for a number of steps of a damping method (implicit
+  Euler) after each transfer before the chosen method continues (Rannacher
+  smoothing). Configured by the user, never switched on by a failure, so
+  it is not a fallback. A Newmark variant that damps only the highest
+  frequencies (generalized-α), the better answer for waves: GitHub issue
+  #40.
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks

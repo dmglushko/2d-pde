@@ -6,7 +6,9 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   tab("problem");
   const presets = q('#panel-problem select[aria-label="Problem preset"]');
   select(presets, [...presets.options].find((o) => /Laplace/.test(o.textContent)).value);
-  await until(() => /No errors/.test(text(q("#panel-problem .step-status"))), "the preset");
+  // The status says "No errors" before the preset arrives: wait for it.
+  await until(() => text(q("#toast")).includes("filled in"), "the preset");
+  await until(() => /No errors/.test(text(q("#panel-problem .step-status"))), "the check");
   tab("solve");
   click(button("Solve", panel("solve")));
   await until(() => q("#solve-result .stats"), "the solution", 60000);
@@ -35,7 +37,7 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   // An edit of the solve's inputs: the result goes outdated, drawn greyed
   // with a stamp, never as current.
   tab("problem");
-  type(q('#panel-problem [data-path$=".g"] input'), "0.25");
+  type(q('#panel-problem [data-path^="problem.boundary_conditions."][data-path$=".text"] input'), "u = 0.25");
   await until(() => !q("#view-stamp").hidden, "the outdated stamp");
   check("an outdated result is stamped", /Outdated/.test(text(q("#view-stamp"))));
   check("and named outdated in the legend", /\(outdated\)/.test(legendLabel()), legendLabel());

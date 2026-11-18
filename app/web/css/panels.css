@@ -1089,3 +1089,74 @@ dialog.settings h3 {
 .split-row .name-input {
   width: 9em;
 }
+
+/* An equation or a condition written as one line: the text with the
+   symbols a keyboard lacks beside it, and under it the coefficients the
+   library read from it (or its error), in a row of its own height. */
+.line-field {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.line-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.line-row input.line-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.symbol-bar {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+button.symbol {
+  min-width: 28px;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.derived {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 22px;
+}
+
+.derived-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chip.coefficient {
+  font-family: var(--mono);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.derived.stale,
+.checking .derived,
+.result.stale {
+  opacity: 0.55;
+}
+
+/* A line's error takes the place of what it means. */
+.line-field > .error-text {
+  min-height: 22px;
+}
+
+button.switch-form {
+  font-size: 12.5px;
+}

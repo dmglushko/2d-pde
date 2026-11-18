@@ -110,7 +110,11 @@ std::size_t plan_chunk(std::span<const ChunkCost> history,
                        const SessionOptions &options);
 
 // How one metric of the integrator's report combines over chunks.
-enum class Combine { sum, max, min, first, last };
+// min_measured: the smallest value above 0, 0 when no chunk has one (0
+// means "not measured", as for the integrator's min_pivot_ratio).
+// max keeps a NaN (from any chunk); min_measured ignores 0 ("not
+// measured").
+enum class Combine { sum, max, min, min_measured, first, last };
 struct MetricRule {
   std::string_view name;
   Combine combine;

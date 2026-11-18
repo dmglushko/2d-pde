@@ -54,8 +54,10 @@ public:
       throw std::runtime_error(
           "sparse_lu: the solution is not finite (the matrix is singular or "
           "nearly so)");
-    result.residual =
-        detail::relative_residual(*matrix_, right_hand_side, result.values);
+    const auto measures =
+        detail::measure_residual(*matrix_, right_hand_side, result.values);
+    result.residual = measures.relative_residual;
+    result.backward_error = measures.backward_error;
     return result;
   }
 

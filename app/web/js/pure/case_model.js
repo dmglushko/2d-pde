@@ -265,6 +265,12 @@ export function fileKind(name) {
   return null;
 }
 
+// Whether an equation or a condition of the case is written as one line
+// ({text: "..."}) rather than by its coefficients.
+export function isLine(object) {
+  return isObject(object) && typeof object.text === "string";
+}
+
 // The coefficients a form shows, in the catalog's order: those that are
 // set (a non-empty text), the right side (the field without a term: f or
 // g, always) and the names in `revealed` (shown once in this visit: a

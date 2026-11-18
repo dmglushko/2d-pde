@@ -13,7 +13,8 @@ export default async ({ example, w, q, qa, click, until, text, check, pointer, k
   w.fetch = (path, ...rest) => (failing.has(path) ? Promise.reject(new TypeError("Failed to fetch")) : fetch(path, ...rest));
   failing.add("/api/solve/values");
   const slider = q("#time-slider");
-  slider.value = "5";
+  // Far from the start, which plays and is loaded as the run comes.
+  slider.value = "45";
   slider.dispatchEvent(new w.Event("input", { bubbles: true }));
   await until(() => !q("#view-overlay").hidden && q("#view-overlay").classList.contains("failed"), "the snapshot's failure");
   check("a failed snapshot is said over the picture", /does not answer/.test(text(q("#view-overlay"))), text(q("#view-overlay")));
@@ -21,7 +22,7 @@ export default async ({ example, w, q, qa, click, until, text, check, pointer, k
   check("with Retry", Boolean(retry));
   failing.delete("/api/solve/values");
   click(retry);
-  await until(() => q("#view-overlay").hidden && /^u at t = 0\.5$/.test(text(q("#legend .bar-label"))), "the snapshot after Retry");
+  await until(() => q("#view-overlay").hidden && /^u at t = 4\.5$/.test(text(q("#legend .bar-label"))), "the snapshot after Retry");
   check("Retry loads it", true);
   // u(t) at a probe.
   failing.add("/api/solve/probes");

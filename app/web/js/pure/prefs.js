@@ -6,8 +6,8 @@ const isObject = (value) => value !== null && typeof value === "object" && !Arra
 // The app's preferences (settings.js) and their defaults.
 export const SETTINGS_DEFAULTS = Object.freeze({
   checkWhileTyping: true,
-  checkDelayMs: 350,
-  playbackFps: 12,
+  // Simulated time per second of playback: 1 plays a run in real time.
+  playbackSpeed: 1,
   followRun: true,
   digits: 4,
   pixelRatioCap: 2,
@@ -25,8 +25,7 @@ const SETTING_CHOICES = {
 };
 
 const SETTING_RANGES = {
-  checkDelayMs: [100, 3000],
-  playbackFps: [1, 60],
+  playbackSpeed: [1e-6, 1e6],
   digits: [2, 10],
   pixelRatioCap: [1, 4],
   isolineCount: [2, 40],
@@ -46,7 +45,7 @@ export function normalizeSettings(input) {
     } else if (typeof value === "number" && Number.isFinite(value)) {
       const [low, high] = SETTING_RANGES[key];
       const clamped = Math.min(high, Math.max(low, value));
-      out[key] = key === "pixelRatioCap" ? clamped : Math.round(clamped);
+      out[key] = key === "pixelRatioCap" || key === "playbackSpeed" ? clamped : Math.round(clamped);
     }
   }
   return out;

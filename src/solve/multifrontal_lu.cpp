@@ -1,13 +1,17 @@
 #include "pde2d/solve/multifrontal_lu.hpp"
 
 #include "factorization_threads.hpp"
+#include "pivot_ratio.hpp"
 #include "suitesparse.hpp"
 
 #include <ParU.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -71,6 +75,26 @@ ColumnMatrix columns_of(const fem::CsrMatrix &matrix) {
   return c;
 }
 
+// Throws std::runtime_error when a row of `matrix` has no entry that is
+// not zero (no slot, or only explicitly stored zeros): the matrix is
+// singular. Checked before ParU sees the matrix: ParU 7.12 checks the row
+// scale factors only of the rows that reach a front, so a zero row that
+// is a singleton would get through its factorization (its pivot 0 / 0).
+void check_rows(const fem::CsrMatrix &matrix) {
+  const auto &pattern = *matrix.pattern;
+  for (std::size_t i = 0; i < pattern.rows; ++i) {
+    bool zero = true;
+    for (auto s = pattern.row_offsets[i];
+         zero && s < pattern.row_offsets[i + 1]; ++s)
+      zero = matrix.values[static_cast<std::size_t>(s)] == 0.0;
+    if (zero)
+      throw std::runtime_error(
+          std::format("{}: the matrix is singular (a pivot is exactly zero): "
+                      "row {} of {} has no entry that is not zero",
+                      solver_name, i, pattern.rows));
+  }
+}
+
 class PreparedMultifrontalLu final : public PreparedLinearSolver {
 public:
   PreparedMultifrontalLu(std::shared_ptr<const fem::CsrMatrix> matrix,
@@ -80,6 +104,7 @@ public:
     const std::size_t n = matrix_->rows();
     if (n == 0)
       return; // nothing to factorize: every solve returns an empty vector
+    check_rows(*matrix_);
     // ParU runs `threads_` OpenMP threads (independent fronts at once, and
     // large dense updates split into tasks), each calling the BLAS. This
     // SuiteSparse is built for a generic BLAS, so ParU does not set the
@@ -94,6 +119,11 @@ public:
       check(ParU_InitControl(&control_), "setting up");
       check(ParU_Set(PARU_CONTROL_MAX_THREADS,
                      static_cast<std::int64_t>(threads_), control_),
+            "setting up");
+      // ParU's default, set here because pivot_ratio() relies on it: each
+      // row is divided by its largest absolute entry.
+      check(ParU_Set(PARU_CONTROL_PRESCALE,
+                     static_cast<std::int64_t>(PARU_PRESCALE_MAX), control_),
             "setting up");
       ColumnMatrix columns = columns_of(*matrix_);
       cholmod_sparse a{};
@@ -112,21 +142,8 @@ public:
       check(ParU_Analyze(&a, &symbolic_, control_), "the analysis failed");
       check(ParU_Factorize(&a, symbolic_, &numeric_, control_),
             "the factorization failed");
-      // min |diag U| / max |diag U| of the scaled matrix, over the pivots
-      // of the fronts. The singletons (rows or columns with one entry left,
-      // eliminated before the fronts) are not in it; ParU reports their
-      // zeros as PARU_SINGULAR. A matrix made of singletons only has no
-      // fronts, and ParU then reports -1.
-      double rcond = 0.0;
-      check(ParU_Get(symbolic_, numeric_, PARU_GET_RCOND_ESTIMATE, &rcond,
-                     control_),
-            "reading the pivots");
-      const bool has_fronts = !(rcond < 0.0);
-      if (has_fronts && detail::singular_to_working_precision(rcond, n))
-        throw std::runtime_error(std::format(
-            "{}: the matrix is singular to working precision (its smallest "
-            "pivot is {} times the largest, below n machine epsilons)",
-            solver_name, rcond));
+      pivot_ratio_ = pivot_ratio();
+      pivot_warning_ = detail::pivot_ratio_warning(solver_name, pivot_ratio_);
     } catch (...) {
       release();
       throw;
@@ -146,6 +163,9 @@ public:
     if (n == 0)
       return result;
     result.threads = static_cast<std::size_t>(threads_);
+    result.pivot_ratio = pivot_ratio_;
+    if (!pivot_warning_.empty())
+      result.messages.push_back(pivot_warning_);
     {
       const detail::FactorizationThreads scope(threads_, threads_);
       // ParU reads b through a non-const pointer: give it a copy.
@@ -170,6 +190,96 @@ private:
           std::format("{}: {} ({})", solver_name, what, info_text(info)));
   }
 
+  // The ratio of the smallest pivot |U_kk| of the row-scaled matrix to the
+  // largest, over all pivots; throws std::runtime_error when one is exactly
+  // zero. ParU's own figures (PARU_GET_MIN_UDIAG, PARU_GET_MAX_UDIAG and
+  // their ratio PARU_GET_RCOND_ESTIMATE) cover only the pivots of the
+  // fronts; the singletons (a column, then a row, with one entry left),
+  // eliminated before the fronts, are added here. A singleton's pivot is
+  // an entry of the scaled matrix that no elimination changed: entry
+  // (P[k], Q[k]) divided by its row's scale factor, for the first
+  // `singletons` positions k of ParU's row and column orders P and Q.
+  // ParU checks the pattern, not the values, for singletons, so an
+  // explicitly stored zero can be a singleton's pivot: it is checked before
+  // dividing (no row scale is zero: check_rows), so no NaN reaches the
+  // ratio. (With threads, ParU
+  // starts the smallest front pivot at 1 instead of at the first pivot, so
+  // the ratio can differ between thread counts when every front pivot of
+  // the scaled matrix is above 1.)
+  double pivot_ratio() const {
+    const std::size_t n = matrix_->rows();
+    std::int64_t row_singletons = 0, column_singletons = 0;
+    check(ParU_Get(symbolic_, numeric_, PARU_GET_NROW_SINGLETONS,
+                   &row_singletons, control_),
+          "reading the pivots");
+    check(ParU_Get(symbolic_, numeric_, PARU_GET_NCOL_SINGLETONS,
+                   &column_singletons, control_),
+          "reading the pivots");
+    const auto singletons =
+        static_cast<std::size_t>(row_singletons + column_singletons);
+    double smallest = std::numeric_limits<double>::infinity();
+    double largest = 0.0;
+    if (singletons > 0) {
+      std::vector<std::int64_t> p(n), q(n);
+      std::vector<double> scale(n);
+      check(ParU_Get(symbolic_, numeric_, PARU_GET_P, p.data(), control_),
+            "reading the pivots");
+      check(ParU_Get(symbolic_, numeric_, PARU_GET_Q, q.data(), control_),
+            "reading the pivots");
+      check(ParU_Get(symbolic_, numeric_, PARU_GET_ROW_SCALE_FACTORS,
+                     scale.data(), control_),
+            "reading the pivots");
+      for (std::size_t k = 0; k < singletons; ++k) {
+        const auto row = static_cast<std::size_t>(p[k]);
+        const double value = entry(*matrix_, row, q[k]);
+        if (value == 0.0)
+          throw std::runtime_error(
+              std::format("{}: the matrix is singular (a pivot is exactly "
+                          "zero): the singleton in row {}, column {} is zero",
+                          solver_name, row, q[k]));
+        const double pivot = std::abs(value) / scale[row];
+        if (!std::isfinite(pivot) || !(pivot > 0.0))
+          throw std::runtime_error(std::format(
+              "{}: the pivot in row {}, column {} is not a finite positive "
+              "number (an entry or its row scale factor is not finite)",
+              solver_name, row, q[k]));
+        smallest = std::min(smallest, pivot);
+        largest = std::max(largest, pivot);
+      }
+    }
+    // Both -1 without fronts (a matrix of singletons only).
+    double front_smallest = 0.0, front_largest = 0.0;
+    check(ParU_Get(symbolic_, numeric_, PARU_GET_MIN_UDIAG, &front_smallest,
+                   control_),
+          "reading the pivots");
+    check(ParU_Get(symbolic_, numeric_, PARU_GET_MAX_UDIAG, &front_largest,
+                   control_),
+          "reading the pivots");
+    if (front_largest >= 0.0) {
+      smallest = std::min(smallest, front_smallest);
+      largest = std::max(largest, front_largest);
+    }
+    if (!(smallest > 0.0))
+      throw std::runtime_error(std::format(
+          "{}: the matrix is singular (a pivot is exactly zero)", solver_name));
+    return smallest / largest;
+  }
+
+  // The value in slot (row, column) of `matrix`; 0 when it has no slot.
+  static double entry(const fem::CsrMatrix &matrix, std::size_t row,
+                      std::int64_t column) {
+    const auto &pattern = *matrix.pattern;
+    const auto first =
+                   pattern.column_indices.begin() + pattern.row_offsets[row],
+               last = pattern.column_indices.begin() +
+                      pattern.row_offsets[row + 1];
+    const auto at = std::lower_bound(first, last, column);
+    if (at == last || *at != column)
+      return 0.0;
+    return matrix
+        .values[static_cast<std::size_t>(at - pattern.column_indices.begin())];
+  }
+
   void release() {
     if (numeric_)
       ParU_FreeNumeric(&numeric_, control_);
@@ -185,6 +295,8 @@ private:
   ParU_Control control_ = nullptr;
   ParU_Symbolic symbolic_ = nullptr;
   ParU_Numeric numeric_ = nullptr;
+  double pivot_ratio_ = 0.0;  // 0 for an empty matrix
+  std::string pivot_warning_; // empty unless pivot_ratio_ is tiny
 };
 
 } // namespace

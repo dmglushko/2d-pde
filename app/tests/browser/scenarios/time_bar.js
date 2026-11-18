@@ -9,6 +9,8 @@ export default async ({ example, w, q, qa, click, select, until, sleep, text, ch
   await until(() => text(q("#toast")).includes("up to date"), "Run all", 90000);
   check("the time bar is shown", !q("#timebar").hidden);
   const slider = q("#time-slider");
+  // The run plays from its start in real time (5 s of simulated time).
+  check("a run plays from its start", q("#time-play").getAttribute("aria-label") === "Pause" && Number(slider.value) < 50, slider.value);
   check("the slider covers every snapshot", Number(slider.max) === 50, slider.max);
   slider.value = "10";
   slider.dispatchEvent(new w.Event("input", { bubbles: true }));

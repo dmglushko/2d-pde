@@ -228,7 +228,7 @@ test("a solve fetches its values in binary and colours the picture", async () =>
 const layout = (snapshots) => ({ path: "/api/solve/values", format: "float32le", snapshots, nodes: 2 });
 const timeRun = (state, snapshots, t, extra = {}) => ({ job: 3, state, mode: "time", t0: 0, t1: 1, t, snapshots_total: 5, times: [0, 0.25, 0.5, 0.75, 1].slice(0, snapshots), min: 0, max: snapshots, reports: [{ metrics: { steps: snapshots } }], values: layout(snapshots), ...extra });
 
-test("a time run streams its snapshots and follows the newest", async () => {
+test("a time run streams its snapshots and plays from its start", async () => {
   start();
   const run = runStage("solve");
   (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
@@ -236,7 +236,8 @@ test("a time run streams its snapshots and follows the newest", async () => {
   await flush();
   assert.equal(followedRun()?.job, 3, "followed");
   assert.equal(stageStatus("solve"), "busy");
-  assert.equal(store.solveFrame, 1);
+  assert.equal(store.solveFrame, 0, "the start is shown");
+  assert.equal(store.playRun, true, "the time bar plays it as it comes");
   // While it runs, a problem check is not held back (the server answers
   // between chunks).
   scheduleProblemCheck({ now: true });
@@ -244,13 +245,11 @@ test("a time run streams its snapshots and follows the newest", async () => {
   const progress = await next("/api/solve/progress");
   assert.deepEqual(progress.body, { job: 3 });
   progress.answer(timeRun("running", 4, 0.75));
-  const more = await next("/api/solve/values");
-  assert.deepEqual(more.body, { job: 3, first: 2, count: 2 }, "only the new snapshots");
-  more.answer(float32([2, 2, 3, 3]));
   await sleep(10);
   const data = store.results.solve.data;
   assert.equal(data.values.length, 4);
-  assert.equal(store.solveFrame, 3, "the newest is shown");
+  assert.equal(store.solveFrame, 0, "the playback moves the picture, not the progress");
+  assert.equal(data.values[3], null, "the playback fetches what it shows");
   assert.equal(data.scale.max, 4, "the scale follows the range so far");
   // The slider was moved: the picture stays there.
   store.solveFrameChosen = true;
@@ -334,22 +333,33 @@ test("a check of a problem edited since is dropped", async () => {
   assert.equal(store.results.problem, null, "not kept");
 });
 
-test("the check while typing follows the settings", async () => {
+test("the check while typing follows the settings, at once and one at a time", async () => {
   start();
   setSetting("checkWhileTyping", false);
   scheduleProblemCheck();
-  await sleep(settings.checkDelayMs + 50);
+  await sleep(50);
   assert.equal(pending.length, 0, "no check while typing");
   scheduleProblemCheck({ now: true });
   (await next("/api/problem")).answer({ ok: true });
   setSetting("checkWhileTyping", true);
-  setSetting("checkDelayMs", 120);
+  // Typing: the first key is checked at once, the keys typed while it
+  // runs are checked together when it answers.
+  editCase((c) => (c.problem.parameters = { k: 1 }), "edit", { sections: ["problem"] });
   scheduleProblemCheck();
-  await sleep(60);
-  assert.equal(pending.length, 0, "not before the delay");
-  (await next("/api/problem")).answer({ ok: true });
-  setSetting("checkDelayMs", 350);
-  assert.ok(JSON.parse(storage.get("pde2d-app-settings")).checkDelayMs === 350, "settings are kept");
+  const first = await next("/api/problem");
+  for (let k = 2; k < 5; k++) {
+    editCase((c) => (c.problem.parameters = { k }), "edit", { sections: ["problem"] });
+    scheduleProblemCheck();
+  }
+  await sleep(20);
+  assert.equal(pending.filter((p) => p.path === "/api/problem").length, 0, "one check at a time");
+  first.answer({ ok: true });
+  const second = await next("/api/problem");
+  assert.deepEqual(second.body.problem.parameters, { k: 4 }, "the newest text");
+  second.answer({ ok: true });
+  await sleep(20);
+  assert.equal(pending.length, 0, "nothing more");
+  assert.ok(JSON.parse(storage.get("pde2d-app-settings")).checkWhileTyping === true, "settings are kept");
 });
 
 test("edits write the case to storage after a pause, and at once when flushed", async () => {

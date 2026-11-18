@@ -135,23 +135,32 @@ field, Ctrl+Z undoes the whole edit of the field.
    whether the target was met, and every stage's report. Export the mesh as
    `.pde2d` (it opens in `tools/mesh_viewer`) or as an SVG picture. A component's option that the library refuses is
    marked at its field.
-3. **Problem.** Write the equation's coefficients, named parameters, one
-   boundary condition per region and the initial conditions as expressions
-   in x, y and t. Each form shows the coefficients in use and the right
-   side; **Show all coefficients** reveals the others (a template chosen
-   from **Start from…** or **Type…** shows its own). **Preset…** fills in a whole problem for the current
+3. **Problem.** Write the equation as one line, the way it is written on
+   paper: `u_t - div(k*grad(u)) = 1`, or with nabla `u_t - ∇·(k∇u) = 1`
+   (the ∇ · ² Δ buttons beside the field insert the symbols at the
+   caret); u and its derivatives u_x, u_y, u_xx, u_xy, u_yy, u_t, u_tt,
+   grad, div, lap and dot, vectors `(a, b)` and matrices
+   `[[a, b], [c, d]]`, with coefficients in x, y, t and named parameters.
+   Under the line, "means" shows the coefficients the library read from
+   it (`a_xx = -k`, `b_x = …`); an error shows there once you pause
+   typing. Each boundary condition is a line too (`u = 0`, `u_n = 0`,
+   `k*u_n + h*u = h*u_out`, `(k ∇u)·n = q`: n is the outward normal, tau
+   the tangent). **Coefficients** switches a line to the coefficient form
+   (a_xx u_xx + … = f) and **As a line** back; there each form shows the
+   coefficients in use and the right side, and **Show all coefficients**
+   reveals the others. **Preset…** fills in a whole problem for the current
    geometry with matching solve settings (**Use a preset…** in the step's head): Poisson, Laplace with u = x,
    heat (a bump, a heated boundary, cooling), the wave equation with and
    without damping, steady convection-diffusion and reaction-diffusion;
    the message that follows has **Undo**. A preset is not applied when the
    case changed while it was prepared (choose it again). The **Start from…** and
    **Type…** menus fill in common equations and conditions. Every edit is
-   checked after a short pause in typing (see Settings): errors appear
-   under their field, and each field shows what it depends on. Each condition
+   checked at once (see Settings): errors appear under their field, and
+   each coefficient field shows what it depends on. Each condition
    shows its kind (Dirichlet, natural, dynamic), and the summary shows
-   the time order and which initial conditions are needed. While an edit
-   waits for its check, the summary says "Checking…" and the old facts
-   are greyed out. Renaming a parameter to a name that exists is refused.
+   the time order and which initial conditions are needed. Nothing above
+   the fields changes while a check runs; a check that takes longer than
+   0.4 s says "Checking…" and greys out the old facts. Renaming a parameter to a name that exists is refused.
 4. **Assemble.** Builds the P1 system at a time t, meshing first if
    needed: the number of unknowns and Dirichlet nodes, which operators are
    zero, change with t or are symmetric (always, or only at this t), and a
@@ -170,9 +179,12 @@ field, Ctrl+Z undoes the whole edit of the field.
    when a choice does not fit the problem. **Solve** meshes first if
    needed, then shows the counts, min u and max u, the steps and the
    solver's iterations and residual, and draws the solution. For a run
-   in time, the time bar under the picture (**Play**, the slider, the
-   shown time with that snapshot's min and max) walks through the
-   snapshots; the colours keep one scale for every time. **Compare with
+   in time, the time bar under the picture (**Play**, the playback speed,
+   the slider, the shown time with that snapshot's min and max) walks
+   through the snapshots: at 1× one simulated second takes one second,
+   whatever the number of steps. A run plays from its start while it is
+   computed, once a few snapshots are there, and no faster than the run
+   computes (the bar then says the speed it plays at); the colours keep one scale for every time. **Compare with
    an exact solution** takes an expression in x, y, t: it shows the
    largest nodal error max |u − exact|, its RMS over the nodes and the
    lumped L2 error at the shown time, the largest over all snapshots and,
@@ -235,9 +247,9 @@ on it). The browser remembers which ones you folded; rarely changed ones
 reports) start folded.
 
 **Settings** (the gear in the top bar; Escape closes it) are kept in this
-browser, not in the case: the problem check while typing (on or off, and
-its delay), the playback speed, whether a run's newest snapshot is
-followed, the significant digits shown, the number of isolines, the
+browser, not in the case: the problem check while typing (on or off),
+whether a run plays as it is computed (the playback speed is chosen on
+the time bar and kept too), the significant digits shown, the number of isolines, the
 colour maps (for values of one sign: blue, orange or green; for both
 signs: blue–red or blue–orange), and the picture quality (lower is faster to pan and draw, higher is sharper). The Computation group
 (sequential or parallel assembly and linear solves) is shown disabled: the

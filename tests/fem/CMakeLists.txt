@@ -19,3 +19,4 @@ pde2d_add_test(NAME fem_assembly_threads SOURCE assembly_threads.cpp
 pde2d_add_test(NAME fem_assembly_convergence SOURCE assembly_convergence.cpp
                LIBS pde2d_fem)
 pde2d_add_test(NAME fem_quadrature SOURCE quadrature.cpp LIBS pde2d_fem)
+pde2d_add_test(NAME fem_equation_text SOURCE equation_text.cpp LIBS pde2d_fem)

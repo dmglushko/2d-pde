@@ -1,10 +1,12 @@
-// Step 3: the problem as text: the equation's coefficients, parameters,
-// one boundary condition per region and the initial conditions. Every
-// edit is checked by the server a moment later; errors and what each
-// coefficient depends on are shown next to the fields.
+// Step 3: the problem as text: the equation, parameters, one boundary
+// condition per region and the initial conditions. The equation and each
+// condition are one line ("u_t - div(k*grad(u)) = 0", read by the
+// library) or, switched, their coefficients. Every edit is checked by the
+// server at once; errors, the coefficients a line means and what each
+// coefficient depends on are shown under the fields.
 
-import { applyPreset, scheduleProblemCheck } from "../actions.js";
-import { renameParameter, visibleCoefficients } from "../pure/case_model.js";
+import { applyPreset, scheduleProblemCheck, toast } from "../actions.js";
+import { isLine, renameParameter, visibleCoefficients } from "../pure/case_model.js";
 import { errorBox, fill, foldable, h, infoToggle, markLocal, numberInput, regionSwatch, revealFolded } from "../dom.js";
 import { settings } from "../settings.js";
 import { currentError, editCase, freshResult, lastResult, outdatedError, store } from "../state.js";
@@ -24,6 +26,23 @@ function edit(mutate, reason = "edit") {
 const checkOnCommit = () => {
   if (!settings.checkWhileTyping) scheduleProblemCheck({ now: true });
 };
+
+// While a line is being typed, its error waits for a pause (a line is
+// wrong after almost every key until it is finished); what it meant last
+// stays meanwhile. A check that takes longer than SLOW_MS is said.
+const ERROR_PAUSE_MS = 700;
+const SLOW_MS = 400;
+let typedAt = 0;
+let typedPath = null;
+let pauseTimer = null;
+let panelElement = null;
+function typed(path) {
+  typedAt = performance.now();
+  typedPath = path;
+  clearTimeout(pauseTimer);
+  pauseTimer = setTimeout(() => panelElement && problemPanel.update(panelElement, true), ERROR_PAUSE_MS + 10);
+}
+const typingIn = (path) => path === typedPath && performance.now() - typedAt < ERROR_PAUSE_MS;
 
 // Which coefficients each form shows (pure/case_model.js,
 // visibleCoefficients): per form path, the names a template revealed in
@@ -79,12 +98,14 @@ function coefficientRow(field, object, path, placeholder = "0") {
     value: object[field.name] ?? "",
     placeholder,
     "aria-label": field.name,
-    oninput: (event) =>
+    oninput: (event) => {
+      typed(`${path}.${field.name}`);
       edit(() => {
         const text = event.target.value;
         if (text.trim() === "") delete object[field.name];
         else object[field.name] = text;
-      }),
+      });
+    },
     onchange: checkOnCommit,
   });
   const term = h("small", {}, field.term ? `× ${field.term}` : "right side");
@@ -92,6 +113,88 @@ function coefficientRow(field, object, path, placeholder = "0") {
     h("div", { class: "name" }, field.name, term),
     h("div", { class: "cell field", dataset: { path: `${path}.${field.name}`, coef: "" } }, input, h("div", { class: "facts" })),
   ];
+}
+
+// The symbols a keyboard lacks, inserted at the caret of `input`.
+const SYMBOLS = [
+  ["∇", "nabla: ∇u is grad(u)"],
+  ["·", "dot: ∇·F is div(F), a·b the dot product"],
+  ["²", "∇²u is lap(u)"],
+  ["Δ", "Δu is lap(u)"],
+];
+
+function symbolBar(input) {
+  const insert = (symbol) => {
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    input.setRangeText(symbol, start, end, "end");
+    input.focus();
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  return h(
+    "div",
+    { class: "symbol-bar", role: "group", "aria-label": "Insert a symbol" },
+    SYMBOLS.map(([symbol, title]) =>
+      h(
+        "button",
+        // The field keeps the focus (and its caret) while one is pressed.
+        { type: "button", class: "symbol", title, "aria-label": `Insert ${symbol}`, onmousedown: (event) => event.preventDefault(), onclick: () => insert(symbol) },
+        symbol,
+      ),
+    ),
+  );
+}
+
+// An equation or condition as one line: the text, the symbols, and under
+// it (filled by update) the coefficients the library read from it, or
+// its error. `object` is the case's object, `path` its case path.
+function lineField(object, path, { label, placeholder }) {
+  const input = h("input", {
+    type: "text",
+    class: "expr line-input",
+    spellcheck: false,
+    autocomplete: "off",
+    value: object.text ?? "",
+    placeholder,
+    "aria-label": label,
+    oninput: (event) => {
+      typed(`${path}.text`);
+      edit(() => (object.text = event.target.value));
+    },
+    onchange: checkOnCommit,
+  });
+  return h(
+    "div",
+    { class: "line-field field", dataset: { path: `${path}.text`, line: path } },
+    h("div", { class: "line-row" }, input, symbolBar(input)),
+    h("div", { class: "derived", dataset: { derivedOf: path }, "aria-live": "polite" }),
+  );
+}
+
+// Switches the equation or a condition at `path` between its line and
+// its coefficients, from both forms of the last check (the library reads
+// the line and prints the coefficients). `replace(c, value)` puts the new
+// form into the case.
+function switchForm(path, toLine, replace) {
+  const form = freshResult("problem")?.forms?.[path];
+  if (!form) {
+    toast(toLine ? "It can be written as a line once the check finds no error in it." : "The coefficients are known once the check finds no error in the line.");
+    return;
+  }
+  edit((c) => replace(c, toLine ? { text: form.text } : { ...form.coefficients }), "structure");
+}
+
+function switchButton(path, line, replace) {
+  return h(
+    "button",
+    {
+      type: "button",
+      class: "link small switch-form",
+      title: line ? "Edit the coefficients of the form instead of the line" : "Write it as one line, as on paper",
+      onclick: () => switchForm(path, !line, replace),
+    },
+    line ? "Coefficients" : "As a line",
+  );
 }
 
 function templateSelect(label, templates, apply) {
@@ -131,15 +234,18 @@ function presetSelect(presets) {
 
 function equationSection(catalog, problem) {
   problem.equation ??= {};
-  const help = infoToggle(catalog.expression_help, "expressions");
+  const line = isLine(problem.equation);
+  const help = infoToggle(line ? `${catalog.line_help} ${catalog.expression_help}` : catalog.expression_help, line ? "writing the equation" : "expressions");
   const start = templateSelect("Start from…", catalog.equation_templates, (values) => {
     reveal("problem.equation", values);
     edit((c) => (c.problem.equation = values), "structure");
   });
+  const toggle = switchButton("problem.equation", line, (c, value) => (c.problem.equation = value));
   return foldable(
-    { id: "problem.equation", title: "Equation", kind: "section", extras: [help.button, h("span", { class: "spacer" }), start], info: help.panel },
-    h("div", { class: "form-line" }, catalog.equation_form),
-    coefficientsForm(catalog.equation_fields, problem.equation, "problem.equation"),
+    { id: "problem.equation", title: "Equation", kind: "section", extras: [help.button, h("span", { class: "spacer" }), toggle, start], info: help.panel },
+    line
+      ? lineField(problem.equation, "problem.equation", { label: "Equation", placeholder: "u_t - div(k*grad(u)) = 0" })
+      : [h("div", { class: "form-line" }, catalog.equation_form), coefficientsForm(catalog.equation_fields, problem.equation, "problem.equation")],
   );
 }
 
@@ -210,9 +316,14 @@ function parametersSection(problem) {
 function conditionCard(catalog, conditions, region, index, count) {
   const condition = conditions[region];
   const path = `problem.boundary_conditions.${region}`;
+  const line = isLine(condition);
   const type = templateSelect("Type…", catalog.condition_templates, (values) => {
     reveal(path, values);
     edit((c) => (c.problem.boundary_conditions[region] = { ...values, priority: condition.priority ?? 0 }), "structure");
+  });
+  const toggle = switchButton(path, line, (c, value) => {
+    const old = c.problem.boundary_conditions[region];
+    c.problem.boundary_conditions[region] = old.priority === undefined ? value : { ...value, priority: old.priority };
   });
   const priority = numberInput({
     value: condition.priority ?? 0,
@@ -228,11 +339,12 @@ function conditionCard(catalog, conditions, region, index, count) {
       id: `problem.condition.${region}`,
       title: [regionSwatch(index), " ", region],
       folded: count > 4,
-      extras: [h("span", { class: "chip", dataset: { kindOf: region } }, "…"), h("span", { class: "spacer" })],
+      extras: [h("span", { class: "chip", dataset: { kindOf: region } }, "…"), h("span", { class: "spacer" }), toggle],
       attributes: { class: "field", dataset: { path } },
     },
+    line ? lineField(condition, path, { label: `Condition on ${region}`, placeholder: "u = 0" }) : null,
     h("div", { class: "row condition-line" }, type, h("label", { class: "row inline-label" }, "priority", priority)),
-    coefficientsForm(catalog.condition_fields, condition, path),
+    line ? null : coefficientsForm(catalog.condition_fields, condition, path),
   );
 }
 
@@ -244,10 +356,11 @@ function conditionsSection(catalog, problem) {
     const i = order.indexOf(name);
     return i < 0 ? order.length + regions.indexOf(name) : i;
   };
-  const help = infoToggle(catalog.condition_note, "boundary conditions");
+  const help = infoToggle(`${catalog.condition_note} Written as a line: ${catalog.condition_line_note}`, "boundary conditions");
+  const anyCoefficients = regions.some((region) => !isLine(conditions[region]));
   return foldable(
     { id: "problem.conditions", title: "Boundary conditions", kind: "section", extras: [help.button], info: help.panel },
-    h("div", { class: "form-line" }, catalog.condition_form),
+    anyCoefficients ? h("div", { class: "form-line" }, catalog.condition_form) : null,
     regions.length === 0 ? h("p", { class: "note" }, "The regions appear here once the geometry is read.") : null,
     regions.sort((a, b) => index(a) - index(b)).map((region) => conditionCard(catalog, conditions, region, index(region), regions.length)),
   );
@@ -269,9 +382,18 @@ function factChips(facts) {
   return depends.length ? [h("span", { class: "chip" }, `depends on ${depends.join(", ")}`)] : [h("span", { class: "chip" }, "constant")];
 }
 
-// The status line: checking, no errors, or how many.
-function checkStatus(check, fresh, error) {
+// How long the running check has run (ms), or null.
+function checkingFor() {
+  const since = store.busySince.problem;
+  return store.busy.has("problem") && since !== undefined ? performance.now() - since : null;
+}
+
+// The status line: checking, no errors, or how many. A check that is
+// still quick keeps the words of the last one (no flicker while typing).
+function checkStatus(check, fresh, error, shown) {
   if (error) return { status: "failed", text: "The check failed" };
+  const running = checkingFor();
+  if (!fresh && running !== null && running < SLOW_MS && shown) return shown;
   if (store.busy.has("problem") || !fresh) return { status: "busy", text: "Checking…" };
   if (!check.ok) return { status: "failed", text: `${check.errors.length} error${check.errors.length > 1 ? "s" : ""}` };
   return { status: "done", text: "No errors" };
@@ -289,8 +411,20 @@ function summaryChips(check) {
   );
 }
 
+// The coefficients a line means, as "a_xx = -k" chips in the catalog's
+// order (powers as ^, as typed; the library prints **).
+function derivedChips(fields, coefficients) {
+  const named = fields.filter((f) => coefficients?.[f.name] !== undefined);
+  if (named.length === 0) return [h("span", { class: "note" }, "no coefficient")];
+  return [
+    h("span", { class: "derived-label" }, "means"),
+    named.map((f) => h("span", { class: "chip coefficient", title: f.term ? `× ${f.term}` : "right side" }, `${f.name} = ${coefficients[f.name].replaceAll("**", "^")}`)),
+  ];
+}
+
 export const problemPanel = {
   build(container) {
+    panelElement = container;
     const catalog = store.catalog.problem;
     const problem = (store.caseData.problem ??= {});
     const head = stepHead("problem", catalog.presets?.length ? presetSelect(catalog.presets) : null);
@@ -314,27 +448,49 @@ export const problemPanel = {
   update(container, force = false) {
     const summary = container.querySelector("#problem-summary");
     if (!summary) return;
+    const catalog = store.catalog.problem;
     const fresh = freshResult("problem");
     const check = fresh ?? lastResult("problem");
     const error = currentError("problem");
     const old = outdatedError("problem");
-    if (!force && summary.shown && summary.shown.check === check && summary.shown.fresh === fresh && summary.shown.error === error && summary.shown.old === old) return;
-    summary.shown = { check, fresh, error, old };
-    // A check of an earlier problem is shown muted, never as current.
-    container.classList.toggle("checking", !fresh);
+    const running = checkingFor();
+    const quick = !fresh && running !== null && running < SLOW_MS;
+    if (quick) {
+      // Said once it is slow.
+      clearTimeout(summary.slowTimer);
+      summary.slowTimer = setTimeout(() => this.update(container), SLOW_MS - running + 10);
+    }
+    if (!force && summary.shown && summary.shown.check === check && summary.shown.fresh === fresh && summary.shown.error === error && summary.shown.old === old && summary.shown.quick === quick) return;
+    summary.shown = { check, fresh, error, old, quick };
+    // A check of an earlier problem is shown muted, never as current; a
+    // quick one is not worth a flicker.
+    container.classList.toggle("checking", !fresh && !quick);
 
-    // Per field: its facts and its error.
+    // Per field: its facts and its error. The error of a line being typed
+    // waits for a pause.
     const errors = new Map((check?.errors ?? []).map((e) => [e.path, e.message]));
     for (const cell of container.querySelectorAll("[data-path]:not(input)")) {
       const path = cell.dataset.path;
-      cell.classList.toggle("invalid", errors.has(path));
+      const waiting = typingIn(path) && errors.has(path);
+      const shownError = errors.has(path) && !waiting;
+      cell.classList.toggle("invalid", shownError);
       for (const old of cell.querySelectorAll(":scope > [data-error]")) old.remove();
-      if (errors.has(path)) {
+      if (shownError) {
         cell.append(h("div", { class: "error-text", "data-error": "" }, errors.get(path)));
         if (fresh) revealFolded(cell);
       }
       const facts = cell.querySelector(":scope > .facts");
       if (facts) fill(facts, ...(errors.has(path) ? [] : factChips(check?.facts?.[path])));
+      // A line: what it means, from the last check that read it (kept,
+      // muted, while it has an error or is being typed).
+      const derived = cell.querySelector(":scope > .derived");
+      if (derived) {
+        const form = check?.forms?.[cell.dataset.line];
+        const fields = cell.dataset.line === "problem.equation" ? catalog.equation_fields : catalog.condition_fields;
+        if (form) fill(derived, ...derivedChips(fields, form.coefficients));
+        derived.hidden = shownError || derived.childElementCount === 0;
+        derived.classList.toggle("stale", !form);
+      }
     }
     for (const chip of container.querySelectorAll("[data-kind-of]")) {
       const conditions = check?.conditions ?? {};
@@ -343,7 +499,15 @@ export const problemPanel = {
       chip.classList.toggle("bad", !kind && errors.has(`problem.boundary_conditions.${chip.dataset.kindOf}`));
     }
 
-    setStepStatus(container.head, "problem", checkStatus(check, fresh, error));
+    container.head.lastCheckStatus = checkStatus(check, fresh, error, container.head.lastCheckStatus);
+    setStepStatus(container.head, "problem", container.head.lastCheckStatus);
+    // While a check runs, the summary of the last one stays (fields below
+    // it do not move on every key).
+    if (!fresh && !error && !old && summary.childElementCount > 0) {
+      summary.classList.add("stale");
+      return;
+    }
+    summary.classList.remove("stale");
     const children = [];
     if (error) children.push(errorBox(error));
     if (old) children.push(errorBox(old, { outdated: true }));

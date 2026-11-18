@@ -43,28 +43,21 @@
   },
   "problem": {
     "equation": {
-      "m2": "1",
-      "a_xx": "-1",
-      "a_yy": "-1",
-      "f": "0"
+      "text": "u_tt - lap(u) = 0"
     },
     "parameters": {},
     "boundary_conditions": {
       "bottom": {
-        "alpha": "1",
-        "g": "0"
+        "text": "u = 0"
       },
       "right": {
-        "alpha": "1",
-        "g": "0"
+        "text": "u = 0"
       },
       "top": {
-        "alpha": "1",
-        "g": "0"
+        "text": "u = 0"
       },
       "left": {
-        "alpha": "1",
-        "g": "0"
+        "text": "u = 0"
       }
     },
     "initial": {

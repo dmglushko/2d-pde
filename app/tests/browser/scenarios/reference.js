@@ -6,7 +6,9 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   tab("problem");
   const presets = q('#panel-problem select[aria-label="Problem preset"]');
   select(presets, [...presets.options].find((o) => /Laplace/.test(o.textContent)).value);
-  await until(() => /No errors/.test(text(q("#panel-problem .step-status"))), "the preset");
+  // The status says "No errors" before the preset arrives: wait for it.
+  await until(() => text(q("#toast")).includes("filled in"), "the preset");
+  await until(() => /No errors/.test(text(q("#panel-problem .step-status"))), "the check");
   tab("solve");
   click(button("Solve", panel("solve")));
   await until(() => q("#solve-result .stats"), "the solution", 60000);
@@ -33,8 +35,8 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   await until(() => /This run is the reference/.test(text(refSection())), "the reference");
   check("the run is kept as the reference", true);
   tab("problem");
-  const g = q('#panel-problem [data-path$=".g"] input');
-  type(g, "0.5");
+  const g = q('#panel-problem [data-path^="problem.boundary_conditions."][data-path$=".text"] input');
+  type(g, "u = 0.5");
   tab("solve");
   click(button("Solve", panel("solve")));
   await until(() => button("Compare with reference", refSection() ?? q("body")), "the new run", 60000);

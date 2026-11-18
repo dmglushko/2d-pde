@@ -97,6 +97,8 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | Refinement | `Remesher::refine(mesh, marked)` | `Mesh`, marked triangles | `RefinementResult`: the finer `Mesh`, reports, `properties`, optional `Parents` | `pde2d_mesh` |
 | Adaptation | `Adaptation::estimate(state)`, `adapt(state, estimate)` (`MeshRefinement`: estimate, mark, `Remesher::refine`) | a `SolvedState` (problem, solution, derivatives) | `AdaptationResult`: a new `Mesh` or none, properties, parents, the estimate, reports | `pde2d_adapt` |
 | Adaptive loop (static) | `AdaptiveStaticSolver::solve(meshed, target, t)` | `MeshedProblem` (its mesh is the start), `AdaptiveTarget` | `AdaptiveStaticResult`: every cycle's solution, estimate and reports, the last problem, why it stopped | `pde2d_adapt` |
+| Solution transfer | `transfer_solution(old, meshed, parents)` | a `Solution` (values, velocities), the new `MeshedProblem`, optional `Parents` | `SolutionTransfer`: the `Solution` on the new mesh, a report | `pde2d_adapt` |
+| Adaptive loop (in time) | `AdaptiveIntegrator::integrate(meshed, t0, t1, target, output, initial)` | `MeshedProblem` (its mesh is the start), times, `AdaptiveTimeTarget`, `IntegrationOutput` | `AdaptiveIntegrationResult`: the final solution, snapshots, step records, every piece (problem, integrator report, the adaptation at its end) | `pde2d_adapt` |
 | Mesh properties | `measure(mesh, warning_angle_degrees)` | `Mesh` | `MeshProperties`: counts, smallest/largest angle, shortest/longest edge, triangles below the warning angle | `pde2d_mesh` |
 
 ### Data
@@ -109,7 +111,7 @@ Assembler → TimeMethod step → LinearSolver for every time step and builds a
 | `Problem` | the equation's coefficients, boundary conditions by region name and initial conditions as `Expression`s (each with its facts), and the parameter values | a plain struct |
 | `MeshedProblem` | the mesh and the problem; every expression compiled to a function of (x, y, t) with its facts; the Dirichlet nodes and the node ↔ unknown tables; ∇·A and the time derivatives of the Dirichlet data | never |
 | `AssembledProblem` | at one time t: the operators mass, damping, stiffness (each a `free` and a `dirichlet` `CsrMatrix`), the load, the Dirichlet values, the right-hand side, its own facts, a report | never |
-| `LinearSolveResult` | one value per free unknown, iterations, residual | never |
+| `LinearSolveResult` | one value per free unknown, iterations, relative residual, backward error, pivot ratio, threads, warnings (`messages`) | never |
 | `Solution` | one value per mesh node, the mesh, the time (and, for time order 2, one velocity per node) | a plain struct |
 
 Every stage that does work also returns or holds a `StageReport` (time,
@@ -601,13 +603,13 @@ module: it is a program over the public headers, described in
 | `src/mesh/` | implementation; private headers `delaunay_internal.hpp`, `polygon_nodes.hpp`, `stage.hpp`, `local_improvers.hpp`, `edge_recovery.hpp`, `loop_chains.hpp` (joining a loop's curves into chains; shared by the discretizer and the Remesher), `boundary_split_policy.hpp` (the fixed, internal policy for splitting curved boundary edges), `boundary_split_steps.hpp` (its steps, a friend of `WorkingMesh`) and `mesh_validity.hpp` (the geometric validity check run by the `WorkingMesh` constructor) and `domain_size_policy.hpp` (the fixed definition of the domain size) and `edge_bisection.hpp` (the bisection core shared by the three bisection refiners: marked edges, closure, division patterns, parents, the `run` loop; `detail::check_marked`) and `refinement_edges.hpp` (the longest-edge tie order `detail::longest_local_edge`, shared by the core and `set_longest_edges_as_refinement_edges`; `detail::set_longest_edges_as_refinement_edges` of a working mesh, for all triangles or those whose order an edit chose; `RefinementEdgeRecord`, a friend of `WorkingMesh`); `bisection_refiners.cpp` holds the three bisection refiners (each a rule for the core) |
 | `include/pde2d/io/` | `svg.hpp` (SVG import/export of geometries, SVG pictures of meshes), `pde2d_mesh.hpp` (the old `.pde2d` format), `gmsh.hpp` (Gmsh import) |
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
-| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`AssemblerOptions`, `Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
+| `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `equation_text.hpp` (`parse_equation`, `parse_condition`, `equation_text`, `condition_text`), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`AssemblerOptions`, `Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`), `element_blocks.hpp` (assembly's pure element block functions) and `threads.hpp` (checking and resolving `AssemblerOptions::threads`; includes `<omp.h>`); `assembler.cpp` holds the driver (with the OpenMP loop over a colour), patterns, colouring and `detail::AssemblyInternals` |
-| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`), `supernodal_cholesky.hpp` (`SupernodalCholeskyOptions`, `SupernodalCholesky`), `multifrontal_lu.hpp` (`MultifrontalLuOptions`, `MultifrontalLu`) |
-| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `threads.hpp` (checking and resolving a `threads` option; includes `<omp.h>`), `eigen_threads.hpp` (`detail::EigenThreads`, the scope every Eigen computation runs in), `factorization_threads.hpp` (`detail::FactorizationThreads`, the scope every SuiteSparse call runs in: a process-wide lock, OpenBLAS's count and the calling thread's OpenMP count; the OpenBLAS calls are in `factorization_threads.cpp`), `suitesparse.hpp` (what the two SuiteSparse solvers share: their options check, CHOLMOD's view of a `CsrMatrix` as the compressed columns of its transpose, the singularity rule, the checks of a result; includes `cholmod.h`) and `vectors.hpp` (norms, residual, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the Eigen solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`), SuiteSparse only in `suitesparse.hpp`, `supernodal_cholesky.cpp` and `multifrontal_lu.cpp`; `time_methods.cpp` holds the three time methods |
+| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `FreeState`, `StepAnchor`, `StepRecord`, `IntegrationResult`), `supernodal_cholesky.hpp` (`SupernodalCholeskyOptions`, `SupernodalCholesky`), `multifrontal_lu.hpp` (`MultifrontalLuOptions`, `MultifrontalLu`) |
+| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `threads.hpp` (checking and resolving a `threads` option; includes `<omp.h>`), `eigen_threads.hpp` (`detail::EigenThreads`, the scope every Eigen computation runs in), `factorization_threads.hpp` (`detail::FactorizationThreads`, the scope every SuiteSparse call runs in: a process-wide lock, OpenBLAS's count and the calling thread's OpenMP count; the OpenBLAS calls are in `factorization_threads.cpp`), `suitesparse.hpp` (what the two SuiteSparse solvers share: their options check, CHOLMOD's view of a `CsrMatrix` as the compressed columns of its transpose, the checks of a result; includes `cholmod.h`), `pivot_ratio.hpp` (`detail::small_pivot_ratio` = 1e-10 and the warning below it, shared by `SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; no heavy dependency) and `vectors.hpp` (norms, the residual measures: relative residual and backward error, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the Eigen solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`), SuiteSparse only in `suitesparse.hpp`, `supernodal_cholesky.cpp` and `multifrontal_lu.cpp`; `time_methods.cpp` holds the three time methods |
 | `app/` | the graphical interface (`pde2d_app`): `src/` (case format with its migrations and generated schema, the geometry sources with the drawing and the boundary locator, the mesh and solve catalogs, the stage cache, runs in chunks per client under two locks, comparisons and probes, exporters with a stored zip writer, problem presets, `--set` and `--sweep`, local HTTP server), `web/` (the page, plain JS modules, with the geometry editor on the picture), `examples/` (cases), `Start pde2d app.cmd` and `start-app.sh` (double-click launcher), `tests/` (`browser/`: the page in headless Chrome; `example_checks.json`: the examples' expected figures), `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md`, its design `docs/app.md` and its decisions `docs/app-decisions.md` |
-| `include/pde2d/adapt/` | `error_estimator.hpp` (`ErrorEstimator`, `ErrorEstimate`, `TimeDerivatives`), `residual_estimator.hpp` (`ResidualEstimatorOptions`), `kelly_estimator.hpp` (`KellyEstimatorOptions`), `recovery_estimator.hpp` (`RecoveryEstimatorOptions`, `RecoveryNorm`), `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `adaptation.hpp` (`Adaptation`, `AdaptationCapabilities`, `AdaptationResult`, `SolvedState`), `mesh_refinement.hpp` (`MeshRefinement`), `adaptive_static_solver.hpp` (`AdaptiveStaticSolver`, `AdaptiveTarget`, `ErrorTolerance`, `StopReason`, `AdaptiveCycle`, `AdaptiveStaticResult`); refinement of marked triangles is `mesh::Remesher::refine` |
-| `src/adapt/` | `error_estimator.cpp` (the shared checks of `estimate`), `residual_estimators.cpp` (the residual terms, shared by the residual and Kelly estimators), `recovery_estimator.cpp`, `marking.cpp` (the shared checks and the four strategies), `mesh_refinement.cpp`, `adaptive_static_solver.cpp`; private header `estimator_geometry.hpp` (per-triangle area, diameter and gradient of u_h, interior edges with their two triangles, the triangle of each boundary edge, checked coefficient values, the check of a quadrature degree option) |
+| `include/pde2d/adapt/` | `error_estimator.hpp` (`ErrorEstimator`, `ErrorEstimate`, `TimeDerivatives`), `residual_estimator.hpp` (`ResidualEstimatorOptions`), `kelly_estimator.hpp` (`KellyEstimatorOptions`), `recovery_estimator.hpp` (`RecoveryEstimatorOptions`, `RecoveryNorm`), `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `adaptation.hpp` (`Adaptation`, `AdaptationCapabilities`, `AdaptationResult`, `SolvedState`), `mesh_refinement.hpp` (`MeshRefinement`), `adaptive_static_solver.hpp` (`AdaptiveStaticSolver`, `AdaptiveTarget`, `ErrorTolerance`, `StopReason`, `AdaptiveCycle`, `AdaptiveStaticResult`), `solution_transfer.hpp` (`transfer_solution`, `SolutionTransfer`), `adaptive_integrator.hpp` (`AdaptiveIntegrator`, `AdaptiveIntegratorOptions`, `AdaptationSchedule`, `AdaptiveTimeTarget`, `AdaptationOutcome`, `AdaptationPoint`, `IntegrationPiece`, `AdaptiveIntegrationResult`); refinement of marked triangles is `mesh::Remesher::refine` |
+| `src/adapt/` | `error_estimator.cpp` (the shared checks of `estimate`), `residual_estimators.cpp` (the residual terms, shared by the residual and Kelly estimators), `recovery_estimator.cpp`, `marking.cpp` (the shared checks and the four strategies), `mesh_refinement.cpp`, `adaptive_static_solver.cpp`, `solution_transfer.cpp`, `adaptive_integrator.cpp`; private headers `point_location.hpp` (`detail::PointLocator`: a bucket grid over a mesh's triangles and boundary edges, exact containment, nearest boundary point; for the transfer without parents) and `estimator_geometry.hpp` (per-triangle area, diameter and gradient of u_h, interior edges with their two triangles, the triangle of each boundary edge, checked coefficient values, the check of a quadrature degree option) |
 | `tests/<module>/` | one test program per topic, registered in that directory's `CMakeLists.txt`; `tests/io/data/` holds hand-written `.msh` files; `tests/mesh/refinement_checks.hpp` holds the oracles of a refinement result (also used by `tests/adapt/cycles.cpp`); `tests/adapt/estimator_support.hpp` computes the true energy error of a P1 solution (exact gradients, subdivision at a singular point) |
 | `tests/support/` | `check.hpp` (test helper), `mesh_checks.hpp` (independent mesh oracles, including a brute-force overlap check in `check_valid_mesh`), `shapes.hpp` (test geometries), `l_shape_mesh.hpp` (an L-shape with many colours, for the threaded tests `tests/fem/assembly_threads.cpp` and `tests/solve/threads.cpp`) |
 | `tools/` | `test.sh` (configure, build, ctest), `format.sh`, `mesh_viewer/` (the old browser viewer, unchanged except its README) |
@@ -1063,6 +1065,7 @@ text ──► Expression ─┐
 | `InitialConditions` | `problem.hpp` | `std::optional<Expression>` `u` and `u_t` |
 | `Problem` | `problem.hpp` | `equation`, `parameters`, `boundary_conditions` (region name → condition), `initial` |
 | `ConditionKind` | `problem.hpp` | `dirichlet`, `natural`, `dynamic`; `classify(condition)` and `is_oblique(condition)` |
+| (functions) | `equation_text.hpp` | `parse_equation(text)` → `Equation`, `parse_condition(text)` → `BoundaryCondition` (one line each, with grad, div, lap, dot or ∇, ∇·, ∇², Δ, vectors and matrices; see "Equations as one line"), and back: `equation_text(equation)`, `condition_text(condition)` |
 | `CompiledEquation`, `CompiledCondition` | `meshed_problem.hpp` | the same members as `CompiledExpression`s; a condition also has its `kind`, `oblique` and `priority` |
 | `DirichletNode` | `meshed_problem.hpp` | a node and the regions whose `g / alpha` is averaged there (one, or two at an equal-priority corner) |
 | `MeshedProblem` | `meshed_problem.hpp` | `Problem` + `std::shared_ptr<const Mesh>`, checked and compiled, up to assembly |
@@ -1084,6 +1087,32 @@ Problem problem{
 auto meshed = std::make_shared<const MeshedProblem>(mesh, problem);
 double a = meshed->equation().a_xx(0.5, 0.5, 0.0); // -1000
 ```
+
+**Equations as one line** (`equation_text.hpp`, `src/fem/equation_text.cpp`).
+`parse_equation("u_t - ∇·(k∇u) = 1")` reads a line into an `Equation`,
+`parse_condition("k*u_n + h*u = h*u_out")` into a `BoundaryCondition`;
+nothing after them knows the line. A small recursive-descent parser of
+its own reads the structure (`=`, `+ - * / ^`, `·`, vectors `(a, b)`,
+matrices `[[a, b], [c, d]]`, `grad div lap dot`, `∇ ∇· ∇² Δ`, a factor in
+front of ∇ or Δ); every part without u, the normal or an operator of the
+line (a number, a name, a function call with its arguments, and `+ - * /
+^` and parentheses of such) is handed to `Expression` as it is written,
+so coefficients keep Expression's syntax, allow-list and messages
+(`Piecewise` and its conditions included). The line is evaluated to a
+form linear in u: a SymEngine coefficient per derivative of u (u, u_x,
+u_y, u_xx, u_xy, u_yy, u_t, u_tt) and, in a condition, per component
+n_x, n_y of the normal; a product of two parts with u, a function of u
+or a third derivative is refused where it is written. grad and div
+differentiate by the product rule, the coefficients through
+`detail::derivative`, so `-∇·(k∇u)` becomes a = −k, b = −∇k. The left
+side minus the right side gives the coefficients and −(the part without
+u) the right-hand side; a condition's normal components must form
+β_n u_n + β_τ u_τ (the u_x n_x and u_y n_y coefficients equal, the u_x
+n_y one the negative of the u_y n_x one), after `expand`. Coefficients
+are built with `detail::expression_from_form` (checked, printed by
+SymEngine). `equation_text` and `condition_text` print the coefficient
+form back from the parsed forms, which `parse_*` reads to the same
+coefficients.
 
 **Expressions.** SymEngine parses the text when an `Expression` is built
 (`parse`, with `^` as power). Floating literals are restored in a bottom-up
@@ -1403,10 +1432,49 @@ IntegrationResult r2 = integrator.integrate(meshed, 1.0, 2.0, {}, &r.final);
 **Linear solvers** (`linear_solver.hpp`). `LinearSolver::prepare(
 std::shared_ptr<const CsrMatrix>)` returns a
 `std::unique_ptr<const PreparedLinearSolver>`, which holds the matrix and
-solves `solve(rhs) -> LinearSolveResult` (values, iterations, relative
-residual |b − Ax| / |b| computed after the solve, and `threads`: the
-resolved option of the iterative and the parallel direct solvers, 1 for
-the Eigen direct solvers) as often as needed.
+solves `solve(rhs) -> LinearSolveResult` as often as needed: values,
+iterations, `residual` (the relative residual |b − Ax|₂ / |b|₂ computed
+after the solve), `threads` (the resolved option of the iterative and the
+parallel direct solvers, 1 for the Eigen direct solvers), `backward_error` (|b − Ax|∞ / (|A|∞ |x|∞ + |b|∞), |A|∞
+the largest absolute row sum, from the same residual; every solver fills
+it; a residual entry that is not finite makes it NaN, which no
+tolerance accepts), `pivot_ratio` (the smallest pivot over the largest,
+from `SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; 0 when
+not measured) and `messages` (warnings, "worked, but…", each naming the
+solver; empty except for `SupernodalCholesky` on a matrix it factored as
+−A, and for the three solvers that measure `pivot_ratio` when it is below
+`detail::small_pivot_ratio` = 1e-10 (`src/solve/pivot_ratio.hpp`, fixed,
+not an option): "<solver>: the matrix is nearly singular (pivot ratio
+below 1e-10; its value is the result's pivot_ratio, in reports
+pivot_ratio or min_pivot_ratio), so the answer may have few correct
+digits; …", made once in `prepare` by `detail::pivot_ratio_warning` and
+added to every solve's result, after the −A warning; the text names the
+threshold, not the ratio, so it is the same for every solve of a solver
+(a step matrix prepared again at every step gives it once in the
+integrator's report); the answer is
+returned and the backward error checked as before). The members are in this order: the first four (values, iterations,
+residual, threads) are those the struct had before the other three were
+added, so a positional initialization written then keeps its meaning;
+new members go at the end. The `StaticSolver`
+copies the messages into its "static_solver" report; the `Integrator`
+passes its time method a private wrapper of the linear solver
+(`LoggingSolver` in `integrator.cpp`) whose prepared solvers
+(`LoggingPreparedSolver`) log every solve's result, the steps' and
+those of `start()`: its "integrator" report gets each distinct
+message once, in the order they were added, and the largest
+`backward_error` (`max_backward_error`) and smallest `pivot_ratio` above
+0 (`min_pivot_ratio`, 0 when no solve measured one) over those solves,
+all three read from the log in one snapshot (`SolveLog::snapshot`, under
+one lock), so that a solve of a prepared solver kept beyond
+`integrate()` cannot make them disagree.
+The log (`SolveLog`) is
+per-run state shared (`std::shared_ptr`) by the wrapper and every
+prepared solver it made, and guarded by a mutex held only to add or copy,
+never during a solve: a time method may solve from several threads at
+once with one prepared solver (solves that overlap add their messages in
+the order they take the lock), and may keep a prepared solver beyond
+`integrate()` (a later solve works and adds to a log that no report reads
+any more).
 A solver declares `requirements()` (`LinearSolverRequirements{
 symmetric_matrix}`); `prepare` sees only values, so the callers (the
 `Integrator`, the `StaticSolver`, `Newmark::start`, `ImplicitEuler::start`)
@@ -1424,9 +1492,9 @@ detects its failure and throws `std::runtime_error`.
 | `SparseLu` | nothing | Eigen's SparseLU with COLAMD; the matrix is copied once into Eigen's column-major format; a zero pivot throws `std::runtime_error` in `prepare`, a result that is not finite throws in `solve` |
 | `BiCgStab` | nothing | `BiCgStabOptions{.tolerance = 1e-10, .max_iterations = 1000, .threads = 1}`; Jacobi preconditioner; views our arrays through `Eigen::Map` without copying; starts from zero; non-convergence throws `std::runtime_error` |
 | `ConjugateGradient` | symmetric | Eigen's ConjugateGradient with Lower \| Upper and Jacobi; `ConjugateGradientOptions` as for `BiCgStab`; converges only for a positive definite matrix, otherwise it does not reach its tolerance and throws |
-| `SimplicialLdlt` | symmetric | Eigen's SimplicialLDLT with AMD (lower triangle, copied to column-major); no pivoting, so a zero pivot (singular, or indefinite needing pivots) throws `std::runtime_error` in `prepare`; a tiny pivot passes the factorization, so `solve` checks the relative residual against `SimplicialLdltOptions{.residual_tolerance = 1e-8}` and throws `std::runtime_error` above it |
-| `SupernodalCholesky` | symmetric | CHOLMOD's supernodal L Lᵀ (always supernodal; CHOLMOD's default ordering, AMD or METIS); reads the lower triangle through a view of our arrays (no copy); `SupernodalCholeskyOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for a matrix that is not positive definite (naming the column; negative definite included) or singular to working precision; `solve` checks the residual like `SimplicialLdlt` |
-| `MultifrontalLu` | nothing | ParU's multifrontal LU with threshold partial pivoting (UMFPACK's analysis, METIS, rows scaled by their largest entry); the matrix is copied once into compressed columns; `MultifrontalLuOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for a zero pivot or a matrix singular to working precision (a pure Neumann problem); `solve` checks the residual |
+| `SimplicialLdlt` | symmetric | Eigen's SimplicialLDLT with AMD (lower triangle, copied to column-major); no pivoting, so a zero pivot (singular, or indefinite needing pivots) throws `std::runtime_error` in `prepare`; a tiny pivot passes the factorization, so `solve` checks the backward error against `SimplicialLdltOptions{.residual_tolerance = 1e-8}` and throws `std::runtime_error` above it; pivot ratio min \|D\| / max \|D\| |
+| `SupernodalCholesky` | symmetric | CHOLMOD's supernodal L Lᵀ (always supernodal; CHOLMOD's default ordering, AMD or METIS); reads the lower triangle through a view of our arrays (no copy); `SupernodalCholeskyOptions{.residual_tolerance = 1e-8, .threads = 1}`; when every diagonal entry is negative (`CsrMatrix::entry(i, i) < 0`, a missing one counts as 0) `prepare` factors −A (a negated copy of the values on the same pattern, freed after the factorization) and `solve` solves −A x = −b (a negated copy of b, which CHOLMOD gets as a copy anyway), checks with A and b as given, and adds the warning "…the matrix is negative definite…, so -A was factored…; the answer is unchanged" to every result; `prepare` throws `std::runtime_error` for a matrix (or −A) that is not positive definite (a zero or negative pivot, naming the column; exactly singular, indefinite, a zero diagonal entry or one of each sign included); `solve` checks the backward error like `SimplicialLdlt`; pivot ratio `cholmod_l_rcond` ((min/max diag L)²) |
+| `MultifrontalLu` | nothing | ParU's multifrontal LU with threshold partial pivoting (UMFPACK's analysis, METIS, rows scaled by their largest entry); the matrix is copied once into compressed columns; `MultifrontalLuOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for an exact zero pivot (a front's or a singleton's) and, before ParU, for a row with no entry that is not zero; `solve` checks the backward error; pivot ratio over the diagonal of U of the scaled matrix, singletons included |
 
 The two iterative solvers share one prepared solver
 (`detail::PreparedIterative<EigenSolver>`, `src/solve/iterative_solve.hpp`):
@@ -1483,14 +1551,56 @@ the last digits between thread counts, and for ParU, which schedules its
 tasks while it runs, between runs; with 1 thread they are reproducible bit
 for bit (`tests/solve/parallel_direct.cpp`, also with two solves at once).
 
-**Singular to working precision.** A singular matrix rarely meets an
-exact zero pivot in floating point: a pure Neumann problem factorizes with
-a last pivot of about 1e-17 n times the largest. Both parallel direct
-solvers therefore count a factorization whose smallest pivot is below
-n·ε times its largest (`cholmod_l_rcond`, ParU's rcond estimate over the
-pivots of its fronts; a matrix of singletons only has no fronts and no
-estimate) as singular (`detail::singular_to_working_precision`); a
-matrix from a well-posed problem keeps pivots near 1/n.
+**What the direct solvers check.** Each solve of `SimplicialLdlt`,
+`SupernodalCholesky` and `MultifrontalLu` checks the backward error, not
+the relative residual, against `residual_tolerance` (`detail::
+measure_residual`, `vectors.hpp`: one pass over the matrix gives b − Ax
+and the row sums). The residual of an accurate answer is rounding of size
+ε |A| |x| (each entry of Ax is a sum of up to about ten products), so the
+relative residual grows with |A| |x| / |b| and a coefficient contrast of
+1e6 makes it about 1e-7, while the backward error stays a few ε. The
+infinity norm is the one this rounding bound is written in (entrywise
+|fl(Ax) − Ax| ≤ γ (|A| |x|)), |A|∞ is exact and cheap from CSR rows, and
+taking maxima squares nothing, so nothing underflows or overflows. The
+iterative solvers and `SparseLu` report it too (the iterative ones from
+the last residual of the scaled system; the backward error does not change
+with the scale) but do not check it.
+
+The factorizations refuse only an exact zero pivot (and the Cholesky any
+pivot that is not positive). A singular matrix rarely meets an exact zero
+pivot in floating point: a pure Neumann problem factorizes with a last
+pivot of rounding (a pivot ratio of about 5e-14 on 65 × 65 nodes), and
+its compatible load then gives one of its solutions (residual about
+2e-13); a very ill-conditioned but well-posed problem is solved too
+(a Robin coefficient of 2e-9 on one end of a 1 × 1/128 strip: pivot ratio
+4e-12, the answer as accurate as its condition number of about 1e15
+allows, which is about 10% here). The ratio of the smallest pivot to the
+largest is reported in `pivot_ratio`, not judged (below 1e-10 the
+result carries a warning, see above): CHOLMOD's
+`cholmod_l_rcond`; for ParU, its smallest and largest |U_kk| over the
+fronts (`PARU_GET_MIN_UDIAG`, `PARU_GET_MAX_UDIAG`) combined with the
+singletons, which ParU eliminates before the fronts and leaves out: a
+singleton's pivot is entry (P[k], Q[k]) of the scaled matrix, read from
+our matrix and ParU's row scale factors (ParU checks the pattern, not the
+values, for singletons, so an explicitly stored zero can be one; it
+throws as an exact zero pivot, checked before dividing by the row scale).
+Before ParU sees the matrix, `MultifrontalLu` refuses one with a row
+that has no entry that is not zero (no slot, or only stored zeros), as
+singular with the row named: ParU 7.12 checks the row scale factors
+only of the rows that reach a front, so a zero row that is a singleton
+would get through (its pivot 0 / 0). `MultifrontalLu` sets ParU's row scaling
+(`PARU_PRESCALE_MAX`, the default) explicitly, since the singleton pivots
+depend on it.
+
+**Known limits of the SuiteSparse solvers.** OpenBLAS's thread count is
+one setting for the whole process: a program that sets it
+(`openblas_set_num_threads`) during one of these solves can have its
+setting overwritten when the scope restores the count it found. Ubuntu's
+ParU (SuiteSparse 7.12) defines the global `operator new(std::size_t)` and
+`operator delete(void *)`, so every program that links `pde2d_solve`
+allocates through them; on failure they throw `std::bad_alloc` at once,
+skipping a `std::new_handler` the program installed. Both are said in
+the two solvers' header comments.
 
 Times measured once (Ryzen 9 6900HX, WSL; best of three; `prepare` is the
 symbolic analysis and the numeric factorization) on the unit square cut
@@ -1511,12 +1621,18 @@ symbolic factorization: about 0.2 s of CHOLMOD's 0.5 s, 1.3 s of ParU's
 unknowns, large dense fronts) they do: `SupernodalCholesky` 1.56 / 1.21 /
 1.10 s, `MultifrontalLu` 4.13 / 3.00 / 2.58 s for 1 / 2 / 4 threads.
 
-**Solution** (`solution.hpp`). `Solution{mesh, time, values, velocities}`;
+**Solution** (`solution.hpp`). `Solution{mesh, time, values, velocities,
+accelerations}` (`accelerations` added last: positional initializations
+keep their meaning);
 `build_solution(meshed, free_values, t)` places the free values at
 `free_nodes()` and `dirichlet_value(k, t)` at the Dirichlet nodes.
 `velocities` is filled only by the `Integrator` for time order 2 (free
 part from the state, Dirichlet nodes from `dirichlet_rate`), so that a run
-can be continued.
+can be continued; `accelerations` only for a method that keeps the
+acceleration (`TimeMethod::keeps_acceleration`, Newmark: free part from
+the state, Dirichlet nodes from `dirichlet_acceleration`), so that a
+continued run does not compute it again, and by the adaptive loop after
+damping steps.
 
 **StaticSolver** (`static_solver.hpp`). Assembles at t with
 `max_time_order` 0, checks the solver's requirements against
@@ -1524,7 +1640,8 @@ can be continued.
 right_hand_side()` (= load − A_FD U_D at that order), and returns
 `StaticResult{solution, reports}` with the reports "assembly" and
 "static_solver" (free_unknowns, linear_iterations, residual,
-linear_threads). `StaticSolver(linear_solver, AssemblerOptions = {})`:
+backward_error, pivot_ratio, linear_threads; its messages are the linear
+solver's, `LinearSolveResult::messages`). `StaticSolver(linear_solver, AssemblerOptions = {})`:
 it makes its assembler, with the given thread count, in its constructor.
 
 **Time methods** (`time_method.hpp`). A `TimeMethod` declares
@@ -1537,7 +1654,16 @@ declares `start_needs(time_order)` (`StartNeeds::nothing`, `static_part`
 or `whole_problem`: what its start reads at t0), has `start(assembled at
 t0, linear_solver, state)` (default: nothing; called only when the start
 needs something) and `advance(assembled, dt, prepared, state) ->
-StepSolveInfo`. The state is a
+StepSolveInfo`. It declares `keeps_acceleration(time_order)` (default
+false; Newmark true): its state carries U″ and its start computes nothing
+else, so the `Integrator` returns the accelerations in its Solutions and,
+given an initial Solution with accelerations, takes them and calls no
+start. It declares `velocity_quotient_is_acceleration(time_order)`
+(default false; `ImplicitEuler` true at order 2): the quotient (V₁ −
+V₀)/dt of a step satisfies M₂ U″ + B U′ + A U = b at the step's end, so a
+method that keeps the acceleration may continue from it (the adaptive
+loop after damping steps; the midpoint method's quotient is the
+acceleration at the middle, Newmark's the average of the two ends). The state is a
 `TimeState{values, velocities, accelerations}` in the free unknowns. The
 right-hand side the methods use is `right_hand_side()`, which already
 holds the whole lifting.
@@ -1570,8 +1696,13 @@ fallback).
 **Integrator** (`integrator.hpp`). `Integrator(method, step_controller,
 linear_solver, AssemblerOptions = {})` (it makes its assembler with these
 options); `integrate(meshed, t0, t1, IntegrationOutput, const
-Solution *initial = nullptr) -> IntegrationResult{final, snapshots,
-history, report}`.
+Solution *initial = nullptr, std::optional<std::size_t> max_steps = {},
+const StepAnchor *anchor = nullptr) -> IntegrationResult{final,
+snapshots, history, report, before_last_step, anchor}`
+(`before_last_step` and `anchor` were added last, so a positional
+initialization written before them keeps its meaning; new members go at
+the end). `method()` returns the time method, so that a driver can read
+its declarations.
 
 - The time order is `Assembler::time_order(meshed)`, from the formula
   facts without evaluating anything, checked against
@@ -1579,15 +1710,20 @@ history, report}`.
   `time_order(meshed)` (the order as written), the refusal says that time
   terms vanished in assembly.
 - The state comes from `initial` (same mesh object; velocities required
-  for time order 2) or from `initial_free_state(t0)` (the free nodes
+  for time order 2; for a method that keeps the acceleration its
+  accelerations when it has them, checked for size and finiteness) or
+  from `initial_free_state(t0)` (the free nodes
   only; no boundary data is evaluated). At time order 0 there is no initial state (`initial` is
   only checked for its mesh and size): the method's start computes it.
 - The problem is assembled at t0 only as far as `start_needs(order)`
   says (`static_part`: `max_time_order` 0, `whole_problem`: 2), and
   `start` is called only then; with `nothing` there is no assembly at t0,
   so boundary data whose rate is not finite at t0 (u = √t from 0) works
-  with Euler and midpoint. After the start the state must have a value
-  per free unknown, or the integrator throws `std::runtime_error`.
+  with Euler and midpoint. When the accelerations of a method that keeps
+  them came from `initial`, the start is skipped as for `nothing` (no
+  assembly at t0). After the start the state must have a value per free
+  unknown, and an acceleration per free unknown for a method that keeps
+  it, or the integrator throws `std::runtime_error`.
 - Times: on a stretch of equal steps from an anchor, step k ends at
   anchor + k·dt; a step ending within 1e-9·dt of the next target (a
   snapshot time or t1) lands on it, and a step that would pass it is
@@ -1608,19 +1744,57 @@ history, report}`.
   steps, once per step. The summary becomes the report "integrator"
   (t0, t1, time_order, steps, rejected_steps, min_dt, max_dt,
   linear_iterations, max_linear_iterations, max_residual, assemblies,
-  prepares, snapshots, assembly_threads).
+  prepares, snapshots, assembly_threads, linear_threads,
+  max_backward_error, min_pivot_ratio: the worst of every solve of the
+  call, `start()`'s included, from the logging wrapper, not from
+  `StepSolveInfo`; min_pivot_ratio is 0 when nothing measured it), whose
+  messages
+  are the linear solver's warnings of every solve of the call (also of
+  `start()`), each distinct one once, in the order they were added
+  (solves from several threads at once: the order in which they took the
+  log's lock).
 - Continuing a run from `previous.final` gives the same values bit for
-  bit for the first-order methods when the long run lands on the split
-  time; for `Newmark` the acceleration is computed again at the split
-  time, so equal to rounding.
+  bit when the long run lands on the split time, for `Newmark` too: its
+  acceleration comes with `final` and its start is not called again, so
+  it also continues from a time where M₂ is zero (m2 = (t − 0.5)² with
+  damping, continued at 0.5; `tests/solve/time_integration.cpp`). Without
+  the accelerations, Newmark's start computes them again (to rounding,
+  and only where M₂ is invertible).
+- `with_method(method)` returns an `Integrator` with the same step
+  controller, linear solver and assembler options and another method
+  (the adaptive loop's damping steps).
+- `max_steps` (at least 1) ends the run after that many steps if t1 is
+  not reached first; `final.time` is where it ended (metric `t_end`; `t1`
+  stays the asked end), the last step is not shortened, and snapshot
+  times after it are not taken. A run continued from there starts a new
+  stretch of steps at that time (bit for bit like a long run only when
+  the step times are exact in binary, as anchor + k·dt and (anchor +
+  n·dt) + k·dt then agree), unless it is given the earlier run's
+  `IntegrationResult::anchor` (`StepAnchor{time, dt, steps}`: the
+  stretch the run ended on, its steps ending at time + k·dt; after a
+  landing time is the landing time and steps 0): then its first step
+  continues that stretch when the controller gives the same dt, and the
+  step times are those of one long run (also when the controller's
+  answer depends on t). An anchor that does not stand at t0 (time +
+  steps·dt ≠ t0) throws. `IntegrationOutput::keep_before_last_step` keeps the state at
+  the start of the last step (`before_last_step`, a `FreeState{time,
+  values, velocities, dt}` in the free unknowns, with velocities for time
+  order 2, and the step's length as the method used it: a step landing
+  within 1e-9·dt of a target keeps its nominal dt, so the difference of
+  the times can differ from it): no boundary data is evaluated for it
+  (the rate of u = √t does not exist at t0 = 0), and a caller can form
+  the difference quotient of the final state at the free nodes, dividing
+  by `dt`; the adaptive loop uses both.
 
 ## Adaptive refinement (estimation, marking and the loop in `pde2d_adapt`, refinement in `pde2d_mesh`)
 
 Adaptive refinement goes round three steps: estimate, mark, refine.
 Estimators and marking strategies are components of `pde2d_adapt`;
 refinement is `Remesher::refine`, with the same refiners as meshing.
-`MeshRefinement` puts the three together as one `Adaptation`, and the
-`AdaptiveStaticSolver` runs the loop for static problems.
+`MeshRefinement` puts the three together as one `Adaptation`, the
+`AdaptiveStaticSolver` runs the loop for static problems and the
+`AdaptiveIntegrator` the loop in time, which moves the state to each new
+mesh with `transfer_solution`.
 
 ```mermaid
 flowchart LR
@@ -1930,6 +2104,201 @@ estimator's effectivity is 5.5–5.6 and the recovery estimator's tends to
 the L-shape with u = r^(2/3) sin(2θ/3), Dörfler θ = 0.5 and newest
 vertex bisection give energy error ∝ N^(−0.53) (residual, Kelly and
 recovery estimators alike), uniform refinement N^(−0.33).
+
+### Solution transfer
+
+`transfer_solution(old, problem, parents = nullptr)`
+(`solution_transfer.hpp`) moves a P1 `Solution` to `problem`'s mesh by
+interpolation and returns `SolutionTransfer{solution, report}`: the
+solution on that mesh object at `old.time`, velocities and accelerations
+when the old one had them; the Dirichlet nodes of `problem` get
+`dirichlet_value(k, time)` (`dirichlet_rate` for the velocities,
+`dirichlet_acceleration` for the accelerations). Each new node is first
+written as weights of at most three old nodes (a private plan), applied
+to the values, the velocities and the accelerations alike:
+
+| Case | A new node gets |
+| --- | --- |
+| parents, `{v, v}` | old node v's value (copied exactly) |
+| parents, `{a, b}` | (u[a] + u[b]) / 2: the old u_h at the edge's midpoint, also for a curve point on a curved boundary edge, which lies off the old chord (outside the old mesh on a convex curve, inside on a concave one): it gets the value at the chord point it was split from, its nearest old boundary point to second order (exactly on a circle) |
+| no parents, a boundary node with a curve link | when both meshes have its chain (same index, length and number of curves, as a Remesher passes them on): the old u_h at its arc length on the old edge of that chain that covers it (from its outgoing edge's s0, else its incoming edge's s1), weighted by arc length along the edge (a curve midpoint gets the average of the edge's ends, as with parents) |
+| no parents, another boundary node | the old u_h at its nearest point of the old boundary loop matched to its own loop (nearest edge of that loop, lowest index on ties, clamped to its ends), never another wall's: in a thin annulus a new inner curve point can be nearer the outer polygon than its own chord |
+| no parents, an interior node | the old u_h in the old triangle that contains it (exact `orient`; lowest index on an edge or node; at an old node's position its value exactly), or, if none does (a node moved outside the old mesh near a curved boundary), at its nearest old boundary point |
+
+Boundary loops are the connected pieces of the boundary edges
+(`detail::boundary_loops`, union-find over their nodes; valid loops never
+touch), numbered in the order of their first edge, on the old and the new
+mesh alike. A new loop is matched to an old one by votes of its boundary
+nodes: each votes for the old loop of its old boundary point (through its
+link, else its nearest old boundary point overall); if any of its nodes
+lie exactly on the old boundary (placed by a link, or a kept old node at
+distance 0) only those vote. The most votes win, ties the lower old loop.
+Regions are not used: two walls may share one.
+
+Point location (`detail::PointLocator`, `src/adapt/point_location.hpp`)
+is a uniform bucket grid over the old mesh's bounding box (about one
+triangle per cell): each cell lists the triangles and boundary edges
+whose boxes meet it, in index order; containment is tested in the
+point's cell, the nearest boundary point by rings of cells around it
+until no farther cell can be nearer (optionally among the edges of one
+loop). There is no walk, so the cycling of
+`WorkingMesh::locate` (GitHub issue #22) and its stop at the boundary of
+a non-convex domain cannot occur. Every weight is in [0, 1] and they sum
+to 1, so no new extremes appear; on a refinement (with or without
+parents) the new u_h equals the old one inside the old mesh. Report
+"solution_transfer": metrics `nodes`, `by_parents`, `kept_nodes`,
+`edge_nodes` (with parents), `located`, `by_link`, `nearest_boundary`,
+`other_loop_nearer` (without: boundary nodes whose nearest old boundary
+point overall was on another loop), `dirichlet_nodes`. Bad input (no mesh, sizes, values that are not
+finite, parents that do not fit: sizes, {a, b} with a > b or out of
+range) is `std::invalid_argument`.
+
+### The adaptive loop in time
+
+`AdaptiveIntegrator(integrator, adaptations, AdaptiveIntegratorOptions =
+{})` (`adaptive_integrator.hpp`; the same constructor checks as
+`AdaptiveStaticSolver`: at least one adaptation, none null, at most one
+that `changes_mesh`; and a damping method when there are damping steps).
+`integrate(meshed, t0, t1, AdaptiveTimeTarget, IntegrationOutput = {},
+initial = nullptr)` integrates in pieces:
+
+```mermaid
+flowchart LR
+    MP([MeshedProblem, state])
+    INT["Integrator::integrate(meshed, t_k, end, ..., &state, max_steps)"]
+    EST["estimate at t_k+1 (u_t, u_tt from the last step)"]
+    TOL{"above the tolerance?"}
+    AD["every adaptation adapts once"]
+    BUD{"new mesh within max_nodes?"}
+    TR["MeshedProblem(new mesh, same Problem); transfer_solution"]
+    OUT(["AdaptiveIntegrationResult"])
+    MP --> INT -->|t1 reached| OUT
+    INT --> EST --> TOL -- no --> MP
+    TOL -- yes --> AD --> BUD -- "no mesh" --> MP
+    BUD -- yes --> TR --> MP
+    BUD -- "no: adapting stops, one piece to t1" --> MP
+```
+
+- **Schedule**: `AdaptationSchedule{interval, steps}` (at least one; the
+  interval finite and positive, steps at least 1). A piece ends at t_k +
+  interval (passed as the integrator's t1, so it lands there; within
+  1e-9·interval of t1 it is t1, and of a snapshot time on either side
+  that time, so a snapshot at an adaptation time adds no step of rounding
+  size) or after `steps` steps (`max_steps`), whichever comes first; the
+  run ends at t1 without adapting there. Snapshot landings inside a piece
+  count as steps. When t + interval rounds to t, `std::runtime_error`
+  (the interval is too small at the current time).
+- **Derivatives at an adaptation time**, at every node, from the piece's
+  `before_last_step` (the free unknowns; requested only for a piece that
+  can end in an adaptation: before t1, or with a step schedule), dt its
+  `FreeState::dt` (the length the method used, not the difference of the
+  times): u_t =
+  (u(t) − u(t − dt)) / dt for time order 1 (and 0), at the Dirichlet
+  nodes with `dirichlet_value` at the step's start; for time order 2 u_t = the
+  velocities, u_tt = their difference quotient at the free nodes and
+  `dirichlet_acceleration(k, t)` at the Dirichlet nodes, so no rate is
+  evaluated at t − dt (u = √t has none at t0 = 0, where plain implicit
+  Euler integrates it).
+- **Tolerance**: as in the static loop (absolute and/or relative to the
+  estimate at the first adaptation time, the smaller applies; the
+  estimate is the first estimating adaptation's, which is then given it).
+  At most the tolerance: nothing adapts (`tolerance_met`); no tolerance:
+  it adapts at every adaptation time. Each time refines at most once and
+  no piece is integrated again.
+- **Node budget**: a new mesh above `max_nodes` is discarded
+  (`node_budget`), adapting stops (the mesh only grows), and the rest is
+  one piece to t1; a starting mesh above it throws. A run always reaches
+  t1 unless something throws.
+- **Refinement limit**: `max_refinements` (at least 1) counts
+  refinements, not adaptation times (the schedule already fixes how often
+  the run checks; each refinement builds a `MeshedProblem` and leaves a
+  transfer error). After the last allowed one adapting stops and the rest
+  is one piece to t1, with a message in the report like the node
+  budget's.
+- **State**: the piece's `final`, on the same problem when nothing
+  changed (so pieces continue the run exactly: bit for bit like one
+  `integrate()` that lands on the same times, Newmark too, since its
+  acceleration is carried), else `transfer_solution` onto a new
+  `MeshedProblem` (values, velocities and accelerations; reports
+  "meshed_problem", "solution_transfer" in the `AdaptationPoint`).
+- **Damping steps** (`AdaptiveIntegratorOptions{damping_steps = 0,
+  damping_method}`, driver options: the same for every job): after each
+  transfer the next `damping_steps` steps are a piece of their own
+  (`IntegrationPiece::damping`), integrated by
+  `integrator.with_method(damping_method)` (the same step controller,
+  linear solver and assembler options); then the integrator's method
+  continues on the same problem to the same adaptation time. The
+  stretch to an adaptation time is fixed when it starts (its end and step
+  limit), and the damping steps count in it; where only the method
+  changes (damping steps that end before the adaptation time), the next
+  piece gets the damping piece's `IntegrationResult::anchor`, so the
+  step times are those of one uninterrupted stretch with the same step
+  controller (with implicit Euler as both methods the run is the same
+  bit for bit); a damping piece that reaches
+  the adaptation time carries the adaptation itself, and damping steps
+  still owed carry over an adaptation time that changed nothing (a new
+  transfer starts them again). `damping_method` must support the
+  problem's time order (`Assembler::time_order` against its
+  capabilities, checked before the first step, `std::invalid_argument`).
+  The acceleration at the end of the damping steps is decided from the
+  damping method's declarations: one that keeps the acceleration
+  (`keeps_acceleration`, Newmark) hands over its own (already in its
+  Solutions); one that declares `velocity_quotient_is_acceleration`
+  (implicit Euler) gets the u_tt of the derivatives ((u_t(t) − u_t(t −
+  dt))/dt at the free nodes, `dirichlet_acceleration` at the Dirichlet
+  nodes), which satisfies M₂ u_tt + B u_t + A u = b at t, the equation
+  Newmark's start solves, without needing M₂ invertible; it goes into
+  the piece's final state and into a snapshot at that time. Either way
+  Newmark continues without its start. Any other damping method ahead of
+  a method that keeps the acceleration (the midpoint method ahead of
+  Newmark) throws `std::invalid_argument` naming both, before the first
+  step. Never used on a failure: only when configured.
+- **Output**: `snapshot_times` are split among the pieces (each on its
+  piece's mesh), `keep_step_history` concatenates the records;
+  `snapshot_every` throws (it counts the steps of one call).
+
+`AdaptiveIntegrationResult{final, snapshots, history, pieces, report}`:
+each `IntegrationPiece{problem, t_start, t_end, report (the
+integrator's, of the damping method's run for a damping piece),
+adaptation, damping}` and each `AdaptationPoint{time, steps,
+estimate, outcome, reports}` (`AdaptationOutcome`: `refined`,
+`tolerance_met`, `nothing_changed`, `node_budget`; `to_string`). Report
+"adaptive_integrator": metrics `t0`, `t1`, `pieces`, `adaptation_times`,
+`refinements`, `steps`, `damping_steps` (included in `steps`), `nodes`, `triangles`, `max_nodes_used`,
+`tolerance`; a message when the budget or `max_refinements` stopped
+adapting. `AdaptiveTimeTarget{every, tolerance, max_nodes,
+max_refinements}`.
+
+Measured (`tests/adapt/adaptive_integrator.cpp`): a Gaussian bump (s =
+0.08) moving through u_t − Δu = f on the unit square, dt = 1/64, adapting
+every 2 steps (residual estimator, Dörfler 0.5, NVB) from 270 nodes:
+implicit Euler ends with 2518 nodes and energy error 0.088; uniform NVB
+refinement gives 0.385 with 1372 nodes and 0.250 with 2927. A transfer
+leaves the old mesh's interpolation error in the new mesh's fine modes;
+implicit Euler damps it within a few steps (after one uniform refinement
+the run agrees with a run on the refined mesh from t0 to 2e-5 two steps
+later), the midpoint method and Newmark do not: the same bump run with
+the midpoint method ends with 3699 nodes and 0.51 (uniform 2927 nodes:
+0.27), and on a standing wave Newmark's nodal u_t error grows from 0.23
+on the starting mesh to 1.04 (|u_t| ≤ 4.4) while u improves (1.01 when
+Newmark recomputes the acceleration with its start after each transfer
+instead of taking the interpolated one).
+
+Damping steps (same file): adapting every 4 steps of 1/128 (so the
+midpoint method still takes about half the steps), the midpoint method
+ends with 3532 nodes and 0.325; with 2 damping steps of implicit Euler
+after each transfer with 2514 nodes and 0.088 (30 of 64 steps damping;
+implicit Euler alone: 2514 nodes, 0.088), against uniform 2927 nodes,
+0.262. After one uniform refinement at t = 1/32, the midpoint run with 2
+damping steps agrees with implicit Euler's within 5e-5 relative and is
+better than a midpoint run on the refined mesh from t0 (0.568 against
+0.576 at t = 0.5), which keeps the interpolation error of its own initial
+data. On the standing wave, Newmark's u_t error at t = 0.5 is 1.04
+without damping steps, 0.84 with 1 and 0.68 with 2 (u 0.030, 0.024,
+0.021); on the linear wave, which has no transfer error, 2 damping steps
+make the errors of u and u_t 0.014 and 0.065 instead of 0.0006 and
+0.0016 (implicit Euler's first-order time error), so the option stays
+off by default.
 
 ## Determinism
 

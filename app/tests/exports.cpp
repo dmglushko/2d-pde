@@ -332,7 +332,7 @@ int main() {
 
          // A coefficient.
          case_json = app::Session::default_case();
-         case_json["problem"]["equation"]["c"] = "sin(";
+         case_json["problem"]["equation"] = {{"c", "sin("}};
          error = stage_error([&] { (void)session.assemble(case_json); });
          check(error.path() == "problem.equation.c", error.path());
 
@@ -347,7 +347,8 @@ int main() {
        [] {
          app::Session session;
          Json case_json = app::Session::default_case();
-         case_json["problem"]["equation"]["a_yy"] = "sin(";
+         case_json["problem"]["equation"] = {
+             {"a_xx", "-1"}, {"a_yy", "sin("}, {"f", "1"}};
          const Json check_result = session.check_problem(case_json);
          check(!check_result["ok"].get<bool>(), "an error");
          check(check_result["errors"][0]["path"] == "problem.equation.a_yy",
@@ -509,7 +510,7 @@ int main() {
          // A convergence study: u = x^2 + y^2 with f = -4 is not in the P1
          // space, so the error falls with the mesh size.
          Json case_json = app::Session::default_case();
-         case_json["problem"]["equation"]["f"] = "-4";
+         case_json["problem"]["equation"] = {{"text", "-lap(u) = -4"}};
          for (auto &[region, condition] :
               case_json["problem"]["boundary_conditions"].items())
            condition = {{"alpha", "1"}, {"g", "x^2 + y^2"}};

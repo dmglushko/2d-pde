@@ -7,8 +7,10 @@
 namespace pde2d::solve {
 
 struct MultifrontalLuOptions {
-  // Every solve measures the relative residual |b - A x| / |b| and throws
-  // std::runtime_error above this; in (0, 1).
+  // Every solve measures the normwise backward error |b - A x| / (|A| |x| +
+  // |b|) (infinity norms; LinearSolveResult::backward_error) and throws
+  // std::runtime_error above this; in (0, 1). (The name is kept from when
+  // it bounded the relative residual.)
   double residual_tolerance = 1e-8;
   // How many threads the factorization and the solves may use: 1 runs in
   // the calling thread, 0 means all hardware threads (the processors
@@ -30,18 +32,29 @@ struct MultifrontalLuOptions {
 // of A + A^T when the matrix is nearly symmetric in pattern, as assembled
 // matrices are). The rows are scaled by their largest entry first.
 //
-// prepare() factorizes and throws std::runtime_error when the matrix is
-// singular: when a pivot is exactly zero, and when it is singular to
-// working precision (its smallest pivot is below n machine epsilons times
-// the largest; a pure Neumann problem, whose constant is not fixed,
-// factorizes with a last pivot of about 1e-17 n). Every solve checks its
-// relative residual against residual_tolerance, so it never returns an
-// unchecked answer.
+// prepare() factorizes and throws std::runtime_error when a pivot is
+// exactly zero (an exactly singular matrix, a row without entries). A tiny
+// pivot is accepted: the ratio of the smallest pivot of the scaled matrix
+// to the largest, over every pivot (the fronts and the singletons
+// eliminated before them), is reported (LinearSolveResult::pivot_ratio,
+// with a warning in the messages below 1e-10), not judged. So a pure Neumann
+// problem, whose constant is not fixed and whose last pivot is rounding (a
+// ratio of about 1e-17), gets one of its solutions, and a very ill-conditioned
+// but well-posed problem is solved. Every solve checks its backward error
+// against residual_tolerance, so it never returns an unchecked answer; the
+// relative residual |b - A x| / |b| is reported but not checked (for an
+// accurate answer it is machine epsilon times |A| |x| / |b|, which a
+// coefficient contrast of 1e6 makes large).
 //
 // Threads: OpenBLAS has one thread count for the whole process, so this
 // solver sets it for the duration of each factorization and solve and
 // restores it afterwards, under the lock shared with SupernodalCholesky
-// (see there).
+// (see there). A program that sets OpenBLAS's count during one of these
+// solves can have its setting overwritten.
+//
+// Linking: Ubuntu's ParU replaces the global operator new and delete of
+// every program that links pde2d_solve (see SupernodalCholesky): a
+// std::new_handler the program installs is skipped when memory runs out.
 class MultifrontalLu final : public LinearSolver {
 public:
   // Throws std::invalid_argument for options out of range.

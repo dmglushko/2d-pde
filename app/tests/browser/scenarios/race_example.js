@@ -14,10 +14,10 @@ export default async ({ example, q, tab, select, click, type, until, idle, text,
   const presets = q('#panel-problem select[aria-label="Problem preset"]');
   const heat = [...presets.options].find((o) => /heat/i.test(o.textContent));
   select(presets, heat.value);
-  const f = q('[data-path="problem.equation.f"] input');
-  type(f, "42");
+  const f = q('[data-path="problem.equation.text"] input');
+  type(f, "-lap(u) = 42");
   await idle();
   await until(() => /not applied/.test(text(q("#toast"))), "the preset to be refused");
-  check("the edit stays", q('[data-path="problem.equation.f"] input').value === "42");
+  check("the edit stays", q('[data-path="problem.equation.text"] input').value === "-lap(u) = 42");
   check("the toast says why", /changed while it was prepared/.test(text(q("#toast"))), text(q("#toast")));
 };

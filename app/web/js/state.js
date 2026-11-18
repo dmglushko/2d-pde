@@ -37,9 +37,11 @@ export const store = {
   fieldSource: "field",
   // The snapshot of the solution shown (an index into its times).
   solveFrame: 0,
-  // True once the user moved the slider during the current run: the
-  // picture then stops following the newest snapshot.
+  // True once the user moved the slider during the current run.
   solveFrameChosen: false,
+  // True while a run being computed should play from its start as it
+  // comes (timebar.js); the slider or Pause ends it.
+  playRun: false,
   // The picture's settings: colorBy is "none", "quality", "field" or
   // "gradient" (|∇u| of the shown field) or "indicator" (an adaptive
   // solution's error indicators, log10); isolines draws the shown field's

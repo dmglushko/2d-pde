@@ -55,7 +55,7 @@ import {
   subscribe,
   undoCase,
 } from "./state.js";
-import { timeSolution, updateTimebar, wireTimebar } from "./timebar.js";
+import { speedChanged, timeSolution, updateTimebar, wireTimebar } from "./timebar.js";
 import { Viewer } from "./view/viewer.js";
 
 const panels = { geometry: geometryPanel, mesh: meshPanel, problem: problemPanel, assemble: assemblePanel, solve: solvePanel };
@@ -689,8 +689,9 @@ async function start() {
       element("legend").replaceChildren(...viewer.legend());
     } else if (key === "pixelRatioCap") viewer.resize();
     else if (key === "isolineCount") updateViewer();
-    // Digits and the playback speed show in the panels.
-    else if (key === "digits" || key === "playbackFps") {
+    else if (key === "playbackSpeed") speedChanged();
+    // Digits show in the panels.
+    else if (key === "digits") {
       buildPanels();
       updateDots();
       viewer.draw();

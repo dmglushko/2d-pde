@@ -159,8 +159,8 @@ int main() {
          Json second = first;
          for (auto &[region, condition] :
               second["problem"]["boundary_conditions"].items())
-           if (condition.contains("g"))
-             condition["g"] = "2*x";
+           if (condition.contains("text"))
+             condition["text"] = "u = 2*x";
          const Json other = session.solve(second);
          Json request = job_request(other);
          request["reference"] = true;

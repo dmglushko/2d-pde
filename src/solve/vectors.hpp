@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -18,11 +19,16 @@
 
 namespace pde2d::solve::detail {
 
-// The largest |v_i|; 0 for an empty or zero vector.
+// The largest |v_i|; 0 for an empty or zero vector, NaN when an entry is
+// NaN (std::max alone would skip it), so a residual that is not finite
+// gives a backward error that no tolerance accepts.
 inline double max_abs(std::span<const double> v) {
   double largest = 0.0;
-  for (const double x : v)
+  for (const double x : v) {
+    if (std::isnan(x))
+      return x;
     largest = std::max(largest, std::abs(x));
+  }
   return largest;
 }
 
@@ -39,15 +45,67 @@ inline double norm(std::span<const double> v) {
   return largest * std::sqrt(sum);
 }
 
-// |b - A x| / |b|, or |b - A x| when b is zero.
-inline double relative_residual(const fem::CsrMatrix &matrix,
-                                std::span<const double> b,
-                                std::span<const double> x) {
-  std::vector<double> r = matrix.multiply(x);
-  for (std::size_t i = 0; i < r.size(); ++i)
-    r[i] = b[i] - r[i];
+// The infinity norm of a matrix: its largest absolute row sum,
+// max_i sum_j |a_ij|; 0 for an empty matrix.
+inline double max_row_sum(const fem::CsrMatrix &matrix) {
+  const auto &pattern = *matrix.pattern;
+  double largest = 0.0;
+  for (std::size_t i = 0; i < pattern.rows; ++i) {
+    double sum = 0.0;
+    for (auto s = pattern.row_offsets[i]; s < pattern.row_offsets[i + 1]; ++s)
+      sum += std::abs(matrix.values[static_cast<std::size_t>(s)]);
+    largest = std::max(largest, sum);
+  }
+  return largest;
+}
+
+// The normwise backward error |r| / (|A| |x| + |b|) from the infinity
+// norms of the residual r = b - A x, of A (its largest absolute row sum),
+// of x and of b: the smallest relative change of A and b (in that norm)
+// for which x is the exact solution. 0 when r is zero, also for b = 0 and
+// x = 0; infinity when r is not zero but A x and b are (only possible for
+// a zero matrix); NaN when |r| is NaN (the checks `!(error <= tolerance)`
+// then reject it).
+inline double backward_error(double residual_norm, double matrix_norm,
+                             double x_norm, double b_norm) {
+  if (residual_norm == 0.0)
+    return 0.0;
+  const double scale = matrix_norm * x_norm + b_norm;
+  return scale > 0.0 ? residual_norm / scale
+                     : std::numeric_limits<double>::infinity();
+}
+
+// What a solve reports about its residual r = b - A x, computed once.
+struct ResidualMeasures {
+  // |r| / |b| in the Euclidean norm, or |r| when b is zero.
+  double relative_residual = 0.0;
+  // backward_error() in the infinity norm.
+  double backward_error = 0.0;
+};
+
+// The residual of x for matrix * x = b, in one pass over the matrix (the
+// product and the absolute row sums together).
+inline ResidualMeasures measure_residual(const fem::CsrMatrix &matrix,
+                                         std::span<const double> b,
+                                         std::span<const double> x) {
+  const auto &pattern = *matrix.pattern;
+  std::vector<double> r(pattern.rows);
+  double matrix_norm = 0.0;
+  for (std::size_t i = 0; i < pattern.rows; ++i) {
+    double product = 0.0, row_sum = 0.0;
+    for (auto s = pattern.row_offsets[i]; s < pattern.row_offsets[i + 1]; ++s) {
+      const auto slot = static_cast<std::size_t>(s);
+      const double a = matrix.values[slot];
+      product += a * x[static_cast<std::size_t>(pattern.column_indices[slot])];
+      row_sum += std::abs(a);
+    }
+    r[i] = b[i] - product;
+    matrix_norm = std::max(matrix_norm, row_sum);
+  }
   const double b_norm = norm(b);
-  return b_norm > 0.0 ? norm(r) / b_norm : norm(r);
+  return {.relative_residual = b_norm > 0.0 ? norm(r) / b_norm : norm(r),
+          .backward_error =
+              backward_error(max_abs(r), matrix_norm, max_abs(x), max_abs(b))};
 }
 
 inline bool all_finite(std::span<const double> v) {

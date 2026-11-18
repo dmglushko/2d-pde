@@ -46,10 +46,7 @@
   },
   "problem": {
     "equation": {
-      "a_xx": "-k",
-      "a_yy": "-k",
-      "b_x": "6*U*y*(1 - y)",
-      "f": "0"
+      "text": "-div(k*grad(u)) + 6*U*y*(1 - y)*u_x = 0"
     },
     "parameters": {
       "k": 0.05,
@@ -57,20 +54,16 @@
     },
     "boundary_conditions": {
       "inlet": {
-        "alpha": "1",
-        "g": "0"
+        "text": "u = 0"
       },
       "wall": {
-        "beta_n": "1",
-        "g": "0"
+        "text": "u_n = 0"
       },
       "outlet": {
-        "beta_n": "1",
-        "g": "0"
+        "text": "u_n = 0"
       },
       "obstacle": {
-        "alpha": "1",
-        "g": "1"
+        "text": "u = 1"
       }
     },
     "initial": {}
