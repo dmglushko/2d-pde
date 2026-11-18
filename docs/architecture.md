@@ -1443,9 +1443,13 @@ solver; empty except for `SupernodalCholesky` on a matrix it factored as
 −A, and for the three solvers that measure `pivot_ratio` when it is below
 `detail::small_pivot_ratio` = 1e-10 (`src/solve/pivot_ratio.hpp`, fixed,
 not an option): "<solver>: the matrix is nearly singular (pivot ratio
-<ratio, 3 digits>, below 1e-10), so the answer may have few correct
+below 1e-10; its value is the result's pivot_ratio, in reports
+pivot_ratio or min_pivot_ratio), so the answer may have few correct
 digits; …", made once in `prepare` by `detail::pivot_ratio_warning` and
-added to every solve's result, after the −A warning; the answer is
+added to every solve's result, after the −A warning; the text names the
+threshold, not the ratio, so it is the same for every solve of a solver
+(a step matrix prepared again at every step gives it once in the
+integrator's report); the answer is
 returned and the backward error checked as before). The members are in this order: the first four (values, iterations,
 residual, threads) are those the struct had before the other three were
 added, so a positional initialization written then keeps its meaning;
@@ -1457,7 +1461,10 @@ passes its time method a private wrapper of the linear solver
 those of `start()`: its "integrator" report gets each distinct
 message once, in the order they were added, and the largest
 `backward_error` (`max_backward_error`) and smallest `pivot_ratio` above
-0 (`min_pivot_ratio`, 0 when no solve measured one) over those solves.
+0 (`min_pivot_ratio`, 0 when no solve measured one) over those solves,
+all three read from the log in one snapshot (`SolveLog::snapshot`, under
+one lock), so that a solve of a prepared solver kept beyond
+`integrate()` cannot make them disagree.
 The log (`SolveLog`) is
 per-run state shared (`std::shared_ptr`) by the wrapper and every
 prepared solver it made, and guarded by a mutex held only to add or copy,

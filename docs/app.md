@@ -748,7 +748,8 @@ there take the same steps.
   rule (`integrator_metric_rules`): `steps`, `rejected_steps`,
   `linear_iterations`, `assemblies`, `prepares`, `snapshots` add up;
   `max_linear_iterations`, `max_residual`, `linear_threads`,
-  `max_backward_error` take the largest; `min_pivot_ratio` the smallest
+  `max_backward_error` take the largest (a NaN of any chunk stays, as in
+  the integrator's own maximum); `min_pivot_ratio` the smallest
   above 0 (`Combine::min_measured`: 0 means "not measured", so it stays 0
   only when no chunk measured one); `min_dt` and
   `max_dt` the smallest and largest over the chunks that took steps; `t0`

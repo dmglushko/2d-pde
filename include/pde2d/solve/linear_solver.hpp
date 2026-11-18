@@ -76,9 +76,10 @@ struct LinearSolveResult {
   // prepared as negative definite (it factored -A), and SimplicialLdlt,
   // SupernodalCholesky and MultifrontalLu one on every solve whose pivot
   // ratio is below 1e-10 ("<solver>: the matrix is nearly singular (pivot
-  // ratio <ratio>, below 1e-10), so the answer may have few correct
-  // digits; ..."; the ratio is the factorization's, so the text is the
-  // same for every solve of one prepared solver). The StaticSolver puts
+  // ratio below 1e-10; its value is the result's pivot_ratio, ...), so the
+  // answer may have few correct digits; ..."; it names the threshold, not
+  // the ratio, so the text is the same for every solve of a solver, also
+  // one prepared again at every step). The StaticSolver puts
   // them in its "static_solver" report, the Integrator each distinct one
   // once in its "integrator" report.
   std::vector<std::string> messages{};

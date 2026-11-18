@@ -1089,3 +1089,8 @@ time from its start.
   measured" and a plain minimum would let a chunk without a measured
   ratio hide the others'. The page does not show them yet; the pivot
   ratio warning reaches it as one of the report's messages.
+- **A NaN stays in the largest over chunks** (2026-11-18, review
+  finding): `Combine::max` keeps a NaN from any chunk instead of
+  `std::max`, which dropped a NaN `max_backward_error` of a later chunk
+  behind an earlier finite one. The integrator keeps NaN in its own
+  maximum, so the combined report says the same as one long run would.

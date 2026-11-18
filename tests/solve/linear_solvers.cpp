@@ -508,6 +508,29 @@ int main() {
                        .backward_error == 0.0,
                "0 for b = 0");
        }},
+      {"a residual entry that is not finite: refused by the backward error "
+       "check",
+       [] {
+         // An infinite diagonal entry: the factorizations give the finite
+         // x = (1 / inf, 4 / 2) = (0, 2), but row 0 of the residual is
+         // 1 - inf * 0 = NaN (row 1 is 0). The NaN must reach the backward
+         // error (review finding: a maximum that skipped NaN made it 0, and
+         // the answer was accepted).
+         const double inf = std::numeric_limits<double>::infinity();
+         const Dense a = {{inf, 0}, {0, 2}};
+         const std::vector<double> b = {1, 4};
+         for (const LinearSolver *solver :
+              std::initializer_list<const LinearSolver *>{
+                  &simplicial_ldlt, &supernodal_cholesky}) {
+           // NaN (printed "nan" or "-nan"), refused.
+           expect_throws<std::runtime_error>(
+               [&] { (void)solver->prepare(sparse(a))->solve(b); },
+               solver->name() + ": the backward error ");
+           expect_throws<std::runtime_error>(
+               [&] { (void)solver->prepare(sparse(a))->solve(b); },
+               "nan is above the tolerance");
+         }
+       }},
       {"LinearSolveResult keeps its positional order",
        [] {
   // The members that existed before backward_error, pivot_ratio and

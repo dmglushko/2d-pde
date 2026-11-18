@@ -197,9 +197,12 @@ std::shared_ptr<const MeshedProblem> contrast_problem() {
 // side and u_n = 0 on the others (review finding: well-posed, but its
 // smallest pivot was below n machine epsilons times the largest, and both
 // solvers refused it). The solution is u = 5e8 + x - x^2 / 2; P1 on this
-// mesh gives it exactly at the nodes, as the 1D problem does.
-std::shared_ptr<const MeshedProblem> weak_robin_problem() {
-  Problem p{.equation = {.a_xx = e("-1"), .a_yy = e("-1"), .f = e("1")}};
+// mesh gives it exactly at the nodes, as the 1D problem does. With `m1`,
+// the heat equation m1 u_t - u_xx - u_yy = 1 on the same strip, from u = 0.
+std::shared_ptr<const MeshedProblem> weak_robin_problem(const char *m1 = "0") {
+  Problem p{
+      .equation = {.a_xx = e("-1"), .a_yy = e("-1"), .m1 = e(m1), .f = e("1")},
+      .initial = {.u = e("0")}};
   p.boundary_conditions.emplace(
       "left",
       BoundaryCondition{.alpha = e("2e-9"), .beta_n = e("1"), .g = e("0")});
@@ -699,11 +702,57 @@ int main() {
                  solver->name() + ": the warning in the report");
            check(report.messages.size() == 1,
                  solver->name() + ": no other message");
-           // Its text names the ratio, as the report gives it.
-           check(has_message(report.messages, pivot_warning(solver->name()) +
-                                                  std::format("{:.3g}", ratio)),
-                 solver->name() + ": the ratio in the text");
+           // Its text names the threshold, not the ratio (the ratio is
+           // the report's pivot_ratio), so every solve of a solver gives
+           // the same text.
+           check(has_message(report.messages,
+                             pivot_warning(solver->name()) +
+                                 "below 1e-10; its value is the result's "
+                                 "pivot_ratio, in reports pivot_ratio or "
+                                 "min_pivot_ratio), so the answer may have "
+                                 "few correct digits"),
+                 solver->name() + ": the threshold in the text");
+           check(report.messages[0].find(std::format("{:.3g}", ratio)) ==
+                     std::string::npos,
+                 solver->name() + ": not the ratio");
          }
+       }},
+      {"a nearly singular step matrix prepared at every step: the warning "
+       "once in the integrator's report",
+       [] {
+         // The weak Robin strip as a heat equation with m1 = 1e-11 (1 +
+         // 10 t): the step matrix M1 / dt + K depends on t, so it is
+         // prepared at every step, and its mass adds about as much as the
+         // weak Robin term, so each step has its own pivot ratio, all below
+         // 1e-10 (review finding: the text held the ratio, and a 1000-step
+         // run reported 904 warnings).
+         const auto method = std::make_shared<TestEuler>(TestEuler::Options{});
+         const auto result = integrate_test_euler(
+             method, weak_robin_problem("1e-11*(1 + 10*t)"), 0.05);
+         const auto &report = result.report;
+         check(report.metrics.at("prepares") == 5 && method->seen.size() == 5,
+               "five steps, five prepares, five solves");
+         std::vector<std::string> ratios;
+         for (const auto &r : method->seen) {
+           std::cout << std::format("  step pivot ratio {:.6g}\n",
+                                    r.pivot_ratio);
+           check(r.pivot_ratio > 0.0 && r.pivot_ratio < 1e-10,
+                 "every step's pivot ratio below 1e-10");
+           check(r.messages == method->seen.front().messages &&
+                     r.messages.size() == 1,
+                 "every step's warning, the same text");
+           const auto shown = std::format("{:.3g}", r.pivot_ratio);
+           if (std::ranges::find(ratios, shown) == ratios.end())
+             ratios.push_back(shown);
+         }
+         check(ratios.size() > 1, "ratios that differ in three digits");
+         check(report.messages.size() == 1 &&
+                   report.messages[0].starts_with(
+                       pivot_warning("supernodal_cholesky")),
+               "the warning once in the report");
+         check(report.metrics.at("min_pivot_ratio") ==
+                   worst(method->seen).second,
+               "the smallest ratio in min_pivot_ratio");
        }},
       {"a well-conditioned Poisson problem: no pivot ratio warning",
        [] {
@@ -722,32 +771,41 @@ int main() {
        [] {
          // The heat equation with m1 = 1 + 10 t: the step matrix depends on
          // t, so it is prepared at every step and each solve has its own
-         // pivot ratio; start() solves with another matrix (A of a
-         // negative definite problem). The report's figures are the worst
-         // of the results the method got, start() included.
+         // pivot ratio; start() solves with another matrix, that of the
+         // weak Robin strip, whose solve alone has both the largest
+         // backward error and the smallest pivot ratio (review finding: a
+         // start() that owned only one of them would not show that the
+         // other comes from the log too). The report's figures are the
+         // worst of the results the method got, start() included.
          const auto heat = problem("-1", "0", "0", "1 + 10*t");
          const auto method = std::make_shared<TestEuler>(TestEuler::Options{
-             .start_matrix =
-                 system_of(problem("1", "0", "0", "0", false, true)).matrix});
+             .start_matrix = system_of(weak_robin_problem()).matrix});
          const auto result = integrate_test_euler(method, heat, 0.05);
          const auto &m = result.report.metrics;
          check(m.at("prepares") == 5 && method->seen.size() == 6,
                "five steps, five prepares, six solves");
-         const auto [backward, pivot] = worst(method->seen);
-         check(pivot > 0.0 && backward > 0.0, "measured");
-         check(m.at("max_backward_error") == backward,
-               "the largest backward error");
-         check(m.at("min_pivot_ratio") == pivot, "the smallest pivot ratio");
-         // The steps alone: without start(), the worst of the steps.
+         const auto &start = method->start_result;
+         const auto [step_backward, step_pivot] =
+             worst(std::vector(method->seen.begin() + 1, method->seen.end()));
+         check(step_pivot > 0.0 && step_backward > 0.0, "measured");
+         check(start.backward_error > step_backward &&
+                   start.pivot_ratio > 0.0 && start.pivot_ratio < step_pivot,
+               "start() alone has the largest backward error and the "
+               "smallest pivot ratio");
+         check(m.at("max_backward_error") == start.backward_error,
+               "the largest backward error: start()'s");
+         check(m.at("min_pivot_ratio") == start.pivot_ratio,
+               "the smallest pivot ratio: start()'s");
+         // The steps alone: without start(), the worst of the steps, the
+         // same as above (each step is deterministic).
          const auto steps_only =
              std::make_shared<TestEuler>(TestEuler::Options{});
          const auto steps = integrate_test_euler(steps_only, heat, 0.05);
-         const auto [step_backward, step_pivot] = worst(steps_only->seen);
+         check(worst(steps_only->seen) == std::pair(step_backward, step_pivot),
+               "the same steps without start()");
          check(steps.report.metrics.at("max_backward_error") == step_backward &&
                    steps.report.metrics.at("min_pivot_ratio") == step_pivot,
                "the worst of the steps");
-         check(step_pivot != pivot || step_backward != backward,
-               "start() changed the worst figures");
        }},
       {"the integrator's worst solve with an iterative solver: no pivot "
        "ratio",

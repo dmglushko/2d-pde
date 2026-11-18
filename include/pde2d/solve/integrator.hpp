@@ -63,7 +63,9 @@ struct IntegrationResult {
   // and those a method's start() does: each distinct message once, in the
   // order they first appeared (SupernodalCholesky's, when it factored -A,
   // once however many steps it solved; a direct solver's pivot ratio
-  // warning once per distinct ratio, so once per prepared solver).
+  // warning once, also when the step matrix is prepared again at every
+  // step: its text holds the threshold, not the ratio). The three are
+  // read from the log of solves at once, so they agree.
   mesh::StageReport report{};
 };
 

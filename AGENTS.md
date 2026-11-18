@@ -317,7 +317,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   threshold (a pure Neumann problem gets one of its solutions); below
   `detail::small_pivot_ratio` (1e-10, the one place: `src/solve/pivot_ratio.hpp`)
   the result carries the warning of `detail::pivot_ratio_warning`, made
-  once per prepared solver so that its text is the same on every solve. ParU's ratio must
+  once per prepared solver; its text names the solver and the threshold,
+  never the ratio (that is `pivot_ratio`), so it is the same on every
+  solve of a solver and an integrator that prepares at every step reports
+  it once. ParU's ratio must
   include its singleton pivots, and no NaN may enter it: a zero row is
   refused before ParU sees the matrix, a zero singleton before dividing.
   A residual entry that is not finite gives a NaN backward error
@@ -335,7 +338,8 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   solve from several threads at once and keep a prepared solver beyond
   `integrate()`. The report's `max_backward_error` and `min_pivot_ratio`
   come from that log (every solve, `start()`'s too), never from
-  `StepSolveInfo`.
+  `StepSolveInfo`, and are read with its messages in one snapshot (one
+  lock), never under separate locks.
 - **`LinearSolveResult` grows at the end.** Its first members (values,
   iterations, residual, threads) keep their order so that positional
   initializations keep their meaning; add a new member after the last.

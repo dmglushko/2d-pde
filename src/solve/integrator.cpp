@@ -174,20 +174,23 @@ public:
     if (result.pivot_ratio > 0.0)
       min_pivot_ratio_ = std::min(min_pivot_ratio_, result.pivot_ratio);
   }
-  std::vector<std::string> messages() const {
+  // What the report shows, read under one lock so that its three parts
+  // agree (a prepared solver kept beyond integrate() may finish a solve
+  // at any time).
+  struct Snapshot {
+    std::vector<std::string> messages;
+    // 0 before any solve.
+    double max_backward_error = 0.0;
+    // 0 when no solve measured its pivot ratio (an iterative solver,
+    // SparseLu, an empty system, no solve).
+    double min_pivot_ratio = 0.0;
+  };
+  Snapshot snapshot() const {
     const std::scoped_lock lock(mutex_);
-    return messages_;
-  }
-  // 0 before any solve.
-  double max_backward_error() const {
-    const std::scoped_lock lock(mutex_);
-    return max_backward_error_;
-  }
-  // 0 when no solve measured its pivot ratio (an iterative solver,
-  // SparseLu, an empty system, no solve).
-  double min_pivot_ratio() const {
-    const std::scoped_lock lock(mutex_);
-    return std::isinf(min_pivot_ratio_) ? 0.0 : min_pivot_ratio_;
+    return {.messages = messages_,
+            .max_backward_error = max_backward_error_,
+            .min_pivot_ratio =
+                std::isinf(min_pivot_ratio_) ? 0.0 : min_pivot_ratio_};
   }
 
 private:
@@ -473,9 +476,10 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   m["linear_threads"] = static_cast<double>(summary.linear_threads);
   // Over every solve of the run, start() included (the log); the pivot
   // ratio over the solves that measured it, 0 when none did.
-  m["max_backward_error"] = log->max_backward_error();
-  m["min_pivot_ratio"] = log->min_pivot_ratio();
-  report.messages = log->messages();
+  SolveLog::Snapshot solves = log->snapshot();
+  m["max_backward_error"] = solves.max_backward_error;
+  m["min_pivot_ratio"] = solves.min_pivot_ratio;
+  report.messages = std::move(solves.messages);
   report.time = Clock::now() - start;
   return result;
 }

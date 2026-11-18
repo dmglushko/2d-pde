@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <set>
 #include <string>
 #include <thread>
@@ -369,6 +370,20 @@ int main() {
          app::combine_report(unmeasured, solves(part(1, 1, 1, 2), 0, 0));
          check(unmeasured->metrics.at("min_pivot_ratio") == 0,
                "no measured pivot ratio: 0");
+         // A NaN backward error (a residual that is not finite) stays,
+         // whether a later chunk or an earlier one had it.
+         for (const bool nan_first : {false, true}) {
+           const double nan = std::numeric_limits<double>::quiet_NaN();
+           std::optional<mesh::StageReport> with_nan;
+           app::combine_report(
+               with_nan, solves(part(1, 1, 1, 1), nan_first ? nan : 1e-16, 0));
+           app::combine_report(
+               with_nan, solves(part(1, 1, 1, 2), nan_first ? 1e-16 : nan, 0));
+           app::combine_report(with_nan, solves(part(1, 1, 1, 3), 2e-16, 0));
+           check(std::isnan(with_nan->metrics.at("max_backward_error")),
+                 nan_first ? "a NaN of the first chunk stays"
+                           : "a NaN of a later chunk stays");
+         }
          check(m.at("steps") == 6 && m.at("prepares") == 4, "sums");
          check(m.at("min_dt") == 0.05 && m.at("max_dt") == 0.3,
                "extremes over chunks with steps");

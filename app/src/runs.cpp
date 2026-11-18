@@ -268,7 +268,10 @@ void combine_report(std::optional<mesh::StageReport> &total,
       into += value;
       break;
     case Combine::max:
-      into = std::max(into, value);
+      // A NaN stays, from either side (std::max would drop a later one),
+      // as in the integrator's own maximum of the backward error.
+      if (!std::isnan(into) && !(value <= into))
+        into = value;
       break;
     case Combine::min:
       into = std::min(into, value);
