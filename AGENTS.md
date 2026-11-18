@@ -315,7 +315,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   an exact zero pivot (the Cholesky on any pivot that is not positive);
   a tiny pivot is reported in `pivot_ratio`, never judged by a threshold
   (a pure Neumann problem gets one of its solutions). ParU's ratio must
-  include its singleton pivots.
+  include its singleton pivots, and no NaN may enter it: a zero row is
+  refused before ParU sees the matrix, a zero singleton before dividing.
+  A residual entry that is not finite gives a NaN backward error
+  (`detail::max_abs` keeps NaN), which every check rejects.
 - **The Cholesky factors −A for a negative diagonal, and says so.** When
   every diagonal entry is negative, `SupernodalCholesky` factors a negated
   copy and solves with −b; the checks use A and b as given, and every
@@ -323,7 +326,14 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   warnings go only there (failures are exceptions); the `StaticSolver`
   copies them into its report and the `Integrator` logs every solve's
   through its private `LoggingSolver`, so a time method never has to pass
-  them on. A new caller that solves must put them in its report.
+  them on. A new caller that solves must put them in its report. The
+  Integrator's log is shared per-run state behind a mutex (held only to
+  add or copy, never during a solve): a time method may solve from
+  several threads at once and keep a prepared solver beyond
+  `integrate()`.
+- **`LinearSolveResult` grows at the end.** Its first members (values,
+  iterations, residual, threads) keep their order so that positional
+  initializations keep their meaning; add a new member after the last.
 - **Time methods use `right_hand_side()` as it is**: it already holds the
   whole lifting (load − A_FD U_D − B_FD U_D' − M2_FD U_D''). The static
   solver assembles with `max_time_order` 0, where it is load − A_FD U_D.

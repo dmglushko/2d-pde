@@ -21,12 +21,14 @@
 #include "pde2d/solve/sparse_lu.hpp"
 #include "pde2d/solve/static_solver.hpp"
 #include "pde2d/solve/supernodal_cholesky.hpp"
+#include "pde2d/solve/time_method.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <format>
 #include <iostream>
 #include <limits>
@@ -216,6 +218,97 @@ integrate_with(std::shared_ptr<const LinearSolver> solver,
       .integrate(p, 0.0, 0.2);
 }
 
+// Implicit Euler for time order 1, (B / dt + A) U1 = b(t1) + B U0 / dt
+// with the same arithmetic as ImplicitEuler, written here so that a test
+// chooses what start() and the steps do with the linear solver (review
+// findings on the integrator's log of warnings). With `start_matrix`,
+// start() prepares it, solves for a right-hand side of ones and keeps the
+// prepared solver and that result; with `concurrent`, every step solves
+// its right-hand side twice, from two threads at once.
+class TestEuler final : public TimeMethod {
+public:
+  struct Options {
+    std::shared_ptr<const CsrMatrix> start_matrix = nullptr;
+    bool concurrent = false;
+  };
+  explicit TestEuler(Options options) : options_(std::move(options)) {}
+
+  std::string name() const override { return "test_euler"; }
+  TimeMethodCapabilities capabilities() const override {
+    return {.time_order_1 = true};
+  }
+  double evaluation_fraction() const override { return 1.0; }
+  StepMatrixWeights step_matrix_weights(double dt) const override {
+    return {.damping = 1.0 / dt, .stiffness = 1.0};
+  }
+  StartNeeds start_needs(int) const override {
+    return options_.start_matrix ? StartNeeds::static_part
+                                 : StartNeeds::nothing;
+  }
+  void start(const AssembledProblem &, const LinearSolver &linear_solver,
+             TimeState &) const override {
+    kept = linear_solver.prepare(options_.start_matrix);
+    start_result = kept->solve(ones());
+  }
+  StepSolveInfo advance(const AssembledProblem &problem, double dt,
+                        const PreparedLinearSolver &solver,
+                        TimeState &state) const override {
+    std::vector<double> rhs(problem.right_hand_side().begin(),
+                            problem.right_hand_side().end());
+    const auto damped = problem.damping().free.multiply(state.values);
+    for (std::size_t i = 0; i < rhs.size(); ++i)
+      rhs[i] += (1.0 / dt) * damped[i];
+    LinearSolveResult solved, other_solved;
+    if (options_.concurrent) {
+      std::exception_ptr failure;
+      std::thread other([&] {
+        try {
+          other_solved = solver.solve(rhs);
+        } catch (...) {
+          failure = std::current_exception();
+        }
+      });
+      try {
+        solved = solver.solve(rhs);
+      } catch (...) {
+        other.join();
+        throw;
+      }
+      other.join();
+      if (failure)
+        std::rethrow_exception(failure);
+      check(same_bits(solved.values, other_solved.values),
+            "both threads solve to the same bits");
+    } else {
+      solved = solver.solve(rhs);
+    }
+    state.values = std::move(solved.values);
+    return {.linear_iterations = solved.iterations,
+            .residual = solved.residual,
+            .linear_threads = solved.threads};
+  }
+
+  std::vector<double> ones() const {
+    return std::vector<double>(options_.start_matrix->rows(), 1.0);
+  }
+
+  // Set by start(): test state, so a const method writes it.
+  mutable std::shared_ptr<const PreparedLinearSolver> kept;
+  mutable LinearSolveResult start_result;
+
+private:
+  Options options_;
+};
+
+IntegrationResult
+integrate_test_euler(std::shared_ptr<const TimeMethod> method,
+                     const std::shared_ptr<const MeshedProblem> &p, double t1) {
+  return Integrator(std::move(method),
+                    std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.01}),
+                    std::make_shared<SupernodalCholesky>())
+      .integrate(p, 0.0, t1);
+}
+
 } // namespace
 
 int main() {
@@ -367,6 +460,70 @@ int main() {
          check(euler.report.messages.size() == 1 &&
                    euler.report.messages[0].find(negative_warning) == 0,
                "time order 0: the warning once");
+       }},
+      {"the integrator's log: concurrent solves of one prepared solver",
+       [] {
+         // A negative definite step matrix: every solve warns. Each step
+         // solves twice at once with the same prepared solver (review
+         // finding: the log was not guarded and a probe crashed). The
+         // answer is ImplicitEuler's, bit for bit.
+         const auto negative = problem("1", "0", "0", "-1", false, true);
+         const auto concurrent =
+             integrate_test_euler(std::make_shared<TestEuler>(
+                                      TestEuler::Options{.concurrent = true}),
+                                  negative, 0.2);
+         check(concurrent.report.metrics.at("steps") == 20, "20 steps");
+         check(concurrent.report.messages.size() == 1 &&
+                   concurrent.report.messages[0].find(negative_warning) == 0,
+               "the warning once");
+         const auto euler = Integrator(std::make_shared<ImplicitEuler>(),
+                                       std::make_shared<FixedStep>(
+                                           FixedStepOptions{.dt = 0.01}),
+                                       std::make_shared<SupernodalCholesky>())
+                                .integrate(negative, 0.0, 0.2);
+         check(same_bits(concurrent.final.values, euler.final.values),
+               "the same bits as ImplicitEuler");
+       }},
+      {"the integrator's log: a warning from start() alone",
+       [] {
+         // The heat equation in its positive form: the step matrix is
+         // positive definite, so the steps give no warning; start() solves
+         // with a negative definite matrix, which does (review finding:
+         // the earlier test got the same warning from start() and from
+         // every step).
+         const auto positive = problem("-1", "0", "0", "1");
+         const auto negative_matrix =
+             system_of(problem("1", "0", "0", "0", false, true)).matrix;
+         const auto method = std::make_shared<TestEuler>(
+             TestEuler::Options{.start_matrix = negative_matrix});
+         const auto result = integrate_test_euler(method, positive, 0.05);
+         check(result.report.messages.size() == 1 &&
+                   result.report.messages[0].find(negative_warning) == 0,
+               "the warning of start()");
+         check(integrate_test_euler(
+                   std::make_shared<TestEuler>(TestEuler::Options{}), positive,
+                   0.05)
+                   .report.messages.empty(),
+               "no warning from the steps");
+       }},
+      {"the integrator's log: a prepared solver used after integrate()",
+       [] {
+         // The method keeps the prepared solver of its start() and solves
+         // with it once the Integrator and its run are gone (review
+         // finding: the log was a local of integrate(), and AddressSanitizer
+         // showed a stack-use-after-return). The solve works and carries
+         // its warning; the log it adds to is no report's any more.
+         const auto method = std::make_shared<TestEuler>(TestEuler::Options{
+             .start_matrix =
+                 system_of(problem("1", "0", "0", "0", false, true)).matrix});
+         (void)integrate_test_euler(method, problem("-1", "0", "0", "1"), 0.05);
+         check(method->kept != nullptr, "start() kept its prepared solver");
+         const auto later = method->kept->solve(method->ones());
+         check(same_bits(later.values, method->start_result.values),
+               "the same answer as in start()");
+         check(later.messages.size() == 1 &&
+                   later.messages[0].find(negative_warning) == 0,
+               "its warning");
        }},
       {"time steps: both agree with the Eigen solvers",
        [] {

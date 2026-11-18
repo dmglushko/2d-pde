@@ -19,11 +19,16 @@
 
 namespace pde2d::solve::detail {
 
-// The largest |v_i|; 0 for an empty or zero vector.
+// The largest |v_i|; 0 for an empty or zero vector, NaN when an entry is
+// NaN (std::max alone would skip it), so a residual that is not finite
+// gives a backward error that no tolerance accepts.
 inline double max_abs(std::span<const double> v) {
   double largest = 0.0;
-  for (const double x : v)
+  for (const double x : v) {
+    if (std::isnan(x))
+      return x;
     largest = std::max(largest, std::abs(x));
+  }
   return largest;
 }
 
@@ -59,7 +64,8 @@ inline double max_row_sum(const fem::CsrMatrix &matrix) {
 // of x and of b: the smallest relative change of A and b (in that norm)
 // for which x is the exact solution. 0 when r is zero, also for b = 0 and
 // x = 0; infinity when r is not zero but A x and b are (only possible for
-// a zero matrix).
+// a zero matrix); NaN when |r| is NaN (the checks `!(error <= tolerance)`
+// then reject it).
 inline double backward_error(double residual_norm, double matrix_norm,
                              double x_norm, double b_norm) {
   if (residual_norm == 0.0)

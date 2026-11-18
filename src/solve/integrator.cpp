@@ -11,6 +11,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -147,28 +148,44 @@ Solution make_solution(const fem::MeshedProblem &meshed, const TimeState &state,
 }
 
 // The linear solver's warnings (LinearSolveResult::messages) of one
-// integrate() call: each distinct message once, in the order they first
-// appeared (a solver prepared for a negative definite step matrix warns at
-// every step).
+// integrate() call: each distinct message once (a solver prepared for a
+// negative definite step matrix warns at every step), in the order they
+// were added. A time method may solve from several threads at once (a
+// prepared solver is const and may be used concurrently), so the log is
+// guarded by a mutex; it is held only to add or copy, never during a
+// solve. Solves that overlap add their messages in the order they take
+// the lock; a warning's text says which solver and matrix it is about, so
+// that order carries no information the report needs.
 class MessageLog {
 public:
   void add(const std::vector<std::string> &messages) {
+    if (messages.empty())
+      return;
+    const std::scoped_lock lock(mutex_);
     for (const std::string &message : messages)
       if (std::ranges::find(messages_, message) == messages_.end())
         messages_.push_back(message);
   }
-  const std::vector<std::string> &messages() const { return messages_; }
+  std::vector<std::string> messages() const {
+    const std::scoped_lock lock(mutex_);
+    return messages_;
+  }
 
 private:
+  mutable std::mutex mutex_;
   std::vector<std::string> messages_;
 };
 
-// A prepared solver that passes every solve on and logs its messages.
+// A prepared solver that passes every solve on and logs its messages. It
+// shares the log of its integrate() call: a method may keep a prepared
+// solver beyond that call (from its start() or a step) and solve with it
+// later, which still works and adds to a log that no report reads any
+// more.
 class LoggingPreparedSolver final : public PreparedLinearSolver {
 public:
   LoggingPreparedSolver(std::unique_ptr<const PreparedLinearSolver> solver,
-                        MessageLog &log)
-      : solver_(std::move(solver)), log_(&log) {}
+                        std::shared_ptr<MessageLog> log)
+      : solver_(std::move(solver)), log_(std::move(log)) {}
   LinearSolveResult
   solve(std::span<const double> right_hand_side) const override {
     LinearSolveResult result = solver_->solve(right_hand_side);
@@ -178,7 +195,7 @@ public:
 
 private:
   std::unique_ptr<const PreparedLinearSolver> solver_;
-  MessageLog *log_;
+  std::shared_ptr<MessageLog> log_;
 };
 
 // The integrator's linear solver as the time method sees it: the same
@@ -188,8 +205,9 @@ private:
 // does with a LinearSolveResult.
 class LoggingSolver final : public LinearSolver {
 public:
-  LoggingSolver(const LinearSolver &solver, MessageLog &log)
-      : solver_(&solver), log_(&log) {}
+  LoggingSolver(std::shared_ptr<const LinearSolver> solver,
+                std::shared_ptr<MessageLog> log)
+      : solver_(std::move(solver)), log_(std::move(log)) {}
   std::string name() const override { return solver_->name(); }
   LinearSolverRequirements requirements() const override {
     return solver_->requirements();
@@ -197,12 +215,12 @@ public:
   std::unique_ptr<const PreparedLinearSolver>
   prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const override {
     return std::make_unique<const LoggingPreparedSolver>(
-        solver_->prepare(std::move(matrix)), *log_);
+        solver_->prepare(std::move(matrix)), log_);
   }
 
 private:
-  const LinearSolver *solver_;
-  MessageLog *log_;
+  std::shared_ptr<const LinearSolver> solver_;
+  std::shared_ptr<MessageLog> log_;
 };
 
 // The running summary of the step records.
@@ -259,8 +277,8 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   check_output(output, t0, t1);
   const fem::MeshedProblem &meshed = *meshed_problem;
   const auto start = Clock::now();
-  MessageLog log;
-  const LoggingSolver linear_solver(*linear_solver_, log);
+  const auto log = std::make_shared<MessageLog>();
+  const LoggingSolver linear_solver(linear_solver_, log);
 
   // 1. The time order, from assembly's formula facts without evaluating
   // anything (d/dt sqrt(t) may be infinite at t0), against the method's
@@ -431,7 +449,7 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // read from the assembly's own report.
   m["assembly_threads"] = current->report().metrics.at("threads");
   m["linear_threads"] = static_cast<double>(summary.linear_threads);
-  report.messages = log.messages();
+  report.messages = log->messages();
   report.time = Clock::now() - start;
   return result;
 }
