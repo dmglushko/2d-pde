@@ -3,7 +3,8 @@
 A graphical interface for the pde2d library, in a browser: choose a
 domain, mesh it, write the problem, assemble it, solve it (statically, in
 time with the snapshots shown while the run goes on, or adaptively,
-refining the mesh where the error is estimated), compare the result
+refining the mesh where the error is estimated, statically or in time),
+compare the result
 with an exact solution or another run, and export it (CSV, VTK for
 ParaView, Matrix Market, provenance). The same cases also run from the
 command line, alone or as parameter sweeps.
@@ -231,6 +232,28 @@ field, Ctrl+Z undoes the whole edit of the field.
    (and an N^(−1) slope). **Export adapted mesh** saves the last mesh as
    `.pde2d`, which opens as a mesh file. An adaptive solve runs in one
    piece: it has no progress and no Stop.
+   **Adaptive in time** integrates like **In time** (its settings are
+   shown first) and, every so much time or so many steps (**Adapt
+   every**), estimates the error, refines the marked triangles and moves
+   the solution to the new mesh by interpolation, until **Maximum nodes**
+   or **Maximum refinements**; with a **Tolerance** it refines only when
+   the estimate is above it. The mesh only grows (no coarsening yet).
+   **Damping steps** take that many implicit Euler steps after each
+   transfer, which methods that do not damp (midpoint, Newmark) need.
+   Each snapshot is drawn on its own mesh as the time bar moves;
+   **Adaptation times** lists each time with its nodes, estimate and what
+   happened, with a chart of the nodes against t
+   (`app/examples/l_shape_heat_adaptive.json`). It runs in one piece too,
+   and exports as the VTK series (a file per snapshot) and the last mesh,
+   not as one CSV or VTK file.
+   **Linear solver** offers the direct solvers sparse LU, simplicial LDLᵀ,
+   supernodal Cholesky and multifrontal LU (the last two parallel, for
+   large problems) and the iterative conjugate gradient and BiCGSTAB;
+   **Threads** (1: one thread, 0: every processor) is an option of each
+   solver that has one and of **Assembly** (folded under the linear
+   solver). Assembly and the iterative solvers give the same numbers for
+   every thread count; the parallel direct solvers may differ in the last
+   digits.
    Changing the case stops a run. If the server is busy or does not
    answer for a moment, the page keeps asking (and says so); a snapshot,
    a difference or u(t) that could not be loaded says why beside it, with
@@ -251,9 +274,9 @@ browser, not in the case: the problem check while typing (on or off),
 whether a run plays as it is computed (the playback speed is chosen on
 the time bar and kept too), the significant digits shown, the number of isolines, the
 colour maps (for values of one sign: blue, orange or green; for both
-signs: blue–red or blue–orange), and the picture quality (lower is faster to pan and draw, higher is sharper). The Computation group
-(sequential or parallel assembly and linear solves) is shown disabled: the
-library runs sequentially for now.
+signs: blue–red or blue–orange), and the picture quality (lower is faster to pan and draw, higher is sharper). Threads are
+not here: they belong to the case (the Solve step's linear solver and
+Assembly).
 
 In the picture, drag to pan, use the wheel or pinch with two fingers to
 zoom, and double-click (or the **⤢** button) to fit; **+** and **−** at
@@ -334,7 +357,13 @@ system (`stiffness.mtx`, `damping.mtx`, `mass.mtx`, `rhs.mtx`); an
 adaptive solve (`app/examples/l_shape_adaptive.json`) also writes its
 last mesh, `solution-mesh.pde2d`, and its summary lists every cycle
 (`solve.adaptive.cycles`) and, with an exact solution, each cycle's error
-(`comparison.cycles`). Each
+(`comparison.cycles`). An adaptive run in time
+(`app/examples/l_shape_heat_adaptive.json`) writes the last mesh and the
+VTK series but no `solution.csv` or `solution.vtk` (its snapshots are on
+several meshes), and its summary lists the adaptation times
+(`solve.adaptive_time.adaptations`). With an exact solution the summary's
+`comparison` also gives the last snapshot's error (`comparison.final`).
+Each
 file but `.pde2d` says what produced it where its format allows: `#`
 lines at the top of the CSV (read it with
 `pandas.read_csv("solution.csv", comment="#")`), `%` lines after the

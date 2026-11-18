@@ -1188,3 +1188,92 @@ time from its start.
   integrator gained the metric `t_end`, where a run ended, with its
   `max_steps`): like `t1`, the combined run ends where its last chunk
   did. The app never passes `max_steps`, so `t_end` equals `t1`.
+
+## 2026-11-18: threads, the parallel direct solvers, the adaptive loop in time
+
+The library gained thread counts (`AssemblerOptions::threads`, the
+iterative solvers' `threads`), two parallel direct solvers
+(`SupernodalCholesky`, `MultifrontalLu`) and the adaptive loop for
+time-dependent problems (`AdaptiveIntegrator`, solution transfer, damping
+steps). The owner asked the app to offer everything new.
+
+- **Threads are case options, not a browser preference.** The disabled
+  "Sequential / Parallel" group of the Settings dialog is gone. The
+  library made the count an option of each component (and a thread count
+  can change the last digits of the parallel direct solvers), so it
+  belongs where the component is chosen: the solvers' own `threads`
+  option comes from the catalog like any other, and a new
+  `solve.assembler` part (`{"threads"}`, may be missing: one thread)
+  goes to the static solver, the integrator and both adaptive loops. A
+  browser preference would have made a run depend on something the case
+  does not record, and `--run` could not reproduce it. The Assemble step
+  keeps one thread: its stage key has no solve section, and its timing
+  matters little.
+- **The parallel direct solvers are two more linear solvers** with their
+  `residual_tolerance` and `threads`; their declared requirement
+  (symmetry for Cholesky) reaches the page as a trait like the others'.
+  The default stays sparse LU.
+- **A fourth mode, `adaptive_time`**, rather than an option of the time
+  mode: its target, budgets and four slots would have made the time
+  mode's form twice as long for every run in time. It reads the `time`
+  part as it is (t0, t1, snapshots, method, step) plus its own part; the
+  catalog says so with `with: ["time"]`, and the page shows the time
+  part first. Switching between In time and Adaptive in time keeps the
+  same interval and method.
+- **A new option kind `schedule`** (`{"interval", "steps"}`, both
+  optional, as the library's `AdaptationSchedule`), drawn with the length
+  bound's two-field widget (one table, `PAIR_FIELDS`, for the three pair
+  kinds). The default is every 10 steps: settings never know the domain
+  or the interval, and a step count is meaningful for any.
+- **`max_nodes` and `max_refinements` are required in the case** (20000
+  and 20 by default) although the library allows leaving them out, as
+  for the static loop: they bound the memory a run reserves (the meshes
+  and the snapshots at the node budget), and the reserved mesh ids.
+- **The damping method is built only with damping steps.** With 0 steps
+  the library takes no method; building one anyway would refuse a case
+  whose (unused) choice does not fit the problem's time order.
+- **One library call, no progress or Stop**, as for the static loop.
+  Chunking the run the way a time run is chunked would restart the
+  schedule, the relative tolerance (relative to the first adaptation
+  time) and the budgets at every chunk: that would be a different
+  algorithm, which the app must not make. Recorded in
+  library-requests.md, item 2. The example takes 0.4 s.
+- **Each snapshot stays on its own mesh**; the run does not interpolate
+  them to one mesh. Readers take the mesh from the snapshot
+  (`Solution::mesh`), which was already there, so comparisons, probes
+  and the VTK series needed a per-snapshot mesh instead of the run's and
+  nothing else; each mesh gets an id (the starting mesh keeps its own,
+  the new ones take ids reserved when the run is made) so the page can
+  fetch it like any mesh. Interpolating to the last mesh would have shown
+  the early snapshots with an error they never had.
+- **Exports with one mesh refuse** such a run (`solution.csv`,
+  `solution.vtk`), and the page does not offer them: a CSV row per node
+  has no meaning across meshes. The VTK series writes each snapshot on
+  its own mesh (ParaView follows a changing mesh); `solution-mesh.pde2d`
+  gives the last mesh. A reference comparison with or of such a run is
+  refused, since it compares node by node.
+- **The page fetches every mesh with the result** (at most
+  max_refinements + 1, typically a few MB) and draws the shown snapshot
+  on its own (`pictureMesh`), so the readout, probes and profile follow
+  the time bar. A snapshot that is not loaded yet is stood in for only
+  by one on the same mesh: values of another mesh would be drawn on the
+  wrong nodes.
+- **Adaptation times** are a table (t, N, estimate, outcome) and a chart
+  of N against t, not the static loop's log–log chart: the estimate at
+  successive times measures different solutions, so its rate against N
+  means nothing.
+- **`comparison.final` in the `--run` summary**: the last snapshot's
+  error besides the largest over the snapshots. For a run that starts on
+  a coarse mesh the largest is the early snapshots', which hides what
+  adapting did; the example's checks read the final one.
+- Example `l_shape_heat_adaptive.json`: heat with the L-shape's corner
+  singularity growing as 1 − exp(−t), from 28 nodes, adapting every 5
+  steps: at t = 2 about 5600 nodes and an L2 error of 1.5e−4, against
+  7.4e−4 on a uniform mesh of 6200 nodes. A moving bump was tried first:
+  without coarsening the mesh keeps the bump's whole path, and at the
+  budget the bump leaves the refined region, so it showed the loop at
+  its worst. Tests in `app_solve` (the run's meshes, values, probes,
+  comparison and exports; the refusals' paths; the parallel solvers and
+  threads), `web.test.mjs` (`splitCounted`, `snapshotNodes`,
+  `nearestLoaded` on one mesh, the run sizes) and the browser scenario
+  `adaptive_time`.

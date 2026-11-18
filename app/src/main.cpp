@@ -51,7 +51,9 @@ constexpr std::string_view usage = R"(Usage:
       (ParaView opens it with its times), provenance.json and the
       assembled system at assembly.t (stiffness.mtx, mass.mtx,
       damping.mtx, rhs.mtx) there; for an adaptive solve also its last
-      mesh (solution-mesh.pde2d).
+      mesh (solution-mesh.pde2d), and adaptive in time without
+      solution.csv and solution.vtk (its snapshots are on several
+      meshes: the series has each on its own).
   pde2d_app --run CASE.json --sweep PATH=V1,V2,... [--sweep ...]
             [--set PATH=VALUE]... [--output DIR]
       Runs the case once per combination of the swept values (the first

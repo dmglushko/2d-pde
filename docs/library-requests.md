@@ -29,6 +29,11 @@ app, for assembly and the solvers.
   Parallel" for assembly and for linear solves, disabled with a note
   that points here (2026-11-15). Once the library has the option, the
   setting becomes a catalog option like any other.
+- **Done** (2026-11-18): the library has `AssemblerOptions::threads`, the
+  iterative solvers' `threads` and the parallel direct solvers
+  (`SupernodalCholesky`, `MultifrontalLu`). The app offers each as a
+  case option (the solvers' own, and `solve.assembler.threads`); the
+  disabled group is gone.
 
 ## 2. Progress and cancellation of long runs
 
@@ -56,7 +61,12 @@ cannot be stopped.
   loop itself: that would reimplement the library's stopping rules). A
   callback after each cycle (its solution, estimate and mesh, returning
   whether to go on) would give progress, Stop and the cycles as they
-  come.
+  come. The same holds for the adaptive loop in time (2026-11-18): the
+  app's `adaptive_time` run is one `AdaptiveIntegrator::integrate` call
+  (chunking it like a time run would restart its schedule, its relative
+  tolerance and its budgets at every chunk); a callback after each step
+  or each piece would give the time bar its snapshots as they come and
+  Stop.
 - **What chunks cost** (2026-11-16): each `integrate` call prepares the
   linear solver and assembles at its start again, so the app sizes chunks
   by their measured cost to keep that fixed cost a small share
