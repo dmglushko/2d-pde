@@ -13,9 +13,12 @@ struct SolutionTransfer {
   solve::Solution solution{};
   // "solution_transfer": the time taken; the metrics nodes, by_parents
   // (1 or 0), kept_nodes and edge_nodes (with parents: new nodes that are
-  // old nodes, new nodes on an old edge), located (without parents: nodes
-  // inside an old triangle), nearest_boundary (without parents: nodes
-  // given the value at their nearest old boundary point) and
+  // old nodes, new nodes on an old edge); without parents located (nodes
+  // inside an old triangle), by_link (boundary nodes placed on an old
+  // edge through their curve links), nearest_boundary (nodes given the
+  // value at their nearest old boundary point, of their own loop for a
+  // boundary node) and other_loop_nearer (boundary nodes among those
+  // whose nearest old boundary point overall was on another loop); and
   // dirichlet_nodes; a message saying which way it went.
   mesh::StageReport report{};
 };
@@ -40,13 +43,31 @@ struct SolutionTransfer {
 // Without parents (an improver flipped or moved nodes, or the mesh was
 // not made by refinement): by point location in the old mesh, a bucket
 // grid with exact containment (no walk, so GitHub issue #22 does not
-// arise). A boundary node of the new mesh gets the old u_h at its
-// nearest point of the old boundary, as with parents; another node gets
-// the old u_h of the old triangle that contains it (the lowest index
-// when it lies on an edge or node), or, if none does (a node moved
-// outside the old mesh near a curved boundary), at its nearest point of
-// the old boundary. A node at an old node's position keeps its value
-// exactly.
+// arise). A boundary node of the new mesh gets the old u_h at its point
+// of the old boundary, never one of another wall (in a thin annulus a
+// new point of the inner curve can be nearer the outer polygon than its
+// own chord):
+//
+// - with curve links on both meshes (the same chains: equal count of
+//   curves and length, as a Remesher passes them on), the point at its
+//   arc length on the old edge of its chain that covers it, weighted by
+//   arc length along that edge (so a curve midpoint gets the average of
+//   the edge's ends, as with parents);
+// - otherwise the nearest point of the old boundary loop matched to its
+//   own loop. Loops are the connected pieces of the boundary edges (they
+//   never touch in a valid mesh); a new loop is matched to the old loop
+//   its nodes' old boundary points lie on: by the nodes that lie exactly
+//   on the old boundary (kept old nodes, and nodes placed by links) when
+//   there are any, else by the old loop of each node's nearest old
+//   boundary point; the most votes win, ties the lower old loop (in the
+//   order of their first boundary edge). Regions are not used: two walls
+//   may share one.
+//
+// Another node gets the old u_h of the old triangle that contains it
+// (the lowest index when it lies on an edge or node), or, if none does
+// (a node moved outside the old mesh near a curved boundary), at its
+// nearest point of the old boundary. A node at an old node's position
+// keeps its value exactly.
 //
 // Interpolation never leaves the range of the old values on a triangle or
 // boundary edge: no new extremes. On a refinement (with or without

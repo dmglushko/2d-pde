@@ -6,7 +6,10 @@
 // run that never refines equals one Integrator run that lands on the same
 // times, bit for bit for the first-order methods; a wave equation (time
 // order 2) runs with its velocities transferred; the node budget stops
-// adapting but not the run; invalid targets throw.
+// adapting but not the run, and so does max_refinements; a snapshot at an
+// adaptation time adds no step; the time derivatives an estimator gets
+// are checked, also for boundary data whose rate is not finite at t0;
+// invalid targets throw.
 
 #include "adapt/estimator_support.hpp"
 #include "solve/solve_support.hpp"
@@ -306,28 +309,47 @@ fem::Problem decay_problem() {
           .initial = {.u = Expression("sin(pi*x)*sin(pi*y)")}};
 }
 
-// An adaptation that changes nothing and records when it was asked.
+// An adaptation that changes nothing and records when it was asked and
+// what it was given: in adapt(), or, when it estimates (an estimate of
+// zero), in estimate(), the state an estimator gets.
 class Recorder final : public Adaptation {
 public:
   struct Call {
     double time;
     std::vector<double> values, u_t, u_tt;
   };
+  explicit Recorder(bool estimates = false) : estimates_(estimates) {}
   std::string name() const override { return "recorder"; }
-  AdaptationCapabilities capabilities() const override { return {}; }
-  std::optional<ErrorEstimate> estimate(const SolvedState &) const override {
-    return std::nullopt;
+  AdaptationCapabilities capabilities() const override {
+    return {.estimates_error = estimates_};
+  }
+  std::optional<ErrorEstimate>
+  estimate(const SolvedState &state) const override {
+    if (!estimates_)
+      return std::nullopt;
+    record(state);
+    ErrorEstimate estimate;
+    estimate.indicators.assign(state.problem.mesh()->triangles.size(), 0.0);
+    estimate.report.stage = "recorder";
+    return estimate;
   }
   AdaptationResult adapt(const SolvedState &state,
                          const ErrorEstimate *) const override {
+    if (!estimates_)
+      record(state);
+    return {};
+  }
+  mutable std::vector<Call> calls;
+
+private:
+  void record(const SolvedState &state) const {
     calls.push_back(
         {state.solution.time,
          state.solution.values,
          {state.derivatives.u_t.begin(), state.derivatives.u_t.end()},
          {state.derivatives.u_tt.begin(), state.derivatives.u_tt.end()}});
-    return {};
   }
-  mutable std::vector<Call> calls;
+  bool estimates_;
 };
 
 struct Schedule {
@@ -459,6 +481,41 @@ void follows_schedules() {
                1e-12, "u_t = (u(t) - u(t - dt)) / dt");
       }
     }
+  }
+}
+
+// An adaptation time that rounds next to a snapshot time is that time: dt
+// = 0.1 and an interval of 0.1, snapshots at 0.3 (0.2 + 0.1 is just above
+// it) and 0.8 (0.7 + 0.1 just below): ten steps of 0.1, none of rounding
+// size, and the snapshots at their exact times.
+void snapshot_at_an_adaptation_time() {
+  const auto problem = std::make_shared<const fem::MeshedProblem>(
+      test::unit_square(4), decay_problem());
+  check(0.2 + 0.1 > 0.3 && 0.7 + 0.1 < 0.8, "the sums round off both sides");
+  for (const auto &method :
+       std::vector<std::shared_ptr<const solve::TimeMethod>>{
+           std::make_shared<solve::ImplicitEuler>(),
+           std::make_shared<solve::ImplicitMidpoint>()}) {
+    const auto recorder = std::make_shared<Recorder>();
+    const auto r =
+        AdaptiveIntegrator(integrator(method, 0.1), {recorder})
+            .integrate(
+                problem, 0.0, 1.0, {.every = {.interval = 0.1}},
+                {.keep_step_history = true, .snapshot_times = {0.3, 0.8}});
+    check(r.history.size() == 10 && r.report.metrics.at("steps") == 10.0,
+          "ten steps");
+    for (std::size_t k = 0; k < r.history.size(); ++k) {
+      near(r.history[k].t, 0.1 * static_cast<double>(k + 1), 1e-15,
+           "the step times");
+      near(r.history[k].dt, 0.1, 1e-15, "steps of 0.1");
+    }
+    check(r.snapshots.size() == 2 && r.snapshots[0].time == 0.3 &&
+              r.snapshots[1].time == 0.8,
+          "the snapshots at their exact times");
+    check(recorder->calls.size() == 9, "nine adaptation times");
+    check(recorder->calls[2].time == 0.3 && recorder->calls[7].time == 0.8,
+          "the adaptation times are the snapshot times");
+    check(r.final.time == 1.0, "reaches t1");
   }
 }
 
@@ -638,6 +695,113 @@ void standing_wave() {
   }
 }
 
+// The derivatives an estimator gets at an adaptation time one step after
+// t0, for a wave (time order 2) with boundary data that moves: u_t is the
+// integrator's velocities (at the Dirichlet nodes the rate at t), u_tt
+// the difference quotient of the velocities at the free nodes and the
+// acceleration of the boundary data at the Dirichlet nodes. Checked
+// against one plain step and the initial and boundary data written out.
+fem::Problem moving_wave_problem(const std::string &g) {
+  const fem::BoundaryCondition dirichlet{.alpha = Expression("1"),
+                                         .g = Expression(g)};
+  return {.equation = {.a_xx = Expression("-1"),
+                       .a_yy = Expression("-1"),
+                       .m2 = Expression("1")},
+          .boundary_conditions = {{"bottom", dirichlet},
+                                  {"right", dirichlet},
+                                  {"top", dirichlet},
+                                  {"left", dirichlet}},
+          .initial = {.u = Expression("y"), .u_t = Expression("sin(x) + y")}};
+}
+
+void second_order_derivatives() {
+  const auto problem = std::make_shared<const fem::MeshedProblem>(
+      test::unit_square(4), moving_wave_problem("x*t^2 + y"));
+  const double dt = 0.1;
+  const auto plain =
+      integrator(std::make_shared<solve::ImplicitEuler>(), dt)
+          .integrate(problem, 0.0, dt, {.keep_before_last_step = true});
+  const auto &free_nodes = problem->free_nodes();
+  const auto &nodes = problem->mesh()->nodes;
+  // The state before the step is the initial one, in the free unknowns.
+  const solve::FreeState &before = *plain.before_last_step;
+  check(before.time == 0.0 && before.velocities.size() == free_nodes.size(),
+        "the free velocities at t0");
+  for (std::size_t i = 0; i < free_nodes.size(); ++i) {
+    const Point p = nodes[free_nodes[i]];
+    near(before.velocities[i], std::sin(p.x) + p.y, 1e-15,
+         "the initial velocity u_t(x, 0)");
+    near(before.values[i], p.y, 1e-15, "the initial value u(x, 0)");
+  }
+
+  const auto recorder = std::make_shared<Recorder>(true);
+  const auto r =
+      AdaptiveIntegrator(
+          integrator(std::make_shared<solve::ImplicitEuler>(), dt), {recorder})
+          .integrate(problem, 0.0, 2 * dt, {.every = {.steps = 1}});
+  check(recorder->calls.size() == 1 && recorder->calls[0].time == dt,
+        "one adaptation, after the first step");
+  const auto &call = recorder->calls[0];
+  check(call.values == plain.final.values, "the solution after one step");
+  check(call.u_t == plain.final.velocities, "u_t: the velocities");
+  std::vector<bool> dirichlet(nodes.size(), true);
+  for (const std::size_t v : free_nodes)
+    dirichlet[v] = false;
+  std::size_t dirichlet_nodes = 0;
+  for (std::size_t v = 0; v < nodes.size(); ++v) {
+    const Point p = nodes[v];
+    if (dirichlet[v]) {
+      ++dirichlet_nodes;
+      near(call.u_t[v], 2 * p.x * dt, 1e-14, "Dirichlet: g_t(t)");
+      near(call.u_tt[v], 2 * p.x, 1e-14, "Dirichlet: g_tt(t)");
+    } else {
+      near(call.u_tt[v],
+           (plain.final.velocities[v] - (std::sin(p.x) + p.y)) / dt, 1e-12,
+           "free: (u_t(t) - u_t(t - dt)) / dt");
+    }
+  }
+  check(dirichlet_nodes == 16, "the boundary of the 4 x 4 square");
+  check(r.final.time == 2 * dt, "reaches t1");
+}
+
+// A wave at rest with u = sqrt(t) on the boundary, whose rate is not finite
+// at t0 = 0: implicit Euler never evaluates it there, and neither may the
+// adaptive run, also when it adapts after the first step (u_tt at the
+// Dirichlet nodes is g_tt(t), at t > t0).
+void boundary_rate_not_finite_at_t0() {
+  fem::Problem wave = moving_wave_problem("sqrt(t)");
+  wave.initial = {.u = Expression("0"), .u_t = Expression("0")};
+  const auto problem =
+      std::make_shared<const fem::MeshedProblem>(test::unit_square(4), wave);
+  const double dt = 0.1;
+  const auto plain = integrator(std::make_shared<solve::ImplicitEuler>(), dt)
+                         .integrate(problem, 0.0, dt);
+  for (const AdaptationSchedule &every :
+       {AdaptationSchedule{.interval = 1.0}, AdaptationSchedule{.steps = 1},
+        AdaptationSchedule{.steps = 3}}) {
+    const auto recorder = std::make_shared<Recorder>();
+    const auto r = AdaptiveIntegrator(
+                       integrator(std::make_shared<solve::ImplicitEuler>(), dt),
+                       {recorder})
+                       .integrate(problem, 0.0, dt, {.every = every});
+    check(recorder->calls.empty(), "no adaptation at t1");
+    check(r.final.values == plain.final.values &&
+              r.final.velocities == plain.final.velocities,
+          "the plain run's step");
+  }
+  const auto recorder = std::make_shared<Recorder>();
+  const auto r =
+      AdaptiveIntegrator(
+          integrator(std::make_shared<solve::ImplicitEuler>(), dt), {recorder})
+          .integrate(problem, 0.0, 2 * dt, {.every = {.steps = 1}});
+  check(recorder->calls.size() == 1, "an adaptation after the first step");
+  const auto &call = recorder->calls[0];
+  for (const auto &d : problem->dirichlet_nodes())
+    near(call.u_tt[d.node], -0.25 * std::pow(dt, -1.5), 1e-12,
+         "u_tt = g_tt(t) at a Dirichlet node");
+  check(r.final.time == 2 * dt, "reaches t1");
+}
+
 // --- the node budget and invalid input -------------------------------------
 
 void node_budget() {
@@ -665,6 +829,36 @@ void node_budget() {
             r.report.messages[0].find("node budget") != std::string::npos,
         "the report says so");
   check(r.report.metrics.at("steps") == 16.0, "every step taken");
+}
+
+// max_refinements: after the second refinement adapting stops, and the
+// rest is one piece to t1.
+void refinement_limit() {
+  const auto start = std::make_shared<const fem::MeshedProblem>(
+      unit_square_mesh(0.1), bump_problem());
+  const AdaptiveIntegrator adaptive(
+      integrator(std::make_shared<solve::ImplicitEuler>(), 1.0 / 32),
+      {refinement()});
+  const auto r = adaptive.integrate(
+      start, 0.0, 0.5, {.every = {.steps = 2}, .max_refinements = 2});
+  check(r.final.time == 0.5, "reaches t1");
+  check(r.report.metrics.at("refinements") == 2.0, "two refinements");
+  std::size_t second = 0, refined = 0;
+  for (std::size_t k = 0; k < r.pieces.size(); ++k)
+    if (r.pieces[k].adaptation &&
+        r.pieces[k].adaptation->outcome == AdaptationOutcome::refined &&
+        ++refined == 2)
+      second = k;
+  check(refined == 2 && second + 2 == r.pieces.size(), "then one piece to t1");
+  check(!r.pieces.back().adaptation && r.pieces.back().t_end == 0.5,
+        "the last piece ends at t1 without adapting");
+  check(r.report.metrics.at("adaptation_times") ==
+            static_cast<double>(second + 1),
+        "no adaptation time after the limit");
+  check(r.report.metrics.at("steps") == 16.0, "every step taken");
+  check(!r.report.messages.empty() &&
+            r.report.messages[0].find("refinement limit") != std::string::npos,
+        "the report says so");
 }
 
 void rejects_bad_input() {
@@ -698,6 +892,16 @@ void rejects_bad_input() {
   fails({.every = {.steps = 1}, .max_nodes = 0},
         "max_nodes must be at least 1");
   fails({.every = {.steps = 1}, .max_nodes = 3}, "the starting mesh has 25");
+  fails({.every = {.steps = 1}, .max_refinements = 0},
+        "max_refinements must be at least 1");
+  // t + interval rounds to t at t0 = 1e6 (the spacing of doubles there is
+  // 1.2e-10).
+  expect_throws<std::runtime_error>(
+      [&] {
+        (void)recorder.integrate(problem, 1e6, 1e6 + 1.0,
+                                 {.every = {.interval = 1e-12}});
+      },
+      "the adaptation interval 1e-12 is too small to change t = 1e+06");
   expect_throws<std::invalid_argument>(
       [&] {
         (void)recorder.integrate(
@@ -740,11 +944,18 @@ int main() {
        transfer_error_and_damping},
       {"adaptation times follow the interval and the step count",
        follows_schedules},
+      {"a snapshot at an adaptation time adds no step",
+       snapshot_at_an_adaptation_time},
       {"a target that never refines equals one integrator run",
        never_refining_equals_plain_run},
       {"a wave equation transfers its velocities", wave_transfers_velocities},
       {"a standing wave on adapted meshes (measured)", standing_wave},
+      {"time order 2: the u_t and u_tt an estimator gets",
+       second_order_derivatives},
+      {"a boundary rate not finite at t0 is never evaluated there",
+       boundary_rate_not_finite_at_t0},
       {"the node budget stops adapting, not the run", node_budget},
+      {"max_refinements stops adapting, not the run", refinement_limit},
       {"invalid configurations and targets throw", rejects_bad_input},
   });
 }

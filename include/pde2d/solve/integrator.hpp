@@ -27,10 +27,22 @@ struct IntegrationOutput {
   // Keep a Solution after every n-th step of the call (0: never). A step
   // that also lands on a snapshot time gives one snapshot.
   std::size_t snapshot_every = 0;
-  // Keep the solution at the start of the last step
+  // Keep the state at the start of the last step, in the free unknowns
   // (IntegrationResult::before_last_step), for example to form a
-  // difference quotient of the final state.
+  // difference quotient of the final state. No boundary data is evaluated
+  // for it.
   bool keep_before_last_step = false;
+};
+
+// The integration state at one time in the free unknowns
+// (MeshedProblem::free_nodes(): entry i is node free_nodes()[i]), without
+// the Dirichlet nodes, so that keeping it evaluates no boundary data (the
+// rate of u = sqrt(t) is not finite at t = 0).
+struct FreeState {
+  double time = 0.0;
+  std::vector<double> values{};
+  // For time order 2, else empty.
+  std::vector<double> velocities{};
 };
 
 // The record of one step.
@@ -47,9 +59,6 @@ struct IntegrationResult {
   // The solution where the run ended (with velocities for time order 2):
   // at t1, or earlier when integrate() stopped after max_steps steps.
   Solution final{};
-  // The solution at the start of the last step (with velocities for time
-  // order 2), if keep_before_last_step was set; else empty.
-  std::optional<Solution> before_last_step{};
   // In time order; see IntegrationOutput.
   std::vector<Solution> snapshots{};
   // Every step's record, if keep_step_history was set; else empty.
@@ -77,6 +86,11 @@ struct IntegrationResult {
   // step: its text holds the threshold, not the ratio). The three are
   // read from the log of solves at once, so they agree.
   mesh::StageReport report{};
+  // The state at the start of the last step (with velocities for time
+  // order 2), if keep_before_last_step was set; else empty. (After the
+  // members above, so that positional initializations keep their meaning:
+  // new members go at the end.)
+  std::optional<FreeState> before_last_step{};
 };
 
 // Integrates a MeshedProblem in time (docs/decisions.md, "Solvers and time

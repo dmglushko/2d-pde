@@ -432,7 +432,8 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
     const bool last =
         t_new == t1 || (max_steps && summary.steps + 1 == *max_steps);
     if (last && output.keep_before_last_step)
-      result.before_last_step = make_solution(meshed, state, time_order, t);
+      result.before_last_step = FreeState{
+          .time = t, .values = state.values, .velocities = state.velocities};
     const StepSolveInfo solved =
         method_->advance(*current, h, *prepared, state);
     t = t_new;

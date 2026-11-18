@@ -28,9 +28,24 @@ struct NodeWeights {
   std::array<double, 3> weights{};
 };
 
+// The boundary loop of every boundary edge of `mesh` (indexed like
+// boundary_edges): the connected pieces of the boundary, which in a valid
+// mesh are the closed loops (they do not touch), numbered 0, 1, ... in the
+// order of their first edge.
+std::vector<std::size_t> boundary_loops(const mesh::Mesh &mesh);
+
+// The nearest point of a boundary: its weights, the boundary edge it is
+// on, and the squared distance to it.
+struct BoundaryPoint {
+  NodeWeights weights{};
+  std::size_t edge = 0;
+  double distance2 = 0.0;
+};
+
 class PointLocator {
 public:
-  // The mesh must be valid (mesh::validate) and outlive the locator.
+  // The mesh must be valid (mesh::validate), have a boundary edge, and
+  // outlive the locator.
   explicit PointLocator(const mesh::Mesh &mesh);
 
   // The weights of p in the triangle of lowest index that contains it
@@ -39,10 +54,18 @@ public:
   // two weights of the edge.
   std::optional<NodeWeights> in_triangle(geometry::Point p) const;
 
-  // The weights of the point of the mesh boundary nearest to p (on the
-  // boundary edge of lowest index among the nearest, clamped to its ends;
-  // an end gets weight 1 alone).
-  NodeWeights nearest_on_boundary(geometry::Point p) const;
+  // The point of the mesh boundary nearest to p (on the boundary edge of
+  // lowest index among the nearest, clamped to its ends; an end gets
+  // weight 1 alone). With `loop`, only the edges of that boundary loop
+  // (boundary_loops; it must exist) are considered.
+  BoundaryPoint
+  nearest_on_boundary(geometry::Point p,
+                      std::optional<std::size_t> loop = std::nullopt) const;
+
+  // The boundary loop of each boundary edge (boundary_loops) and their
+  // count.
+  const std::vector<std::size_t> &edge_loops() const { return edge_loops_; }
+  std::size_t loops() const { return loops_; }
 
 private:
   std::array<std::size_t, 2> cell_of(geometry::Point p) const;
@@ -54,6 +77,8 @@ private:
   double cell_width_ = 1.0, cell_height_ = 1.0;
   std::vector<std::vector<std::size_t>> triangles_; // per cell
   std::vector<std::vector<std::size_t>> edges_;     // per cell
+  std::vector<std::size_t> edge_loops_;             // per boundary edge
+  std::size_t loops_ = 0;
 };
 
 } // namespace pde2d::adapt::detail

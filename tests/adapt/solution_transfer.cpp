@@ -4,7 +4,9 @@
 // the average of its parent edge's ends (the old u_h at the chord
 // midpoint), also without parents (its nearest old boundary point);
 // velocities go the same way and Dirichlet nodes get the new problem's
-// data; bad input throws. The oracle evaluates the old u_h by brute force
+// data; in a thin annulus a new curve point takes its own wall's value,
+// not the nearer other wall's (through links, or by its own loop); bad
+// input throws. The oracle evaluates the old u_h by brute force
 // (every triangle, barycentric coordinates), not with the code under test.
 
 #include "solve/solve_support.hpp"
@@ -229,6 +231,7 @@ void reproduces_by_point_location() {
          "linear reproduced");
   check(moved.report.metrics.at("by_parents") == 0.0, "by point location");
   check(moved.report.metrics.at("located") +
+                moved.report.metrics.at("by_link") +
                 moved.report.metrics.at("nearest_boundary") ==
             static_cast<double>(new_mesh->nodes.size()),
         "every node accounted for");
@@ -338,6 +341,131 @@ void velocities_and_dirichlet() {
   check(!problem.dirichlet_nodes().empty(), "there are Dirichlet nodes");
 }
 
+// A thin annulus, radii 1 and 1.02, both walls in the one region "wall":
+// the inner circle (a hole, so clockwise) in 12 chords of 30 degrees, the
+// outer in 24 of 15 (their chords stay outside radius 1.02 cos 7.5 deg =
+// 1.011), with curve links. Each inner chord's triangle has the outer node
+// at its middle angle as vertex 0, so the chord is its refinement edge.
+mesh::Mesh thin_annulus() {
+  const geometry::CurveGeometry g({test::circle_loop({0, 0}, 1.02, "wall"),
+                                   test::circle_loop({0, 0}, 1.0, "wall")});
+  mesh::Mesh m;
+  m.region_names = {"wall"};
+  for (const auto &loop : g.loops())
+    m.chains.emplace_back(std::vector<geometry::Curve>{loop.curves[0].curve});
+  const auto add_loop = [&](std::size_t chain, std::size_t pieces) {
+    const std::size_t first = m.nodes.size();
+    const double length = m.chains[chain].length();
+    const auto s = [&](std::size_t k) {
+      return k == pieces ? length
+                         : length * static_cast<double>(k) /
+                               static_cast<double>(pieces);
+    };
+    for (std::size_t k = 0; k < pieces; ++k)
+      m.nodes.push_back(m.chains[chain].point_at(s(k)));
+    for (std::size_t k = 0; k < pieces; ++k)
+      m.boundary_edges.push_back(
+          {.nodes = {first + k, first + (k + 1) % pieces},
+           .region = 0,
+           .link =
+               mesh::CurveLink{.chain = chain, .s0 = s(k), .s1 = s(k + 1)}});
+  };
+  add_loop(0, 24); // outer: nodes 0..23, counterclockwise
+  add_loop(1, 12); // inner: nodes 24..35
+  // The outer node in the direction of p.
+  const auto outer_towards = [&](Point p) {
+    std::size_t best = 0;
+    for (std::size_t j = 1; j < 24; ++j)
+      if (dot(m.nodes[j], p) > dot(m.nodes[best], p))
+        best = j;
+    return best;
+  };
+  const auto add = [&](std::size_t a, std::size_t b, std::size_t c) {
+    // Counterclockwise, a first.
+    if (cross(m.nodes[b] - m.nodes[a], m.nodes[c] - m.nodes[a]) < 0)
+      std::swap(b, c);
+    m.triangles.push_back({{a, b, c}});
+  };
+  for (const auto &edge : m.boundary_edges) {
+    const auto [p, q] = edge.nodes;
+    if (p < 24) {
+      // An outer edge: with the inner node at the angle of its end on a
+      // multiple of 30 degrees (outer node e is at 15 e degrees, inner node
+      // 24 + k at -30 k).
+      const std::size_t e = p % 2 == 0 ? p : q;
+      add(p, q, 24 + (12 - e / 2) % 12);
+    } else {
+      // An inner chord: with the outer node at its middle.
+      add(outer_towards(m.nodes[p] + m.nodes[q]), p, q);
+    }
+  }
+  return m;
+}
+
+void thin_annulus_walls() {
+  mesh::Mesh annulus = thin_annulus();
+  mesh::validate(annulus);
+  // The inner chord from (1, 0) clockwise, and its triangle.
+  const std::size_t a = 24, b = 25;
+  std::size_t marked = annulus.triangles.size();
+  for (std::size_t t = 0; t < annulus.triangles.size(); ++t) {
+    const auto &v = annulus.triangles[t].nodes;
+    if (std::ranges::count(v, a) + std::ranges::count(v, b) == 2)
+      marked = t;
+  }
+  check(marked < annulus.triangles.size(), "the inner chord's triangle");
+  const auto old_mesh = std::make_shared<const mesh::Mesh>(annulus);
+  mesh::RefinementResult r = refine(
+      *old_mesh, std::make_shared<mesh::NewestVertexBisection>(), {marked});
+  check(r.mesh.nodes.size() == old_mesh->nodes.size() + 1, "one new node");
+  const std::size_t n = old_mesh->nodes.size();
+  const Point x = r.mesh.nodes[n];
+  near(std::hypot(x.x, x.y), 1.0, 1e-14, "the new node is on the inner circle");
+  // The premise: it is nearer the outer polygon (its node at the same
+  // angle, 0.02 away) than its own chord (1 - cos 15 deg = 0.034).
+  const Point chord_middle = midpoint(old_mesh->nodes[a], old_mesh->nodes[b]);
+  double to_outer = std::numeric_limits<double>::infinity();
+  for (std::size_t j = 0; j < 24; ++j)
+    to_outer = std::min(to_outer, distance(x, old_mesh->nodes[j]));
+  check(to_outer < 0.021 && distance(x, chord_middle) > 0.034,
+        "nearer the other wall than its own chord");
+
+  // u = 0 on the inner wall, 1 on the outer.
+  const auto values = [](const mesh::Mesh &m) {
+    solve::Solution s;
+    for (const Point &p : m.nodes)
+      s.values.push_back(std::hypot(p.x, p.y) > 1.01 ? 1.0 : 0.0);
+    return s;
+  };
+  const auto check_transfer = [&](std::shared_ptr<const mesh::Mesh> before,
+                                  std::shared_ptr<const mesh::Mesh> after,
+                                  bool linked) {
+    solve::Solution old = values(*before);
+    old.mesh = before;
+    const auto moved = transfer_solution(old, *natural_problem(after, "wall"));
+    check(moved.solution.values[n] == 0.0, "the inner wall's value");
+    for (std::size_t v = 0; v < n; ++v)
+      check(moved.solution.values[v] == old.values[v], "old nodes keep theirs");
+    const auto &m = moved.report.metrics;
+    check(m.at("by_parents") == 0.0, "no parents");
+    check(m.at("by_link") == (linked ? 37.0 : 0.0), "boundary nodes by link");
+    check(m.at("other_loop_nearer") == (linked ? 0.0 : 1.0),
+          "the nearest point overall was on the other wall");
+  };
+  const auto new_mesh = std::make_shared<const mesh::Mesh>(r.mesh);
+  check(!new_mesh->chains.empty() && new_mesh->boundary_edges[0].link,
+        "the refinement keeps the links");
+  check_transfer(old_mesh, new_mesh, true);
+  // Without links: by the inner loop.
+  const auto strip = [](mesh::Mesh m) {
+    m.chains.clear();
+    for (auto &edge : m.boundary_edges)
+      edge.link.reset();
+    return std::make_shared<const mesh::Mesh>(std::move(m));
+  };
+  check_transfer(strip(*old_mesh), strip(*new_mesh), false);
+}
+
 void rejects_bad_input() {
   const auto old_mesh = square();
   mesh::RefinementResult r =
@@ -396,6 +524,8 @@ int main() {
        curved_boundary},
       {"velocities like values; Dirichlet nodes from the new problem",
        velocities_and_dirichlet},
+      {"a thin annulus: a curve point keeps to its own wall",
+       thin_annulus_walls},
       {"bad input throws", rejects_bad_input},
   });
 }

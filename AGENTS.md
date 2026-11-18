@@ -340,9 +340,12 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   come from that log (every solve, `start()`'s too), never from
   `StepSolveInfo`, and are read with its messages in one snapshot (one
   lock), never under separate locks.
-- **`LinearSolveResult` grows at the end.** Its first members (values,
-  iterations, residual, threads) keep their order so that positional
-  initializations keep their meaning; add a new member after the last.
+- **Public result structs grow at the end.** A new member of a public
+  result struct (`LinearSolveResult`, `IntegrationResult`, and the
+  others) goes after the last one, so that positional initializations
+  keep their meaning: `LinearSolveResult` keeps values, iterations,
+  residual, threads first, `IntegrationResult` final, snapshots,
+  history, report (both tested positionally).
 - **Time methods use `right_hand_side()` as it is**: it already holds the
   whole lifting (load − A_FD U_D − B_FD U_D' − M2_FD U_D''). The static
   solver assembles with `max_time_order` 0, where it is load − A_FD U_D.
@@ -407,12 +410,19 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   (`src/adapt/solution_transfer.cpp`): interpolation through the parents
   when they are kept, else point location with the private
   `detail::PointLocator` (never `WorkingMesh::locate`, which can cycle:
-  issue #22); Dirichlet nodes from the new `MeshedProblem`. The
+  issue #22); Dirichlet nodes from the new `MeshedProblem`. Without
+  parents a boundary node takes its old boundary point through its curve
+  link, else on the old loop matched to its own (never the nearest point
+  of another wall); keep that when changing the transfer. The
   `AdaptiveIntegrator` integrates in pieces with `Integrator::integrate`
   (its `max_steps` and `keep_before_last_step`), never re-implementing
   the step times, and continues a piece on the same problem from its
   `final` so that a run without refinement equals one integrate() call
-  landing on the adaptation times.
+  landing on the adaptation times; an adaptation time near a snapshot
+  time is that time. `before_last_step` is a `FreeState` (free unknowns,
+  no boundary data evaluated), requested only for a piece that can end
+  in an adaptation; at the Dirichlet nodes u_tt is the boundary data's
+  acceleration at t, never a quotient that needs the rate at t − dt.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   adaptive time stepping, explicit time methods,
   handling pure Neumann problems, well-posedness

@@ -37,6 +37,13 @@ struct AdaptiveTimeTarget {
   // discarded and adapting stops; the run continues to t1 on the last
   // mesh.
   std::optional<std::size_t> max_nodes{};
+  // At most this many refinements (adaptation times that changed the mesh;
+  // at least 1). After the last one adapting stops: no more estimates, and
+  // the run continues to t1 on that mesh as one piece. Counted in
+  // refinements, not adaptation times: the schedule already fixes how
+  // often the run checks, while each refinement builds a new
+  // MeshedProblem and leaves a transfer error in the solution.
+  std::optional<std::size_t> max_refinements{};
 };
 
 // What happened at one adaptation time.
@@ -97,7 +104,8 @@ struct AdaptiveIntegrationResult {
   // adaptation_times, refinements, steps, nodes and triangles (of the
   // last mesh), max_nodes_used (the most nodes any piece integrated on,
   // the last mesh's since meshes only grow) and tolerance (resolved, when
-  // set); a message when the node budget stopped adapting.
+  // set); a message when the node budget or max_refinements stopped
+  // adapting.
   mesh::StageReport report{};
 };
 
@@ -113,23 +121,33 @@ struct AdaptiveIntegrationResult {
 //
 // The adaptation times follow the schedule: the piece ends at t_k +
 // interval (the integrator lands on it; a time within 1e-9 interval of t1
-// is t1) or after `steps` steps (Integrator::integrate's max_steps),
-// whichever comes first, and the run ends at t1, where it does not adapt.
+// is t1, and of a snapshot time that time, so a snapshot that coincides
+// with an adaptation time adds no step) or after `steps` steps
+// (Integrator::integrate's max_steps), whichever comes first, and the run
+// ends at t1, where it does not adapt.
 // Each adaptation time refines at most once, without integrating the
 // piece again: the mesh follows the solution one adaptation time behind,
 // and adapting more often follows it more closely.
 //
 // The estimate at an adaptation time is that of the solution there with
-// its time derivatives from the last step: time order 1 (or 0) u_t =
-// (u(t) - u(t - dt)) / dt; time order 2 u_t = the integrator's
-// velocities, u_tt = (u_t(t) - u_t(t - dt)) / dt, all at every node (the
-// Dirichlet nodes from the boundary data). The cycle's estimate is that of
+// its time derivatives from the last step, at every node: time order 1
+// (or 0) u_t = (u(t) - u(t - dt)) / dt (at the Dirichlet nodes from the
+// boundary data's values); time order 2 u_t = the integrator's
+// velocities, u_tt = (u_t(t) - u_t(t - dt)) / dt at the free nodes and
+// the boundary data's acceleration at t at the Dirichlet nodes (its rate
+// at t - dt may not exist: u = sqrt(t) at t0 = 0). The state before the
+// last step (IntegrationOutput::keep_before_last_step: the free unknowns,
+// so no boundary data is evaluated for it) is kept only for a piece that
+// can end in an adaptation; the boundary data above is evaluated only at
+// an adaptation time, so a run that never adapts evaluates nothing a
+// plain Integrator run would not. The cycle's estimate is that of
 // the first adaptation that declares estimates_error, which is then given
 // it. When the estimate is at most the tolerance nothing adapts;
 // otherwise every adaptation adapts in order. A new mesh with more nodes
 // than max_nodes is discarded and the run adapts no more (the mesh only
-// grows); the rest is one piece to t1. So a run always reaches t1 unless
-// something throws.
+// grows); after max_refinements refinements it adapts no more either; the
+// rest is one piece to t1. So a run always reaches t1 unless something
+// throws.
 //
 // The state passed on is the previous piece's final solution, on the
 // same problem when nothing changed (so the pieces continue the run
@@ -166,11 +184,14 @@ public:
   // (on the problem's mesh). Throws std::invalid_argument for a null
   // problem, times that are not finite or t1 <= t0, a schedule with
   // nothing set or a value that is not finite and positive (steps at
-  // least 1), a tolerance value or max_nodes that is not finite and
-  // positive, a tolerance when no adaptation estimates, a starting mesh
+  // least 1), a tolerance value, max_nodes or max_refinements that is not
+  // finite and positive, a tolerance when no adaptation estimates, a
+  // starting mesh
   // with more nodes than max_nodes, snapshot times not strictly
   // increasing within [t0, t1], and snapshot_every; throws
-  // std::runtime_error when an adaptation breaks its declarations; passes
+  // std::runtime_error when an adaptation breaks its declarations and
+  // when t + interval rounds to t (an interval too small at the current
+  // time); passes
   // on the exceptions of the integrator, the adaptations, the transfer
   // and the MeshedProblem constructor.
   [[nodiscard]] AdaptiveIntegrationResult

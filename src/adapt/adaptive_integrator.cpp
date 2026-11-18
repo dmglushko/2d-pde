@@ -17,9 +17,10 @@ namespace {
 
 constexpr const char *stage = "adaptive_integrator";
 
-// An adaptation time within this fraction of the interval of t1 is t1, so
-// that rounding in the sums t_k + interval never leaves a tiny last piece
-// (the Integrator's landing rule for its steps).
+// An adaptation time within this fraction of the interval of t1 is t1,
+// and one that close to a snapshot time is that time, so that rounding in
+// the sums t_k + interval never leaves a tiny piece or step (the
+// Integrator's landing rule for its steps).
 constexpr double landing_tolerance = 1e-9;
 
 void check_positive(const std::optional<double> &value, const char *name) {
@@ -42,6 +43,9 @@ void validate(const AdaptiveTimeTarget &target) {
   if (target.max_nodes && *target.max_nodes == 0)
     throw std::invalid_argument(
         std::format("{}: max_nodes must be at least 1", stage));
+  if (target.max_refinements && *target.max_refinements == 0)
+    throw std::invalid_argument(
+        std::format("{}: max_refinements must be at least 1", stage));
 }
 
 void validate(const solve::IntegrationOutput &output, double t0, double t1) {
@@ -72,29 +76,43 @@ double resolve(const ErrorTolerance &tolerance, double first_estimate) {
   return bound;
 }
 
-// The time derivatives at the end of a piece, at every node, from its last
-// step: u_t = (u(t) - u(t - dt)) / dt, or for time order 2 (velocities)
-// u_t = the velocities and u_tt = their difference quotient.
+// The time derivatives at the end of a piece, at every node. At the free
+// nodes from the last step: u_t = (u(t) - u(t - dt)) / dt, or for time
+// order 2 u_t = the velocities and u_tt = their difference quotient. At
+// the Dirichlet nodes from the boundary data: for time order 1 (or 0) the
+// quotient of its values at t and t - dt; for time order 2 u_t is the
+// velocity (its rate at t) and u_tt its acceleration at t, so that no rate
+// is evaluated at t - dt (u = sqrt(t) has none at t0 = 0).
 struct Derivatives {
   std::vector<double> u_t, u_tt;
 };
 
-Derivatives last_step_derivatives(const solve::Solution &end,
-                                  const solve::Solution &before) {
+Derivatives last_step_derivatives(const fem::MeshedProblem &problem,
+                                  const solve::Solution &end,
+                                  const solve::FreeState &before) {
   const double dt = end.time - before.time;
-  const auto quotient = [dt](const std::vector<double> &now,
-                             const std::vector<double> &then) {
-    std::vector<double> rate(now.size());
-    for (std::size_t i = 0; i < now.size(); ++i)
-      rate[i] = (now[i] - then[i]) / dt;
+  const auto &free_nodes = problem.free_nodes();
+  const auto &dirichlet = problem.dirichlet_nodes();
+  const auto quotient = [&](const std::vector<double> &now,
+                            const std::vector<double> &then) {
+    std::vector<double> rate(now.size(), 0.0);
+    for (std::size_t i = 0; i < free_nodes.size(); ++i)
+      rate[free_nodes[i]] = (now[free_nodes[i]] - then[i]) / dt;
     return rate;
   };
   Derivatives d;
   if (!end.velocities.empty()) {
     d.u_t = end.velocities;
     d.u_tt = quotient(end.velocities, before.velocities);
+    for (std::size_t k = 0; k < dirichlet.size(); ++k)
+      d.u_tt[dirichlet[k].node] = problem.dirichlet_acceleration(k, end.time);
   } else {
     d.u_t = quotient(end.values, before.values);
+    for (std::size_t k = 0; k < dirichlet.size(); ++k) {
+      const std::size_t node = dirichlet[k].node;
+      d.u_t[node] =
+          (end.values[node] - problem.dirichlet_value(k, before.time)) / dt;
+    }
   }
   return d;
 }
@@ -173,7 +191,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   std::size_t steps = 0, adaptation_times = 0, refinements = 0;
   std::size_t max_nodes_used = 0;
   bool adapting = true;
-  std::string budget_message;
+  std::string stop_message;
   // The state the next piece starts from: the caller's for the first.
   std::optional<solve::Solution> carried;
   const solve::Solution *state_in = initial;
@@ -186,15 +204,33 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     std::optional<std::size_t> max_steps;
     if (adapting) {
       if (target.every.interval) {
-        const double next = t + *target.every.interval;
-        if (next < t1 - landing_tolerance * *target.every.interval)
+        const double interval = *target.every.interval;
+        const double next = t + interval;
+        if (!(next > t))
+          throw std::runtime_error(std::format(
+              "{}: the adaptation interval {} is too small to change t = {} "
+              "in double precision",
+              stage, interval, t));
+        const double slack = landing_tolerance * interval;
+        if (next < t1 - slack) {
           end = next;
+          // A snapshot time this close is the adaptation time: the piece
+          // lands on it exactly, with no step of rounding size after it.
+          for (std::size_t s = next_snapshot;
+               s < times.size() && times[s] <= next + slack; ++s)
+            if (std::abs(times[s] - next) <= slack) {
+              end = times[s];
+              break;
+            }
+        }
       }
       max_steps = target.every.steps;
     }
-    solve::IntegrationOutput piece_output{.keep_step_history =
-                                              output.keep_step_history,
-                                          .keep_before_last_step = adapting};
+    // The state before the last step is needed only when the piece can end
+    // in an adaptation: before t1, or after max_steps steps.
+    solve::IntegrationOutput piece_output{
+        .keep_step_history = output.keep_step_history,
+        .keep_before_last_step = adapting && (end < t1 || max_steps)};
     for (std::size_t s = next_snapshot; s < times.size() && times[s] <= end;
          ++s)
       piece_output.snapshot_times.push_back(times[s]);
@@ -226,7 +262,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     AdaptationPoint point{.time = t, .steps = steps};
     const solve::Solution &solution = run.final;
     const Derivatives derivatives =
-        last_step_derivatives(solution, *run.before_last_step);
+        last_step_derivatives(*problem, solution, *run.before_last_step);
     const SolvedState state{
         .problem = *problem,
         .solution = solution,
@@ -268,7 +304,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
       } else if (target.max_nodes && next->nodes.size() > *target.max_nodes) {
         point.outcome = AdaptationOutcome::node_budget;
         adapting = false;
-        budget_message = std::format(
+        stop_message = std::format(
             "node budget: at t = {} the adapted mesh would have {} nodes, "
             "more than max_nodes = {}; it was discarded, adapting stopped, "
             "and the run continued to t1 on the mesh of {} nodes",
@@ -285,6 +321,15 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
         problem = std::move(next_problem);
         point.outcome = AdaptationOutcome::refined;
         ++refinements;
+        if (target.max_refinements && refinements >= *target.max_refinements) {
+          adapting = false;
+          stop_message = std::format(
+              "refinement limit: refinement {} of max_refinements = {} was "
+              "made at t = {}; adapting stopped, and the run continued to t1 "
+              "on the mesh of {} nodes",
+              refinements, *target.max_refinements, t,
+              problem->mesh()->nodes.size());
+        }
       }
     }
     carried = moved ? std::move(*moved) : std::move(run.final);
@@ -307,8 +352,8 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   m["max_nodes_used"] = static_cast<double>(max_nodes_used);
   if (tolerance)
     m["tolerance"] = *tolerance;
-  if (!budget_message.empty())
-    report.messages.push_back(std::move(budget_message));
+  if (!stop_message.empty())
+    report.messages.push_back(std::move(stop_message));
   report.time = std::chrono::steady_clock::now() - start;
   return result;
 }

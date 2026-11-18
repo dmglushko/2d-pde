@@ -711,11 +711,21 @@ void stops_after_max_steps() {
           "the same state as the long run after 5 steps");
     check(part.before_last_step && part.before_last_step->time == 4.0 / 16,
           "the state before the last step");
-    check(part.before_last_step->values == whole.snapshots[3].values,
-          "the state after 4 steps");
-    check(part.before_last_step->velocities.size() ==
-              whole.snapshots[3].velocities.size(),
-          "velocities for time order 2 only");
+    // In the free unknowns: no boundary data is evaluated for it.
+    const auto &free_nodes = m->free_nodes();
+    const Solution &after_4 = whole.snapshots[3];
+    const FreeState &before = *part.before_last_step;
+    check(before.values.size() == free_nodes.size() &&
+              before.velocities.size() ==
+                  (after_4.velocities.empty() ? 0 : free_nodes.size()),
+          "free values, and free velocities for time order 2 only");
+    for (std::size_t k = 0; k < free_nodes.size(); ++k) {
+      check(before.values[k] == after_4.values[free_nodes[k]],
+            "the values after 4 steps");
+      if (!before.velocities.empty())
+        check(before.velocities[k] == after_4.velocities[free_nodes[k]],
+              "the velocities after 4 steps");
+    }
     // Reaching t1 first: max_steps does not matter; before_last_step is
     // the start of the step that landed on t1.
     const auto reached =
@@ -801,10 +811,31 @@ void checks_input() {
       "time method is null");
 }
 
+// The members that existed before before_last_step keep their order: a
+// positional initialization written then means the same (review finding).
+void integration_result_keeps_its_order() {
+  Solution final{.time = 1.0, .values = {2.0}};
+  std::vector<Solution> snapshots(2);
+  std::vector<StepRecord> history(3);
+  pde2d::mesh::StageReport report;
+  report.stage = "integrator";
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+  const IntegrationResult r{final, snapshots, history, report};
+#pragma GCC diagnostic pop
+  check(r.final.time == 1.0 && r.final.values == std::vector<double>{2.0} &&
+            r.snapshots.size() == 2 && r.history.size() == 3 &&
+            r.report.stage == "integrator",
+        "final, snapshots, history, report");
+  check(!r.before_last_step, "the new member keeps its default");
+}
+
 } // namespace
 
 int main() {
   return pde2d::test::run({
+      {"IntegrationResult keeps its positional order",
+       integration_result_keeps_its_order},
       {"implicit Euler converges at first order in time",
        [] {
          time_rate(std::make_shared<ImplicitEuler>(), heat_problem(),

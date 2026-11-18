@@ -48,7 +48,39 @@ SegmentPoint on_segment(const mesh::Mesh &mesh, std::size_t u, std::size_t v,
 
 } // namespace
 
+std::vector<std::size_t> boundary_loops(const mesh::Mesh &mesh) {
+  // Union-find over the nodes: the two ends of a boundary edge are in one
+  // loop.
+  std::vector<std::size_t> parent(mesh.nodes.size());
+  for (std::size_t v = 0; v < parent.size(); ++v)
+    parent[v] = v;
+  const auto root = [&](std::size_t v) {
+    while (parent[v] != v)
+      v = parent[v] = parent[parent[v]];
+    return v;
+  };
+  for (const auto &edge : mesh.boundary_edges) {
+    const std::size_t a = root(edge.nodes[0]), b = root(edge.nodes[1]);
+    if (a != b)
+      parent[std::max(a, b)] = std::min(a, b);
+  }
+  constexpr auto none = std::numeric_limits<std::size_t>::max();
+  std::vector<std::size_t> number(mesh.nodes.size(), none);
+  std::vector<std::size_t> loops(mesh.boundary_edges.size());
+  std::size_t count = 0;
+  for (std::size_t e = 0; e < loops.size(); ++e) {
+    std::size_t &n = number[root(mesh.boundary_edges[e].nodes[0])];
+    if (n == none)
+      n = count++;
+    loops[e] = n;
+  }
+  return loops;
+}
+
 PointLocator::PointLocator(const mesh::Mesh &mesh) : mesh_(mesh) {
+  edge_loops_ = boundary_loops(mesh);
+  for (const std::size_t loop : edge_loops_)
+    loops_ = std::max(loops_, loop + 1);
   box_ = geometry::bounding_box(mesh.nodes);
   const double w = geometry::width(box_), h = geometry::height(box_);
   const std::size_t n = std::max<std::size_t>(mesh.triangles.size(), 1);
@@ -143,7 +175,9 @@ std::optional<NodeWeights> PointLocator::in_triangle(Point p) const {
   return std::nullopt;
 }
 
-NodeWeights PointLocator::nearest_on_boundary(Point p) const {
+BoundaryPoint
+PointLocator::nearest_on_boundary(Point p,
+                                  std::optional<std::size_t> loop) const {
   const auto cell = cell_of(p);
   const auto ci = static_cast<std::ptrdiff_t>(cell[0]),
              cj = static_cast<std::ptrdiff_t>(cell[1]);
@@ -158,6 +192,8 @@ NodeWeights PointLocator::nearest_on_boundary(Point p) const {
       return;
     for (const std::size_t e : edges_[index(static_cast<std::size_t>(i),
                                             static_cast<std::size_t>(j))]) {
+      if (loop && edge_loops_[e] != *loop)
+        continue;
       const auto &v = mesh_.boundary_edges[e].nodes;
       const SegmentPoint q = on_segment(mesh_, v[0], v[1], p);
       if (q.distance2 < best || (q.distance2 == best && e < best_edge)) {
@@ -189,7 +225,7 @@ NodeWeights PointLocator::nearest_on_boundary(Point p) const {
     if (best < reach * reach)
       break;
   }
-  return best_weights;
+  return {.weights = best_weights, .edge = best_edge, .distance2 = best};
 }
 
 } // namespace pde2d::adapt::detail
