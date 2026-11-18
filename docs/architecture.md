@@ -488,7 +488,7 @@ sequenceDiagram
     Note over M: Newmark: throws if M2 is zero now, else checks requirements, prepare(M2), solve for U'' at t0
     Note over M: ImplicitEuler at order 0: state = solution of A(t0) U = b(t0)
     loop until t reaches t1
-        I->>C: next_step(t)
+        I->>C: next_step(t) (an error-controlling controller: only for the first step, else the last decision's dt)
         C-->>I: dt
         Note over I: shorten the step to land on a snapshot time or t1
         I->>A: assemble(meshed, t + fraction * dt, previous if any)
@@ -500,6 +500,7 @@ sequenceDiagram
         M->>L: solve(right-hand side)
         L-->>M: LinearSolveResult
         M-->>I: new state, iterations and residual
+        Note over I,C: an error-controlling controller only: M.local_error(before, after, dt, earlier steps), then C.judge: rejected, the same step again from its start with a smaller dt; accepted, the next dt
         Note over I: step record into the summary (kept if keep_step_history)
         Note over I: snapshot if asked: build_solution(meshed, U, t)
     end
@@ -539,6 +540,7 @@ flowchart LR
         LSI --- CG[ConjugateGradient]
         LSI --- LDLT[SimplicialLdlt]
         SCI([StepController]) --- FS[FixedStep]
+        SCI --- AS[AdaptiveStep]
     end
     subgraph adapt [pde2d_adapt]
         MKS([MarkingStrategy]) --- MXM[MaximumMarking]
@@ -605,8 +607,8 @@ module: it is a program over the public headers, described in
 | `src/io/` | implementation; libxml2 only in `svg_import.cpp`; private headers `svg_path.hpp` (path data parser), `text.hpp` (files and exact numbers) |
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `equation_text.hpp` (`parse_equation`, `parse_condition`, `equation_text`, `condition_text`), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`AssemblerOptions`, `Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`), `element_blocks.hpp` (assembly's pure element block functions) and `threads.hpp` (checking and resolving `AssemblerOptions::threads`; includes `<omp.h>`); `assembler.cpp` holds the driver (with the OpenMP loop over a colour), patterns, colouring and `detail::AssemblyInternals` |
-| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `FreeState`, `StepAnchor`, `StepRecord`, `IntegrationResult`), `supernodal_cholesky.hpp` (`SupernodalCholeskyOptions`, `SupernodalCholesky`), `multifrontal_lu.hpp` (`MultifrontalLuOptions`, `MultifrontalLu`) |
-| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `threads.hpp` (checking and resolving a `threads` option; includes `<omp.h>`), `eigen_threads.hpp` (`detail::EigenThreads`, the scope every Eigen computation runs in), `factorization_threads.hpp` (`detail::FactorizationThreads`, the scope every SuiteSparse call runs in: a process-wide lock, OpenBLAS's count and the calling thread's OpenMP count; the OpenBLAS calls are in `factorization_threads.cpp`), `suitesparse.hpp` (what the two SuiteSparse solvers share: their options check, CHOLMOD's view of a `CsrMatrix` as the compressed columns of its transpose, the checks of a result; includes `cholmod.h`), `pivot_ratio.hpp` (`detail::small_pivot_ratio` = 1e-10 and the warning below it, shared by `SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; no heavy dependency) and `vectors.hpp` (norms, the residual measures: relative residual and backward error, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the Eigen solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`), SuiteSparse only in `suitesparse.hpp`, `supernodal_cholesky.cpp` and `multifrontal_lu.cpp`; `time_methods.cpp` holds the three time methods |
+| `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`, `ErrorEstimateDeclaration`, `PreviousStep`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp` (`StepController`, `TakenStep`, `StepDecision`), `fixed_step.hpp`, `adaptive_step.hpp` (`AdaptiveStepOptions`, `AdaptiveStep`), `integrator.hpp` (`Integrator`, `IntegrationOutput`, `FreeState`, `StepAnchor`, `StepRecord`, `IntegrationResult`), `supernodal_cholesky.hpp` (`SupernodalCholeskyOptions`, `SupernodalCholesky`), `multifrontal_lu.hpp` (`MultifrontalLuOptions`, `MultifrontalLu`) |
+| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `threads.hpp` (checking and resolving a `threads` option; includes `<omp.h>`), `eigen_threads.hpp` (`detail::EigenThreads`, the scope every Eigen computation runs in), `factorization_threads.hpp` (`detail::FactorizationThreads`, the scope every SuiteSparse call runs in: a process-wide lock, OpenBLAS's count and the calling thread's OpenMP count; the OpenBLAS calls are in `factorization_threads.cpp`), `suitesparse.hpp` (what the two SuiteSparse solvers share: their options check, CHOLMOD's view of a `CsrMatrix` as the compressed columns of its transpose, the checks of a result; includes `cholmod.h`), `pivot_ratio.hpp` (`detail::small_pivot_ratio` = 1e-10 and the warning below it, shared by `SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; no heavy dependency) and `vectors.hpp` (norms, the residual measures: relative residual and backward error, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the Eigen solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`), SuiteSparse only in `suitesparse.hpp`, `supernodal_cholesky.cpp` and `multifrontal_lu.cpp`; `time_methods.cpp` holds the three time methods with their local error estimates, `fixed_step.cpp` the `StepController` defaults and `FixedStep`, `adaptive_step.cpp` the error-controlled step |
 | `app/` | the graphical interface (`pde2d_app`): `src/` (case format with its migrations and generated schema, the geometry sources with the drawing and the boundary locator, the mesh and solve catalogs, the stage cache, runs in chunks per client under two locks, comparisons and probes, exporters with a stored zip writer, problem presets, `--set` and `--sweep`, local HTTP server), `web/` (the page, plain JS modules, with the geometry editor on the picture), `examples/` (cases), `Start pde2d app.cmd` and `start-app.sh` (double-click launcher), `tests/` (`browser/`: the page in headless Chrome; `example_checks.json`: the examples' expected figures), `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md`, its design `docs/app.md` and its decisions `docs/app-decisions.md` |
 | `include/pde2d/adapt/` | `error_estimator.hpp` (`ErrorEstimator`, `ErrorEstimate`, `TimeDerivatives`), `residual_estimator.hpp` (`ResidualEstimatorOptions`), `kelly_estimator.hpp` (`KellyEstimatorOptions`), `recovery_estimator.hpp` (`RecoveryEstimatorOptions`, `RecoveryNorm`), `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `adaptation.hpp` (`Adaptation`, `AdaptationCapabilities`, `AdaptationResult`, `SolvedState`), `mesh_refinement.hpp` (`MeshRefinement`), `adaptive_static_solver.hpp` (`AdaptiveStaticSolver`, `AdaptiveTarget`, `ErrorTolerance`, `StopReason`, `AdaptiveCycle`, `AdaptiveStaticResult`), `solution_transfer.hpp` (`transfer_solution`, `SolutionTransfer`), `adaptive_integrator.hpp` (`AdaptiveIntegrator`, `AdaptiveIntegratorOptions`, `AdaptationSchedule`, `AdaptiveTimeTarget`, `AdaptationOutcome`, `AdaptationPoint`, `IntegrationPiece`, `AdaptiveIntegrationResult`); refinement of marked triangles is `mesh::Remesher::refine` |
 | `src/adapt/` | `error_estimator.cpp` (the shared checks of `estimate`), `residual_estimators.cpp` (the residual terms, shared by the residual and Kelly estimators), `recovery_estimator.cpp`, `marking.cpp` (the shared checks and the four strategies), `mesh_refinement.cpp`, `adaptive_static_solver.cpp`, `solution_transfer.cpp`, `adaptive_integrator.cpp`; private headers `point_location.hpp` (`detail::PointLocator`: a bucket grid over a mesh's triangles and boundary edges, exact containment, nearest boundary point; for the transfer without parents) and `estimator_geometry.hpp` (per-triangle area, diameter and gradient of u_h, interior edges with their two triangles, the triangle of each boundary edge, checked coefficient values, the check of a quadrature degree option) |
@@ -1680,6 +1682,28 @@ holds the whole lifting.
 | `ImplicitMidpoint` | 1, 2 | `nothing` | t + dt/2 | 2M₂/dt² + B/dt + A/2 | b + M₂(2U₀/dt² + 2V₀/dt) + (B/dt − A/2) U₀; then V₁ = 2(U₁ − U₀)/dt − V₀ |
 | `Newmark` (β = 1/4, γ = 1/2) | 2 | `whole_problem` | t + dt | M₂/(β dt²) + γ B/(β dt) + A | b + M₂(U₀/(β dt²) + V₀/(β dt) + (1/(2β) − 1) W₀) + B(γ U₀/(β dt) + (γ/β − 1) V₀ + dt (γ/(2β) − 1) W₀) |
 
+**Local error estimates** (for an error-controlling step controller,
+decided 2026-11-18). A method declares `error_estimate(time_order)`
+(`std::optional<ErrorEstimateDeclaration{order, previous_steps}>`: its
+order p and how many accepted steps before the current one it reads) and
+computes `local_error(before, after, dt, previous)` (one entry per free
+unknown) from states it already has, with no solve:
+
+| Method | Orders | p | Earlier steps | Estimate of the step's local error in U |
+| --- | --- | --- | --- | --- |
+| `ImplicitEuler` | 1 | 1 | 1 | dt²/2 u″, u″ = 2(d₁ − d₀)/(dt + dt₋₁), dᵢ the quotients of this step and the one before: dt²(d₁ − d₀)/(dt + dt₋₁) |
+| `ImplicitEuler` | 2 | 1 | 0 | dt/2 (V₁ − V₀) |
+| `ImplicitMidpoint` | 1, 2 | 2 | 2 | dt³/12 u‴ (the trapezoidal rule's term), u‴ = 6 U[t₋₂, t₋₁, t₀, t₁], the third divided difference of the values at the ends of the last three steps: dt³/2 U[…] |
+| `Newmark` | 2 | 2 | 0 | Zienkiewicz–Xie (1991): dt²(β − 1/6)(W₁ − W₀) = dt²/12 (W₁ − W₀) |
+
+`ImplicitEuler` declares none at time order 0 (no time error). A step with
+fewer earlier steps than declared (the first steps of a run, of a piece
+after a transfer) has no estimate. An estimate is made from values the
+method computed: a step long enough to jump over a fast change of the
+data is not seen as wrong when the method did not sample it (the midpoint
+rule samples the load only at the middle of the step), so a run with
+fronts in its data needs `max_dt` (`tests/solve/adaptive_step.cpp`).
+
 A zero operator adds nothing, so one set of weights serves every order of
 a method: at time order 1 the M₂ terms are absent, at 0 (Euler only) also
 the B terms, leaving A U₁ = b(t₁). At time order 2 Euler and midpoint step
@@ -1696,8 +1720,52 @@ throws `std::runtime_error` naming the cause and
 `ImplicitMidpoint` and `ImplicitEuler`, which need no acceleration (no
 fallback).
 
-**Step control** (`step_controller.hpp`, `fixed_step.hpp`).
-`StepController::next_step(t)`; `FixedStep({.dt = ...})`.
+**Step control** (`step_controller.hpp`, `fixed_step.hpp`,
+`adaptive_step.hpp`). `StepController::next_step(t)`,
+`controls_error()` (default false) and `judge(TakenStep) -> StepDecision`
+(the interface extended for the error-controlled step, decided
+2026-11-17). A controller is const and stateless; what a run remembers
+is in the `Integrator`'s loop and, across runs, in `StepAnchor`. Two
+kinds, told apart only by `controls_error()`:
+
+- `FixedStep({.dt = ...})` (and any controller that does not control the
+  error) is asked `next_step(t)` before every step; `judge` is never
+  called, every step is accepted, and the loop does exactly what it did
+  before the extension (no copy of the state, no history).
+- `AdaptiveStep(AdaptiveStepOptions{.initial_dt, .atol = 1e-6, .rtol =
+  1e-3, .safety = 0.9, .min_factor = 0.2, .max_factor = 5, .min_keep_factor
+  = 0.9, .max_keep_factor = 1.5, .min_dt = 0, .max_dt = ∞})` gives
+  `initial_dt` as the first step of a run that carries no next dt, and
+  judges every step: the error norm is the root mean square of eᵢ /
+  (atol + rtol·max(|uᵢ before|, |uᵢ after|)) (`error_norm`); above 1 the
+  step is rejected and taken again with length·max(min_factor,
+  safety·err^(−1/(p+1))) (below `min_dt`: `std::runtime_error`), else
+  accepted with the proposal length·safety·err^(−1/(p+1)), limited to
+  [min_factor·dt, max_factor·dt] (dt the controller's step, not the
+  shorter length of a landing step, so a landing does not shrink the next
+  step) and to [min_dt, max_dt]; a proposal within [0.9 dt, 1.5 dt] keeps
+  dt, so the step matrix is not prepared again. A step without an
+  estimate is accepted with dt kept. Options are checked in the
+  constructor (`std::invalid_argument`). The error per step is
+  controlled, so the global error behaves like tol^(p/(p+1)).
+
+Measured (`tests/solve/adaptive_step.cpp`, u = (1 + x + 2y) g(t) on a
+4 × 4 square, so only the time error remains; the error is the largest
+nodal error at t1/4, t1/2, 3t1/4 and t1; `max_dt` = t1/20; against the
+largest fixed step t1/(4m) at least as accurate):
+
+| Problem, method | Adaptive: error, steps (rejected), prepares | Fixed: dt, error, steps, prepares |
+| --- | --- | --- |
+| heat, front g = tanh(40(t − ½)), midpoint, rtol 1e-4 | 0.0025, 93 (19), 40 | 1/264, 0.0023, 264, 1 |
+| heat, the same front, implicit Euler, rtol 1e-3 | 0.049, 138 (18), 39 | 1/860, 0.047, 860, 1 |
+| wave, g = cos 2πt + ½ tanh(20(t − 1)), Newmark, rtol 1e-4 | 0.021, 187 (45), 71 | 1/84, 0.019, 168, 1 |
+| wave, the same with tanh(400(t − 1)), Newmark, rtol 1e-4 | 0.013, 219 (60), 96 | 1/518, 0.0066, 1036, 1 |
+
+The adaptive step pays where the solution has a fast phase; on a smooth
+oscillation it takes about as many steps as a fixed one (a wave's phase
+error grows over the run, which a per-step tolerance does not see), and
+it prepares the linear solver far more often (each change of dt, and
+twice for each landing that shortens a step).
 
 **Integrator** (`integrator.hpp`). `Integrator(method, step_controller,
 linear_solver, AssemblerOptions = {})` (it makes its assembler with these
@@ -1743,13 +1811,30 @@ its declarations.
   step matrix is symmetric when every operator with a non-zero weight is
   always symmetric or always zero, else when `is_symmetric` holds for
   the step matrix about to be prepared.
+- With an error-controlling controller the method must declare an error
+  estimate at the time order (`std::invalid_argument` naming the method,
+  before anything is assembled). Each step's start is kept; after
+  `advance` the method's `local_error` (when the run has the earlier
+  steps it reads) goes to `judge` in a `TakenStep{t, dt, length, order,
+  values_before, values_after, local_error}`. A rejected step is recorded
+  (`accepted = false`), the state and the anchor go back to the step's
+  start, and the step is taken again with the decision's smaller dt (a
+  rejection that does not shrink throws `std::runtime_error`); an accepted
+  one gives the next dt and joins the last accepted steps the estimate
+  reads. `max_steps`, `snapshot_every` and `keep_before_last_step` count
+  accepted steps. The anchor carries `next_dt` and `previous_steps` (the
+  last accepted steps, values in the free unknowns and lengths), so a run
+  continued with its anchor equals one long run, rejections included, bit
+  for bit; they are empty for a controller that does not control the
+  error, and checked (sizes, finite) only when used.
 - Each step's `StepRecord{t, dt, accepted, linear_iterations, residual,
-  time}` updates a running summary and is kept only with
+  time, error_norm}` updates a running summary and is kept only with
   `keep_step_history`; snapshots are taken at `snapshot_times` (strictly
   increasing in [t0, t1]; t0 keeps the start) and every `snapshot_every`
   steps, once per step. The summary becomes the report "integrator"
-  (t0, t1, time_order, steps, rejected_steps, min_dt, max_dt,
-  linear_iterations, max_linear_iterations, max_residual, assemblies,
+  (t0, t1, time_order, steps (accepted), rejected_steps, min_dt and
+  max_dt (accepted steps), linear_iterations (every step taken),
+  max_linear_iterations, max_residual, assemblies,
   prepares, snapshots, assembly_threads, linear_threads,
   max_backward_error, min_pivot_ratio: the worst of every solve of the
   call, `start()`'s included, from the logging wrapper, not from
@@ -2221,6 +2306,17 @@ flowchart LR
   transfer error). After the last allowed one adapting stops and the rest
   is one piece to t1, with a message in the report like the node
   budget's.
+- **Adaptive time steps**: with an error-controlling step controller
+  (`AdaptiveStep`) the pieces on one problem continue its dt and the
+  earlier steps its estimate reads through the anchor (below), so a run
+  that never refines equals one `integrate()` call, rejections included;
+  "every n steps" counts accepted steps. After a transfer the next piece
+  gets an anchor at t with only `next_dt` (the dt the controller proposed
+  on the old mesh; a new stretch, no earlier steps, which are on the old
+  mesh), so its first steps (one for implicit Euler at time order 1, two
+  for the midpoint method) have no estimate and keep that dt. The damping
+  method must declare an error estimate too (`std::invalid_argument`
+  before the first step). The report adds `rejected_steps`.
 - **State**: the piece's `final` and its `IntegrationResult::anchor`,
   on the same problem when nothing changed (so pieces continue the run
   exactly: the step times are those of one `integrate()` that lands on
@@ -2272,7 +2368,7 @@ adaptation, damping}` and each `AdaptationPoint{time, steps,
 estimate, outcome, reports}` (`AdaptationOutcome`: `refined`,
 `tolerance_met`, `nothing_changed`, `node_budget`; `to_string`). Report
 "adaptive_integrator": metrics `t0`, `t1`, `pieces`, `adaptation_times`,
-`refinements`, `steps`, `damping_steps` (included in `steps`), `nodes`, `triangles`, `max_nodes_used`,
+`refinements`, `steps`, `damping_steps` (included in `steps`), `rejected_steps`, `nodes`, `triangles`, `max_nodes_used`,
 `tolerance`; a message when the budget or `max_refinements` stopped
 adapting. `AdaptiveTimeTarget{every, tolerance, max_nodes,
 max_refinements}`.

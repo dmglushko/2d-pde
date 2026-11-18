@@ -47,6 +47,18 @@ public:
   double evaluation_fraction() const override { return 0.5; }
   StepMatrixWeights step_matrix_weights(double dt) const override;
   StartNeeds start_needs(int) const override { return StartNeeds::nothing; }
+  // The local error estimate, order p = 2, at time orders 1 and 2: the
+  // error of a step is dt^3 / 12 u''' (that of the trapezoidal rule, equal
+  // to the midpoint rule's for a linear problem with constant matrices),
+  // with u''' = 6 U[t_-2, t_-1, t0, t1], the third divided difference of
+  // the values at the ends of this step and the two before it (Gresho and
+  // Sani, 3.16.4, estimate the same term with a predictor):
+  // e = dt^3 / 2 U[t_-2, t_-1, t0, t1] (two earlier steps).
+  std::optional<ErrorEstimateDeclaration>
+  error_estimate(int time_order) const override;
+  std::vector<double>
+  local_error(const TimeState &before, const TimeState &after, double dt,
+              std::span<const PreviousStep> previous) const override;
   StepSolveInfo advance(const fem::AssembledProblem &problem, double dt,
                         const PreparedLinearSolver &solver,
                         TimeState &state) const override;

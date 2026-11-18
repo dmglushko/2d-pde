@@ -222,6 +222,18 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
           "method that does, such as implicit_euler",
           stage, method.name(), damping_method.name(), time_order));
   }
+  // An error-controlling step controller judges the damping steps too, so
+  // the damping method must estimate its error (before the first step,
+  // not at the first transfer).
+  if (damping_ && integrator_.step_controller()->controls_error()) {
+    const int time_order = fem::Assembler().time_order(*problem);
+    if (!options_.damping_method->error_estimate(time_order))
+      throw std::invalid_argument(std::format(
+          "{}: the damping method {} declares no local error estimate at "
+          "time order {}, which the step controller {} needs",
+          stage, options_.damping_method->name(), time_order,
+          integrator_.step_controller()->name()));
+  }
   if (target.max_nodes && problem->mesh()->nodes.size() > *target.max_nodes)
     throw std::invalid_argument(std::format(
         "{}: the starting mesh has {} nodes, more than max_nodes = {}", stage,
@@ -233,6 +245,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   const auto &times = output.snapshot_times;
   std::size_t next_snapshot = 0; // into times
   std::size_t steps = 0, adaptation_times = 0, refinements = 0;
+  std::size_t rejected_steps = 0;
   std::size_t damping_steps = 0;
   std::size_t max_nodes_used = 0;
   bool adapting = true;
@@ -243,8 +256,9 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   // The step anchor the next piece continues: set after every piece whose
   // successor runs on the same problem (damping steps that ended before
   // the adaptation time, an adaptation time that changed nothing), so the
-  // steps keep the times of one uninterrupted run; never after a transfer
-  // to a new mesh, where a new stretch starts.
+  // steps keep the times of one uninterrupted run (and an error-controlled
+  // run its dt and the earlier steps its estimate reads); after a transfer
+  // to a new mesh a new stretch starts, carrying only the proposed dt.
   std::optional<solve::StepAnchor> anchor;
   double t = t0;
   // The stretch to the next adaptation time (or to t1 once adapting has
@@ -318,6 +332,8 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     anchor.reset();
     const auto taken = static_cast<std::size_t>(run.report.metrics.at("steps"));
     steps += taken;
+    rejected_steps +=
+        static_cast<std::size_t>(run.report.metrics.at("rejected_steps"));
     stretch_steps += taken;
     if (damping) {
       damping_steps += taken;
@@ -447,6 +463,13 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     }
     if (!moved)
       anchor = run.anchor; // the same problem: the same stretch of steps
+    else
+      // A new mesh: a new stretch of steps, without the earlier steps (they
+      // are on the old mesh), but with the dt an error-controlling step
+      // controller proposed (0 for one that does not control the error,
+      // which then asks next_step as without an anchor).
+      anchor = solve::StepAnchor{
+          .time = t, .dt = 0.0, .steps = 0, .next_dt = run.anchor.next_dt};
     carried = moved ? std::move(*moved) : std::move(run.final);
     state_in = &*carried;
     piece.adaptation = std::move(point);
@@ -463,6 +486,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   m["refinements"] = static_cast<double>(refinements);
   m["steps"] = static_cast<double>(steps);
   m["damping_steps"] = static_cast<double>(damping_steps);
+  m["rejected_steps"] = static_cast<double>(rejected_steps);
   m["nodes"] = static_cast<double>(problem->mesh()->nodes.size());
   m["triangles"] = static_cast<double>(problem->mesh()->triangles.size());
   m["max_nodes_used"] = static_cast<double>(max_nodes_used);

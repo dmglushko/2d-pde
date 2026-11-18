@@ -62,15 +62,35 @@ struct FreeState {
 // it takes the step times one run would have taken: integrate() stopped
 // by max_steps and continued from its final state with its anchor equals
 // one longer run, also when the step controller's answer depends on t.
+//
+// For an error-controlling step controller (StepController::controls_error)
+// it also carries what the controller and the method's error estimate
+// remember: the dt the last decision proposed and the last accepted steps
+// (members added last, so that positional initializations keep their
+// meaning). A run given the anchor takes its first step with next_dt
+// instead of next_step(t0), and its first steps have their error estimate
+// (the midpoint method reads two earlier steps), so a run continued with
+// its anchor equals one long run with the same controller. A controller
+// that does not control the error ignores both (they stay empty).
 struct StepAnchor {
   double time = 0.0;
   // The nominal step of the stretch (the step controller's); 0 before any
   // step.
   double dt = 0.0;
   std::size_t steps = 0;
+  // The step controller's dt for the next step (StepDecision::next_dt);
+  // 0: none, the next run asks next_step(t0).
+  double next_dt = 0.0;
+  // The last accepted steps, oldest first, as many as the method's error
+  // estimate reads (ErrorEstimateDeclaration::previous_steps) or fewer;
+  // the last one ends at time + steps dt. In the free unknowns of the
+  // run's problem: a run on another problem cannot use them.
+  std::vector<PreviousStep> previous_steps{};
 };
 
-// The record of one step.
+// The record of one step. A step an error-controlling step controller
+// rejected has a record too (accepted false), before the record of the
+// same step taken again with a smaller dt.
 struct StepRecord {
   double t = 0.0;  // the time at the end of the step
   double dt = 0.0; // its length
@@ -78,6 +98,11 @@ struct StepRecord {
   std::size_t linear_iterations = 0;
   double residual = 0.0;
   std::chrono::duration<double> time{}; // the time taken
+  // The error norm the step controller judged the step by
+  // (StepDecision::error_norm); none for a controller that does not
+  // control the error, and for a step the method could not estimate yet.
+  // (Added last: positional initializations keep their meaning.)
+  std::optional<double> error_norm{};
 };
 
 struct IntegrationResult {
@@ -91,8 +116,11 @@ struct IntegrationResult {
   std::vector<StepRecord> history{};
   // Stage "integrator", the summary of the step records: the time taken
   // and the metrics t0, t1 (as asked), t_end (where the run ended: t1, or
-  // earlier after max_steps), time_order, steps, rejected_steps, min_dt,
-  // max_dt, linear_iterations (the sum), max_linear_iterations,
+  // earlier after max_steps), time_order, steps (the accepted steps),
+  // rejected_steps (the steps an error-controlling step controller
+  // rejected and the run took again), min_dt and max_dt (over the
+  // accepted steps), linear_iterations (the sum over every step taken,
+  // rejected ones included), max_linear_iterations,
   // max_residual, assemblies, prepares (how often the linear solver was
   // prepared for a step matrix; not counting start(), which also does the
   // solve at t0 for time order 0), assemblies (counting the one at t0 only
@@ -158,7 +186,8 @@ public:
   //    keeps them came from `initial`, it neither assembles at t0 nor
   //    calls start(), so boundary data whose time derivative is not
   //    finite at t0 (u = sqrt(t) from t0 = 0) can be integrated;
-  // 3. repeats until t1: asks the step controller for dt, shortens the
+  // 3. repeats until t1: asks the step controller for dt (see below for
+  //    an error-controlling one), shortens the
   //    step to land on the next snapshot time or t1 (a step that ends
   //    within 1e-9 dt of one lands on it), assembles the problem at the
   //    method's evaluation point (passing the previous result, so parts
@@ -185,6 +214,21 @@ public:
   // method that keeps them (Newmark), so such a run continues without its
   // start and equals one long run that lands on t1, bit for bit.
   //
+  // An error-controlling step controller (StepController::controls_error,
+  // AdaptiveStep) gives the first dt (next_step(t0), or the anchor's
+  // next_dt) and judges every step after it (StepController::judge) by
+  // the method's local error estimate (TimeMethod::local_error, given the
+  // accepted steps before it that the method declares it reads; a step
+  // with fewer has no estimate). A rejected step is recorded (accepted
+  // false), the state goes back to the step's start, and the step is
+  // taken again with the smaller dt (it may be shortened to land again);
+  // an accepted step's decision gives the next dt. The method must
+  // declare an error estimate at the problem's time order
+  // (TimeMethod::error_estimate), else std::invalid_argument before
+  // anything is assembled. Steps still land exactly on the snapshot times
+  // and t1. max_steps, snapshot_every and keep_before_last_step count
+  // accepted steps only.
+  //
   // `max_steps`, when given, ends the run after that many steps if t1 is
   // not reached first: final.time then says where it ended (the last step
   // was not shortened, so it is not a landing; a run continued from there
@@ -199,7 +243,14 @@ public:
   // or (for a method that keeps the acceleration) with accelerations of
   // the wrong size or not finite, and an `anchor` that does not stand at
   // t0 (time + steps dt != t0, or a dt that is not finite and positive with
-  // steps > 0). Throws std::runtime_error when the method's start() leaves
+  // steps > 0), or, for an error-controlling controller, whose next_dt is
+  // not finite and at least 0 or whose previous_steps do not have a value
+  // per free unknown and a positive length; for an error-controlling
+  // controller, a method that declares no error estimate at the time
+  // order. Throws std::runtime_error when the controller's answer is not
+  // finite and positive or a rejection does not shrink the step, and
+  // passes on the controller's own (AdaptiveStep below min_dt). Throws
+  // std::runtime_error when the method's start() leaves
   // no state at t0 (a method of time order 0 must compute it), or no
   // acceleration for a method that keeps it. Passes on the exceptions of
   // assembly, of the method's start() and of the linear
@@ -214,6 +265,11 @@ public:
   // The time method, so that a driver can read its declarations.
   [[nodiscard]] const std::shared_ptr<const TimeMethod> &method() const {
     return method_;
+  }
+  // The step controller, so that a driver can read its declarations.
+  [[nodiscard]] const std::shared_ptr<const StepController> &
+  step_controller() const {
+    return step_controller_;
   }
 
   // The same step controller, linear solver and assembler options with

@@ -452,8 +452,23 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   method ahead of such a method is refused before the first step
   (`std::invalid_argument` naming both), never given a wrong
   acceleration.
+- **Error control decides from declarations.** A step controller says
+  whether it controls the error (`StepController::controls_error()`); a
+  time method declares its estimate per time order
+  (`TimeMethod::error_estimate`: order p, earlier steps read) and
+  computes it in `local_error` from states it has, never with an extra
+  solve. The Integrator refuses a method without one before the first
+  step (no fallback). A controller that does not control the error takes
+  the old loop exactly (FixedStep stays bit for bit as it was: no state
+  copies, `judge` never called). Controllers are stateless; what a run
+  remembers (next dt, the last accepted steps) is in the Integrator's
+  loop and travels in `StepAnchor` (`next_dt`, `previous_steps`), which
+  the AdaptiveIntegrator passes across pieces on one problem; after a
+  transfer only `next_dt`. A rejected step is recorded with `accepted =
+  false` and retaken from its start; `steps`, `max_steps`,
+  `snapshot_every` and `keep_before_last_step` count accepted steps.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
-  adaptive time stepping, explicit time methods,
+  explicit time methods,
   handling pure Neumann problems, well-posedness
   checks, coarsening, L2 projection for the solution transfer,
   re-integrating a piece after refining, callables, anisotropic meshing,
