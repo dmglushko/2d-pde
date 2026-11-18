@@ -33,6 +33,8 @@ import {
   viewTransform,
 } from "../web/js/pure/mesh_math.js";
 import { SETTINGS_DEFAULTS, clampPictureHeight, freeProbeSlot, normalizeSettings, parseFolds } from "../web/js/pure/prefs.js";
+import { addPaceSample, frameAt, measuredPace, PACE_SHARE, playbackStep, speedLabel, START_SNAPSHOTS } from "../web/js/pure/playback.js";
+import { isLine } from "../web/js/pure/case_model.js";
 import { keptSnapshots, nearestLoaded, snapshotPlan, splitSnapshots, valueRange } from "../web/js/pure/run_values.js";
 import { LARGE_SOLUTION_BYTES, RUN_ALL, STAGES, STEPS, errorPath, errorPathOf, requestCase, solutionBytes, stageKey, stagesToRun, stepOfPath } from "../web/js/pure/stages.js";
 import { Tickets } from "../web/js/pure/tickets.js";
@@ -477,9 +479,70 @@ test("node colour positions are the scale's, NaN without a value", () => {
 
 test("settings are made whole and kept in range", () => {
   assert.deepEqual(normalizeSettings(null), SETTINGS_DEFAULTS);
-  assert.deepEqual(normalizeSettings({ digits: 99, playbackFps: 0.2, checkWhileTyping: "yes", pixelRatioCap: 1.5, other: 1 }), { ...SETTINGS_DEFAULTS, digits: 10, playbackFps: 1, pixelRatioCap: 1.5 });
-  assert.equal(normalizeSettings({ checkDelayMs: 777.4 }).checkDelayMs, 777);
+  assert.deepEqual(normalizeSettings({ digits: 99, playbackSpeed: 0, checkWhileTyping: "yes", pixelRatioCap: 1.5, other: 1 }), { ...SETTINGS_DEFAULTS, digits: 10, playbackSpeed: 1e-6, pixelRatioCap: 1.5 });
+  // A speed is not rounded; settings that are gone are dropped.
+  assert.equal(normalizeSettings({ playbackSpeed: 0.25 }).playbackSpeed, 0.25);
+  assert.equal(SETTINGS_DEFAULTS.playbackSpeed, 1, "real time");
+  assert.equal(normalizeSettings({ checkDelayMs: 777.4 }).checkDelayMs, undefined);
   assert.equal(normalizeSettings({ followRun: false }).followRun, false);
+});
+
+test("playback: simulated time moves with real time at the speed", () => {
+  // Snapshots every 0.5 s of simulated time: 1× shows the next one after
+  // half a second of real time, whatever the steps between them.
+  const times = [0, 0.5, 1, 1.5, 2];
+  assert.equal(frameAt(times, 0.49), 0);
+  assert.equal(frameAt(times, 0.5), 1);
+  assert.equal(frameAt(times, 0.5 - 1e-12), 1, "rounding of the clock does not hold a frame back");
+  assert.equal(frameAt(times, 9), 4);
+  let step = playbackStep({ t: 0, seconds: 0.3, speed: 1, times });
+  assert.deepEqual([step.t, step.frame, step.waiting, step.finished], [0.3, 0, null, false]);
+  step = playbackStep({ t: 0.3, seconds: 0.3, speed: 1, times });
+  assert.ok(Math.abs(step.t - 0.6) < 1e-12 && step.frame === 1);
+  // 10×: three seconds of simulated time in 0.3 s; the end of a finished
+  // run is reached and said.
+  step = playbackStep({ t: 0, seconds: 0.3, speed: 10, times });
+  assert.deepEqual([step.t, step.frame, step.finished], [2, 4, true]);
+  // Not past the snapshots that are loaded.
+  step = playbackStep({ t: 0, seconds: 1, speed: 1, times, upTo: 1 });
+  assert.deepEqual([step.t, step.frame, step.waiting], [0.5, 1, "loading"]);
+  assert.equal(speedLabel(0.25), "0.25×");
+  assert.equal(speedLabel(1000), "1000×");
+});
+
+test("playback of a running run: a few snapshots first, then no faster than the run", () => {
+  const few = [0, 0.1];
+  let step = playbackStep({ t: 0, seconds: 0.5, speed: 1, times: few, running: true });
+  assert.deepEqual([step.t, step.waiting], [0, "starting"], "it waits for a few snapshots");
+  const times = Array.from({ length: START_SNAPSHOTS }, (_, i) => i * 0.1);
+  // The run computes 0.2 simulated seconds per second: 1× would outrun
+  // it, so it plays at 90 % of that.
+  step = playbackStep({ t: 0, seconds: 1, speed: 1, times, running: true, pace: 0.2 });
+  assert.ok(Math.abs(step.t - PACE_SHARE * 0.2) < 1e-12 && step.speed === PACE_SHARE * 0.2);
+  // A run faster than the speed: the speed holds.
+  step = playbackStep({ t: 0, seconds: 0.1, speed: 1, times, running: true, pace: 50 });
+  assert.ok(Math.abs(step.t - 0.1) < 1e-12 && step.speed === 1);
+  // Caught up with the run: it waits at the newest snapshot.
+  step = playbackStep({ t: 0.25, seconds: 1, speed: 1, times, running: true, pace: 50 });
+  assert.deepEqual([step.t, step.frame, step.waiting, step.finished], [0.30000000000000004, 3, "computing", false]);
+  // The pace over the last seconds of progress.
+  const samples = [];
+  addPaceSample(samples, 0, 0);
+  addPaceSample(samples, 100, 0.1);
+  assert.equal(measuredPace(samples), null, "too short a window");
+  addPaceSample(samples, 1000, 0.5);
+  addPaceSample(samples, 1000, 0.5);
+  assert.equal(samples.length, 3, "a sample that did not move is not kept");
+  assert.equal(measuredPace(samples), 0.5);
+  addPaceSample(samples, 9000, 1.3);
+  assert.ok(samples[0].at >= 1000, "old samples leave the window");
+});
+
+test("an equation or condition is a line or coefficients", () => {
+  assert.equal(isLine({ text: "u = 0", priority: 1 }), true);
+  assert.equal(isLine({ text: "" }), true, "an empty line is still a line");
+  assert.equal(isLine({ alpha: "1", g: "0" }), false);
+  assert.equal(isLine(null), false);
 });
 
 test("folded sections are read back safely", () => {

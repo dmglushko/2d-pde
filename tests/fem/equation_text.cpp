@@ -14,7 +14,7 @@ using pde2d::test::near;
 
 namespace {
 
-const Parameters parameters{{"k", 2.5},  {"k1", 3.0},    {"k2", 0.5},
+const Parameters parameters{{"k", 2.5},  {"k1", 3.0},     {"k2", 0.5},
                             {"h", 7.0},  {"u_out", 20.0}, {"c", 1.5},
                             {"q", -4.0}, {"n", 3.0}};
 
@@ -36,8 +36,8 @@ void same(const Expression &actual, const std::string &expected,
 }
 
 struct Wanted {
-  std::string a_xx = "0", a_xy = "0", a_yy = "0", b_x = "0", b_y = "0",
-              c = "0", m1 = "0", m2 = "0", f = "0";
+  std::string a_xx = "0", a_xy = "0", a_yy = "0", b_x = "0", b_y = "0", c = "0",
+              m1 = "0", m2 = "0", f = "0";
 };
 
 void equation_is(const Equation &e, const Wanted &w) {
@@ -111,8 +111,8 @@ int main() {
          const Wanted laplace{.a_xx = "-1", .a_yy = "-1", .f = "1"};
          equation_is(parse_equation("-lap(u) = 1"), laplace);
          equation_is(parse_equation("-div(grad(u)) = 1"), laplace);
-         equation_is(parse_equation("-Δu = 1"), laplace);        // Δ
-         equation_is(parse_equation("-∇²u = 1"), laplace);  // ∇²
+         equation_is(parse_equation("-Δu = 1"), laplace);  // Δ
+         equation_is(parse_equation("-∇²u = 1"), laplace); // ∇²
          equation_is(parse_equation("-∇·∇u = 1"), laplace);
          equation_is(parse_equation("-∇⋅(∇u) = 1"), laplace);
        }},
@@ -125,18 +125,16 @@ int main() {
                              .b_y = "-x^2",
                              .f = "1"};
          equation_is(parse_equation("-div((1 + x^2*y)*grad(u)) = 1"), wanted);
-         equation_is(parse_equation("-∇·((1 + x^2*y)∇u) = 1"),
-                     wanted);
+         equation_is(parse_equation("-∇·((1 + x^2*y)∇u) = 1"), wanted);
          // A constant parameter has no derivative.
          equation_is(parse_equation("u_t - ∇·(k ∇u) = 0"),
                      {.a_xx = "-k", .a_yy = "-k", .m1 = "1"});
        }},
       {"a matrix coefficient and convection",
        [] {
-         equation_is(
-             parse_equation("-∇·([[k1, 0], [0, k2]] ∇u) + "
-                            "(1, 0)·∇u = 1"),
-             {.a_xx = "-k1", .a_yy = "-k2", .b_x = "1", .f = "1"});
+         equation_is(parse_equation("-∇·([[k1, 0], [0, k2]] ∇u) + "
+                                    "(1, 0)·∇u = 1"),
+                     {.a_xx = "-k1", .a_yy = "-k2", .b_x = "1", .f = "1"});
          // div(A grad u) with A = [[x, y], [2, 3]]: a_xy = A_12 + A_21 and
          // b = div of A's columns.
          equation_is(parse_equation("div([[x, y], [2, 3]]*grad(u)) = 0"),
@@ -157,8 +155,7 @@ int main() {
                      {.a_xx = "-Piecewise((k, x < 0), (1, True))",
                       .a_yy = "-Piecewise((k, x < 0), (1, True))",
                       .f = "Piecewise((1, x <= 0.5), (0, True))"});
-         equation_is(parse_equation("2**2*u = x^2.0"),
-                     {.c = "4", .f = "x^2"});
+         equation_is(parse_equation("2**2*u = x^2.0"), {.c = "4", .f = "x^2"});
          // n is a parameter in the equation.
          equation_is(parse_equation("n*u = 1"), {.c = "n", .f = "1"});
          equation_is(parse_equation("u/k = 1"), {.c = "1/k", .f = "1"});
@@ -210,7 +207,8 @@ int main() {
                       {.beta_tau = "1", .beta_x = "1", .g = "y"});
          condition_is(parse_condition("u_t + u_n = 0"),
                       {.beta_n = "1", .gamma = "1"});
-         // A multiple of the identity plus a rotation: (A ∇u)·n = k u_n + u_tau.
+         // A multiple of the identity plus a rotation: (A ∇u)·n = k u_n +
+         // u_tau.
          condition_is(parse_condition("([[k, 1], [-1, k]] ∇u)·n = 0"),
                       {.beta_n = "k", .beta_tau = "1"});
          condition_is(parse_condition("u_y + x*u_x = 0"),
@@ -238,24 +236,26 @@ int main() {
                              .b_x = "-1",
                              .m1 = "1",
                              .f = "sin(x)"});
+         check(equation_text({.a_xx = Expression("x**2"),
+                              .f = Expression("y^2")}) == "x^2*u_xx = y^2",
+               "powers as ^");
          check(equation_text(Equation{.f = Expression("1")}) == "0 = 1",
                "an empty left side");
          check(equation_text({.a_xx = Expression("-1"),
                               .a_yy = Expression("-1"),
                               .f = Expression("1")}) == "-u_xx - u_yy = 1",
-               "the Laplacian: " +
-                   equation_text({.a_xx = Expression("-1"),
-                                  .a_yy = Expression("-1"),
-                                  .f = Expression("1")}));
-         check(equation_text({.c = Expression("-2*k"), .m1 = Expression("x"),
+               "the Laplacian: " + equation_text({.a_xx = Expression("-1"),
+                                                  .a_yy = Expression("-1"),
+                                                  .f = Expression("1")}));
+         check(equation_text({.c = Expression("-2*k"),
+                              .m1 = Expression("x"),
                               .f = Expression("0")}) == "-2*k*u + x*u_t = 0",
                "signs and products");
          const auto c1 = parse_condition("k*u_n + h*u - u_tau = h*u_out");
          const auto c2 = parse_condition(condition_text(c1));
-         condition_is(c2, {.alpha = "h",
-                           .beta_n = "k",
-                           .beta_tau = "-1",
-                           .g = "h*u_out"});
+         condition_is(
+             c2,
+             {.alpha = "h", .beta_n = "k", .beta_tau = "-1", .g = "h*u_out"});
          // A coefficient that is a sum gets parentheses.
          const Equation sum{.b_x = Expression("1 + x"), .f = Expression("0")};
          equation_is(parse_equation(equation_text(sum)), {.b_x = "1 + x"});

@@ -117,36 +117,26 @@
   },
   "problem": {
     "equation": {
-      "a_xx": "-1",
-      "a_yy": "-1",
-      "f": "0"
+      "text": "-lap(u) = 0"
     },
     "parameters": {
       "h": 0.5
     },
     "boundary_conditions": {
       "base": {
-        "alpha": "h",
-        "beta_n": "1",
-        "g": "0"
+        "text": "u_n + h*u = 0"
       },
       "tip": {
-        "alpha": "h",
-        "beta_n": "1",
-        "g": "0"
+        "text": "u_n + h*u = 0"
       },
       "top": {
-        "alpha": "h",
-        "beta_n": "1",
-        "g": "0"
+        "text": "u_n + h*u = 0"
       },
       "root": {
-        "alpha": "1",
-        "g": "1"
+        "text": "u = 1"
       },
       "hole": {
-        "alpha": "1",
-        "g": "0"
+        "text": "u = 0"
       }
     },
     "initial": {}

@@ -15,7 +15,10 @@
 //      "outer": {"alpha": "1", "g": "0", "priority": 0}},
 //    "initial": {"u": "0", "u_t": ""}}
 //
-// Every coefficient is the text of an Expression. A coefficient that is
+// An equation or a condition may instead be one line, {"text": "..."}
+// (line_key), read by fem::parse_equation or fem::parse_condition; a line
+// and coefficients together are an error. Every coefficient is the text
+// of an Expression. A coefficient that is
 // missing, null or empty is not set: zero for the equation and the
 // boundary conditions, "not given" for the initial conditions.
 namespace pde2d::app {
@@ -25,6 +28,11 @@ namespace pde2d::app {
 inline constexpr std::string_view problem_section_keys[] = {
     "equation", "parameters", "boundary_conditions", "initial"};
 inline constexpr std::string_view condition_extra_keys[] = {"priority"};
+// The key of the one-line form of an equation or a condition, given
+// instead of its coefficients: {"text": "u_t - div(k*grad(u)) = 0"} or
+// {"text": "u = 0", "priority": 1} (fem::parse_equation,
+// fem::parse_condition).
+inline constexpr std::string_view line_key = "text";
 
 // Throws std::invalid_argument naming the path in the case file
 // ("problem.equation.a_xx: ...") for a wrong value type, an unknown key or
@@ -36,11 +44,17 @@ fem::Parameters read_parameters(const Json &parameters);
 
 // Checks the problem section without stopping at the first error, for the
 // page: {"ok", "errors": [{"path", "message"}], "facts": {path: facts},
-// "conditions": {region: {"kind", "oblique"}}, "time_order",
+// "conditions": {region: {"kind", "oblique"}}, "forms": {path: {"line",
+// "text", "coefficients"}}, "time_order",
 // "coefficients_depend_on_t", "data_depends_on_t", "required_initial"}.
-// Every expression is also compiled with the parameters, which finds
-// names that are neither x, y, t nor a parameter. It does not need a mesh,
-// so it cannot check that the regions match one (MeshedProblem does).
+// "forms" holds both forms of the equation ("problem.equation") and of
+// every condition that was read: whether it was given as a line, the line
+// (as written, or printed by fem::equation_text / condition_text) and the
+// coefficients that are not zero (as written, or read from the line).
+// Facts are per coefficient also for a line; an error of a line is at
+// its "text". Every expression is also compiled with the parameters, which
+// finds names that are neither x, y, t nor a parameter. It does not need a
+// mesh, so it cannot check that the regions match one (MeshedProblem does).
 Json check_problem(const Json &problem_section);
 
 // The condition a new region gets: u = 0.

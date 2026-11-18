@@ -11,12 +11,10 @@
 #include <utility>
 #include <vector>
 
-// Sign conventions (docs/app.md, "The catalog"): the equation is
-// a_xx u_xx + a_xy u_xy + a_yy u_yy + b_x u_x + b_y u_y + c u + m1 u_t +
-// m2 u_tt = f, so -k (u_xx + u_yy) is a_xx = a_yy = -k; a condition is
-// alpha u + beta_n u_n + ... = g with n the outward normal, so cooling
-// -k u_n = h (u - u_out) is written u_n = -(h/k)(u - u_out) with k = 1:
-// alpha = h, beta_n = 1, g = h u_out.
+// Equations and conditions are lines (fem::parse_equation,
+// parse_condition), written as on paper: heat is u_t - div(k*grad(u)) = 0.
+// Conditions use the outward normal n, so cooling -k u_n = h (u - u_out)
+// is written u_n + h*u = h*u_out with k = 1.
 namespace pde2d::app {
 
 namespace {
@@ -63,9 +61,14 @@ struct Preset {
   std::function<PresetProblem(const DomainFacts &)> make;
 };
 
-Json dirichlet(std::string g) {
-  return texts({{"alpha", "1"}, {"g", std::move(g)}});
+// An equation or condition as one line.
+Json line(std::string text) {
+  Json out = Json::object();
+  out["text"] = std::move(text);
+  return out;
 }
+
+Json dirichlet(const std::string &g) { return line("u = " + g); }
 
 Json static_solve(std::string_view linear_solver) {
   Json out = default_solve_section();
@@ -114,7 +117,7 @@ const std::vector<Preset> &presets() {
        "-(u_xx + u_yy) = 1 with u = 0 on the boundary; static",
        [](const DomainFacts &) {
          PresetProblem p;
-         p.equation = texts({{"a_xx", "-1"}, {"a_yy", "-1"}, {"f", "1"}});
+         p.equation = line("-lap(u) = 1");
          p.condition = dirichlet("0");
          p.solve = static_solve("simplicial_ldlt");
          return p;
@@ -124,7 +127,7 @@ const std::vector<Preset> &presets() {
        "static",
        [](const DomainFacts &) {
          PresetProblem p;
-         p.equation = texts({{"a_xx", "-1"}, {"a_yy", "-1"}});
+         p.equation = line("lap(u) = 0");
          p.condition = dirichlet("x");
          p.solve = static_solve("simplicial_ldlt");
          return p;
@@ -134,7 +137,7 @@ const std::vector<Preset> &presets() {
        "midpoint",
        [](const DomainFacts &facts) {
          PresetProblem p;
-         p.equation = texts({{"m1", "1"}, {"a_xx", "-k"}, {"a_yy", "-k"}});
+         p.equation = line("u_t - div(k*grad(u)) = 0");
          p.parameters = numbers({{"k", 1.0}});
          add_bump(p.parameters, facts);
          p.condition = dirichlet("0");
@@ -151,7 +154,7 @@ const std::vector<Preset> &presets() {
          PresetProblem p;
          const double t1 =
              round_to(facts.domain_size * facts.domain_size / 4, 2);
-         p.equation = texts({{"m1", "1"}, {"a_xx", "-k"}, {"a_yy", "-k"}});
+         p.equation = line("u_t - div(k*grad(u)) = 0");
          p.parameters = numbers({{"k", 1.0}, {"t_on", round_to(t1 / 10, 2)}});
          p.condition = dirichlet("0");
          p.first_condition = dirichlet("1 - exp(-t/t_on)");
@@ -165,11 +168,10 @@ const std::vector<Preset> &presets() {
        "u_out) on the boundary; implicit Euler",
        [](const DomainFacts &facts) {
          PresetProblem p;
-         p.equation = texts({{"m1", "1"}, {"a_xx", "-k"}, {"a_yy", "-k"}});
+         p.equation = line("u_t - div(k*grad(u)) = 0");
          p.parameters =
              numbers({{"k", 1.0}, {"h", 2.0}, {"u0", 1.0}, {"u_out", 0.0}});
-         p.condition =
-             texts({{"alpha", "h"}, {"beta_n", "1"}, {"g", "h*u_out"}});
+         p.condition = line("u_n + h*u = h*u_out");
          p.initial = texts({{"u", "u0"}});
          const double r = facts.clearance;
          p.solve = time_solve("implicit_euler", "simplicial_ldlt",
@@ -181,7 +183,7 @@ const std::vector<Preset> &presets() {
        "Newmark",
        [](const DomainFacts &facts) {
          PresetProblem p;
-         p.equation = texts({{"m2", "1"}, {"a_xx", "-c2"}, {"a_yy", "-c2"}});
+         p.equation = line("u_tt - c2*lap(u) = 0");
          p.parameters = numbers({{"c2", 1.0}});
          add_bump(p.parameters, facts);
          p.condition = dirichlet("0");
@@ -196,8 +198,7 @@ const std::vector<Preset> &presets() {
        [](const DomainFacts &facts) {
          PresetProblem p;
          const double t1 = round_to(facts.domain_size, 2);
-         p.equation = texts(
-             {{"m2", "1"}, {"m1", "d"}, {"a_xx", "-c2"}, {"a_yy", "-c2"}});
+         p.equation = line("u_tt + d*u_t - c2*lap(u) = 0");
          p.parameters = numbers({{"c2", 1.0}, {"d", round_to(4 / t1, 2)}});
          add_bump(p.parameters, facts);
          p.condition = dirichlet("0");
@@ -211,11 +212,7 @@ const std::vector<Preset> &presets() {
        "is not symmetric)",
        [](const DomainFacts &facts) {
          PresetProblem p;
-         p.equation = texts({{"a_xx", "-k"},
-                             {"a_yy", "-k"},
-                             {"b_x", "v_x"},
-                             {"b_y", "v_y"},
-                             {"f", "1"}});
+         p.equation = line("-div(k*grad(u)) + dot((v_x, v_y), grad(u)) = 1");
          p.parameters = numbers({{"k", round_to(0.05 * facts.domain_size, 2)},
                                  {"v_x", 1.0},
                                  {"v_y", 0.5}});
@@ -228,14 +225,13 @@ const std::vector<Preset> &presets() {
        "(the reaction makes it well posed); static",
        [](const DomainFacts &facts) {
          PresetProblem p;
-         p.equation =
-             texts({{"a_xx", "-k"}, {"a_yy", "-k"}, {"c", "s"}, {"f", bump}});
+         p.equation = line("-div(k*grad(u)) + s*u = " + bump);
          p.parameters = numbers(
              {{"k", 1.0},
               {"s",
                round_to(16 / (facts.domain_size * facts.domain_size), 2)}});
          add_bump(p.parameters, facts);
-         p.condition = texts({{"beta_n", "1"}, {"g", "0"}});
+         p.condition = line("u_n = 0");
          p.solve = static_solve("simplicial_ldlt");
          return p;
        }},

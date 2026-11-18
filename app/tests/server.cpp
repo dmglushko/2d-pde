@@ -147,7 +147,8 @@ int main() {
          const Json preset =
              post(client, "/api/preset",
                   {{"case", case_json}, {"preset", "wave"}}, 200);
-         check(preset["problem"]["equation"]["m2"] == "1" &&
+         check(preset["problem"]["equation"]["text"] ==
+                       "u_tt - c2*lap(u) = 0" &&
                    preset["solve"]["mode"] == "time",
                "a preset fills the problem and the solve section");
          const auto file = client.Post("/api/export/mesh.svg", case_json.dump(),

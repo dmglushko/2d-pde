@@ -67,13 +67,45 @@ function hideToast() {
 
 // --- running stages ---------------------------------------------------------------
 
-let geometryTimer = null;
+// A stage the page runs by itself after every edit (the geometry, the
+// problem check) runs at once, one request at a time: an edit made while
+// one runs is sent when it answers, the newest text only. Waiting for a
+// pause would only add latency (the answers take milliseconds), and one
+// request at a time keeps a slow one from piling up others.
+function coalesced(start) {
+  let running = false;
+  let again = false;
+  let timer = null;
+  const go = () => {
+    timer = null;
+    if (running) {
+      again = true;
+      return;
+    }
+    running = true;
+    Promise.resolve(start())
+      .catch(() => {})
+      .finally(() => {
+        running = false;
+        if (again) {
+          again = false;
+          go();
+        }
+      });
+  };
+  // After the current event (an edit notifies first), or after `delay`.
+  return (delay = 0) => {
+    clearTimeout(timer);
+    timer = setTimeout(go, delay);
+  };
+}
 
-// Reads the geometry a moment after the last change (typing, the end of
-// a drag in the drawing editor).
+const geometryRequest = coalesced(() => runStage("geometry"));
+
+// Reads the geometry after a change (typing, the end of a drag in the
+// drawing editor).
 export function scheduleGeometry() {
-  clearTimeout(geometryTimer);
-  geometryTimer = setTimeout(() => runStage("geometry"), 250);
+  geometryRequest();
 }
 
 // The solve: the server answers its first chunk at once; a time run then
@@ -91,12 +123,13 @@ const calls = {
 };
 
 // A run's progress made into the page's solve result: its values are
-// loaded on demand (snapshots.js), the newest first.
+// loaded on demand (snapshots.js), first the ones shown first: the start
+// of a run that is still computed (it plays from there), else the newest.
 async function solveData(summary) {
   summary.layout = summary.values;
   summary.values = [];
   growSnapshots(summary, summary.layout.snapshots);
-  if (summary.values.length > 0) await loadAround(summary, summary.values.length - 1);
+  if (summary.values.length > 0) await loadAround(summary, summary.state === "running" ? 0 : summary.values.length - 1);
   return summary;
 }
 for (const stage of STAGES) if (!calls[stage.call]) throw new Error(`no call for ${stage.id}`);
@@ -141,8 +174,12 @@ async function run(stage, field, found = null) {
     if (stage === "problem" && !ticket.holds()) return null;
     if (stage === "solve") {
       solveScale(data);
-      store.solveFrame = data.times.length - 1;
+      // A run that is still computed plays from its start (timebar.js);
+      // a finished one shows its end.
+      const running = data.state === "running";
+      store.solveFrame = running ? 0 : data.times.length - 1;
       store.solveFrameChosen = false;
+      store.playRun = running;
       store.fieldSource = "solve";
       // A reattached run keeps the colouring this tab had (restoreView).
       if (!(found && store.view.colorBy === "gradient")) store.view.colorBy = "field";
@@ -174,7 +211,7 @@ async function run(stage, field, found = null) {
     notify("result");
     if (checkWaiting && !longRunning()) {
       checkWaiting = false;
-      run("problem");
+      problemRequest();
     }
   }
 }
@@ -183,8 +220,9 @@ const POLL_MS = 250;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Follows a time run until it is done, fails or is stopped: polls its
-// progress, fetches the new snapshots and shows the newest (unless the
-// user chose one with the slider, or the setting is off). A poll the
+// progress and makes room for the new snapshots, which the time bar plays
+// from the start as they come (timebar.js; the snapshots it needs are
+// fetched there). A poll the
 // server refused for the moment (busy) or that got no answer is tried
 // again after a growing pause (pure/requests.js, backoffDelay), and the
 // Solve step says so (store.runNotice); a run that was replaced or is gone
@@ -230,13 +268,6 @@ async function followRun(run, data) {
     growSnapshots(data, layout.snapshots);
     data.times = progress.times.slice(0, values.length);
     solveScale(data);
-    const follow = settings.followRun && !store.solveFrameChosen;
-    if (follow) store.solveFrame = values.length - 1;
-    // The newest snapshot when it is shown; others load when shown.
-    if (follow && values.length > 0) {
-      await loadAround(data, values.length - 1);
-      if (!live()) return null;
-    }
     notify("progress");
     if (progress.state === "running") continue;
     following = null;
@@ -412,24 +443,23 @@ export async function runAll() {
   return true;
 }
 
-// Checks the problem after a pause in typing (the settings: on or off,
-// and the delay). `now`: a committed change (a field left, a template, a
-// new case), checked after a short moment whatever the settings say.
-// While a long stage runs, the server is busy (one mutex for all symbolic
-// work): the check waits and runs once when the stage ends. A time run
-// being followed does not hold it: the server answers between chunks.
-let checkTimer = null;
+// Checks the problem after an edit (with the setting off, only `now`: a
+// committed change, a field left, a template, a new case). The check runs
+// at once, one at a time (coalesced). While a long stage runs, the server
+// is busy (one mutex for all symbolic work): the check waits and runs
+// once when the stage ends. A time run being followed does not hold it:
+// the server answers between chunks.
 let checkWaiting = false;
+const problemRequest = coalesced(() => {
+  if (longRunning()) {
+    checkWaiting = true;
+    return null;
+  }
+  return run("problem");
+});
 export function scheduleProblemCheck({ now = false } = {}) {
   if (!now && !settings.checkWhileTyping) return;
-  clearTimeout(checkTimer);
-  checkTimer = setTimeout(
-    () => {
-      if (longRunning()) checkWaiting = true;
-      else run("problem");
-    },
-    now ? 50 : settings.checkDelayMs,
-  );
+  problemRequest();
 }
 
 // Fills the problem and the solve settings from a preset of the server's

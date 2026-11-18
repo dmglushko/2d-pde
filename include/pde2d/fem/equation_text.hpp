@@ -63,9 +63,9 @@ BoundaryCondition parse_condition(std::string_view text);
 // The equation as one line in the coefficient form, terms in the order
 // above, zero ones left out, for example "-u_xx - u_yy + u_t = 1";
 // "0 = f" when every coefficient on the left is zero. The coefficients
-// are printed from their parsed form, so the text may differ from what
-// was written (1 + x for x+1) but parse_equation reads it back to the
-// same coefficients.
+// are printed from their parsed form, powers with ^, so the text may
+// differ from what was written (1 + x for x+1) but parse_equation reads it
+// back to the same coefficients.
 std::string equation_text(const Equation &equation);
 
 // The condition as one line ("u_n + 2*u = 0"), like equation_text, without

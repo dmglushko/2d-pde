@@ -22,7 +22,8 @@ namespace {
 using SymEngine::Basic;
 using SymEngine::RCP;
 
-// --- the line as tokens ---------------------------------------------------------
+// --- the line as tokens
+// ---------------------------------------------------------
 
 enum class TokenKind {
   number,
@@ -106,7 +107,8 @@ std::vector<Token> tokenize(std::string_view text) {
       tokens.push_back({TokenKind::name, start, i});
       continue;
     }
-    if (is_digit(c) || (c == '.' && i + 1 < text.size() && is_digit(text[i + 1]))) {
+    if (is_digit(c) ||
+        (c == '.' && i + 1 < text.size() && is_digit(text[i + 1]))) {
       while (i < text.size() && is_digit(text[i]))
         ++i;
       if (i < text.size() && text[i] == '.') {
@@ -129,18 +131,41 @@ std::vector<Token> tokenize(std::string_view text) {
     }
     TokenKind kind = TokenKind::other;
     switch (c) {
-    case '+': kind = TokenKind::plus; break;
-    case '-': kind = TokenKind::minus; break;
-    case '*': kind = TokenKind::times; break;
-    case '/': kind = TokenKind::divide; break;
-    case '^': kind = TokenKind::power; break;
-    case '(': kind = TokenKind::open; break;
-    case ')': kind = TokenKind::close; break;
-    case '[': kind = TokenKind::open_bracket; break;
-    case ']': kind = TokenKind::close_bracket; break;
-    case ',': kind = TokenKind::comma; break;
-    case '=': kind = TokenKind::equals; break;
-    default: break;
+    case '+':
+      kind = TokenKind::plus;
+      break;
+    case '-':
+      kind = TokenKind::minus;
+      break;
+    case '*':
+      kind = TokenKind::times;
+      break;
+    case '/':
+      kind = TokenKind::divide;
+      break;
+    case '^':
+      kind = TokenKind::power;
+      break;
+    case '(':
+      kind = TokenKind::open;
+      break;
+    case ')':
+      kind = TokenKind::close;
+      break;
+    case '[':
+      kind = TokenKind::open_bracket;
+      break;
+    case ']':
+      kind = TokenKind::close_bracket;
+      break;
+    case ',':
+      kind = TokenKind::comma;
+      break;
+    case '=':
+      kind = TokenKind::equals;
+      break;
+    default:
+      break;
     }
     ++i;
     // One character, also a whole UTF-8 sequence.
@@ -154,7 +179,8 @@ std::vector<Token> tokenize(std::string_view text) {
   return tokens;
 }
 
-// --- the line as a tree -----------------------------------------------------------
+// --- the line as a tree
+// -----------------------------------------------------------
 
 // The derivatives of u a term may hold; `none` is a term without u.
 enum class Term { none, u, u_x, u_y, u_xx, u_xy, u_yy, u_t, u_tt };
@@ -266,9 +292,8 @@ public:
       else if (token.kind == TokenKind::close ||
                token.kind == TokenKind::close_bracket) {
         if (open.empty())
-          fail("it has a '" + std::string(spelling(token)) +
-               "' at character " + std::to_string(position(token.begin)) +
-               " that closes nothing");
+          fail("it has a '" + std::string(spelling(token)) + "' at character " +
+               std::to_string(position(token.begin)) + " that closes nothing");
         open.pop_back();
       } else if (token.kind == TokenKind::equals && open.empty())
         ++equals;
@@ -488,8 +513,7 @@ private:
         break;
     }
     fail("it has a '(' at character " +
-         std::to_string(position(tokens_[open].begin)) +
-         " that is not closed");
+         std::to_string(position(tokens_[open].begin)) + " that is not closed");
   }
 
   // Whether the tokens [first, last) mention u, the normal or an
@@ -558,8 +582,8 @@ private:
              "': a function may take only coefficients (x, y, t and "
              "parameters), since the line must be linear in u");
       at_ = after;
-      auto node = make(NodeKind::expression, token.begin,
-                       tokens_[after - 1].end);
+      auto node =
+          make(NodeKind::expression, token.begin, tokens_[after - 1].end);
       node.plain = true;
       return node;
     }
@@ -635,7 +659,8 @@ private:
   }
 };
 
-// --- values: linear in u --------------------------------------------------------------
+// --- values: linear in u
+// --------------------------------------------------------------
 
 // The normal's component a term carries (only in a condition).
 enum class Normal { one, n_x, n_y };
@@ -706,7 +731,8 @@ bool is_constant(const Form &form) {
 
 RCP<const Basic> constant_part(const Form &form) {
   const auto it = form.find({Term::none, Normal::one});
-  return it == form.end() ? RCP<const Basic>(SymEngine::integer(0)) : it->second;
+  return it == form.end() ? RCP<const Basic>(SymEngine::integer(0))
+                          : it->second;
 }
 
 class Evaluator {
@@ -752,8 +778,8 @@ public:
       auto right = value(node.children[1]);
       if (left.shape != right.shape)
         parser_.fail(parser_.quote(node) + " " +
-                     (node.kind == NodeKind::add ? "adds" : "subtracts") +
-                     " " + shape_name(right.shape) + " and " +
+                     (node.kind == NodeKind::add ? "adds" : "subtracts") + " " +
+                     shape_name(right.shape) + " and " +
                      shape_name(left.shape));
       if (node.kind == NodeKind::subtract)
         right = negate(std::move(right));
@@ -775,8 +801,8 @@ public:
     case NodeKind::laplacian: {
       auto operand = value(node.children[0]);
       if (operand.shape != Shape::scalar)
-        parser_.fail(parser_.quote(node) +
-                     " takes the Laplacian of " + shape_name(operand.shape) +
+        parser_.fail(parser_.quote(node) + " takes the Laplacian of " +
+                     shape_name(operand.shape) +
                      "; it needs a number, as in lap(u)");
       return divergence(node, gradient(node, std::move(operand)));
     }
@@ -784,10 +810,9 @@ public:
       auto left = value(node.children[0]);
       auto right = value(node.children[1]);
       if (left.shape != Shape::vector || right.shape != Shape::vector)
-        parser_.fail(parser_.quote(node) +
-                     " takes the dot product of " + shape_name(left.shape) +
-                     " and " + shape_name(right.shape) +
-                     "; it needs two vectors");
+        parser_.fail(parser_.quote(node) + " takes the dot product of " +
+                     shape_name(left.shape) + " and " +
+                     shape_name(right.shape) + "; it needs two vectors");
       return dot(node, left, right);
     }
     case NodeKind::tuple:
@@ -873,9 +898,9 @@ private:
     if (a.shape == Shape::matrix && b.shape == Shape::vector) {
       Value result{Shape::vector, {}};
       for (int row = 0; row < 2; ++row)
-        result.parts.push_back(sum(product(node, a.parts[2 * row], b.parts[0]),
-                                   product(node, a.parts[2 * row + 1],
-                                           b.parts[1])));
+        result.parts.push_back(
+            sum(product(node, a.parts[2 * row], b.parts[0]),
+                product(node, a.parts[2 * row + 1], b.parts[1])));
       return result;
     }
     if (a.shape == Shape::matrix && b.shape == Shape::matrix) {
@@ -893,8 +918,7 @@ private:
 
   Value divide(const Node &node, Value a, const Value &b) {
     if (b.shape != Shape::scalar || !is_constant(b.parts[0]))
-      parser_.fail(parser_.quote(node) +
-                   " divides by " +
+      parser_.fail(parser_.quote(node) + " divides by " +
                    (b.shape != Shape::scalar ? std::string(shape_name(b.shape))
                                              : std::string("u or the normal")) +
                    "; only coefficients may divide");
@@ -960,8 +984,7 @@ private:
       Expression written = checked(coefficient);
       if (!written.facts().zero) {
         const Expression changed = detail::derivative(written, variable);
-        accumulate(result, key,
-                   detail::ExpressionAccess::impl(changed).form);
+        accumulate(result, key, detail::ExpressionAccess::impl(changed).form);
       }
       if (key.first != Term::none)
         accumulate(result, {*term, Normal::one}, coefficient);
@@ -1029,12 +1052,12 @@ std::string quoted(std::string_view text) {
 }
 
 bool has_u(const Form &form) {
-  return std::ranges::any_of(form, [](const auto &entry) {
-    return entry.first.first != Term::none;
-  });
+  return std::ranges::any_of(
+      form, [](const auto &entry) { return entry.first.first != Term::none; });
 }
 
-// --- printing ------------------------------------------------------------------------
+// --- printing
+// ------------------------------------------------------------------------
 
 struct Printed {
   bool negative;
@@ -1048,15 +1071,16 @@ Printed printed(const RCP<const Basic> &form) {
   if (is_a_Number(*form))
     negative = down_cast<const Number &>(*form).is_negative();
   else if (is_a<Mul>(*form))
-    negative = down_cast<const Number &>(*down_cast<const Mul &>(*form).get_coef())
-                   .is_negative();
+    negative =
+        down_cast<const Number &>(*down_cast<const Mul &>(*form).get_coef())
+            .is_negative();
   const auto magnitude = negative ? neg(form) : form;
   return {negative, magnitude->__str__()};
 }
 
-std::string line(const std::vector<std::pair<const Expression *, const char *>>
-                     &terms,
-                 const Expression &right) {
+std::string
+line(const std::vector<std::pair<const Expression *, const char *>> &terms,
+     const Expression &right) {
   std::string out;
   for (const auto &[expression, name] : terms) {
     if (expression->facts().zero)
@@ -1078,8 +1102,12 @@ std::string line(const std::vector<std::pair<const Expression *, const char *>>
   }
   if (out.empty())
     out = "0";
-  return out + " = " +
-         detail::ExpressionAccess::impl(right).form->__str__();
+  out += " = " + detail::ExpressionAccess::impl(right).form->__str__();
+  // Powers as ^, as they are usually typed (SymEngine prints **).
+  for (auto at = out.find("**"); at != std::string::npos;
+       at = out.find("**", at + 1))
+    out.replace(at, 2, "^");
+  return out;
 }
 
 } // namespace
@@ -1112,8 +1140,7 @@ Equation parse_equation(std::string_view text) {
 
 BoundaryCondition parse_condition(std::string_view text) {
   Parser parser(text, Mode::condition,
-                "Cannot read the boundary condition " + quoted(text) +
-                    ": ");
+                "Cannot read the boundary condition " + quoted(text) + ": ");
   const auto [left, right] = parser.line();
   Evaluator evaluator(parser);
   const auto form = evaluator.difference(left, right);
@@ -1131,7 +1158,8 @@ BoundaryCondition parse_condition(std::string_view text) {
   }
   const auto at = [&](Term term, Normal normal) {
     const auto it = form.find({term, normal});
-    return it == form.end() ? RCP<const Basic>(SymEngine::integer(0)) : it->second;
+    return it == form.end() ? RCP<const Basic>(SymEngine::integer(0))
+                            : it->second;
   };
   // (beta_x + beta_n n_x - beta_tau n_y) u_x
   //   + (beta_y + beta_n n_y + beta_tau n_x) u_y.
@@ -1139,7 +1167,8 @@ BoundaryCondition parse_condition(std::string_view text) {
   const auto tangential = at(Term::u_y, Normal::n_x);
   const auto same = [](const RCP<const Basic> &a, const RCP<const Basic> &b) {
     const auto difference = SymEngine::sub(a, b);
-    return zero_number(*difference) || zero_number(*SymEngine::expand(difference));
+    return zero_number(*difference) ||
+           zero_number(*SymEngine::expand(difference));
   };
   if (!same(normal, at(Term::u_y, Normal::n_y)) ||
       !same(SymEngine::neg(tangential), at(Term::u_x, Normal::n_y)))

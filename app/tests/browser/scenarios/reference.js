@@ -33,8 +33,8 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   await until(() => /This run is the reference/.test(text(refSection())), "the reference");
   check("the run is kept as the reference", true);
   tab("problem");
-  const g = q('#panel-problem [data-path$=".g"] input');
-  type(g, "0.5");
+  const g = q('#panel-problem [data-path^="problem.boundary_conditions."][data-path$=".text"] input');
+  type(g, "u = 0.5");
   tab("solve");
   click(button("Solve", panel("solve")));
   await until(() => button("Compare with reference", refSection() ?? q("body")), "the new run", 60000);

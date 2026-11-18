@@ -48,6 +48,7 @@ all=(
   "phone_menu 390 844 solve"
   "geometry_editor 1280 800 geometry"
   "drawing_incomplete 1280 800 geometry"
+  "equation_line 1280 800 problem"
 )
 
 chrome="${PDE2D_CHROME:-}"

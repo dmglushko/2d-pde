@@ -556,8 +556,8 @@ int main() {
       {"problem errors are collected with their paths",
        [] {
          Json problem = app::default_problem_section();
-         problem["equation"]["c"] = "sin(";
-         problem["equation"]["f"] = "k*x";
+         problem["equation"] = {
+             {"a_xx", "-1"}, {"a_yy", "-1"}, {"c", "sin("}, {"f", "k*x"}};
          problem["boundary_conditions"]["left"] = {{"gamma", "1"}};
          problem["boundary_conditions"]["right"] = {{"alpha", "1"}, {"g", "0"}};
          const Json check_result = app::check_problem(problem);
@@ -580,6 +580,74 @@ int main() {
          problem["equation"]["q"] = "1";
          expect_throws<std::invalid_argument>(
              [&] { (void)app::build_problem(problem); }, "unknown key 'q'");
+       }},
+      {"equations and conditions as lines, with both forms in the check",
+       [] {
+         Json problem = app::default_problem_section();
+         problem["parameters"] = {{"k", 2.0}};
+         problem["equation"] = {{"text", "u_t - div(k*grad(u)) = 1"}};
+         problem["boundary_conditions"]["left"] = {{"text", "u_n + u = 0"},
+                                                   {"priority", 2}};
+         problem["boundary_conditions"]["right"] = {{"alpha", "1"}, {"g", "y"}};
+         problem["initial"] = {{"u", "0"}};
+         const Json result = app::check_problem(problem);
+         check(result["ok"].get<bool>(), "ok: " + result.dump());
+         const Json &equation = result["forms"]["problem.equation"];
+         check(equation["line"] == true &&
+                   equation["text"] == "u_t - div(k*grad(u)) = 1",
+               "the line as written");
+         check(
+             equation["coefficients"] ==
+                 Json(
+                     {{"a_xx", "-k"}, {"a_yy", "-k"}, {"m1", "1"}, {"f", "1"}}),
+             "the coefficients read from it: " +
+                 equation["coefficients"].dump());
+         check(result["facts"]["problem.equation.m1"]["zero"] == false,
+               "facts per coefficient");
+         const Json &left = result["forms"]["problem.boundary_conditions.left"];
+         check(left["coefficients"] == Json({{"alpha", "1"}, {"beta_n", "1"}}),
+               "the condition's coefficients");
+         check(result["conditions"]["left"]["kind"] == "natural", "natural");
+         const Json &right =
+             result["forms"]["problem.boundary_conditions.right"];
+         check(right["line"] == false && right["text"] == "u = y",
+               "coefficients printed as a line: " + right.dump());
+         check(app::build_problem(problem)
+                       .boundary_conditions.at("left")
+                       .priority == 2,
+               "the priority beside a line");
+
+         // Errors of a line are at its text; a line with coefficients is
+         // refused at the object.
+         problem["equation"] = {{"text", "u*u_x = 1"}};
+         problem["boundary_conditions"]["left"] = {{"text", "u = 0"},
+                                                   {"g", "1"}};
+         problem["boundary_conditions"]["right"] = {{"text", "  "}};
+         const Json failed = app::check_problem(problem);
+         std::set<std::string> paths;
+         for (const Json &error : failed["errors"])
+           paths.insert(error["path"].get<std::string>());
+         check(paths.contains("problem.equation.text"), "the line's error");
+         check(paths.contains("problem.boundary_conditions.left"),
+               "both forms");
+         check(paths.contains("problem.boundary_conditions.right.text"),
+               "an empty line");
+         check(!failed["forms"].contains("problem.equation"),
+               "no forms for a line that failed");
+         // A name that is not a parameter is found by compiling, at the
+         // line.
+         problem = app::default_problem_section();
+         problem["equation"] = {{"text", "-lap(u) = q"}};
+         const Json unknown = app::check_problem(problem);
+         check(unknown["errors"].size() == 1 &&
+                   unknown["errors"][0]["path"] == "problem.equation.text",
+               "unknown name at the line: " + unknown.dump());
+         expect_throws<std::invalid_argument>(
+             [&] {
+               problem["equation"] = {{"text", "u^2 = 1"}};
+               (void)app::build_problem(problem);
+             },
+             "problem.equation.text: Cannot read the equation");
        }},
       {"the default case runs to the end",
        [] {
@@ -634,7 +702,7 @@ int main() {
                             "time order 0");
 
          // The right-hand side at the time asked for, not at assembly.t.
-         case_json["problem"]["equation"]["f"] = "t";
+         case_json["problem"]["equation"] = {{"text", "-lap(u) = t"}};
          request["case"] = case_json;
          request["field"] = {{"kind", "right_hand_side"}, {"t", 2.0}};
          const Json at_two = session.field(request);

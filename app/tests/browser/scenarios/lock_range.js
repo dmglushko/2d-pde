@@ -22,8 +22,8 @@ export default async ({ example, q, qa, tab, click, select, type, until, idle, t
   check("the range is locked at the value typed", /locked/.test(text(q("#legend"))));
   // Solve again with another source: the range stays.
   tab("problem");
-  const f = q('[data-path="problem.equation.f"] input');
-  type(f, `${f.value || "0"}*2`);
+  const f = q('[data-path="problem.equation.text"] input');
+  type(f, f.value.replace(/=\s*(.*)$/, "= ($1)*2"));
   tab("solve");
   click(button("Solve", panel("solve")));
   await until(() => /Up to date/.test(text(q("#panel-solve .step-status"))), "the new solution", 60000);

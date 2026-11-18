@@ -224,8 +224,8 @@
 }
 
 .timebar input[type="range"] {
-  flex: 1 1 160px;
-  min-width: 120px;
+  flex: 1 1 100px;
+  min-width: 80px;
 }
 
 .time-label {
@@ -683,4 +683,23 @@
 
 .study-failed {
   color: var(--critical);
+}
+
+.timebar select.speed {
+  min-height: 32px;
+  padding-left: 6px;
+  padding-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-run .play-note {
+  color: var(--muted);
+}
+
+/* At phone width the time bar keeps one row: the snapshot's min and max
+   of u are the time's tooltip there. */
+@media (max-width: 520px) {
+  .time-range {
+    display: none;
+  }
 }

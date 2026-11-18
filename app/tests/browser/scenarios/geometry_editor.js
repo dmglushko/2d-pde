@@ -185,11 +185,11 @@ export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, 
 
   // A condition set after the split survives a rename of the part.
   tab("problem");
-  const g = () => q('[data-path="problem.boundary_conditions.bottom_2.g"] input');
+  const g = () => q('[data-path="problem.boundary_conditions.bottom_2.text"] input');
   await until(() => g(), "the new part's condition");
-  type(g(), "5");
+  type(g(), "u = 5");
   g().dispatchEvent(new w.Event("change", { bubbles: true }));
-  await until(() => savedCase().problem.boundary_conditions.bottom_2.g === "5", "g = 5");
+  await until(() => savedCase().problem.boundary_conditions.bottom_2.text === "u = 5", "u = 5");
   tab("geometry");
   q('#geometry-regions tr[data-region="bottom_2"] button').click();
   const renameTo = q('#geometry-regions input[aria-label="New name"]');
@@ -197,7 +197,7 @@ export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, 
   [...qa("#geometry-regions button")].find((b) => b.textContent === "Apply" && b.closest(".edit-line")?.textContent.includes("Rename")).click();
   await until(() => savedCase().problem.boundary_conditions.outlet, "the renamed part");
   const renamed = savedCase();
-  check("the renamed part keeps its edited condition", renamed.problem.boundary_conditions.outlet.g === "5", JSON.stringify(renamed.problem.boundary_conditions));
+  check("the renamed part keeps its edited condition", renamed.problem.boundary_conditions.outlet.text === "u = 5", JSON.stringify(renamed.problem.boundary_conditions));
   check("the split took the name", renamed.geometry.region_edits.length === 2 && renamed.geometry.region_edits[1].second === "outlet", JSON.stringify(renamed.geometry.region_edits));
   await idle();
   await until(() => regions().includes("outlet"), "the rename read");

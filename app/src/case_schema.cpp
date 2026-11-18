@@ -343,17 +343,29 @@ Json coefficients_schema(const Json &fields,
   return object_schema(keys, described, {}, true);
 }
 
+// The coefficients, or the line instead (line_key).
+Json with_line(Json schema, std::string_view what) {
+  Json line = typed({"string", "null"});
+  line["description"] = "the " + std::string(what) +
+                        " as one line, given instead of the coefficients "
+                        "(fem::parse_equation, fem::parse_condition)";
+  schema["properties"][std::string(line_key)] = std::move(line);
+  return schema;
+}
+
 Json problem_schema() {
   const Json catalog = problem_catalog_json();
   Json parameters = typed({"object", "null"});
   parameters["additionalProperties"] = typed({"number"});
   Json conditions = typed({"object", "null"});
-  conditions["additionalProperties"] =
+  conditions["additionalProperties"] = with_line(
       coefficients_schema(catalog["condition_fields"], condition_extra_keys,
-                          typed({"integer", "null"}));
+                          typed({"integer", "null"})),
+      "condition");
   return object_schema(
       problem_section_keys,
-      {{"equation", coefficients_schema(catalog["equation_fields"])},
+      {{"equation",
+        with_line(coefficients_schema(catalog["equation_fields"]), "equation")},
        {"parameters", std::move(parameters)},
        {"boundary_conditions", std::move(conditions)},
        {"initial", coefficients_schema(catalog["initial_fields"])}},

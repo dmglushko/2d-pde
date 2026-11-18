@@ -3,6 +3,7 @@
 #include "app_error.hpp"
 
 #include "pde2d/fem/compiled_expression.hpp"
+#include "pde2d/fem/equation_text.hpp"
 
 #include <array>
 #include <cmath>
@@ -141,6 +142,31 @@ void read_fields(const Json &object, const std::string &where,
   }
 }
 
+// Whether `object` gives the line ("text") rather than coefficients. A
+// line and a coefficient together are an error at `where`.
+template <class Member, std::size_t N>
+bool gives_line(const Json &object, const std::string &where,
+                const std::array<Field<Member>, N> &fields) {
+  if (!object.is_object() || member(object, line_key).is_null())
+    return false;
+  for (const Field<Member> &field : fields)
+    if (!member(object, field.name).is_null())
+      throw PathError(where, "give either the line ('text') or the "
+                             "coefficients, not both ('" +
+                                 std::string(field.name) + "' is set too)");
+  return true;
+}
+
+// The line's text (empty when it is only spaces).
+std::string line_text(const Json &object, const std::string &where) {
+  const std::string path = where + "." + std::string(line_key);
+  std::string text = require_string(member(object, line_key), path);
+  if (text.find_first_not_of(" \t\r\n") == std::string::npos)
+    throw PathError(path, "the line is empty; write it as left side = "
+                          "right side, for example -lap(u) = 1 or u = 0");
+  return text;
+}
+
 fem::Problem read_problem(const Json &section, Errors &errors) {
   fem::Problem problem;
   const Json empty = Json::object();
@@ -157,15 +183,26 @@ fem::Problem read_problem(const Json &section, Errors &errors) {
   };
 
   const Json &equation = member(input, "equation");
+  bool equation_line = false;
   if (errors.attempt("problem.equation", [&] {
         if (equation.is_null())
           return;
         require_object(equation, "problem.equation");
-        const auto names = field_names(equation_fields);
+        auto names = field_names(equation_fields);
+        names.push_back(line_key);
         reject_unknown_keys(equation, "problem.equation", names);
-      }))
-    read_fields(equation, "problem.equation", equation_fields, problem.equation,
-                errors, set_expression);
+        equation_line =
+            gives_line(equation, "problem.equation", equation_fields);
+      })) {
+    if (equation_line)
+      errors.attempt("problem.equation.text", [&] {
+        problem.equation =
+            fem::parse_equation(line_text(equation, "problem.equation"));
+      });
+    else
+      read_fields(equation, "problem.equation", equation_fields,
+                  problem.equation, errors, set_expression);
+  }
 
   errors.attempt("problem.parameters", [&] {
     problem.parameters = read_parameters(member(input, "parameters"));
@@ -183,16 +220,24 @@ fem::Problem read_problem(const Json &section, Errors &errors) {
       const std::string where = "problem.boundary_conditions." + item.key();
       fem::BoundaryCondition condition;
       const Json &object = item.value();
+      bool line = false;
       if (!errors.attempt(where, [&] {
             require_object(object, where);
             auto names = field_names(condition_fields);
             names.insert(names.end(), std::begin(condition_extra_keys),
                          std::end(condition_extra_keys));
+            names.push_back(line_key);
             reject_unknown_keys(object, where, names);
+            line = gives_line(object, where, condition_fields);
           }))
         continue;
-      read_fields(object, where, condition_fields, condition, errors,
-                  set_expression);
+      if (line)
+        errors.attempt(where + ".text", [&] {
+          condition = fem::parse_condition(line_text(object, where));
+        });
+      else
+        read_fields(object, where, condition_fields, condition, errors,
+                    set_expression);
       errors.attempt(where + ".priority", [&] {
         const Json &priority = member(object, "priority");
         if (priority.is_null())
@@ -222,6 +267,12 @@ fem::Problem read_problem(const Json &section, Errors &errors) {
                 errors, set_expression);
 
   return problem;
+}
+
+// The problem section as an object (a null section has no keys).
+const Json &input_section(const Json &section) {
+  static const Json empty = Json::object();
+  return section.is_object() ? section : empty;
 }
 
 Json facts_json(const fem::ExpressionFacts &facts) {
@@ -257,11 +308,10 @@ Json fields_json(const std::array<Field<Member>, N> &fields) {
   return out;
 }
 
-Json texts(std::initializer_list<std::pair<std::string_view, std::string_view>>
-               values) {
+// An equation or condition given as one line.
+Json line(std::string_view text) {
   Json out = Json::object();
-  for (const auto &[key, value] : values)
-    out[std::string(key)] = value;
+  out[std::string(line_key)] = text;
   return out;
 }
 
@@ -305,27 +355,73 @@ Json check_problem(const Json &problem_section) {
                                                         problem.parameters);
   });
   Json facts = Json::object();
+  // `field`: where an error of compiling goes (the coefficient's field,
+  // or the line it was read from).
   const auto inspect = [&](const std::string &path,
-                           const fem::Expression &expression) {
+                           const fem::Expression &expression,
+                           const std::string &field) {
     // A text that did not parse has no facts: the zero expression left in
     // its place is not what was written.
-    if (errors.failed_at(path))
+    if (errors.failed_at(path) || errors.failed_at(field))
       return;
     facts[path] = facts_json(expression.facts());
     if (parameters_valid && !expression.facts().zero)
-      errors.attempt(path, [&] {
+      errors.attempt(field, [&] {
         [[maybe_unused]] const fem::CompiledExpression compiled(
             expression, problem.parameters);
       });
   };
-  for (const auto &field : equation_fields)
-    inspect("problem.equation." + std::string(field.name),
-            problem.equation.*field.member);
+  // Both forms of every equation and condition that was read: the line
+  // (as written, or printed from the coefficients) and the coefficients
+  // (as written, or read from the line), so the page can show either.
+  Json forms = Json::object();
+  const auto add_form = [&](const std::string &where, const Json &object,
+                            const std::string &printed, Json coefficients) {
+    for (const auto &key : {std::string(where), where + ".text"})
+      if (errors.failed_at(key))
+        return;
+    Json item = Json::object();
+    const bool line = object.is_object() && !member(object, line_key).is_null();
+    item["line"] = line;
+    item["text"] = line ? member(object, line_key) : Json(printed);
+    item["coefficients"] = std::move(coefficients);
+    forms[where] = std::move(item);
+  };
+  const auto field_of = [](const Json &object, const std::string &where,
+                           std::string_view name) {
+    return object.is_object() && !member(object, line_key).is_null()
+               ? where + ".text"
+               : where + "." + std::string(name);
+  };
+  {
+    const std::string where = "problem.equation";
+    const Json &object = member(input_section(problem_section), "equation");
+    Json coefficients = Json::object();
+    for (const auto &field : equation_fields) {
+      const fem::Expression &expression = problem.equation.*field.member;
+      inspect(where + "." + std::string(field.name), expression,
+              field_of(object, where, field.name));
+      if (!expression.facts().zero)
+        coefficients[std::string(field.name)] = expression.text();
+    }
+    add_form(where, object, fem::equation_text(problem.equation),
+             std::move(coefficients));
+  }
   Json conditions = Json::object();
   for (const auto &[region, condition] : problem.boundary_conditions) {
     const std::string where = "problem.boundary_conditions." + region;
-    for (const auto &field : condition_fields)
-      inspect(where + "." + std::string(field.name), condition.*field.member);
+    const Json &object = member(
+        member(input_section(problem_section), "boundary_conditions"), region);
+    Json coefficients = Json::object();
+    for (const auto &field : condition_fields) {
+      const fem::Expression &expression = condition.*field.member;
+      inspect(where + "." + std::string(field.name), expression,
+              field_of(object, where, field.name));
+      if (!expression.facts().zero)
+        coefficients[std::string(field.name)] = expression.text();
+    }
+    add_form(where, object, fem::condition_text(condition),
+             std::move(coefficients));
     errors.attempt(where, [&] {
       Json item = Json::object();
       item["kind"] = kind_name(fem::classify(condition));
@@ -335,13 +431,15 @@ Json check_problem(const Json &problem_section) {
   }
   for (const auto &field : initial_fields)
     if (const auto &expression = problem.initial.*field.member)
-      inspect("problem.initial." + std::string(field.name), *expression);
+      inspect("problem.initial." + std::string(field.name), *expression,
+              "problem.initial." + std::string(field.name));
 
   Json out = Json::object();
   out["ok"] = error_list.empty();
   out["errors"] = std::move(error_list);
   out["facts"] = std::move(facts);
   out["conditions"] = std::move(conditions);
+  out["forms"] = std::move(forms);
   // The summaries describe the input as written; they need no compiling.
   const int order = fem::time_order(problem);
   out["time_order"] = order;
@@ -358,14 +456,14 @@ Json check_problem(const Json &problem_section) {
 
 Json default_problem_section() {
   Json out = Json::object();
-  out["equation"] = texts({{"a_xx", "-1"}, {"a_yy", "-1"}, {"f", "1"}});
+  out["equation"] = line("-lap(u) = 1");
   out["parameters"] = Json::object();
   out["boundary_conditions"] = Json::object();
   out["initial"] = Json::object();
   return out;
 }
 
-Json default_condition() { return texts({{"alpha", "1"}, {"g", "0"}}); }
+Json default_condition() { return line("u = 0"); }
 
 Json problem_catalog_json() {
   Json out = Json::object();
@@ -378,12 +476,24 @@ Json problem_catalog_json() {
       "counterclockwise by 90 degrees), both of the straight mesh edge. "
       "At a corner between two Dirichlet regions the higher priority "
       "wins; equal priorities are averaged.";
+  out["condition_line_note"] =
+      "u = 0, u_n = 0, k*u_n + h*u = h*u_out or (k ∇u)·n = q: n is the "
+      "outward normal, tau the tangent, u_n = n·∇u and u_tau = tau·∇u.";
   out["equation_fields"] = fields_json(equation_fields);
   out["condition_fields"] = fields_json(condition_fields);
   out["initial_fields"] = fields_json(initial_fields);
   out["initial_note"] =
       "Which initial conditions are needed follows from the time order: "
       "none for 0, u for 1, u and u_t for 2.";
+  out["line_help"] =
+      "One line, left side = right side, linear in u: u and its "
+      "derivatives u_x, u_y, u_xx, u_xy, u_yy, u_t, u_tt; grad(u), div(F), "
+      "lap(u), dot(a, b), or with nabla ∇u, ∇·F, ∇²u, Δu and a·b; vectors "
+      "(a, b) and matrices [[a, b], [c, d]]; a factor in front of ∇ "
+      "multiplies it (k∇u). Coefficients are expressions as below. In a "
+      "boundary condition n is the outward normal, tau the tangent, u_n = "
+      "n·∇u and u_tau = tau·∇u. Examples: u_t - div(k*grad(u)) = 0, "
+      "-∇·(k∇u) + (1, 0)·∇u = f, k*u_n + h*u = h*u_out.";
   out["expression_help"] =
       "Variables x, y, t and named parameters; numbers, pi, E; + - * / ^; "
       "sin cos tan asin acos atan sinh cosh tanh exp log (or ln) sqrt abs; "
@@ -393,37 +503,29 @@ Json problem_catalog_json() {
 
   Json equations = Json::array();
   equations.push_back(
-      named_template("Poisson", "-(u_xx + u_yy) = f",
-                     texts({{"a_xx", "-1"}, {"a_yy", "-1"}, {"f", "1"}})));
+      named_template("Poisson", "-Δu = f", line("-lap(u) = 1")));
+  equations.push_back(named_template("Heat", "u_t - ∇·(k∇u) = f",
+                                     line("u_t - div(k*grad(u)) = 0")));
+  equations.push_back(
+      named_template("Wave", "u_tt - c2 Δu = f", line("u_tt - c2*lap(u) = 0")));
+  equations.push_back(
+      named_template("Convection-diffusion", "-∇·(k∇u) + v·∇u = f",
+                     line("-div(k*grad(u)) + dot((v_x, v_y), grad(u)) = 1")));
+  equations.push_back(named_template("Reaction-diffusion", "-Δu + s u = f",
+                                     line("-lap(u) + s*u = 1")));
   equations.push_back(named_template(
-      "Heat", "u_t - k (u_xx + u_yy) = f",
-      texts({{"a_xx", "-k"}, {"a_yy", "-k"}, {"m1", "1"}, {"f", "0"}})));
-  equations.push_back(named_template(
-      "Wave", "u_tt - c2 (u_xx + u_yy) = f",
-      texts({{"a_xx", "-c2"}, {"a_yy", "-c2"}, {"m2", "1"}, {"f", "0"}})));
-  equations.push_back(named_template("Convection-diffusion",
-                                     "-k (u_xx + u_yy) + v_x u_x + v_y u_y = f",
-                                     texts({{"a_xx", "-k"},
-                                            {"a_yy", "-k"},
-                                            {"b_x", "v_x"},
-                                            {"b_y", "v_y"},
-                                            {"f", "1"}})));
-  equations.push_back(named_template(
-      "Reaction-diffusion", "-(u_xx + u_yy) + s u = f",
-      texts({{"a_xx", "-1"}, {"a_yy", "-1"}, {"c", "s"}, {"f", "1"}})));
+      "Anisotropic diffusion", "-∇·(A∇u) = f with A = [[k1, 0], [0, k2]]",
+      line("-div([[k1, 0], [0, k2]]*grad(u)) = 1")));
   out["equation_templates"] = std::move(equations);
 
   Json conditions = Json::array();
   conditions.push_back(
       named_template("Dirichlet", "u = g", default_condition()));
-  conditions.push_back(named_template("Neumann", "u_n = g",
-                                      texts({{"beta_n", "1"}, {"g", "0"}})));
+  conditions.push_back(named_template("Neumann", "u_n = g", line("u_n = 0")));
   conditions.push_back(
-      named_template("Robin", "alpha u + u_n = g",
-                     texts({{"alpha", "1"}, {"beta_n", "1"}, {"g", "0"}})));
+      named_template("Robin", "u_n + h u = g", line("u_n + u = 0")));
   conditions.push_back(
-      named_template("Dynamic", "u_n + u_t = g",
-                     texts({{"beta_n", "1"}, {"gamma", "1"}, {"g", "0"}})));
+      named_template("Dynamic", "u_n + u_t = g", line("u_n + u_t = 0")));
   out["condition_templates"] = std::move(conditions);
   return out;
 }

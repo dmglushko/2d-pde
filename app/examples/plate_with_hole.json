@@ -46,27 +46,21 @@
   },
   "problem": {
     "equation": {
-      "a_xx": "-1",
-      "a_yy": "-1",
-      "f": "0"
+      "text": "-lap(u) = 0"
     },
     "parameters": {},
     "boundary_conditions": {
       "inlet": {
-        "alpha": "1",
-        "g": "1"
+        "text": "u = 1"
       },
       "outlet": {
-        "alpha": "1",
-        "g": "0"
+        "text": "u = 0"
       },
       "wall": {
-        "beta_n": "1",
-        "g": "0"
+        "text": "u_n = 0"
       },
       "hole": {
-        "beta_n": "1",
-        "g": "0"
+        "text": "u_n = 0"
       }
     },
     "initial": {}
