@@ -1019,3 +1019,66 @@ guess).
   its curves; `drawing_incomplete`: an incomplete drawing after a
   reload), C++ (the locator on a region across the loop's start and on
   holes the library turned).
+
+## 2026-11-18: the equation as one line, no waiting, playback in time
+
+Asked by the owner: type the equation inline (also with nabla), remove
+the lag after every input, stop fields jumping, and play a run in real
+time from its start.
+
+- **Lines are the library's** (`fem::parse_equation`,
+  `fem::parse_condition`, decided by the owner the same day). The app
+  only stores `{"text": ...}` in place of the coefficients and forwards
+  the library's messages at `.text`. Why: the expansion of
+  `div(k*grad(u))` needs the coefficients' derivatives, which only the
+  library may take; the app never reimplements maths.
+- **A line or coefficients, never both, no version change.** The case
+  keeps the form the user chose; old cases with coefficients are read as
+  they are. Why: nothing to migrate, and the coefficient form stays
+  available (and is what a line means, shown under it).
+- **The check returns both forms** (`forms`: the line printed by
+  `fem::equation_text`/`condition_text`, the coefficients read from the
+  line). The page switches forms from them and shows "means …" under a
+  line. Why: the page cannot convert by itself, and the meaning of a
+  line is what the user must see to learn the convention (a_xx = −k for
+  −∇·(k∇u)).
+- **Lines everywhere new** (the default case, templates, presets, the
+  seven examples; their figures are unchanged, the coefficients being the
+  same). Why: what the owner asked for is the normal way in.
+- **Symbol buttons, not shortcuts.** ∇ · ² Δ beside each line insert at
+  the caret; ASCII names (grad, div, lap, dot) are always accepted. Why:
+  no keyboard has ∇, and a button is discoverable.
+- **No fixed pause before a check.** The problem check and the geometry
+  run at once and coalesce (one request in flight, the newest text
+  next); the "Delay after the last key" setting is gone. Why: the
+  measured cost was the 350 ms and 250 ms pauses, not the work (a
+  keystroke costs about 1 ms in the page, a check 3 to 5 ms on the
+  server).
+- **Nothing above a field changes while checking.** The summary keeps the
+  last check (greyed only after 0.4 s), the status keeps its words for a
+  quick check, and a line's error waits for a 0.7 s pause in typing in
+  it. Why: the summary emptied and refilled on every key, moving every
+  field below it; immediate errors would flicker on every key of a line.
+- **Playback in simulated time.** 1× is one simulated second per second
+  (a speed menu on the time bar, kept as a preference; 0.001× to 1000×
+  for runs of milliseconds or hours); the snapshot shown is the last one
+  at or before the clock. Why: frames per second made the speed depend
+  on the number of snapshots.
+- **A run plays from its start, at the run's pace.** While computed, a
+  run starts playing once 4 snapshots are there and plays at
+  min(speed, 90 % of the measured pace over the last 4 s), waiting at the
+  newest snapshot if it catches up; the bar says the speed it plays at.
+  Why: showing only the newest snapshot jumped to the end; the owner
+  asked to start at the start and adapt to a slower computation (the 90 %
+  keeps the waits rare). A timer drives the clock (60 ticks a second,
+  at most 0.25 s per tick), not animation frames, which do not run in a
+  frame that is not painted.
+- **At phone width the snapshot's min and max are the time's tooltip**,
+  so the time bar with the speed menu keeps one row (the picture stays
+  in the top 60 % of the screen).
+- Tests: C++ (lines and both forms in the check, errors at `.text`, a
+  line with coefficients refused), Node (the playback clock, the pace,
+  coalesced checks, `isLine`), browser (`equation_line`: typing without
+  the field moving, the meaning, a symbol at the caret, an error after a
+  pause, switching forms, a condition line; `time_bar`: a run plays from
+  its start).

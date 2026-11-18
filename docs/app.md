@@ -118,7 +118,7 @@ flowchart LR
 | `app/src/binary.hpp` | little-endian float32, float64 and uint32 |
 | `app/src/session.*` | `Session`: the facade the server and `--run` use (stages, runs, comparisons, probes, status, exports, `run`), the two locks and `Work` (a call under the session mutex, with what it does), the table of field kinds, the default case |
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`: routes, client ids, token, Origin, the queue bound for calls that wait for the session) and the command line |
-| `app/web/` | `index.html`, `css/` (one dark theme, every colour a token: `tokens.css` tokens and base, `panels.css` controls, step heads, forms, results, toast, settings, `picture.css` viewer, time bar, legend, overlays, charts, `layout.css` top bar, columns, tabs, narrow screens; loaded in that order), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing, chart, colour-bar and log ticks, CSV, byte sizes; `color.js` OKLab ramps, field scales, the locked range, the colour maps; `display.js` what the picture shows (`resolveDisplay`); `requests.js` retries, backoff, plain error texts, the server's busy text; `study.js` refinement levels and observed orders; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, the conditions that follow a drawing's region changes, visible coefficients; `drawing.js` the drawing's curves, hit testing, snapping, the split point, the drawing edits; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id kept per tab and its claim, the token header, requests that wait), `state.js` (the store, `editCase`, tickets, undo, invalid entries, the picture's state per tab), `actions.js` (stages, runs and their progress with retries, reattaching after a reload, presets, exports), `display.js` (the store gathered for `resolveDisplay`), `snapshots.js`, `settings.js`, `case_menu.js`, `server_status.js`, `refinement.js` (the refinement study), `geometry_editor.js` (the tools bar, the split tool, the drawing editor: the viewer's overlay), `region_popover.js` (a region's actions on the picture), `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, the overlay drawn over the kept frame, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart: keyboard readout, CSV, log–log), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
+| `app/web/` | `index.html`, `css/` (one dark theme, every colour a token: `tokens.css` tokens and base, `panels.css` controls, step heads, forms, results, toast, settings, `picture.css` viewer, time bar, legend, overlays, charts, `layout.css` top bar, columns, tabs, narrow screens; loaded in that order), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing, chart, colour-bar and log ticks, CSV, byte sizes; `color.js` OKLab ramps, field scales, the locked range, the colour maps; `display.js` what the picture shows (`resolveDisplay`); `requests.js` retries, backoff, plain error texts, the server's busy text; `study.js` refinement levels and observed orders; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, the conditions that follow a drawing's region changes, visible coefficients, `isLine`; `playback.js` the playback clock and the run's pace; `drawing.js` the drawing's curves, hit testing, snapping, the split point, the drawing edits; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id kept per tab and its claim, the token header, requests that wait), `state.js` (the store, `editCase`, tickets, undo, invalid entries, the picture's state per tab), `actions.js` (stages, the coalesced requests of the problem check and the geometry, runs and their progress with retries, reattaching after a reload, presets, exports), `display.js` (the store gathered for `resolveDisplay`), `snapshots.js`, `settings.js`, `case_menu.js`, `server_status.js`, `refinement.js` (the refinement study), `geometry_editor.js` (the tools bar, the split tool, the drawing editor: the viewer's overlay), `region_popover.js` (a region's actions on the picture), `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, the overlay drawn over the kept frame, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart: keyboard readout, CSV, log–log), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
 | `app/examples/` | example cases (each runs as `app_run_*`) and an example SVG |
 | `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `drawing.cpp` (drawings, their errors' paths, the exact conversion of every shape and example, the locator, a mesh file's split at a node), `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, the series zip, CRC-32 and SHA-256, error paths, `--set`, `--sweep`), `server.cpp` (HTTP, token, Origin, 429, status, clients), `example_checks.json` and `example_check.cpp` (each example's expected figures, `app_check_*`), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
@@ -144,9 +144,10 @@ must not be ignored silently), and a missing value means its default.
     "improvers": [{"type": "delaunay_flips", "options": {"use": "final_only"}}]
   },
   "problem": {
-    "equation": {"a_xx": "-1", "a_yy": "-1", "f": "1"},
+    "equation": {"text": "u_t - div(k*grad(u)) = 1"},
     "parameters": {"k": 0.1},
-    "boundary_conditions": {"left": {"alpha": "1", "g": "0", "priority": 0}},
+    "boundary_conditions": {"left": {"text": "u = 0", "priority": 0},
+                            "right": {"alpha": "1", "beta_n": "1", "g": "0"}},
     "initial": {"u": "0"}
   },
   "assembly": {"t": 0, "max_time_order": 2},
@@ -186,8 +187,15 @@ must not be ignored silently), and a missing value means its default.
   the improvers on it (the discretizer and triangulator are not used).
 - `mesh.refiner` may be `null` (no refiner). A length bound is
   `{"absolute": number or null, "relative": number or null}`.
-- Problem coefficients are expression texts; an empty or missing one is
-  not set. `priority` is a whole number.
+- The equation and each condition are either one line, `{"text": ...}`
+  (read by the library's `fem::parse_equation` and `fem::parse_condition`:
+  `u_t - div(k*grad(u)) = 1`, `-∇·(k∇u) + (1, 0)·∇u = f`, `k*u_n + h*u =
+  h*u_out`), or their coefficients (expression texts; an empty or missing
+  one is not set). A line and a coefficient together are an error at the
+  object; an empty line is an error at its `text`. New cases, the
+  examples, the templates and the presets use lines; cases with
+  coefficients are read as they are (no version change). `priority` is a
+  whole number, beside a line or the coefficients.
 - `assembly.max_time_order` (0, 1 or 2) is `Assembler::assemble`'s: which
   time terms are built.
 - `solve.mode` is `static` (`StaticSolver` at `static.t`) or `time`
@@ -267,7 +275,7 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 | `POST /api/geometry/drawing` | case | `{"geometry": drawing}`: the case's curves after its region edits as a drawing section, curve for curve (refused for a mesh file) |
 | `POST /api/mesh` | case | `mesh`: the mesh's summary (`id`, counts `nodes`, `triangles`, `boundary_edges`, `region_names`, `has_links`, and `arrays`: where its arrays are, see "Binary answers"); `stats`, `target_met`, `longest_edge`, `max_edge_length`, `domain_size`, every stage's `reports`, `memory` (`snapshot_bytes`: what a run on this mesh keeps per snapshot, about `snapshot_bytes` × (snapshots + 1) in all; `budget`) |
 | `POST /api/mesh/arrays` | `{"mesh": id}` | the mesh's arrays in binary. The session keeps the last 16 meshes it built and the meshes of every kept run |
-| `POST /api/problem` | case | the check: `ok`, `errors` (`path`, `message`), `facts` per path (none for a text that did not parse), each condition's kind, time order, needed initial conditions |
+| `POST /api/problem` | case | the check: `ok`, `errors` (`path`, `message`), `facts` per coefficient path (also for a line; none for a text that did not parse), each condition's kind, `forms` (per equation and condition that was read: `line` whether it was given as a line, `text` the line as written or printed from the coefficients by `fem::equation_text`/`condition_text`, `coefficients` the non-zero ones as written or read from the line), time order, needed initial conditions |
 | `POST /api/assemble` | case | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
 | `POST /api/field` | `{"case", "field"}` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`) |
 | `POST /api/solve` | case | starts the client's solve of the case, or finds its current one with the same inputs (see "Runs"), and answers its progress (below) |
@@ -321,7 +329,9 @@ start of its text. Where the paths come from:
   at the loop and edge the message names (`Loop 1, curve 3: ...` is
   `geometry.loops[1].edges[3]`; for two loops that cross, the curve of
   the later loop it names; `geometry.loops[i]` when it names only a
-  loop); a coefficient at `problem.equation.a_xx` and so on; the mesh
+  loop); a coefficient at `problem.equation.a_xx` and so on, a line at
+  `problem.equation.text` (also when compiling one of the coefficients
+  it means fails, an unknown name); the mesh
   spec at `mesh.spec.max_edge_length...`; `--set` at the path it was
   given; a comparison's expression at `exact`; a probe point at
   `points[i]`.
@@ -467,9 +477,10 @@ needs and its writer:
   requirement, a time method's supported `time_orders`.
 - `shapes`: the ready-made shapes with their options.
 - `problem`: the coefficients of the equation, of a condition and of the
-  initial conditions in order, with the term each multiplies; help text;
-  templates of common equations and conditions; `presets` (`id`,
-  `label`, `description`).
+  initial conditions in order, with the term each multiplies; help text
+  (`line_help`, `condition_line_note`, `expression_help`); templates of
+  common equations and conditions (as lines); `presets` (`id`, `label`,
+  `description`).
 - `format`, `version`, `library_version`, `default_case`.
 
 ## Adding a component
@@ -631,7 +642,8 @@ edges.
   the drawing at the start of the drag, so nothing accumulates) and
   draws it; the case changes once, when the pointer is released
   (`editCase`, "edit": one undo step), and the server reads the geometry
-  250 ms after (`scheduleGeometry`). A gesture belongs to the geometry's
+  right after (`scheduleGeometry`, one request at a time, see "Stages the
+  page runs by itself"). A gesture belongs to the geometry's
   revision it started on: an undo, a redo or any other change of the
   geometry meanwhile ends it, and so do Escape and a cancelled pointer;
   an ended gesture changes nothing, and the inspector shows the case's
@@ -847,10 +859,34 @@ on the mesh it was computed on, with "Outdated: the case changed since
 this result" over the picture and "(outdated)" in the legend and the
 Colour menu; it never draws a comparison.
 
+**Stages the page runs by itself** (the problem check after every edit,
+the geometry after a change of it; `actions.js`, `coalesced`) run at
+once, one request at a time: an edit made while one runs is sent when it
+answers, the newest text only (no pause in typing is waited for; the
+answers take milliseconds). The setting "Check while typing" off checks
+the problem only when a field is left.
+
+**The Problem step** (`panels/problem.js`). The equation and each
+condition show their line (a text field with buttons that insert ∇ · ² Δ
+at the caret, keeping the focus) and under it, in a row of its own
+height, what the line means: the coefficients from the check's `forms`
+("means a_xx = -k · b_x = …", powers as ^), kept greyed while the line
+is being typed or wrong. A line's error waits until typing in it pauses
+for 0.7 s and then takes the place of the meaning (a line is wrong after
+almost every key). "Coefficients" (beside the equation's heading and in
+each condition card's head) switches to the coefficient form and "As a
+line" back, both from the fresh check's `forms` (the library reads and
+prints them; a form with an error cannot switch, a toast says so).
+Templates give lines. **Nothing above a field changes while a check
+runs**: the summary (time order, chips) and the step's status keep the
+last check's words, and only a check slower than 0.4 s says "Checking…"
+and greys the old facts.
+
 **Following a run** (`actions.js`, `followRun`): the page polls the
-progress every 250 ms, shows the newest snapshot unless the time bar was
-moved during the run (or the setting is off), and colours with the range
-so far (the summary's exact `min` and `max`, one scale for every
+progress every 250 ms and makes room for the new snapshots; the time bar
+plays the run from its start as it comes (`store.playRun`, see "The time
+bar"; the setting "Play a run as it is computed" turns it off), and the
+picture colours with the range so far (the summary's exact `min` and `max`, one scale for every
 snapshot). A poll answered `busy` (429) or not at all is tried again
 after 250 ms, doubling to 4 s (`pure/requests.js`), and the Solve step's
 head says so; a `replaced` or `expired` answer, or another error, ends
@@ -881,11 +917,26 @@ the picture keeps the nearest loaded snapshot and says so in its label
 picture in plain words with Retry (or Solve again when the run is gone),
 and no new fetch starts until then. Differences behave the same.
 
-**The time bar** under the picture (play or pause, a slider, the shown
-time with that snapshot's min and max of u from the progress's
-`snapshot_min` and `snapshot_max`, in double) is the one control of the
-shown snapshot (`store.solveFrame`); during a run it also shows how far
-the run got.
+**The time bar** under the picture (play or pause, the playback speed,
+a slider, the shown time with that snapshot's min and max of u from the
+progress's `snapshot_min` and `snapshot_max`, in double; at phone width
+the min and max are the time's tooltip, so the bar keeps one row) is the
+one control of the shown snapshot (`store.solveFrame`); during a run it
+also shows how far the run got and how the playback keeps up.
+**Playback** (`timebar.js`, `pure/playback.js`) moves a clock in
+simulated time by real time, about 60 ticks a second (a timer): at 1×
+(the default speed, a preference) one simulated second takes one second,
+whatever the steps and snapshots; the snapshot shown is the last one at
+or before the clock. It never runs past the snapshots loaded from the
+shown one on (they are fetched ahead, `prefetchSnapshots`), and a tick
+counts at most 0.25 s (a hidden tab does not jump). A run being computed
+plays from t0: it waits until 4 snapshots are there, then plays at the
+speed or at 90 % of the run's measured pace (simulated time per second
+over the last 4 s of progress), whichever is slower, and waits at the
+newest snapshot if it catches up; the bar says "playing at 0.38×: the
+run computes slower than 1×". When the run ends, the playback goes on at
+the speed to the end. The slider and Pause end playing a run as it comes;
+Play at the end starts again from t0.
 
 **Probes.** A click on the picture (or Enter with the picture focused)
 pins a probe, up to four; each keeps its colour slot while others come
@@ -1050,9 +1101,9 @@ with its distance to the boundary, found on a grid over the bounding box
 (inside an odd number of loops, farthest from the sampled boundary) or
 among the triangle centroids of a mesh file. Bumps are centred there with
 a width of half that distance. The page names presets only by the ids the
-catalog gives; every physical choice is in `presets.cpp`, which spells out
-the sign conventions (−k Δu is `a_xx = a_yy = -k`; cooling is
-`alpha = h, beta_n = 1, g = h u_out`). Each preset runs on the default
+catalog gives; every physical choice is in `presets.cpp`, written as lines
+(heat is `u_t - div(k*grad(u)) = 0`; cooling through the boundary,
+−k u_n = h (u − u_out) with k = 1, is `u_n + h*u = h*u_out`). Each preset runs on the default
 rectangle and on an annulus in `tests/runs.cpp`, and on the drawn
 cooling fin in `tests/drawing.cpp`.
 
