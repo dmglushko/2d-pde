@@ -263,33 +263,136 @@ void transfer_error_and_damping() {
   std::vector<double> times;
   for (int k = 4; k <= 32; k += 4)
     times.push_back(k * dt);
-  for (const auto &method :
-       std::vector<std::shared_ptr<const solve::TimeMethod>>{
-           std::make_shared<solve::ImplicitEuler>(),
-           std::make_shared<solve::ImplicitMidpoint>()}) {
-    const auto r =
-        AdaptiveIntegrator(integrator(method, dt), {uniform_refinement})
-            .integrate(start, 0.0, 0.5,
-                       {.every = {.steps = 2}, .max_nodes = 1000},
-                       {.snapshot_times = times});
-    check(r.report.metrics.at("refinements") == 1.0, "one refinement");
-    check(r.pieces[0].adaptation->time == 2 * dt, "at t = 1/32");
-    const auto fresh =
-        integrator(method, dt)
-            .integrate(std::make_shared<const fem::MeshedProblem>(
-                           r.final.mesh, bump_problem()),
-                       0.0, 0.5, {.snapshot_times = times});
-    for (std::size_t k = 0; k < times.size(); ++k) {
-      const double transferred = bump_error(r.snapshots[k]);
-      const double direct = bump_error(fresh.snapshots[k]);
-      std::cout << "INFO " << method->name() << " t = " << times[k]
-                << ": transferred " << transferred << ", fresh " << direct
-                << '\n';
-      if (method->name() == "implicit_euler")
-        near(transferred, direct, 1e-4 * direct,
-             "Euler: the transfer is forgotten");
+  for (const std::size_t damping : {0u, 2u}) {
+    for (const auto &method :
+         std::vector<std::shared_ptr<const solve::TimeMethod>>{
+             std::make_shared<solve::ImplicitEuler>(),
+             std::make_shared<solve::ImplicitMidpoint>()}) {
+      if (damping > 0 && method->name() == "implicit_euler")
+        continue;
+      const auto r =
+          AdaptiveIntegrator(
+              integrator(method, dt), {uniform_refinement},
+              {.damping_steps = damping,
+               .damping_method = std::make_shared<solve::ImplicitEuler>()})
+              .integrate(start, 0.0, 0.5,
+                         {.every = {.steps = 2}, .max_nodes = 1000},
+                         {.snapshot_times = times});
+      check(r.report.metrics.at("refinements") == 1.0, "one refinement");
+      check(r.pieces[0].adaptation->time == 2 * dt, "at t = 1/32");
+      const auto fresh =
+          integrator(method, dt)
+              .integrate(std::make_shared<const fem::MeshedProblem>(
+                             r.final.mesh, bump_problem()),
+                         0.0, 0.5, {.snapshot_times = times});
+      for (std::size_t k = 0; k < times.size(); ++k) {
+        const double transferred = bump_error(r.snapshots[k]);
+        const double direct = bump_error(fresh.snapshots[k]);
+        std::cout << "INFO " << method->name() << " (" << damping
+                  << " damping steps) t = " << times[k] << ": transferred "
+                  << transferred << ", fresh " << direct << '\n';
+        if (method->name() == "implicit_euler")
+          near(transferred, direct, 1e-4 * direct,
+               "Euler: the transfer is forgotten");
+        else if (damping > 0)
+          check(transferred < 1.001 * direct,
+                "damping steps: no worse than a run on the refined mesh from "
+                "t0");
+      }
     }
   }
+}
+
+// The moving bump with the midpoint method, adapting every 4 steps of
+// 1/128 (so the midpoint method takes about half the steps even with
+// damping steps): without damping steps each transfer's error stays and
+// the adaptive run is worse than uniform refinement; with 2 steps of
+// implicit Euler after each transfer it is clearly better than both
+// (measured: 3532 nodes, error 0.325 without; 2514 nodes, 0.0877 with;
+// uniform 2927 nodes, 0.262). With 0 damping steps the run is unchanged
+// bit for bit, whatever the damping method.
+void damping_steps_after_transfers() {
+  const double dt = 1.0 / 128, t1 = 0.5;
+  const auto start = std::make_shared<const fem::MeshedProblem>(
+      unit_square_mesh(0.1), bump_problem());
+  const auto midpoint = std::make_shared<solve::ImplicitMidpoint>();
+  const auto euler = std::make_shared<solve::ImplicitEuler>();
+  const AdaptiveTimeTarget target{.every = {.steps = 4}, .max_nodes = 6000};
+  const auto plain =
+      AdaptiveIntegrator(integrator(midpoint, dt), {refinement()})
+          .integrate(start, 0.0, t1, target);
+  const auto off =
+      AdaptiveIntegrator(integrator(midpoint, dt), {refinement()},
+                         {.damping_steps = 0, .damping_method = euler})
+          .integrate(start, 0.0, t1, target);
+  check(off.final.values == plain.final.values &&
+            off.pieces.size() == plain.pieces.size() &&
+            off.report.metrics.at("damping_steps") == 0.0,
+        "0 damping steps: unchanged bit for bit");
+  const auto damped =
+      AdaptiveIntegrator(integrator(midpoint, dt), {refinement()},
+                         {.damping_steps = 2, .damping_method = euler})
+          .integrate(start, 0.0, t1, target);
+  check(damped.final.time == t1, "reaches t1");
+
+  // Uniform refinement to at least as many nodes as the damped run.
+  std::shared_ptr<const mesh::Mesh> uniform = start->mesh();
+  const mesh::Remesher nvb(std::make_shared<mesh::NewestVertexBisection>());
+  while (uniform->nodes.size() < damped.final.mesh->nodes.size()) {
+    std::vector<std::size_t> all(uniform->triangles.size());
+    for (std::size_t t = 0; t < all.size(); ++t)
+      all[t] = t;
+    uniform =
+        std::make_shared<const mesh::Mesh>(nvb.refine(*uniform, all).mesh);
+  }
+  const auto uniform_run =
+      integrator(midpoint, dt)
+          .integrate(std::make_shared<const fem::MeshedProblem>(uniform,
+                                                                bump_problem()),
+                     0.0, t1);
+  const double plain_error = bump_error(plain.final);
+  const double damped_error = bump_error(damped.final);
+  const double uniform_error = bump_error(uniform_run.final);
+  std::cout << "INFO midpoint, every 4 steps of 1/128: no damping "
+            << plain.final.mesh->nodes.size() << " nodes, error " << plain_error
+            << "; 2 damping steps of implicit Euler "
+            << damped.final.mesh->nodes.size() << " nodes, error "
+            << damped_error << " (" << damped.report.metrics.at("damping_steps")
+            << " of " << damped.report.metrics.at("steps")
+            << " steps); uniform " << uniform->nodes.size() << " nodes, error "
+            << uniform_error << '\n';
+  check(damped_error < 0.5 * plain_error, "clearly better than undamped");
+  check(damped_error < 0.5 * uniform_error,
+        "clearly better than uniform with at least as many nodes");
+
+  // The pieces: after every refinement a damping piece of 2 steps, then
+  // the midpoint method to the adaptation time (4 steps after the last).
+  const double refinements = damped.report.metrics.at("refinements");
+  check(damped.report.metrics.at("damping_steps") == 2 * refinements,
+        "2 damping steps per refinement");
+  std::size_t damping_pieces = 0;
+  for (std::size_t k = 0; k < damped.pieces.size(); ++k) {
+    const IntegrationPiece &piece = damped.pieces[k];
+    const bool after_refinement =
+        k > 0 && damped.pieces[k - 1].adaptation &&
+        damped.pieces[k - 1].adaptation->outcome == AdaptationOutcome::refined;
+    check(piece.damping == after_refinement,
+          "a damping piece exactly after each refinement");
+    if (!piece.damping)
+      continue;
+    ++damping_pieces;
+    check(piece.report.metrics.at("steps") == 2.0, "two damping steps");
+    check(!piece.adaptation, "no adaptation after the damping steps");
+    check(k + 1 < damped.pieces.size() &&
+              damped.pieces[k + 1].problem == piece.problem &&
+              damped.pieces[k + 1].report.metrics.at("steps") == 2.0 &&
+              (damped.pieces[k + 1].adaptation ||
+               damped.pieces[k + 1].t_end == t1),
+          "the midpoint method takes the other 2 steps to the adaptation "
+          "time");
+  }
+  check(static_cast<double>(damping_pieces) == refinements,
+        "one damping piece per refinement");
 }
 
 // --- schedules and continuation --------------------------------------------
@@ -643,6 +746,52 @@ void wave_transfers_velocities() {
           "as accurate as the plain run to its time error: values and "
           "velocities carried over");
   }
+  // Newmark with 2 damping steps of implicit Euler after each transfer:
+  // the linear wave has no transfer error, so the damping steps only add
+  // their (first-order) time error (measured).
+  {
+    const double dt = 1.0 / 64;
+    const auto r =
+        AdaptiveIntegrator(
+            integrator(std::make_shared<solve::Newmark>(), dt), {refinement()},
+            {.damping_steps = 2,
+             .damping_method = std::make_shared<solve::ImplicitEuler>()})
+            .integrate(start, 0.0, 1.0, {.every = {.interval = 0.125}});
+    const auto [u, v] = linear_wave_errors(r.final);
+    std::cout << "INFO linear wave newmark, 2 damping steps of implicit "
+                 "Euler: "
+              << r.final.mesh->nodes.size() << " nodes, errors " << u << ", "
+              << v << '\n';
+    check(r.final.time == 1.0 && u < 0.05 && v < 0.1,
+          "the damping steps keep the run close");
+  }
+}
+
+// Newmark keeps its acceleration across pieces: a target that never
+// refines gives one Integrator run that lands on the adaptation times,
+// bit for bit (the pieces do not call Newmark's start again).
+void newmark_pieces_continue_exactly() {
+  mesh::Mesh square = *test::unit_square(4);
+  mesh::set_longest_edges_as_refinement_edges(square);
+  const auto problem = std::make_shared<const fem::MeshedProblem>(
+      std::make_shared<const mesh::Mesh>(std::move(square)),
+      linear_wave_problem());
+  const auto newmark = integrator(std::make_shared<solve::Newmark>(), 1.0 / 16);
+  const auto r = AdaptiveIntegrator(newmark, {refinement()})
+                     .integrate(problem, 0.0, 1.0,
+                                {.every = {.interval = 0.25},
+                                 .tolerance = {.absolute = 1e300}});
+  check(r.pieces.size() == 4, "four pieces");
+  const auto whole = newmark.integrate(problem, 0.0, 1.0,
+                                       {.snapshot_times = {0.25, 0.5, 0.75}});
+  check(r.final.values == whole.final.values &&
+            r.final.velocities == whole.final.velocities &&
+            r.final.accelerations == whole.final.accelerations,
+        "bit for bit");
+  for (std::size_t k = 1; k < r.pieces.size(); ++k)
+    check(r.pieces[k].report.metrics.at("assemblies") ==
+              r.pieces[k].report.metrics.at("steps"),
+          "no start in a continued piece");
 }
 
 // u_tt - (u_xx + u_yy) = 0, u = sin(pi x) sin(pi y) cos(sqrt(2) pi t): a
@@ -692,6 +841,33 @@ void standing_wave() {
     check(r.final.time == 0.5, "reaches t1");
     check(u < 0.05, "u stays accurate");
     check(v < 0.5 * w, "u_t is carried over (lost, it would be off by ~w)");
+  }
+  // Newmark with 1 or 2 damping steps of implicit Euler after each
+  // transfer (measured). Newmark continues after them from the
+  // acceleration of the last damping step: no start(), so nothing is
+  // assembled at the piece's first time.
+  for (const std::size_t damping : {1u, 2u}) {
+    const double dt = 1.0 / 128;
+    const AdaptiveIntegrator adaptive(
+        integrator(std::make_shared<solve::Newmark>(), dt), {refinement()},
+        {.damping_steps = damping,
+         .damping_method = std::make_shared<solve::ImplicitEuler>()});
+    const auto r =
+        adaptive.integrate(start, 0.0, 0.5, {.every = {.interval = 0.0625}});
+    const auto [u, v] = errors(r.final);
+    std::cout << "INFO standing wave newmark, " << damping
+              << " damping steps of implicit Euler: "
+              << r.final.mesh->nodes.size() << " nodes, errors " << u << ", "
+              << v << '\n';
+    check(r.final.time == 0.5, "reaches t1");
+    check(r.report.metrics.at("damping_steps") ==
+              static_cast<double>(damping) * r.report.metrics.at("refinements"),
+          "damping steps after each refinement");
+    for (std::size_t k = 1; k < r.pieces.size(); ++k)
+      if (r.pieces[k - 1].damping)
+        check(r.pieces[k].report.metrics.at("assemblies") ==
+                  r.pieces[k].report.metrics.at("steps"),
+              "Newmark continues from the damping steps' acceleration");
   }
 }
 
@@ -872,6 +1048,21 @@ void rejects_bad_input() {
   expect_throws<std::invalid_argument>(
       [&] { (void)AdaptiveIntegrator(i, {refinement(), refinement()}); },
       "at most one adaptation may change the mesh");
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)AdaptiveIntegrator(i, {refinement()}, {.damping_steps = 2});
+      },
+      "2 damping steps need a damping method");
+  // The decay problem has time order 1, which Newmark does not support.
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)AdaptiveIntegrator(
+            i, {refinement()},
+            {.damping_steps = 1,
+             .damping_method = std::make_shared<solve::Newmark>()})
+            .integrate(problem, 0.0, 1.0, {.every = {.interval = 0.5}});
+      },
+      "the damping method newmark does not support time order 1");
   const AdaptiveIntegrator adaptive(i, {refinement()});
   const AdaptiveIntegrator recorder(i, {std::make_shared<Recorder>()});
   const AdaptiveTimeTarget good{.every = {.interval = 0.5}};
@@ -940,8 +1131,10 @@ void rejects_bad_input() {
 int main() {
   return test::run({
       {"a moving bump: refined where it is, better than uniform", moving_bump},
-      {"after a transfer, implicit Euler agrees with a fresh run",
+      {"after a transfer, implicit Euler (and damping steps) forget it",
        transfer_error_and_damping},
+      {"damping steps after each transfer (midpoint method)",
+       damping_steps_after_transfers},
       {"adaptation times follow the interval and the step count",
        follows_schedules},
       {"a snapshot at an adaptation time adds no step",
@@ -950,6 +1143,7 @@ int main() {
        never_refining_equals_plain_run},
       {"a wave equation transfers its velocities", wave_transfers_velocities},
       {"a standing wave on adapted meshes (measured)", standing_wave},
+      {"Newmark: pieces continue exactly", newmark_pieces_continue_exactly},
       {"time order 2: the u_t and u_tt an estimator gets",
        second_order_derivatives},
       {"a boundary rate not finite at t0 is never evaluated there",

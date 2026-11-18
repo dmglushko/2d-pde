@@ -206,8 +206,11 @@ struct AdaptiveIntegratorOptions {
 // (tests/adapt/adaptive_integrator.cpp, a moving bump: implicit Euler
 // adaptive 2518 nodes, energy error 0.088 against uniform 2927 nodes,
 // 0.25; the midpoint method adaptive 3699 nodes, 0.51, against uniform
-// 0.27; with 2 damping steps of implicit Euler after each transfer:
-// MIDPOINT_DAMPED).
+// 0.27; adapting every 4 steps of 1/128, the midpoint method gives 3532
+// nodes, 0.325, and with 2 damping steps of implicit Euler after each
+// transfer 2514 nodes, 0.088, against uniform 2927 nodes, 0.26). For a
+// smooth wave damping steps cost accuracy (each adds implicit Euler's
+// first-order time error), so they are an option, off by default.
 //
 // Output: snapshot_times as for the Integrator (the pieces land on them),
 // keep_step_history concatenates the pieces' records; snapshot_every is

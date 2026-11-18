@@ -293,8 +293,9 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   assembly at t0 and no `start` call, `static_part`: `max_time_order` 0,
   `whole_problem`: 2); whether to prepare the linear solver again comes
   from dt and the operators' `depends_on_t` / `always_zero` for the
-  non-zero weights of `step_matrix_weights(dt)`. Never test a method's
-  type or name.
+  non-zero weights of `step_matrix_weights(dt)`; whether `Solution`s
+  carry accelerations, and whether a run given them skips the start,
+  from `keeps_acceleration(order)`. Never test a method's type or name.
 - **Linear solvers declare requirements; callers check them** before
   every `prepare` (`detail::check_requirements`): a symmetry requirement
   is met when the matrix is always symmetric by the facts or symmetric
@@ -356,7 +357,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   dynamic condition) and either can be a zero operator. Only `Newmark`'s
   `start` solves with M2, and fails with a message naming the methods that
   need no acceleration (first when M2 is `zero_now` at t0, then when the
-  solve fails).
+  solve fails). A run continued from a `Solution` with accelerations does
+  not call it (so Newmark continues bit for bit, also where M2 is zero);
+  keep the accelerations in every `Solution` the Integrator returns for a
+  method that keeps them.
 - **Step times are anchor + k·dt**, not sums, and steps land exactly on
   snapshot times and t1, so a continued run (`integrate(meshed, t1, t2,
   output, &previous.final)`) matches one long run that lands on t1 (bit
@@ -423,6 +427,12 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   no boundary data evaluated), requested only for a piece that can end
   in an adaptation; at the Dirichlet nodes u_tt is the boundary data's
   acceleration at t, never a quotient that needs the rate at t − dt.
+  The transfer moves accelerations like velocities. Damping steps after
+  a transfer run only when `AdaptiveIntegratorOptions::damping_steps` asks
+  for them, as their own piece with `Integrator::with_method`; never
+  switch methods for any other reason (no fallback). After damping
+  steps at time order 2 the state carries their last step's acceleration,
+  so a method that keeps one continues without its start.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   adaptive time stepping, explicit time methods,
   handling pure Neumann problems, well-posedness
