@@ -172,7 +172,7 @@ solve_adaptive(const SolveSetup &setup,
       setup.estimator, setup.marking,
       std::make_shared<const mesh::Remesher>(setup.refiner));
   const adapt::AdaptiveStaticSolver solver(
-      solve::StaticSolver(setup.linear_solver), {refinement});
+      solve::StaticSolver(setup.linear_solver, setup.assembler), {refinement});
   try {
     return solver.solve(std::move(problem), setup.target, setup.t);
   } catch (const std::invalid_argument &error) {
@@ -448,7 +448,7 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
           run.times.begin() + static_cast<std::ptrdiff_t>(ready),
           run.times.begin() + static_cast<std::ptrdiff_t>(to) + 1);
       return solve::Integrator(run.setup.method, run.setup.step_controller,
-                               run.setup.linear_solver)
+                               run.setup.linear_solver, run.setup.assembler)
           .integrate(run.meshed, run.times[from], run.times[to], output,
                      run.last ? &*run.last : nullptr);
     });
@@ -559,7 +559,7 @@ void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock) {
   if (run.setup.mode == SolveMode::static_solve) {
     try {
       solve::StaticResult result = staged("solve", [&] {
-        return solve::StaticSolver(run.setup.linear_solver)
+        return solve::StaticSolver(run.setup.linear_solver, run.setup.assembler)
             .solve(run.meshed, run.setup.t);
       });
       const std::scoped_lock lock(run_lock);

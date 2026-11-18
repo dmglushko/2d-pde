@@ -394,6 +394,7 @@ Json solve_schema() {
       object_schema(solve_section_keys,
                     {{"mode", std::move(modes)},
                      {"linear_solver", choice_schema(catalog.linear_solvers)},
+                     {"assembler", options_schema(catalog.assembler_settings)},
                      {"static", options_schema(catalog.static_settings)},
                      {"time", std::move(time)},
                      {"adaptive", std::move(adaptive)}},

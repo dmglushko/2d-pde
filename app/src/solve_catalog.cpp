@@ -15,9 +15,11 @@
 #include "pde2d/solve/fixed_step.hpp"
 #include "pde2d/solve/implicit_euler.hpp"
 #include "pde2d/solve/implicit_midpoint.hpp"
+#include "pde2d/solve/multifrontal_lu.hpp"
 #include "pde2d/solve/newmark.hpp"
 #include "pde2d/solve/simplicial_ldlt.hpp"
 #include "pde2d/solve/sparse_lu.hpp"
+#include "pde2d/solve/supernodal_cholesky.hpp"
 
 #include <array>
 #include <stdexcept>
@@ -46,9 +48,29 @@ OptionSpec plain_option(std::string name, std::string label,
           .unit = std::move(unit)};
 }
 
-// The options of an iterative solver (tolerance and max_iterations).
+// The threads option of a component (1: the calling thread, 0: every
+// processor). `what` says what the threads do.
+OptionSpec threads_option(std::size_t threads, std::string_view what) {
+  return plain_option("threads", "Threads",
+                      std::string(what) +
+                          " 1 runs in the calling thread, 0 uses every "
+                          "processor; at most 1024.",
+                      OptionKind::integer, threads);
+}
+
+// The backward error bound of a direct solver.
+OptionSpec residual_tolerance_option(double value) {
+  return plain_option(
+      "residual_tolerance", "Residual tolerance",
+      "A solve whose backward error |b - A x| / (|A| |x| + |b|) is above this "
+      "fails; in (0, 1).",
+      OptionKind::number, value);
+}
+
+// The options of an iterative solver (tolerance, max_iterations, threads).
 std::vector<OptionSpec> iterative_options(double tolerance,
-                                          std::size_t max_iterations) {
+                                          std::size_t max_iterations,
+                                          std::size_t threads) {
   return {plain_option("tolerance", "Tolerance",
                        "The solve stops when the relative residual "
                        "|b - A x| / |b| is at most this; in (0, 1).",
@@ -56,7 +78,10 @@ std::vector<OptionSpec> iterative_options(double tolerance,
           plain_option("max_iterations", "Maximum iterations",
                        "The solve fails when it has not converged after this "
                        "many iterations; at least 1.",
-                       OptionKind::integer, max_iterations)};
+                       OptionKind::integer, max_iterations),
+          threads_option(threads,
+                         "The threads of the sparse matrix-vector products; "
+                         "the answer is the same for every count.")};
 }
 
 SolveCatalog make_solve_catalog() {
@@ -122,14 +147,15 @@ SolveCatalog make_solve_catalog() {
              "Conjugate gradients with a diagonal preconditioner. Needs a "
              "symmetric matrix and converges only for a positive definite "
              "one; otherwise it fails rather than return a wrong answer.",
-         .options =
-             iterative_options(defaults.tolerance, defaults.max_iterations),
+         .options = iterative_options(
+             defaults.tolerance, defaults.max_iterations, defaults.threads),
          .make = [](const OptionReader &options)
              -> std::shared_ptr<const solve::LinearSolver> {
            return std::make_shared<solve::ConjugateGradient>(
                solve::ConjugateGradientOptions{
                    .tolerance = options.number("tolerance"),
-                   .max_iterations = options.count("max_iterations")});
+                   .max_iterations = options.count("max_iterations"),
+                   .threads = options.count("threads")});
          }});
   }
   {
@@ -140,15 +166,67 @@ SolveCatalog make_solve_catalog() {
          .description =
              "BiCGSTAB with a diagonal preconditioner, for any square "
              "matrix (no symmetry needed).",
-         .options =
-             iterative_options(defaults.tolerance, defaults.max_iterations),
+         .options = iterative_options(
+             defaults.tolerance, defaults.max_iterations, defaults.threads),
          .make = [](const OptionReader &options)
              -> std::shared_ptr<const solve::LinearSolver> {
            return std::make_shared<solve::BiCgStab>(solve::BiCgStabOptions{
                .tolerance = options.number("tolerance"),
-               .max_iterations = options.count("max_iterations")});
+               .max_iterations = options.count("max_iterations"),
+               .threads = options.count("threads")});
          }});
   }
+  {
+    const solve::SupernodalCholeskyOptions defaults{};
+    catalog.linear_solvers.push_back(
+        {.type = "supernodal_cholesky",
+         .label = "Supernodal Cholesky (direct, symmetric, parallel)",
+         .description =
+             "A Cholesky factorization L L^T on dense supernodes "
+             "(SuiteSparse's CHOLMOD), the fastest direct solver for large "
+             "symmetric definite problems; in parallel with threads. A "
+             "negative definite matrix (u_xx + u_yy = f) is solved through "
+             "-A, with a note.",
+         .options = {residual_tolerance_option(defaults.residual_tolerance),
+                     threads_option(
+                         defaults.threads,
+                         "The threads of the factorization and the solves; "
+                         "the last digits may differ between counts.")},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const solve::LinearSolver> {
+           return std::make_shared<solve::SupernodalCholesky>(
+               solve::SupernodalCholeskyOptions{
+                   .residual_tolerance = options.number("residual_tolerance"),
+                   .threads = options.count("threads")});
+         }});
+  }
+  {
+    const solve::MultifrontalLuOptions defaults{};
+    catalog.linear_solvers.push_back(
+        {.type = "multifrontal_lu",
+         .label = "Multifrontal LU (direct, parallel)",
+         .description =
+             "An LU factorization with partial pivoting on dense fronts "
+             "(SuiteSparse's ParU), for any square matrix; in parallel "
+             "with threads.",
+         .options = {residual_tolerance_option(defaults.residual_tolerance),
+                     threads_option(
+                         defaults.threads,
+                         "The threads of the factorization and the solves; "
+                         "with more than one, the last digits may differ "
+                         "between runs.")},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const solve::LinearSolver> {
+           return std::make_shared<solve::MultifrontalLu>(
+               solve::MultifrontalLuOptions{
+                   .residual_tolerance = options.number("residual_tolerance"),
+                   .threads = options.count("threads")});
+         }});
+  }
+  catalog.assembler_settings = {threads_option(
+      fem::AssemblerOptions{}.threads,
+      "The threads that assemble the matrices (the triangles of one colour "
+      "at once); the result is the same for every count.")};
 
   catalog.time_methods.push_back(
       {.type = "implicit_euler",
@@ -499,6 +577,20 @@ SolveSetup build_solve_setup(const Json &solve_section) {
   setup.linear_solver =
       build_component(catalog.linear_solvers, member(section, "linear_solver"),
                       "solve.linear_solver");
+  if (const Json &assembler = member(section, "assembler");
+      !assembler.is_null())
+    require_object(assembler, "solve.assembler");
+  setup.assembler = {.threads = OptionReader(member(section, "assembler"),
+                                             "solve.assembler",
+                                             catalog.assembler_settings)
+                                    .count("threads")};
+  // The library checks the count where it is used; ask it now so that a
+  // bad count lands on its field before anything runs.
+  try {
+    (void)fem::Assembler(setup.assembler);
+  } catch (const std::invalid_argument &error) {
+    throw PathError("solve.assembler.threads", error.what());
+  }
 
   for (const std::string_view part : {"static", "time", "adaptive"}) {
     const Json &value = member(section, part);
@@ -588,6 +680,7 @@ Json default_solve_section() {
   Json out = Json::object();
   out["mode"] = "static";
   out["linear_solver"] = default_choice(catalog.linear_solvers.at(0));
+  out["assembler"] = defaults(catalog.assembler_settings);
   out["static"] = defaults(catalog.static_settings);
   out["time"] = std::move(time);
   Json adaptive = defaults(catalog.adaptive_settings);
@@ -715,6 +808,8 @@ Json solve_catalog_json() {
                 "Solves each linear system: the static one, or the step "
                 "matrix of every step.",
                 "one", std::move(linear_solvers));
+  out["assembler"] =
+      settings("assembler", "Assembly", catalog.assembler_settings);
   out["modes"] = std::move(modes);
   out["max_snapshots"] = max_snapshots;
   return out;

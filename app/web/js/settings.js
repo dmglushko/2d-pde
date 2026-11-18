@@ -1,7 +1,7 @@
 // App preferences: kept in this browser (localStorage), not in the case,
 // since they are about the viewer, not the problem. Every one of them
-// drives code; the computation group is shown disabled until the library
-// can run in parallel (docs/library-requests.md, item 1).
+// drives code. Threads are not here: they are options of the case's
+// solve section (the linear solver's and the assembly's).
 
 import { parseNumberText, setDefaultDigits } from "./pure/format.js";
 import { COLOR_MAPS } from "./pure/color.js";
@@ -94,15 +94,6 @@ function choice(key, options) {
   );
 }
 
-function computation(label) {
-  const name = `computation-${label}`;
-  return h(
-    "div",
-    { class: "row segmented", role: "radiogroup", "aria-label": label, "aria-disabled": "true" },
-    ["Sequential", "Parallel"].map((text, i) => h("label", { class: "choice" }, h("input", { type: "radio", name, disabled: true, checked: i === 0 }), text)),
-  );
-}
-
 function content() {
   return [
     h("p", { class: "note" }, "Kept in this browser, not in the case."),
@@ -137,10 +128,6 @@ function content() {
         [4, "the screen's"],
       ]),
     ),
-    h("h3", {}, "Computation"),
-    row("Assembly", null, computation("Assembly")),
-    row("Linear solves", null, computation("Linear solves")),
-    h("p", { class: "note" }, "The library runs sequentially for now; parallel runs are a recorded library request (docs/library-requests.md, item 1)."),
   ];
 }
 

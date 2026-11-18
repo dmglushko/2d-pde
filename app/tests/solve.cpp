@@ -19,6 +19,9 @@
 #include "pde2d/adapt/residual_estimator.hpp"
 #include "pde2d/solve/bicgstab.hpp"
 #include "pde2d/solve/conjugate_gradient.hpp"
+#include "pde2d/solve/multifrontal_lu.hpp"
+#include "pde2d/solve/supernodal_cholesky.hpp"
+#include "pde2d/fem/assembler.hpp"
 #include "pde2d/solve/fixed_step.hpp"
 #include "pde2d/solve/simplicial_ldlt.hpp"
 
@@ -174,6 +177,32 @@ int main() {
                        .default_value.get<double>() ==
                    solve::SimplicialLdltOptions{}.residual_tolerance,
                "ldlt tolerance");
+         check(option(catalog.linear_solvers, "supernodal_cholesky",
+                      "residual_tolerance")
+                           .default_value.get<double>() ==
+                       solve::SupernodalCholeskyOptions{}.residual_tolerance &&
+                   option(catalog.linear_solvers, "supernodal_cholesky",
+                          "threads")
+                           .default_value.get<std::size_t>() ==
+                       solve::SupernodalCholeskyOptions{}.threads,
+               "cholesky options");
+         check(option(catalog.linear_solvers, "multifrontal_lu", "threads")
+                       .default_value.get<std::size_t>() ==
+                   solve::MultifrontalLuOptions{}.threads,
+               "multifrontal threads");
+         check(
+             option(catalog.linear_solvers, "bicgstab", "threads")
+                         .default_value.get<std::size_t>() ==
+                     solve::BiCgStabOptions{}.threads &&
+                 option(catalog.linear_solvers, "conjugate_gradient", "threads")
+                         .default_value.get<std::size_t>() ==
+                     solve::ConjugateGradientOptions{}.threads,
+             "iterative threads");
+         check(catalog.assembler_settings.size() == 1 &&
+                   catalog.assembler_settings[0]
+                           .default_value.get<std::size_t>() ==
+                       fem::AssemblerOptions{}.threads,
+               "assembler threads");
          check(option(catalog.step_controllers, "fixed_step", "dt")
                        .default_value.get<double>() ==
                    solve::FixedStepOptions{}.dt,
@@ -219,6 +248,11 @@ int main() {
                "cg needs symmetry");
          check(traits(solvers, "sparse_lu")["symmetric_matrix"] == false,
                "lu does not");
+         check(traits(solvers, "supernodal_cholesky")["symmetric_matrix"] ==
+                       true &&
+                   traits(solvers, "multifrontal_lu")["symmetric_matrix"] ==
+                       false,
+               "parallel direct solvers' symmetry");
          const Json &methods = section["modes"][1]["slots"][0]["components"];
          check(traits(methods, "implicit_euler")["time_orders"] ==
                    Json::array({0, 1, 2}),
@@ -489,7 +523,7 @@ int main() {
          // The solution exports on the last mesh; the adapted mesh too.
          const std::string csv =
              session.export_file(case_json, "solution.csv").text();
-         check(std::ranges::count(csv, '\n') >=
+         check(static_cast<std::size_t>(std::ranges::count(csv, '\n')) >=
                    last["nodes"].get<std::size_t>(),
                "a CSV row per node of the last mesh");
          const std::string adapted =
@@ -537,6 +571,47 @@ int main() {
                    plain["job"].get<std::uint64_t>());
              },
              "solve", "no error indicators");
+       }},
+      {"the parallel direct solvers and the threads solve a linear solution",
+       [] {
+         app::Session session;
+         for (const char *type : {"supernodal_cholesky", "multifrontal_lu"}) {
+           Json case_json = dirichlet_case("x + 2*y");
+           case_json["problem"]["equation"]["f"] = "0";
+           case_json["solve"]["linear_solver"] = {
+               {"type", type}, {"options", {{"threads", 2}}}};
+           case_json["solve"]["assembler"] = {{"threads", 2}};
+           const Json mesh = app::test_support::mesh_view(session, case_json);
+           const Json result = session.solve(case_json);
+           const auto values = session.solution_values(case_json);
+           const double error = max_error(
+               mesh, values[0], [](double x, double y) { return x + 2 * y; });
+           check(error < 1e-8,
+                 std::string(type) + " error " + std::to_string(error));
+           const Json &reports = result["reports"];
+           const Json &assembly = reports[reports.size() - 2];
+           check(assembly["stage"] == "assembly" &&
+                     assembly["metrics"]["threads"] == 2,
+                 std::string(type) + " assembly " + assembly.dump());
+           check(reports.back()["metrics"]["linear_threads"] == 2,
+                 std::string(type) + " solver threads");
+         }
+         // The library's refusal of a thread count lands on its field.
+         Json case_json = app::Session::default_case();
+         case_json["solve"]["assembler"] = {{"threads", 5000}};
+         expect_stage_error([&] { (void)session.solve(case_json); }, "solve",
+                            "solve.assembler.threads");
+         case_json = app::Session::default_case();
+         case_json["solve"]["linear_solver"] = {
+             {"type", "multifrontal_lu"}, {"options", {{"threads", 5000}}}};
+         expect_stage_error([&] { (void)session.solve(case_json); }, "solve",
+                            "solve.linear_solver.options.threads");
+         // A case without the assembler part assembles in one thread.
+         case_json = app::Session::default_case();
+         case_json["solve"].erase("assembler");
+         check(app::build_solve_setup(case_json["solve"]).assembler.threads ==
+                   1,
+               "the default");
        }},
       {"the library's refusals reach the page",
        [] {

@@ -5,6 +5,7 @@
 #include "pde2d/adapt/adaptive_static_solver.hpp"
 #include "pde2d/adapt/error_estimator.hpp"
 #include "pde2d/adapt/marking.hpp"
+#include "pde2d/fem/assembler.hpp"
 #include "pde2d/mesh/components.hpp"
 #include "pde2d/mesh/mesh_spec.hpp"
 #include "pde2d/mesh/mesher.hpp"
@@ -116,6 +117,8 @@ struct SolveCatalog {
   std::vector<OptionSpec> time_settings;   // t0, t1, snapshots
   // t, tolerance, max_cycles, max_nodes
   std::vector<OptionSpec> adaptive_settings;
+  // threads (fem::AssemblerOptions), for every mode
+  std::vector<OptionSpec> assembler_settings;
   std::vector<Component<solve::LinearSolver>> linear_solvers;
   std::vector<Component<solve::TimeMethod>> time_methods;
   std::vector<Component<solve::StepController>> step_controllers;
@@ -127,8 +130,9 @@ const SolveCatalog &solve_catalog();
 
 // The keys of the solve section; "time" also holds "method" and "step"
 // beside its settings, "adaptive" "estimator", "marking" and "refiner".
+// "assembler" (may be missing: its defaults) holds the assembly's options.
 inline constexpr std::string_view solve_section_keys[] = {
-    "mode", "linear_solver", "static", "time", "adaptive"};
+    "mode", "linear_solver", "assembler", "static", "time", "adaptive"};
 inline constexpr std::string_view solve_modes[] = {"static", "time",
                                                    "adaptive"};
 
@@ -137,6 +141,7 @@ enum class SolveMode { static_solve, time_integration, adaptive };
 struct SolveSetup {
   SolveMode mode = SolveMode::static_solve;
   std::shared_ptr<const solve::LinearSolver> linear_solver;
+  fem::AssemblerOptions assembler{};
   double t = 0.0; // static and adaptive
   // Time integration:
   std::shared_ptr<const solve::TimeMethod> method;

@@ -668,6 +668,18 @@ function settingsPart(section, solveCase, mode) {
     mode.slots.map((slot) => choiceCard(slot, modeSettings[slot.id], `solve.${key}.${slot.id}`, (next) => editCase((c) => (c.solve[key][slot.id] = next), "structure"))),
     // Its options are rarely changed: folded for a new viewer.
     choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear, { folded: true }),
+    assemblerPart(section, solveCase),
+  );
+}
+
+// The assembly's options (threads), for every mode; folded like the
+// linear solver.
+function assemblerPart(section, solveCase) {
+  if (!section.assembler) return null;
+  const values = (solveCase.assembler ??= {});
+  return foldable(
+    { id: "solve.assembler", title: section.assembler.label, folded: true, attributes: { dataset: { path: "solve.assembler" } } },
+    optionsForm(section.assembler.options, values, "solve.assembler", () => editCase(() => {}, "edit", { sections: ["solve"] })),
   );
 }
 
