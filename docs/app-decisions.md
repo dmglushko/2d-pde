@@ -1277,3 +1277,8 @@ steps). The owner asked the app to offer everything new.
   threads), `web.test.mjs` (`splitCounted`, `snapshotNodes`,
   `nearestLoaded` on one mesh, the run sizes) and the browser scenario
   `adaptive_time`.
+- **Newmark's chunks are now exact** (the library's `Solution` carries
+  Newmark's acceleration): the app needed no change to continue from it,
+  only to drop it from the kept snapshots (like the velocities) and to
+  count it in the state a chunk starts from (`run_bytes`). This replaces
+  "a recomputed acceleration at each chunk start" of 2026-11-15.
