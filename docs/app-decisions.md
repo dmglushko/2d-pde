@@ -1094,3 +1094,7 @@ time from its start.
   `std::max`, which dropped a NaN `max_backward_error` of a later chunk
   behind an earlier finite one. The integrator keeps NaN in its own
   maximum, so the combined report says the same as one long run would.
+- **`t_end` combines as the last chunk's** (2026-11-18, the library's
+  integrator gained the metric `t_end`, where a run ended, with its
+  `max_steps`): like `t1`, the combined run ends where its last chunk
+  did. The app never passes `max_steps`, so `t_end` equals `t1`.

@@ -55,9 +55,10 @@ void publish_snapshot(Run::Published &out, solve::Solution solution) {
       std::make_shared<const solve::Solution>(std::move(solution)));
 }
 
-constexpr std::array<MetricRule, 17> metric_rules{{
+constexpr std::array<MetricRule, 18> metric_rules{{
     {"t0", Combine::first},
     {"t1", Combine::last},
+    {"t_end", Combine::last},
     {"time_order", Combine::last},
     {"steps", Combine::sum},
     {"rejected_steps", Combine::sum},

@@ -753,7 +753,8 @@ there take the same steps.
   above 0 (`Combine::min_measured`: 0 means "not measured", so it stays 0
   only when no chunk measured one); `min_dt` and
   `max_dt` the smallest and largest over the chunks that took steps; `t0`
-  is the first's, `t1`, `time_order` and `assembly_threads` the last's;
+  is the first's, `t1`, `t_end`, `time_order` and `assembly_threads` the
+last's;
   `chunks` is added. A
   metric without a rule is an error (a test checks that the rules are
   exactly the integrator's metrics). `prepares` counts one per chunk at

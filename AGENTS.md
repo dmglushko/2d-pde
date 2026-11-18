@@ -3,8 +3,8 @@
 C++23 library (compiled, not header-only) for 2D geometry, triangle
 meshing, their file formats, the problem description, its P1 finite
 element assembly, its static and time-dependent solution, and error
-estimation, marking, refinement and the adaptive loop for static
-problems: a
+estimation, marking, refinement, solution transfer and the adaptive
+loops for static and time-dependent problems: a
 from-scratch rewrite for one linear scalar PDE with P1 finite elements.
 Read [docs/vision.md](docs/vision.md) (direction), then the sections of
 [docs/decisions.md](docs/decisions.md) (the owner's decisions: your
@@ -387,7 +387,7 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `std::runtime_error` if it overlaps itself. When parents are kept,
   every new node lies on an input edge, every output triangle names its
   input parent, and input nodes keep their indices: keep these when
-  changing the core, the solution transfer will rely on them.
+  changing the core, the solution transfer relies on them.
 - **The estimators' residual follows assembly's weak form.** The element
   residual is f - b . grad u_h - c u_h - m1 u_t - m2 u_tt (the A and div A
   parts cancel for P1), the jump is that of (A grad u_h) . n, and the
@@ -397,16 +397,28 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   its rule from `quadrature.hpp`; an estimator's degrees are its options
   (`triangle_degree`, `edge_degree`, checked in its constructor), with
   defaults exact for coefficients and data of degree at most 1.
-- **Drivers decide from declarations.** The `AdaptiveStaticSolver` reads
-  `Adaptation::capabilities()` (`estimates_error`, `changes_mesh`): the
-  cycle's estimate is that of the first adaptation that estimates, and at
-  most one adaptation may change the mesh until a solution can be
-  transferred. Never test an adaptation's or estimator's type.
+- **Drivers decide from declarations.** The `AdaptiveStaticSolver` and
+  the `AdaptiveIntegrator` read `Adaptation::capabilities()`
+  (`estimates_error`, `changes_mesh`): the cycle's estimate is that of
+  the first adaptation that estimates, and at most one adaptation may
+  change the mesh (all act on the same solved state). Never test an
+  adaptation's or estimator's type.
+- **A solution moves to a new mesh only by `transfer_solution`**
+  (`src/adapt/solution_transfer.cpp`): interpolation through the parents
+  when they are kept, else point location with the private
+  `detail::PointLocator` (never `WorkingMesh::locate`, which can cycle:
+  issue #22); Dirichlet nodes from the new `MeshedProblem`. The
+  `AdaptiveIntegrator` integrates in pieces with `Integrator::integrate`
+  (its `max_steps` and `keep_before_last_step`), never re-implementing
+  the step times, and continues a piece on the same problem from its
+  `final` so that a run without refinement equals one integrate() call
+  landing on the adaptation times.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   adaptive time stepping, explicit time methods,
   handling pure Neumann problems, well-posedness
-  checks, the adaptive loop for time-dependent problems, coarsening and
-  solution transfer, callables, anisotropic meshing, planners,
+  checks, coarsening, L2 projection for the solution transfer,
+  re-integrating a piece after refining, callables, anisotropic meshing,
+  planners,
   the simple-options facade, Gmsh export, reading the old boundary
   context of `.pde2d` files as curve links. Do not add them unless a task
   asks.
