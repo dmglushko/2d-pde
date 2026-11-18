@@ -292,7 +292,8 @@ Integrator::Integrator(std::shared_ptr<const TimeMethod> method,
 IntegrationResult
 Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
                       double t0, double t1, const IntegrationOutput &output,
-                      const Solution *initial) const {
+                      const Solution *initial,
+                      std::optional<std::size_t> max_steps) const {
   if (!meshed_problem)
     throw std::invalid_argument("integrator: the problem is null");
   if (!std::isfinite(t0) || !std::isfinite(t1))
@@ -300,6 +301,8 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   if (!(t1 > t0))
     throw std::invalid_argument("integrator: t1 must be greater than t0");
   check_output(output, t0, t1);
+  if (max_steps && *max_steps == 0)
+    throw std::invalid_argument("integrator: max_steps must be at least 1");
   const fem::MeshedProblem &meshed = *meshed_problem;
   const auto start = Clock::now();
   const auto log = std::make_shared<SolveLog>();
@@ -368,7 +371,7 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   std::size_t prepares = 0;
   Summary summary;
 
-  while (t < t1) {
+  while (t < t1 && !(max_steps && summary.steps >= *max_steps)) {
     const auto step_start = Clock::now();
     const double dt = step_controller_->next_step(t);
     if (!std::isfinite(dt) || !(dt > 0.0))
@@ -425,6 +428,11 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
       prepared_dt = h;
       ++prepares;
     }
+    // The last step of the run: it lands on t1, or it is the max_steps-th.
+    const bool last =
+        t_new == t1 || (max_steps && summary.steps + 1 == *max_steps);
+    if (last && output.keep_before_last_step)
+      result.before_last_step = make_solution(meshed, state, time_order, t);
     const StepSolveInfo solved =
         method_->advance(*current, h, *prepared, state);
     t = t_new;
@@ -451,13 +459,16 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
       result.snapshots.push_back(make_solution(meshed, state, time_order, t));
   }
 
-  result.final = make_solution(meshed, state, time_order, t1);
+  // t is t1 unless max_steps ended the run first (the last step landed on
+  // t1 exactly otherwise).
+  result.final = make_solution(meshed, state, time_order, t);
 
   auto &report = result.report;
   report.stage = "integrator";
   auto &m = report.metrics;
   m["t0"] = t0;
   m["t1"] = t1;
+  m["t_end"] = t;
   m["time_order"] = time_order;
   m["steps"] = static_cast<double>(summary.steps);
   m["rejected_steps"] = static_cast<double>(summary.rejected);

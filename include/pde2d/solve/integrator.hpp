@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace pde2d::solve {
@@ -26,6 +27,10 @@ struct IntegrationOutput {
   // Keep a Solution after every n-th step of the call (0: never). A step
   // that also lands on a snapshot time gives one snapshot.
   std::size_t snapshot_every = 0;
+  // Keep the solution at the start of the last step
+  // (IntegrationResult::before_last_step), for example to form a
+  // difference quotient of the final state.
+  bool keep_before_last_step = false;
 };
 
 // The record of one step.
@@ -39,14 +44,19 @@ struct StepRecord {
 };
 
 struct IntegrationResult {
-  // The solution at t1 (with velocities for time order 2).
+  // The solution where the run ended (with velocities for time order 2):
+  // at t1, or earlier when integrate() stopped after max_steps steps.
   Solution final{};
+  // The solution at the start of the last step (with velocities for time
+  // order 2), if keep_before_last_step was set; else empty.
+  std::optional<Solution> before_last_step{};
   // In time order; see IntegrationOutput.
   std::vector<Solution> snapshots{};
   // Every step's record, if keep_step_history was set; else empty.
   std::vector<StepRecord> history{};
   // Stage "integrator", the summary of the step records: the time taken
-  // and the metrics t0, t1, time_order, steps, rejected_steps, min_dt,
+  // and the metrics t0, t1 (as asked), t_end (where the run ended: t1, or
+  // earlier after max_steps), time_order, steps, rejected_steps, min_dt,
   // max_dt, linear_iterations (the sum), max_linear_iterations,
   // max_residual, assemblies, prepares (how often the linear solver was
   // prepared for a step matrix; not counting start(), which also does the
@@ -123,10 +133,16 @@ public:
   // the same steps. Continuing a run: integrate(meshed, t1, t2, output,
   // &previous.final).
   //
+  // `max_steps`, when given, ends the run after that many steps if t1 is
+  // not reached first: final.time then says where it ended (the last step
+  // was not shortened, so it is not a landing; a run continued from there
+  // takes its steps from that time), and snapshot times after it are not
+  // taken.
+  //
   // Throws std::invalid_argument for a null problem, times that are not
-  // finite or t1 <= t0, bad output options, a time order the method does
-  // not support, a linear solver whose requirements a matrix does not
-  // meet, and an `initial` on another mesh object, of the wrong size, with
+  // finite or t1 <= t0, bad output options, max_steps 0, a time order the
+  // method does not support, a linear solver whose requirements a matrix does
+  // not meet, and an `initial` on another mesh object, of the wrong size, with
   // values that are not finite or without the velocities time order 2
   // needs. Throws std::runtime_error when the method's start() leaves no
   // state at t0 (a method of time order 0 must compute it). Passes on the
@@ -135,7 +151,8 @@ public:
   [[nodiscard]] IntegrationResult
   integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem, double t0,
             double t1, const IntegrationOutput &output = {},
-            const Solution *initial = nullptr) const;
+            const Solution *initial = nullptr,
+            std::optional<std::size_t> max_steps = std::nullopt) const;
 
 private:
   std::shared_ptr<const TimeMethod> method_;

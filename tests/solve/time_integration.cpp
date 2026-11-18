@@ -687,6 +687,49 @@ void lands_on_snapshots() {
   check(every.history.empty(), "no history unless asked");
 }
 
+// max_steps ends a run early; before_last_step is the state one step
+// before the end. Steps of 1/16 are exact in binary, so the times compare
+// exactly.
+void stops_after_max_steps() {
+  for (const auto &problem : {heat_problem(), wave_problem()}) {
+    const auto m = meshed(problem);
+    const auto i = integrator(std::make_shared<ImplicitMidpoint>(), 1.0 / 16);
+    const auto whole = i.integrate(
+        m, 0.0, 1.0, {.keep_step_history = true, .snapshot_every = 1});
+    const auto part = i.integrate(m, 0.0, 1.0,
+                                  {.keep_step_history = true,
+                                   .snapshot_times = {0.25, 0.75},
+                                   .keep_before_last_step = true},
+                                  nullptr, 5);
+    check(part.final.time == 5.0 / 16, "ends after 5 steps");
+    check(part.history.size() == 5, "5 step records");
+    check(part.report.metrics.at("t_end") == 5.0 / 16, "t_end");
+    check(part.report.metrics.at("t1") == 1.0, "t1 as asked");
+    check(part.snapshots.size() == 1 && part.snapshots[0].time == 0.25,
+          "only the snapshot times reached");
+    check(part.final.values == whole.snapshots[4].values,
+          "the same state as the long run after 5 steps");
+    check(part.before_last_step && part.before_last_step->time == 4.0 / 16,
+          "the state before the last step");
+    check(part.before_last_step->values == whole.snapshots[3].values,
+          "the state after 4 steps");
+    check(part.before_last_step->velocities.size() ==
+              whole.snapshots[3].velocities.size(),
+          "velocities for time order 2 only");
+    // Reaching t1 first: max_steps does not matter; before_last_step is
+    // the start of the step that landed on t1.
+    const auto reached =
+        i.integrate(m, 0.0, 1.0, {.keep_before_last_step = true}, nullptr, 100);
+    check(reached.final.time == 1.0, "t1 reached before max_steps");
+    check(reached.before_last_step->time == 15.0 / 16, "the last step's start");
+    check(reached.final.values == whole.final.values, "the same final state");
+    check(!whole.before_last_step, "not kept unless asked");
+    expect_throws<std::invalid_argument>(
+        [&] { (void)i.integrate(m, 0.0, 1.0, {}, nullptr, 0); },
+        "max_steps must be at least 1");
+  }
+}
+
 void continues_runs() {
   // First order: bit for bit, when the long run lands on the split time.
   for (const auto &method : std::vector<std::shared_ptr<const TimeMethod>>{
@@ -831,6 +874,8 @@ int main() {
        mass_zero_at_start},
       {"snapshots land exactly on their times", lands_on_snapshots},
       {"a continued run equals one long run", continues_runs},
+      {"max_steps ends a run early; the state before the last step",
+       stops_after_max_steps},
       {"the integrator checks its input", checks_input},
   });
 }
