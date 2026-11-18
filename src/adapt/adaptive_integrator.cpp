@@ -240,9 +240,11 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   // The state the next piece starts from: the caller's for the first.
   std::optional<solve::Solution> carried;
   const solve::Solution *state_in = initial;
-  // The step anchor the next piece continues: set only after damping steps
-  // that ended before the adaptation time, where only the method changes,
-  // so the steps keep the times of an uninterrupted stretch.
+  // The step anchor the next piece continues: set after every piece whose
+  // successor runs on the same problem (damping steps that ended before
+  // the adaptation time, an adaptation time that changed nothing), so the
+  // steps keep the times of one uninterrupted run; never after a transfer
+  // to a new mesh, where a new stretch starts.
   std::optional<solve::StepAnchor> anchor;
   double t = t0;
   // The stretch to the next adaptation time (or to t1 once adapting has
@@ -443,6 +445,8 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
         }
       }
     }
+    if (!moved)
+      anchor = run.anchor; // the same problem: the same stretch of steps
     carried = moved ? std::move(*moved) : std::move(run.final);
     state_in = &*carried;
     piece.adaptation = std::move(point);

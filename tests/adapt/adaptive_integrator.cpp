@@ -546,11 +546,16 @@ void follows_schedules() {
       check(!r.pieces.back().adaptation, "no adaptation at t1");
 
       // The pieces continue the run exactly: one Integrator run landing on
-      // the same times (the adaptation times as snapshot times) gives the
-      // same values, bit for bit.
+      // the same times (the interval's adaptation times as snapshot
+      // times; those of the step rule are not landings, the pieces
+      // continue the stretch of steps there) gives the same values, bit
+      // for bit.
       std::vector<double> lands = c.snapshots;
-      for (const auto &call : recorder->calls)
-        lands.push_back(call.time);
+      for (std::size_t k = 0; k < c.times.size(); ++k) {
+        const std::size_t since = c.steps[k] - (k == 0 ? 0 : c.steps[k - 1]);
+        if (!(c.every.steps && since == *c.every.steps))
+          lands.push_back(recorder->calls[k].time);
+      }
       std::ranges::sort(lands);
       const auto whole =
           integrator(method, c.dt)
@@ -565,14 +570,14 @@ void follows_schedules() {
               "the same step times");
       for (std::size_t k = 0; k < c.times.size(); ++k) {
         const auto &call = recorder->calls[k];
-        // The state at the adaptation time is the long run's there; u_t is
-        // the difference quotient of its last step, from the long run's
-        // state one step before (its history and snapshots).
+        // The state at the adaptation time is the long run's there (its
+        // first c.steps[k] steps); u_t is the difference quotient of its
+        // last step, from the long run's state one step before.
         const auto at =
-            std::ranges::find_if(whole.snapshots, [&](const auto &s) {
-              return s.time == call.time;
-            });
-        check(at != whole.snapshots.end() && at->values == call.values,
+            integrator(method, c.dt)
+                .integrate(problem, 0.0, c.t1, {.snapshot_times = lands},
+                           nullptr, c.steps[k]);
+        check(at.final.time == call.time && at.final.values == call.values,
               "the state at the adaptation time");
         check(call.u_tt.empty(), "no u_tt for time order 1");
         check(call.u_t.size() == call.values.size(), "u_t at every node");
@@ -657,6 +662,47 @@ void never_refining_equals_plain_run() {
               r.snapshots[0].values == whole.snapshots[1].values,
           "the snapshot at 0.3");
     check(r.report.metrics.at("tolerance") == 1e300, "the tolerance");
+  }
+}
+
+// The anchor goes across every piece on the same problem: adapting every
+// 3 steps of 0.1 (not exact in binary) without refining takes exactly the
+// step times of one integrate() call that lands nowhere, (k + 1) * 0.1
+// from t0, also where a new stretch from the piece's start would round
+// differently (0.30000000000000004 + 0.1 != 0.4).
+void anchor_across_pieces() {
+  const auto problem = std::make_shared<const fem::MeshedProblem>(
+      test::unit_square(4), decay_problem());
+  for (const auto &method :
+       std::vector<std::shared_ptr<const solve::TimeMethod>>{
+           std::make_shared<solve::ImplicitEuler>(),
+           std::make_shared<solve::ImplicitMidpoint>()}) {
+    const auto whole =
+        integrator(method, 0.1)
+            .integrate(problem, 0.0, 2.0, {.keep_step_history = true});
+    const auto recorder = std::make_shared<Recorder>(true);
+    const auto r = AdaptiveIntegrator(integrator(method, 0.1), {recorder})
+                       .integrate(problem, 0.0, 2.0, {.every = {.steps = 3}},
+                                  {.keep_step_history = true});
+    check(recorder->calls.size() == 6 && r.pieces.size() == 7,
+          "adaptation times after 3, 6, ..., 18 steps");
+    check(r.history.size() == whole.history.size(), "as many steps");
+    bool differs = false;
+    for (std::size_t k = 0;
+         k < std::min(r.history.size(), whole.history.size()); ++k) {
+      check(r.history[k].t == whole.history[k].t &&
+                r.history[k].dt == whole.history[k].dt,
+            "the step times of one run");
+      if (k >= 3)
+        differs =
+            differs || whole.history[2].t + static_cast<double>(k - 2) * 0.1 !=
+                           whole.history[k].t;
+    }
+    check(differs, "a new stretch at each piece would give other times");
+    for (std::size_t k = 0; k < recorder->calls.size(); ++k)
+      check(recorder->calls[k].time == whole.history[3 * k + 2].t,
+            "the adaptation times are the uninterrupted run's");
+    check(r.final.values == whole.final.values, "bit for bit");
   }
 }
 
@@ -1421,6 +1467,8 @@ int main() {
        snapshot_at_an_adaptation_time},
       {"a target that never refines equals one integrator run",
        never_refining_equals_plain_run},
+      {"the step anchor goes across every piece on the same problem",
+       anchor_across_pieces},
       {"a wave equation transfers its velocities", wave_transfers_velocities},
       {"a standing wave on adapted meshes (measured)", standing_wave},
       {"Newmark: pieces continue exactly", newmark_pieces_continue_exactly},

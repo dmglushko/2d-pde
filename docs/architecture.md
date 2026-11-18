@@ -2221,10 +2221,12 @@ flowchart LR
   transfer error). After the last allowed one adapting stops and the rest
   is one piece to t1, with a message in the report like the node
   budget's.
-- **State**: the piece's `final`, on the same problem when nothing
-  changed (so pieces continue the run exactly: bit for bit like one
-  `integrate()` that lands on the same times, Newmark too, since its
-  acceleration is carried), else `transfer_solution` onto a new
+- **State**: the piece's `final` and its `IntegrationResult::anchor`,
+  on the same problem when nothing changed (so pieces continue the run
+  exactly: the step times are those of one `integrate()` that lands on
+  the interval's adaptation times and the snapshot times, the "every n
+  steps" times included without landing there, and the values bit for
+  bit, Newmark too, since its acceleration is carried), else `transfer_solution` onto a new
   `MeshedProblem` (values, velocities and accelerations; reports
   "meshed_problem", "solution_transfer" in the `AdaptationPoint`).
 - **Damping steps** (`AdaptiveIntegratorOptions{damping_steps = 0,

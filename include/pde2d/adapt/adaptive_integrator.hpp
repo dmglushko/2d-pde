@@ -185,11 +185,14 @@ struct AdaptiveIntegratorOptions {
 // rest is one piece to t1. So a run always reaches t1 unless something
 // throws.
 //
-// The state passed on is the previous piece's final solution, on the
-// same problem when nothing changed (so the pieces continue the run
-// exactly: with a first-order method bit for bit like one integrate() call
-// that lands on the same times; Newmark continues from its carried
-// acceleration, so bit for bit too), else transferred to the new mesh
+// The state passed on is the previous piece's final solution with its
+// step anchor (solve::StepAnchor), on the same problem when nothing
+// changed (so the pieces continue the run exactly: the step times are
+// those of one integrate() call that lands on the interval's adaptation
+// times and the snapshot times, the times of the "every n steps" rule
+// included without landing there; with a first-order method bit for bit;
+// Newmark continues from its carried acceleration, so bit for bit too),
+// else transferred to the new mesh, where a new stretch of steps starts
 // (values, velocities for time order 2 and accelerations when the state
 // has them; Dirichlet nodes from the new problem).
 //

@@ -428,15 +428,18 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `AdaptiveIntegrator` integrates in pieces with `Integrator::integrate`
   (its `max_steps` and `keep_before_last_step`), never re-implementing
   the step times, and continues a piece on the same problem from its
-  `final` so that a run without refinement equals one integrate() call
-  landing on the adaptation times; an adaptation time near a snapshot
+  `final` and its `anchor` (every piece on the same problem; after a
+  transfer to a new mesh a new stretch starts), so that a run without
+  refinement equals one integrate() call landing on the interval's
+  adaptation times (the "every n steps" times are not landings: they are
+  those of the uninterrupted run); an adaptation time near a snapshot
   time is that time. `before_last_step` is a `FreeState` (free unknowns,
   no boundary data evaluated), requested only for a piece that can end
   in an adaptation; at the Dirichlet nodes u_tt is the boundary data's
   acceleration at t, never a quotient that needs the rate at t − dt.
   Where only the method changes (after damping steps, before the
   adaptation time) the next piece continues the damping piece's
-  `anchor`, so damping steps never change the step times.
+  `anchor` too, so damping steps never change the step times.
   The transfer moves accelerations like velocities. Damping steps after
   a transfer run only when `AdaptiveIntegratorOptions::damping_steps` asks
   for them, as their own piece with `Integrator::with_method`; never
