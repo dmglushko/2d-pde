@@ -1432,19 +1432,31 @@ std::shared_ptr<const CsrMatrix>)` returns a
 `std::unique_ptr<const PreparedLinearSolver>`, which holds the matrix and
 solves `solve(rhs) -> LinearSolveResult` as often as needed: values,
 iterations, `residual` (the relative residual |b − Ax|₂ / |b|₂ computed
-after the solve), `backward_error` (|b − Ax|∞ / (|A|∞ |x|∞ + |b|∞), |A|∞
+after the solve), `threads` (the resolved option of the iterative and the
+parallel direct solvers, 1 for the Eigen direct solvers), `backward_error` (|b − Ax|∞ / (|A|∞ |x|∞ + |b|∞), |A|∞
 the largest absolute row sum, from the same residual; every solver fills
-it), `pivot_ratio` (the smallest pivot over the largest, from
-`SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; 0 when not
-measured), `threads` (the resolved option of the iterative and the
-parallel direct solvers, 1 for the Eigen direct solvers) and `messages`
-(warnings, "worked, but…", each naming the solver; empty except for
-`SupernodalCholesky` on a matrix it factored as −A). The `StaticSolver`
-copies them into its "static_solver" report; the `Integrator` passes its
-time method a private wrapper of the linear solver (`LoggingSolver` in
-`integrator.cpp`) whose prepared solvers log the messages of every solve,
-the steps' and those of `start()`, and its "integrator" report gets each
-distinct message once, in the order of first appearance.
+it; a residual entry that is not finite makes it NaN, which no
+tolerance accepts), `pivot_ratio` (the smallest pivot over the largest,
+from `SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; 0 when
+not measured) and `messages` (warnings, "worked, but…", each naming the
+solver; empty except for `SupernodalCholesky` on a matrix it factored as
+−A). The members are in this order: the first four (values, iterations,
+residual, threads) are those the struct had before the other three were
+added, so a positional initialization written then keeps its meaning;
+new members go at the end. The `StaticSolver`
+copies the messages into its "static_solver" report; the `Integrator`
+passes its time method a private wrapper of the linear solver
+(`LoggingSolver` in `integrator.cpp`) whose prepared solvers
+(`LoggingPreparedSolver`) log the messages of every solve, the steps' and
+those of `start()`, and its "integrator" report gets each distinct
+message once, in the order they were added. The log (`MessageLog`) is
+per-run state shared (`std::shared_ptr`) by the wrapper and every
+prepared solver it made, and guarded by a mutex held only to add or copy,
+never during a solve: a time method may solve from several threads at
+once with one prepared solver (solves that overlap add their messages in
+the order they take the lock), and may keep a prepared solver beyond
+`integrate()` (a later solve works and adds to a log that no report reads
+any more).
 A solver declares `requirements()` (`LinearSolverRequirements{
 symmetric_matrix}`); `prepare` sees only values, so the callers (the
 `Integrator`, the `StaticSolver`, `Newmark::start`, `ImplicitEuler::start`)
@@ -1464,7 +1476,7 @@ detects its failure and throws `std::runtime_error`.
 | `ConjugateGradient` | symmetric | Eigen's ConjugateGradient with Lower \| Upper and Jacobi; `ConjugateGradientOptions` as for `BiCgStab`; converges only for a positive definite matrix, otherwise it does not reach its tolerance and throws |
 | `SimplicialLdlt` | symmetric | Eigen's SimplicialLDLT with AMD (lower triangle, copied to column-major); no pivoting, so a zero pivot (singular, or indefinite needing pivots) throws `std::runtime_error` in `prepare`; a tiny pivot passes the factorization, so `solve` checks the backward error against `SimplicialLdltOptions{.residual_tolerance = 1e-8}` and throws `std::runtime_error` above it; pivot ratio min \|D\| / max \|D\| |
 | `SupernodalCholesky` | symmetric | CHOLMOD's supernodal L Lᵀ (always supernodal; CHOLMOD's default ordering, AMD or METIS); reads the lower triangle through a view of our arrays (no copy); `SupernodalCholeskyOptions{.residual_tolerance = 1e-8, .threads = 1}`; when every diagonal entry is negative (`CsrMatrix::entry(i, i) < 0`, a missing one counts as 0) `prepare` factors −A (a negated copy of the values on the same pattern, freed after the factorization) and `solve` solves −A x = −b (a negated copy of b, which CHOLMOD gets as a copy anyway), checks with A and b as given, and adds the warning "…the matrix is negative definite…, so -A was factored…; the answer is unchanged" to every result; `prepare` throws `std::runtime_error` for a matrix (or −A) that is not positive definite (a zero or negative pivot, naming the column; exactly singular, indefinite, a zero diagonal entry or one of each sign included); `solve` checks the backward error like `SimplicialLdlt`; pivot ratio `cholmod_l_rcond` ((min/max diag L)²) |
-| `MultifrontalLu` | nothing | ParU's multifrontal LU with threshold partial pivoting (UMFPACK's analysis, METIS, rows scaled by their largest entry); the matrix is copied once into compressed columns; `MultifrontalLuOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for an exact zero pivot (a front's or a singleton's); `solve` checks the backward error; pivot ratio over the diagonal of U of the scaled matrix, singletons included |
+| `MultifrontalLu` | nothing | ParU's multifrontal LU with threshold partial pivoting (UMFPACK's analysis, METIS, rows scaled by their largest entry); the matrix is copied once into compressed columns; `MultifrontalLuOptions{.residual_tolerance = 1e-8, .threads = 1}`; `prepare` throws `std::runtime_error` for an exact zero pivot (a front's or a singleton's) and, before ParU, for a row with no entry that is not zero; `solve` checks the backward error; pivot ratio over the diagonal of U of the scaled matrix, singletons included |
 
 The two iterative solvers share one prepared solver
 (`detail::PreparedIterative<EigenSolver>`, `src/solve/iterative_solve.hpp`):
@@ -1552,7 +1564,12 @@ singletons, which ParU eliminates before the fronts and leaves out: a
 singleton's pivot is entry (P[k], Q[k]) of the scaled matrix, read from
 our matrix and ParU's row scale factors (ParU checks the pattern, not the
 values, for singletons, so an explicitly stored zero can be one; it
-throws as an exact zero pivot). `MultifrontalLu` sets ParU's row scaling
+throws as an exact zero pivot, checked before dividing by the row scale).
+Before ParU sees the matrix, `MultifrontalLu` refuses one with a row
+that has no entry that is not zero (no slot, or only stored zeros), as
+singular with the row named: ParU 7.12 checks the row scale factors
+only of the rows that reach a front, so a zero row that is a singleton
+would get through (its pivot 0 / 0). `MultifrontalLu` sets ParU's row scaling
 (`PARU_PRESCALE_MAX`, the default) explicitly, since the singleton pivots
 depend on it.
 
@@ -1685,7 +1702,9 @@ history, report}`.
   linear_iterations, max_linear_iterations, max_residual, assemblies,
   prepares, snapshots, assembly_threads, linear_threads), whose messages
   are the linear solver's warnings of every solve of the call (also of
-  `start()`), each distinct one once, in the order they first appeared.
+  `start()`), each distinct one once, in the order they were added
+  (solves from several threads at once: the order in which they took the
+  log's lock).
 - Continuing a run from `previous.final` gives the same values bit for
   bit for the first-order methods when the long run lands on the split
   time; for `Newmark` the acceleration is computed again at the split
