@@ -1,6 +1,7 @@
 #include "pde2d/adapt/adaptive_integrator.hpp"
 
 #include "pde2d/adapt/solution_transfer.hpp"
+#include "pde2d/fem/assembler.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -135,8 +136,17 @@ std::string_view to_string(AdaptationOutcome outcome) {
 
 AdaptiveIntegrator::AdaptiveIntegrator(
     solve::Integrator integrator,
-    std::vector<std::shared_ptr<const Adaptation>> adaptations)
-    : integrator_(std::move(integrator)), adaptations_(std::move(adaptations)) {
+    std::vector<std::shared_ptr<const Adaptation>> adaptations,
+    AdaptiveIntegratorOptions options)
+    : integrator_(std::move(integrator)), adaptations_(std::move(adaptations)),
+      options_(std::move(options)) {
+  if (options_.damping_steps > 0) {
+    if (!options_.damping_method)
+      throw std::invalid_argument(
+          std::format("{}: {} damping steps need a damping method", stage,
+                      options_.damping_steps));
+    damping_ = integrator_.with_method(options_.damping_method);
+  }
   if (adaptations_.empty())
     throw std::invalid_argument(
         std::format("{}: at least one adaptation is needed", stage));
@@ -178,6 +188,15 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   if (has_tolerance && !estimating)
     throw std::invalid_argument(std::format(
         "{}: a tolerance needs an adaptation that estimates the error", stage));
+  if (damping_) {
+    // From the formula facts, as the Integrator decides it, so that a run
+    // does not fail at its first transfer.
+    const int time_order = fem::Assembler().time_order(*problem);
+    if (!options_.damping_method->capabilities().supports(time_order))
+      throw std::invalid_argument(std::format(
+          "{}: the damping method {} does not support time order {}", stage,
+          options_.damping_method->name(), time_order));
+  }
   if (target.max_nodes && problem->mesh()->nodes.size() > *target.max_nodes)
     throw std::invalid_argument(std::format(
         "{}: the starting mesh has {} nodes, more than max_nodes = {}", stage,
@@ -189,6 +208,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   const auto &times = output.snapshot_times;
   std::size_t next_snapshot = 0; // into times
   std::size_t steps = 0, adaptation_times = 0, refinements = 0;
+  std::size_t damping_steps = 0;
   std::size_t max_nodes_used = 0;
   bool adapting = true;
   std::string stop_message;
@@ -196,47 +216,86 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   std::optional<solve::Solution> carried;
   const solve::Solution *state_in = initial;
   double t = t0;
+  // The stretch to the next adaptation time (or to t1 once adapting has
+  // stopped): its end, its step limit and the steps taken in it. Usually
+  // one piece; after a transfer with damping steps two (the damping
+  // steps, then the integrator's method).
+  bool new_stretch = true;
+  double end = t1;
+  std::optional<std::size_t> max_steps;
+  std::size_t stretch_steps = 0;
+  // Damping steps still to take since the last transfer.
+  std::size_t pending_damping = 0;
 
   for (;;) {
     // 1. The piece: to the next adaptation time, or to t1 once adapting
     // has stopped.
-    double end = t1;
-    std::optional<std::size_t> max_steps;
-    if (adapting) {
-      if (target.every.interval) {
-        const double interval = *target.every.interval;
-        const double next = t + interval;
-        if (!(next > t))
-          throw std::runtime_error(std::format(
-              "{}: the adaptation interval {} is too small to change t = {} "
-              "in double precision",
-              stage, interval, t));
-        const double slack = landing_tolerance * interval;
-        if (next < t1 - slack) {
-          end = next;
-          // A snapshot time this close is the adaptation time: the piece
-          // lands on it exactly, with no step of rounding size after it.
-          for (std::size_t s = next_snapshot;
-               s < times.size() && times[s] <= next + slack; ++s)
-            if (std::abs(times[s] - next) <= slack) {
-              end = times[s];
-              break;
-            }
+    if (new_stretch) {
+      new_stretch = false;
+      end = t1;
+      max_steps.reset();
+      stretch_steps = 0;
+      if (adapting) {
+        if (target.every.interval) {
+          const double interval = *target.every.interval;
+          const double next = t + interval;
+          if (!(next > t))
+            throw std::runtime_error(std::format(
+                "{}: the adaptation interval {} is too small to change t = "
+                "{} in double precision",
+                stage, interval, t));
+          const double slack = landing_tolerance * interval;
+          if (next < t1 - slack) {
+            end = next;
+            // A snapshot time this close is the adaptation time: the piece
+            // lands on it exactly, with no step of rounding size after it.
+            for (std::size_t s = next_snapshot;
+                 s < times.size() && times[s] <= next + slack; ++s)
+              if (std::abs(times[s] - next) <= slack) {
+                end = times[s];
+                break;
+              }
+          }
         }
+        max_steps = target.every.steps;
       }
-      max_steps = target.every.steps;
     }
+    // The steps this piece may take: what is left of the stretch's, and
+    // at most the damping steps still to take for a damping piece.
+    const bool damping = pending_damping > 0;
+    std::optional<std::size_t> piece_steps;
+    if (max_steps)
+      piece_steps = *max_steps - stretch_steps;
+    if (damping)
+      piece_steps = std::min(
+          piece_steps.value_or(std::numeric_limits<std::size_t>::max()),
+          pending_damping);
     // The state before the last step is needed only when the piece can end
-    // in an adaptation: before t1, or after max_steps steps.
+    // in an adaptation (before t1, or after max_steps steps), and after
+    // damping steps for the acceleration of their last step.
     solve::IntegrationOutput piece_output{
         .keep_step_history = output.keep_step_history,
-        .keep_before_last_step = adapting && (end < t1 || max_steps)};
+        .keep_before_last_step =
+            damping || (adapting && (end < t1 || max_steps))};
     for (std::size_t s = next_snapshot; s < times.size() && times[s] <= end;
          ++s)
       piece_output.snapshot_times.push_back(times[s]);
-    solve::IntegrationResult run = integrator_.integrate(
-        problem, t, end, piece_output, state_in, max_steps);
-    steps += static_cast<std::size_t>(run.report.metrics.at("steps"));
+    const solve::Integrator &stepper = damping ? *damping_ : integrator_;
+    solve::IntegrationResult run =
+        stepper.integrate(problem, t, end, piece_output, state_in, piece_steps);
+    const auto taken = static_cast<std::size_t>(run.report.metrics.at("steps"));
+    steps += taken;
+    stretch_steps += taken;
+    if (damping) {
+      damping_steps += taken;
+      pending_damping -= std::min(pending_damping, taken);
+      // The acceleration of the last damping step, for a method that keeps
+      // one (Newmark continues from it without its start).
+      if (!run.final.velocities.empty())
+        run.final.accelerations =
+            last_step_derivatives(*problem, run.final, *run.before_last_step)
+                .u_tt;
+    }
     // The snapshots taken are the first of the times passed, in order.
     next_snapshot += run.snapshots.size();
     for (auto &s : run.snapshots)
@@ -248,13 +307,23 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
                            .t_start = t,
                            .t_end = run.final.time,
                            .report = std::move(run.report),
-                           .adaptation = {}};
+                           .adaptation = {},
+                           .damping = damping};
     t = run.final.time;
     if (!(t < t1)) {
       result.final = std::move(run.final);
       result.pieces.push_back(std::move(piece));
       break;
     }
+    // Damping steps that ended before the adaptation time: the
+    // integrator's method continues the stretch on the same problem.
+    if (t < end && !(max_steps && stretch_steps >= *max_steps)) {
+      carried = std::move(run.final);
+      state_in = &*carried;
+      result.pieces.push_back(std::move(piece));
+      continue;
+    }
+    new_stretch = true;
 
     // 2. The adaptation time: estimate the solution with its derivatives
     // from the last step.
@@ -321,6 +390,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
         problem = std::move(next_problem);
         point.outcome = AdaptationOutcome::refined;
         ++refinements;
+        pending_damping = options_.damping_steps;
         if (target.max_refinements && refinements >= *target.max_refinements) {
           adapting = false;
           stop_message = std::format(
@@ -347,6 +417,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   m["adaptation_times"] = static_cast<double>(adaptation_times);
   m["refinements"] = static_cast<double>(refinements);
   m["steps"] = static_cast<double>(steps);
+  m["damping_steps"] = static_cast<double>(damping_steps);
   m["nodes"] = static_cast<double>(problem->mesh()->nodes.size());
   m["triangles"] = static_cast<double>(problem->mesh()->triangles.size());
   m["max_nodes_used"] = static_cast<double>(max_nodes_used);

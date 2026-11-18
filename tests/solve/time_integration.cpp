@@ -756,19 +756,83 @@ void continues_runs() {
             "continued run equals one long run");
     }
   }
-  // Newmark: the acceleration is computed again from the equation at the
-  // split time, so equal to rounding.
+  // Newmark keeps its acceleration in the Solutions it returns, and a run
+  // continued from one takes it instead of calling start(): bit for bit,
+  // like the first-order methods.
   const auto m = meshed(wave_problem());
   const auto i = integrator(std::make_shared<Newmark>(), 0.1);
   const auto whole = i.integrate(m, 0.0, 1.0, {.snapshot_times = {0.5}});
   const auto first = i.integrate(m, 0.0, 0.5);
   check(!first.final.velocities.empty(), "the final solution has velocities");
+  check(first.final.accelerations.size() == m->mesh()->nodes.size() &&
+            whole.snapshots[0].accelerations.size() == m->mesh()->nodes.size(),
+        "and accelerations, also the snapshots");
+  // At the Dirichlet nodes the boundary data's acceleration.
+  for (std::size_t k = 0; k < m->dirichlet_nodes().size(); ++k)
+    check(first.final.accelerations[m->dirichlet_nodes()[k].node] ==
+              m->dirichlet_acceleration(k, 0.5),
+          "the Dirichlet acceleration");
   const auto second = i.integrate(m, 0.5, 1.0, {}, &first.final);
+  check(second.final.values == whole.final.values &&
+            second.final.velocities == whole.final.velocities &&
+            second.final.accelerations == whole.final.accelerations,
+        "Newmark: the continued run equals one long run");
+  // No start: nothing is assembled at the continuation time.
+  check(second.report.metrics.at("assemblies") ==
+            second.report.metrics.at("steps"),
+        "one assembly per step, none at t0");
+  // Without the accelerations, start() computes them again (to rounding).
+  Solution without = first.final;
+  without.accelerations.clear();
+  const auto restarted = i.integrate(m, 0.5, 1.0, {}, &without);
+  check(restarted.report.metrics.at("assemblies") ==
+            restarted.report.metrics.at("steps") + 1,
+        "start() assembles at t0");
   for (std::size_t k = 0; k < whole.final.values.size(); ++k) {
-    near(second.final.values[k], whole.final.values[k], 1e-12, "values");
-    near(second.final.velocities[k], whole.final.velocities[k], 1e-11,
+    near(restarted.final.values[k], whole.final.values[k], 1e-12, "values");
+    near(restarted.final.velocities[k], whole.final.velocities[k], 1e-11,
          "velocities");
   }
+  // A method that keeps no acceleration returns none, and ignores given
+  // ones.
+  const auto euler = integrator(std::make_shared<ImplicitEuler>(), 0.1);
+  const auto euler_first = euler.integrate(m, 0.0, 0.5);
+  check(euler_first.final.accelerations.empty(),
+        "implicit Euler returns no accelerations");
+  check(euler.integrate(m, 0.5, 1.0, {}, &first.final).final.values ==
+            euler.integrate(m, 0.5, 1.0, {}, &without).final.values,
+        "implicit Euler ignores accelerations");
+}
+
+// The review case: (t - 0.5)^2 u_tt + 0.1 u_t - (u_xx + u_yy) = f with the
+// wave's u. M2 is zero at t = 0.5, so Newmark could not start there; a run
+// continued at 0.5 takes the carried acceleration and equals one long run.
+void newmark_continues_where_m2_vanishes() {
+  Problem problem = wave_problem();
+  const std::string u_t = "-2*" + p + "*sin(2*t) + 3*" + q + "*cos(3*t)";
+  const std::string u_tt = "-4*" + p + "*cos(2*t) - 9*" + q + "*sin(3*t)";
+  problem.equation.m2 = e("(t - 0.5)^2");
+  problem.equation.f = e("(t - 0.5)^2*(" + u_tt + ") + 0.1*(" + u_t + ")");
+  const auto m = meshed(problem);
+  const auto i = integrator(std::make_shared<Newmark>(), 1.0 / 16);
+  const auto whole = i.integrate(m, 0.0, 1.0, {.snapshot_times = {0.5}});
+  const auto first = i.integrate(m, 0.0, 0.5);
+  const auto second = i.integrate(m, 0.5, 1.0, {}, &first.final);
+  check(second.final.values == whole.final.values &&
+            second.final.velocities == whole.final.velocities,
+        "continued at t = 0.5 equals one long run");
+  const double error = pde2d::test::max_nodal_error(
+      *m->mesh(), whole.final.values,
+      [](double x, double y) { return wave_exact(x, y, 1.0); });
+  std::cout << "newmark with m2 = (t - 0.5)^2, dt = 1/16: error at t = 1 "
+            << error << '\n';
+  check(error < 0.05, "Newmark follows the solution through m2 = 0");
+  // Restarting there needs M2 at t = 0.5, which is zero.
+  Solution without = first.final;
+  without.accelerations.clear();
+  expect_throws<std::runtime_error>(
+      [&] { (void)i.integrate(m, 0.5, 1.0, {}, &without); },
+      "M2 is zero at t0 = 0.5");
 }
 
 void checks_input() {
@@ -800,6 +864,19 @@ void checks_input() {
             .integrate(wave, 0.0, 1.0, {}, &steady.solution);
       },
       "velocities");
+  // Accelerations of the wrong size or not finite, for a method that keeps
+  // them.
+  const auto newmark = integrator(std::make_shared<Newmark>(), 0.1);
+  Solution wave_start = newmark.integrate(wave, 0.0, 0.1).final;
+  wave_start.accelerations.pop_back();
+  expect_throws<std::invalid_argument>(
+      [&] { (void)newmark.integrate(wave, 0.1, 0.2, {}, &wave_start); },
+      "accelerations for");
+  wave_start.accelerations.push_back(0.0);
+  wave_start.accelerations[wave->free_nodes()[0]] = std::nan("");
+  expect_throws<std::invalid_argument>(
+      [&] { (void)newmark.integrate(wave, 0.1, 0.2, {}, &wave_start); },
+      "not finite");
   expect_throws<std::invalid_argument>([] { FixedStep({.dt = 0.0}); },
                                        "dt must be finite and positive");
   expect_throws<std::invalid_argument>(
@@ -828,13 +905,21 @@ void integration_result_keeps_its_order() {
             r.report.stage == "integrator",
         "final, snapshots, history, report");
   check(!r.before_last_step, "the new member keeps its default");
+  // Solution: mesh, time, values, velocities, then accelerations.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+  const Solution s{nullptr, 2.0, {1.0}, {3.0}};
+#pragma GCC diagnostic pop
+  check(s.time == 2.0 && s.values == std::vector<double>{1.0} &&
+            s.velocities == std::vector<double>{3.0} && s.accelerations.empty(),
+        "Solution keeps its positional order");
 }
 
 } // namespace
 
 int main() {
   return pde2d::test::run({
-      {"IntegrationResult keeps its positional order",
+      {"IntegrationResult and Solution keep their positional order",
        integration_result_keeps_its_order},
       {"implicit Euler converges at first order in time",
        [] {
@@ -905,6 +990,8 @@ int main() {
        mass_zero_at_start},
       {"snapshots land exactly on their times", lands_on_snapshots},
       {"a continued run equals one long run", continues_runs},
+      {"Newmark continues at a time where M2 vanishes",
+       newmark_continues_where_m2_vanishes},
       {"max_steps ends a run early; the state before the last step",
        stops_after_max_steps},
       {"the integrator checks its input", checks_input},

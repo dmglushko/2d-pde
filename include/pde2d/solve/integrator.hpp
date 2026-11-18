@@ -56,8 +56,9 @@ struct StepRecord {
 };
 
 struct IntegrationResult {
-  // The solution where the run ended (with velocities for time order 2):
-  // at t1, or earlier when integrate() stopped after max_steps steps.
+  // The solution where the run ended (with velocities for time order 2,
+  // and accelerations for a method that keeps them): at t1, or earlier
+  // when integrate() stopped after max_steps steps.
   Solution final{};
   // In time order; see IntegrationOutput.
   std::vector<Solution> snapshots{};
@@ -117,15 +118,18 @@ public:
   //    terms vanished in assembly;
   // 2. takes the starting state, in the free unknowns, from `initial` if
   //    given (the Dirichlet nodes are ignored; for time order 2 it must
-  //    have velocities), else from MeshedProblem::initial_free_state(t0)
+  //    have velocities; for a method that keeps the acceleration,
+  //    TimeMethod::keeps_acceleration, its accelerations when it has
+  //    them), else from MeshedProblem::initial_free_state(t0)
   //    (the free nodes only, so no boundary data is evaluated at t0). Time
   //    order 0 has no initial state (`initial` is only checked): the method's
   //    start computes it. Then it assembles the problem at t0 only as far as
   //    the method's start reads it (TimeMethod::start_needs: nothing,
   //    max_time_order 0 or 2) and calls start() with it; for
-  //    StartNeeds::nothing it neither assembles at t0 nor calls start(),
-  //    so boundary data whose time derivative is not finite at t0
-  //    (u = sqrt(t) from t0 = 0) can be integrated;
+  //    StartNeeds::nothing, and when the accelerations of a method that
+  //    keeps them came from `initial`, it neither assembles at t0 nor
+  //    calls start(), so boundary data whose time derivative is not
+  //    finite at t0 (u = sqrt(t) from t0 = 0) can be integrated;
   // 3. repeats until t1: asks the step controller for dt, shortens the
   //    step to land on the next snapshot time or t1 (a step that ends
   //    within 1e-9 dt of one lands on it), assembles the problem at the
@@ -145,7 +149,9 @@ public:
   // Times on a stretch of equal steps are computed as start + k dt (not
   // summed), so a run that lands on a time and one that starts there take
   // the same steps. Continuing a run: integrate(meshed, t1, t2, output,
-  // &previous.final).
+  // &previous.final); the returned Solutions carry the accelerations of a
+  // method that keeps them (Newmark), so such a run continues without its
+  // start and equals one long run that lands on t1, bit for bit.
   //
   // `max_steps`, when given, ends the run after that many steps if t1 is
   // not reached first: final.time then says where it ended (the last step
@@ -157,9 +163,12 @@ public:
   // finite or t1 <= t0, bad output options, max_steps 0, a time order the
   // method does not support, a linear solver whose requirements a matrix does
   // not meet, and an `initial` on another mesh object, of the wrong size, with
-  // values that are not finite or without the velocities time order 2
-  // needs. Throws std::runtime_error when the method's start() leaves no
-  // state at t0 (a method of time order 0 must compute it). Passes on the
+  // values that are not finite, without the velocities time order 2 needs
+  // or (for a method that keeps the acceleration) with accelerations of
+  // the wrong size or not finite. Throws std::runtime_error when the
+  // method's start() leaves no state at t0 (a method of time order 0 must
+  // compute it), or no acceleration for a method that keeps it. Passes on
+  // the
   // exceptions of assembly, of the method's start() and of the linear
   // solver.
   [[nodiscard]] IntegrationResult
@@ -167,6 +176,12 @@ public:
             double t1, const IntegrationOutput &output = {},
             const Solution *initial = nullptr,
             std::optional<std::size_t> max_steps = std::nullopt) const;
+
+  // The same step controller, linear solver and assembler options with
+  // another time method (for example the damping steps of the adaptive
+  // loop). Throws std::invalid_argument for a null method.
+  [[nodiscard]] Integrator
+  with_method(std::shared_ptr<const TimeMethod> method) const;
 
 private:
   std::shared_ptr<const TimeMethod> method_;

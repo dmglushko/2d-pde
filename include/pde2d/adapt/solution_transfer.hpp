@@ -9,7 +9,7 @@ namespace pde2d::adapt {
 // A solution moved to a new mesh, and how.
 struct SolutionTransfer {
   // On the new problem's mesh (the same object), at the old solution's
-  // time, with velocities when the old one had them.
+  // time, with velocities and accelerations when the old one had them.
   solve::Solution solution{};
   // "solution_transfer": the time taken; the metrics nodes, by_parents
   // (1 or 0), kept_nodes and edge_nodes (with parents: new nodes that are
@@ -25,10 +25,11 @@ struct SolutionTransfer {
 
 // Moves a P1 solution to a new mesh by interpolation (docs/decisions.md,
 // "Solution transfer is interpolation"): every node of the new mesh gets
-// the old u_h at its position, the velocities (time order 2) the same way,
-// and the Dirichlet nodes of `problem` their boundary data at the
-// solution's time instead (dirichlet_value, and dirichlet_rate for the
-// velocities).
+// the old u_h at its position, the velocities (time order 2) and the
+// accelerations (Newmark's, Solution::accelerations) the same way, and the
+// Dirichlet nodes of `problem` their boundary data at the solution's time
+// instead (dirichlet_value, dirichlet_rate for the velocities and
+// dirichlet_acceleration for the accelerations).
 //
 // With `parents` (Remesher::refine's, from old to new mesh): a node with
 // parent {v, v} keeps old node v's value exactly; a node with parent
@@ -74,11 +75,11 @@ struct SolutionTransfer {
 // parents) a P1 function is reproduced: the new u_h equals the old one
 // inside the old mesh.
 //
-// Throws std::invalid_argument when the old solution has no mesh, values
-// or velocities of the wrong size or not finite, or parents that do not
-// fit the two meshes (sizes, a node parent {a, b} with a > b or an index
-// out of range), and passes on dirichlet_value's and dirichlet_rate's
-// exceptions.
+// Throws std::invalid_argument when the old solution has no mesh, values,
+// velocities or accelerations of the wrong size or not finite, or parents
+// that do not fit the two meshes (sizes, a node parent {a, b} with a > b
+// or an index out of range), and passes on the exceptions of
+// dirichlet_value, dirichlet_rate and dirichlet_acceleration.
 [[nodiscard]] SolutionTransfer
 transfer_solution(const solve::Solution &old, const fem::MeshedProblem &problem,
                   const mesh::Parents *parents = nullptr);

@@ -53,8 +53,12 @@ std::vector<double> free_part(const fem::MeshedProblem &meshed,
   return part;
 }
 
+// The starting state. With `take_accelerations` (the method keeps the
+// acceleration) and an initial solution that has accelerations, they are
+// taken too, and the method's start is not needed.
 TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
-                         int time_order, const Solution *initial) {
+                         int time_order, const Solution *initial,
+                         bool take_accelerations) {
   TimeState state;
   if (initial) {
     const std::size_t nodes = meshed.mesh()->nodes.size();
@@ -79,6 +83,14 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
             "velocities, one per node");
       state.velocities = free_part(meshed, initial->velocities);
     }
+    if (take_accelerations && !initial->accelerations.empty()) {
+      if (initial->accelerations.size() != nodes)
+        throw std::invalid_argument(
+            "integrator: the initial solution has " +
+            std::to_string(initial->accelerations.size()) +
+            " accelerations for " + std::to_string(nodes) + " nodes");
+      state.accelerations = free_part(meshed, initial->accelerations);
+    }
   } else if (time_order >= 1) {
     // The problem's own time order is at least the assembled one, so the
     // values (and for time order 2 the velocities) exist.
@@ -91,7 +103,8 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
       state.velocities = std::move(initial_state.velocities);
   }
   if (!detail::all_finite(state.values) ||
-      !detail::all_finite(state.velocities))
+      !detail::all_finite(state.velocities) ||
+      !detail::all_finite(state.accelerations))
     throw std::invalid_argument(
         "integrator: the initial state is not finite at a free node");
   return state;
@@ -131,18 +144,29 @@ bool step_matrix_depends_on_t(const fem::AssembledProblem &problem,
          changes(problem.stiffness(), weights.stiffness);
 }
 
+// The Solution of `state` at t: velocities for time order 2 (Dirichlet
+// nodes: the boundary data's rate at t), and accelerations when the method
+// keeps them (Dirichlet nodes: the boundary data's acceleration at t).
 Solution make_solution(const fem::MeshedProblem &meshed, const TimeState &state,
-                       int time_order, double t) {
+                       int time_order, bool accelerations, double t) {
   Solution solution = build_solution(meshed, state.values, t);
+  const auto &free_nodes = meshed.free_nodes();
+  const auto &dirichlet_nodes = meshed.dirichlet_nodes();
   if (time_order == 2) {
     solution.velocities.assign(solution.values.size(), 0.0);
-    const auto &free_nodes = meshed.free_nodes();
     for (std::size_t i = 0; i < free_nodes.size(); ++i)
       solution.velocities[free_nodes[i]] = state.velocities[i];
-    const auto &dirichlet_nodes = meshed.dirichlet_nodes();
     for (std::size_t k = 0; k < dirichlet_nodes.size(); ++k)
       solution.velocities[dirichlet_nodes[k].node] =
           meshed.dirichlet_rate(k, t);
+  }
+  if (accelerations) {
+    solution.accelerations.assign(solution.values.size(), 0.0);
+    for (std::size_t i = 0; i < free_nodes.size(); ++i)
+      solution.accelerations[free_nodes[i]] = state.accelerations[i];
+    for (std::size_t k = 0; k < dirichlet_nodes.size(); ++k)
+      solution.accelerations[dirichlet_nodes[k].node] =
+          meshed.dirichlet_acceleration(k, t);
   }
   return solution;
 }
@@ -289,6 +313,15 @@ Integrator::Integrator(std::shared_ptr<const TimeMethod> method,
     throw std::invalid_argument("integrator: the linear solver is null");
 }
 
+Integrator
+Integrator::with_method(std::shared_ptr<const TimeMethod> method) const {
+  if (!method)
+    throw std::invalid_argument("integrator: the time method is null");
+  Integrator copy = *this;
+  copy.method_ = std::move(method);
+  return copy;
+}
+
 IntegrationResult
 Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
                       double t0, double t1, const IntegrationOutput &output,
@@ -332,10 +365,20 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // method declares what its start reads at t0"); the steps assemble at
   // their own times, so U_D' and U_D'' are never evaluated at t0 for a
   // method whose start reads nothing.
-  TimeState state = starting_state(meshed, t0, time_order, initial);
+  // A method that keeps the acceleration continues from the initial
+  // solution's accelerations, when it has them, without its start (which
+  // computes only the acceleration): so a continued run equals one long
+  // run, also from a time where M2 is singular.
+  const bool keeps_acceleration = method_->keeps_acceleration(time_order);
+  TimeState state =
+      starting_state(meshed, t0, time_order, initial, keeps_acceleration);
+  const bool acceleration_given =
+      keeps_acceleration && initial && !initial->accelerations.empty();
   std::optional<fem::AssembledProblem> current;
   std::size_t assemblies = 0;
-  const StartNeeds needs = method_->start_needs(time_order);
+  const StartNeeds needs = acceleration_given
+                               ? StartNeeds::nothing
+                               : method_->start_needs(time_order);
   if (needs != StartNeeds::nothing) {
     const int max_time_order = needs == StartNeeds::static_part ? 0 : 2;
     current = assembler.assemble(meshed_problem, t0, nullptr, max_time_order);
@@ -350,11 +393,18 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
         "integrator: {} gave no state at t0 = {} for time order {} (its "
         "start must compute it)",
         method_->name(), t0, time_order));
+  if (keeps_acceleration &&
+      state.accelerations.size() != meshed.free_nodes().size())
+    throw std::runtime_error(std::format(
+        "integrator: {} declares that it keeps the acceleration but gave "
+        "none at t0 = {} (its start must compute it)",
+        method_->name(), t0));
 
   IntegrationResult result;
   std::size_t next_snapshot = 0; // into output.snapshot_times
   if (!output.snapshot_times.empty() && output.snapshot_times[0] == t0) {
-    result.snapshots.push_back(make_solution(meshed, state, time_order, t0));
+    result.snapshots.push_back(
+        make_solution(meshed, state, time_order, keeps_acceleration, t0));
     ++next_snapshot;
   }
 
@@ -457,12 +507,14 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
     if (output.snapshot_every > 0 && summary.steps % output.snapshot_every == 0)
       take_snapshot = true;
     if (take_snapshot)
-      result.snapshots.push_back(make_solution(meshed, state, time_order, t));
+      result.snapshots.push_back(
+          make_solution(meshed, state, time_order, keeps_acceleration, t));
   }
 
   // t is t1 unless max_steps ended the run first (the last step landed on
   // t1 exactly otherwise).
-  result.final = make_solution(meshed, state, time_order, t);
+  result.final =
+      make_solution(meshed, state, time_order, keeps_acceleration, t);
 
   auto &report = result.report;
   report.stage = "integrator";

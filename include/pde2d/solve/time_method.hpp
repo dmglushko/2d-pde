@@ -89,10 +89,23 @@ public:
   // method supports; see StartNeeds).
   virtual StartNeeds start_needs(int time_order) const = 0;
 
+  // Whether, at this time order (one the method supports), the method
+  // keeps the acceleration U'' in its state (TimeState::accelerations) and
+  // its start() computes nothing else. The Integrator then returns the
+  // accelerations in its Solutions (Solution::accelerations), and a run
+  // given an initial Solution with accelerations takes them instead of
+  // calling start() (and assembles nothing at t0 for it), so a continued
+  // run equals one long run and does not need M2 to be invertible at the
+  // time it continues from. The default is false: no accelerations are
+  // returned, and start() runs as start_needs says.
+  virtual bool keeps_acceleration(int time_order) const;
+
   // Called once before the first step, and only when start_needs(time
-  // order) is not StartNeeds::nothing, with the problem assembled at the
-  // start time as start_needs says and the state at the start (values,
-  // and velocities for time order 2; empty for time order 0). A method
+  // order) is not StartNeeds::nothing (and not when keeps_acceleration
+  // holds and the initial Solution has accelerations), with the problem
+  // assembled at the start time as start_needs says and the state at the
+  // start (values, and velocities for time order 2; empty for time order
+  // 0). A method
   // that needs more state (Newmark's accelerations, the solution at t0
   // for time order 0) computes it here; it may prepare `linear_solver`
   // for its own matrix, after checking the solver's requirements against

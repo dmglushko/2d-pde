@@ -23,6 +23,8 @@ namespace pde2d::solve {
 void TimeMethod::start(const fem::AssembledProblem &, const LinearSolver &,
                        TimeState &) const {}
 
+bool TimeMethod::keeps_acceleration(int) const { return false; }
+
 namespace {
 
 StepSolveInfo info(const LinearSolveResult &solved) {

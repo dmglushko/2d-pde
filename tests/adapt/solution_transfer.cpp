@@ -172,7 +172,9 @@ void reproduces_with_parents() {
         transfer_solution(old, *problem, &*r.parents);
     check(moved.solution.mesh == new_mesh, "on the new problem's mesh");
     check(moved.solution.time == 0.5, "at the old time");
-    check(moved.solution.velocities.empty(), "no velocities without old ones");
+    check(moved.solution.velocities.empty() &&
+              moved.solution.accelerations.empty(),
+          "no velocities or accelerations without old ones");
     for (std::size_t v = 0; v < old_mesh->nodes.size(); ++v)
       check(moved.solution.values[v] == old.values[v],
             "old nodes keep their values exactly");
@@ -294,8 +296,8 @@ void curved_boundary() {
   }
 }
 
-// Velocities go the same way; Dirichlet nodes get g and g_t of the new
-// problem at the solution's time.
+// Velocities and accelerations go the same way; Dirichlet nodes get g,
+// g_t and g_tt of the new problem at the solution's time.
 void velocities_and_dirichlet() {
   const auto old_mesh = square();
   mesh::RefinementResult r =
@@ -311,9 +313,17 @@ void velocities_and_dirichlet() {
                     .initial = {.u = Expression("0"), .u_t = Expression("0")}};
   const fem::MeshedProblem problem(new_mesh, wave);
   solve::Solution old = sampled(old_mesh, wavy, 0.75);
-  for (const Point &p : old_mesh->nodes)
+  for (const Point &p : old_mesh->nodes) {
     old.velocities.push_back(linear(p) * 3);
+    old.accelerations.push_back(linear(p) * -2);
+  }
   const auto moved = transfer_solution(old, problem, &*r.parents);
+  solve::Solution only_accelerations = sampled(old_mesh, wavy, 0.75);
+  only_accelerations.values = old.accelerations;
+  const auto reference_accelerations =
+      transfer_solution(only_accelerations, problem, &*r.parents);
+  check(moved.solution.accelerations.size() == new_mesh->nodes.size(),
+        "accelerations on the new mesh");
   solve::Solution only_velocities = sampled(old_mesh, wavy, 0.75);
   only_velocities.values = old.velocities;
   const auto reference =
@@ -328,7 +338,12 @@ void velocities_and_dirichlet() {
       near(moved.solution.values[v], new_mesh->nodes[v].x + 0.75 * 0.75, 1e-14,
            "Dirichlet value g(t)");
       near(moved.solution.velocities[v], 1.5, 1e-14, "Dirichlet rate g_t(t)");
+      near(moved.solution.accelerations[v], 2.0, 1e-14,
+           "Dirichlet acceleration g_tt(t)");
     } else {
+      check(moved.solution.accelerations[v] ==
+                reference_accelerations.solution.values[v],
+            "accelerations interpolated like values");
       check(moved.solution.velocities[v] == reference.solution.values[v],
             "velocities interpolated like values");
       near(moved.solution.velocities[v], 3 * linear(new_mesh->nodes[v]), 1e-13,
@@ -493,6 +508,11 @@ void rejects_bad_input() {
   expect_throws<std::invalid_argument>(
       [&] { (void)transfer_solution(short_velocities, *problem); },
       "velocities for");
+  solve::Solution short_accelerations = good;
+  short_accelerations.accelerations.assign(3, 0.0);
+  expect_throws<std::invalid_argument>(
+      [&] { (void)transfer_solution(short_accelerations, *problem); },
+      "accelerations for");
 
   mesh::Parents wrong_size = *r.parents;
   wrong_size.nodes.pop_back();
@@ -522,7 +542,8 @@ int main() {
        reproduces_by_point_location},
       {"a curved boundary node gets its parent edge's average",
        curved_boundary},
-      {"velocities like values; Dirichlet nodes from the new problem",
+      {"velocities and accelerations like values; Dirichlet nodes from the "
+       "new problem",
        velocities_and_dirichlet},
       {"a thin annulus: a curve point keeps to its own wall",
        thin_annulus_walls},

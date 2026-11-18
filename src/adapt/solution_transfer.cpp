@@ -265,6 +265,9 @@ SolutionTransfer transfer_solution(const solve::Solution &old,
   const bool velocities = !old.velocities.empty();
   if (velocities)
     check_values(old.velocities, old_mesh.nodes.size(), "velocities");
+  const bool accelerations = !old.accelerations.empty();
+  if (accelerations)
+    check_values(old.accelerations, old_mesh.nodes.size(), "accelerations");
   if (!std::isfinite(old.time))
     throw std::invalid_argument(
         std::format("{}: the old solution's time is not finite", stage));
@@ -282,12 +285,17 @@ SolutionTransfer transfer_solution(const solve::Solution &old,
   solution.values = apply(plan, old.values);
   if (velocities)
     solution.velocities = apply(plan, old.velocities);
+  if (accelerations)
+    solution.accelerations = apply(plan, old.accelerations);
   const auto &dirichlet = problem.dirichlet_nodes();
   for (std::size_t k = 0; k < dirichlet.size(); ++k) {
     solution.values[dirichlet[k].node] = problem.dirichlet_value(k, old.time);
     if (velocities)
       solution.velocities[dirichlet[k].node] =
           problem.dirichlet_rate(k, old.time);
+    if (accelerations)
+      solution.accelerations[dirichlet[k].node] =
+          problem.dirichlet_acceleration(k, old.time);
   }
   report.metrics["nodes"] = static_cast<double>(new_mesh.nodes.size());
   report.metrics["by_parents"] = parents ? 1.0 : 0.0;

@@ -19,6 +19,14 @@ struct Solution {
   // 2 (the Integrator fills it, so that a run can be continued); otherwise
   // empty.
   std::vector<double> velocities{};
+  // u_tt, one per mesh node, only for a solution of a problem of time
+  // order 2 from a method that keeps the acceleration in its state
+  // (TimeMethod::keeps_acceleration: Newmark), so that a continued run
+  // does not compute it again; otherwise empty. The adaptive loop also
+  // fills it after damping steps and moves it with transfer_solution.
+  // (Added after the members above, so that positional initializations
+  // keep their meaning: new members go at the end.)
+  std::vector<double> accelerations{};
 };
 
 // Turns the values of the free unknowns (MeshedProblem::free_nodes()) into

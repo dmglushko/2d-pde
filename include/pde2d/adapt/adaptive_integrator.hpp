@@ -86,11 +86,19 @@ struct IntegrationPiece {
   // The integrator's report of this piece ("integrator").
   mesh::StageReport report{};
   std::optional<AdaptationPoint> adaptation{};
+  // Whether this piece is the damping steps after a transfer
+  // (AdaptiveIntegratorOptions), integrated by the damping method. It ends
+  // after those steps, and the next piece continues on the same problem
+  // with the integrator's method up to the same adaptation time; it has
+  // an adaptation only when it reached that time itself. (After the
+  // members above, so that positional initializations keep their
+  // meaning: new members go at the end.)
+  bool damping = false;
 };
 
 struct AdaptiveIntegrationResult {
   // The solution at t1 on the last mesh (with velocities for time order
-  // 2).
+  // 2, and accelerations when the last piece's state has them).
   solve::Solution final{};
   // At the asked snapshot times, in time order, each on the mesh of its
   // piece.
@@ -101,12 +109,33 @@ struct AdaptiveIntegrationResult {
   // Every piece, in time order; the meshes used are their problems'.
   std::vector<IntegrationPiece> pieces{};
   // "adaptive_integrator": the time taken; the metrics t0, t1, pieces,
-  // adaptation_times, refinements, steps, nodes and triangles (of the
+  // adaptation_times, refinements, steps, damping_steps (those of the
+  // damping method, included in steps), nodes and triangles (of the
   // last mesh), max_nodes_used (the most nodes any piece integrated on,
   // the last mesh's since meshes only grow) and tolerance (resolved, when
   // set); a message when the node budget or max_refinements stopped
   // adapting.
   mesh::StageReport report{};
+};
+
+// The settings of the adaptive loop in time that are the same for every
+// job (docs/decisions.md, "Where a setting goes").
+struct AdaptiveIntegratorOptions {
+  // After each transfer to a new mesh, take this many steps with
+  // damping_method before the integrator's method continues (Rannacher
+  // smoothing, docs/decisions.md "Damping steps after a transfer"): a
+  // method that does not damp (the midpoint method, Newmark) keeps the
+  // interpolation error a transfer leaves in the finest modes, implicit
+  // Euler damps it within a few steps. 0: off. The steps are the
+  // integrator's (its step controller, linear solver and assembler
+  // options) with the damping method, and they count as steps of the
+  // schedule.
+  std::size_t damping_steps = 0;
+  // Required when damping_steps > 0; typically solve::ImplicitEuler. It
+  // must support the problem's time order (checked by integrate() from
+  // its capabilities before the first step). Never used for anything
+  // else: no method is switched to on a failure.
+  std::shared_ptr<const solve::TimeMethod> damping_method{};
 };
 
 // The adaptive loop for time-dependent problems: a driver above the
@@ -152,17 +181,33 @@ struct AdaptiveIntegrationResult {
 // The state passed on is the previous piece's final solution, on the
 // same problem when nothing changed (so the pieces continue the run
 // exactly: with a first-order method bit for bit like one integrate() call
-// that lands on the same times), else transferred to the new mesh
-// (values, and velocities for time order 2; Dirichlet nodes from the new
-// problem).
+// that lands on the same times; Newmark continues from its carried
+// acceleration, so bit for bit too), else transferred to the new mesh
+// (values, velocities for time order 2 and accelerations when the state
+// has them; Dirichlet nodes from the new problem).
+//
+// Damping steps (AdaptiveIntegratorOptions): after each transfer the next
+// damping_steps steps are a piece of their own with the damping method
+// (IntegrationPiece::damping), then the integrator's method continues to
+// the same adaptation time (the schedule counts the damping steps too;
+// remaining damping steps carry over an adaptation time that changed
+// nothing, and a new transfer starts them again). For time order 2 the
+// state after damping steps gets the acceleration of their last step,
+// u_tt = (u_t(t) - u_t(t - dt)) / dt at the free nodes (for implicit
+// Euler it satisfies M2 u_tt + B u_t + A u = b at t, the equation Newmark's
+// start would solve, without needing M2 to be invertible) and the
+// boundary data's acceleration at the Dirichlet nodes, so a method that
+// keeps the acceleration continues from it without its start.
 //
 // A transfer leaves the old mesh's interpolation error in the new mesh's
 // fine modes. Implicit Euler damps them within a step; the midpoint method
 // and Newmark (beta = 1/4) do not, so with them each refinement's error
-// stays in the solution (tests/adapt/adaptive_integrator.cpp, a moving
-// bump: implicit Euler adaptive 2518 nodes, energy error 0.088 against
-// uniform 2927 nodes, 0.25; the midpoint method adaptive 3699 nodes,
-// 0.51, against uniform 0.27).
+// stays in the solution unless damping steps are asked for
+// (tests/adapt/adaptive_integrator.cpp, a moving bump: implicit Euler
+// adaptive 2518 nodes, energy error 0.088 against uniform 2927 nodes,
+// 0.25; the midpoint method adaptive 3699 nodes, 0.51, against uniform
+// 0.27; with 2 damping steps of implicit Euler after each transfer:
+// MIDPOINT_DAMPED).
 //
 // Output: snapshot_times as for the Integrator (the pieces land on them),
 // keep_step_history concatenates the pieces' records; snapshot_every is
@@ -173,11 +218,12 @@ struct AdaptiveIntegrationResult {
 // AdaptiveStaticSolver: the loop never reorders triangles.
 class AdaptiveIntegrator {
 public:
-  // Throws std::invalid_argument without adaptations, for a null one, and
-  // when more than one declares changes_mesh.
-  AdaptiveIntegrator(
-      solve::Integrator integrator,
-      std::vector<std::shared_ptr<const Adaptation>> adaptations);
+  // Throws std::invalid_argument without adaptations, for a null one,
+  // when more than one declares changes_mesh, and for damping steps
+  // without a damping method.
+  AdaptiveIntegrator(solve::Integrator integrator,
+                     std::vector<std::shared_ptr<const Adaptation>> adaptations,
+                     AdaptiveIntegratorOptions options = {});
 
   // Integrates `problem` (its mesh is the starting mesh) from t0 to t1,
   // adapting as the target says; `initial` as for Integrator::integrate
@@ -186,6 +232,7 @@ public:
   // nothing set or a value that is not finite and positive (steps at
   // least 1), a tolerance value, max_nodes or max_refinements that is not
   // finite and positive, a tolerance when no adaptation estimates, a
+  // damping method that does not support the problem's time order, a
   // starting mesh
   // with more nodes than max_nodes, snapshot times not strictly
   // increasing within [t0, t1], and snapshot_every; throws
@@ -203,6 +250,10 @@ public:
 private:
   solve::Integrator integrator_;
   std::vector<std::shared_ptr<const Adaptation>> adaptations_;
+  AdaptiveIntegratorOptions options_;
+  // The integrator with the damping method, when damping steps are asked
+  // for.
+  std::optional<solve::Integrator> damping_;
 };
 
 } // namespace pde2d::adapt
