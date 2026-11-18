@@ -48,6 +48,12 @@ export function stagesToRun(stage, isFresh) {
   return [...stageInfo(stage).requires.filter((id) => !isFresh(id)), stage];
 }
 
+// Whether a solve result (or the case's solve section) runs in time: the
+// mode "time" or the adaptive one in time.
+export function isTimeRun(result) {
+  return result?.mode === "time" || result?.mode === "adaptive_time";
+}
+
 // The bytes the solution's values take on the way to the page (float32,
 // one per node and kept time), or null when the case's solve section
 // cannot tell (the server checks it).
@@ -62,6 +68,13 @@ export function solutionBytes(solveSection, nodes) {
   }
   const snapshots = solveSection.time?.snapshots ?? null;
   if (!Number.isInteger(snapshots) || snapshots < 1) return null;
+  // Adaptive in time: each snapshot on its mesh, of at most max_nodes
+  // nodes (and the meshes themselves, a few times the values each).
+  if (solveSection.mode === "adaptive_time") {
+    const { max_nodes: most, max_refinements: refinements } = solveSection.adaptive_time ?? {};
+    if (!Number.isInteger(most) || most < 1 || !Number.isInteger(refinements) || refinements < 0) return null;
+    return 4 * most * (snapshots + 1) + 28 * most * (refinements + 1);
+  }
   return 4 * nodes * (snapshots + 1);
 }
 
@@ -106,6 +119,16 @@ export function serverRunBytes(solveSection, memory) {
     const { max_nodes: nodes, max_cycles: cycles } = solveSection.adaptive ?? {};
     if (!Number.isInteger(nodes) || !Number.isInteger(cycles) || nodes < 1 || cycles < 1) return null;
     const bytes = cycles * (nodes * 64 + 512);
+    return { bytes, budget, share: bytes / budget };
+  }
+  // An adaptive run in time reserves room for max_refinements + 1 meshes
+  // and its snapshots of at most max_nodes nodes (runs.cpp,
+  // adaptive_time_run_bytes, with the state of a first-order problem).
+  if (solveSection.mode === "adaptive_time") {
+    const { max_nodes: nodes, max_refinements: refinements } = solveSection.adaptive_time ?? {};
+    const snapshots = solveSection.time?.snapshots;
+    if (!Number.isInteger(nodes) || nodes < 1 || !Number.isInteger(refinements) || refinements < 0 || !Number.isInteger(snapshots) || snapshots < 1) return null;
+    const bytes = (refinements + 1) * (nodes * 56 + 512) + (snapshots + 1) * (nodes * 8 + 128) + nodes * 8;
     return { bytes, budget, share: bytes / budget };
   }
   let count = 1;

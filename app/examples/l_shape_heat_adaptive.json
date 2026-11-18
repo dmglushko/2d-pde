@@ -54,11 +54,17 @@
       "u": "0"
     }
   },
+  "assembly": {
+    "t": 0.0
+  },
   "solve": {
     "mode": "adaptive_time",
     "linear_solver": {
       "type": "supernodal_cholesky",
       "options": {}
+    },
+    "static": {
+      "t": 0.0
     },
     "time": {
       "t0": 0,

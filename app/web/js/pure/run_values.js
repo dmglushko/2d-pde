@@ -37,13 +37,39 @@ export function snapshotPlan(values, shown, { ahead = 8, behind = 2, kept = 1000
   return { fetch, evict };
 }
 
-// The loaded snapshot nearest to k (k itself when loaded), or -1.
-export function nearestLoaded(values, k) {
+// The loaded snapshot nearest to k (k itself when loaded), or -1. With
+// `allowed`, only snapshots i for which allowed(i) holds (those on k's
+// mesh, for a run whose snapshots are on several).
+export function nearestLoaded(values, k, allowed = () => true) {
   for (let d = 0; d < values.length; d++) {
-    if (values[k - d]) return k - d;
-    if (values[k + d]) return k + d;
+    if (values[k - d] && allowed(k - d)) return k - d;
+    if (values[k + d] && allowed(k + d)) return k + d;
   }
   return -1;
+}
+
+// The node count of snapshot k of a run's values layout: its own when the
+// snapshots are on several meshes (snapshot_nodes), else the run's.
+export function snapshotNodes(layout, k) {
+  return layout?.snapshot_nodes?.[k] ?? layout?.nodes;
+}
+
+// Splits float32 little-endian values of snapshots with `counts` nodes
+// each, in order, into one Float32Array per snapshot. Throws when the size
+// does not fit.
+export function splitCounted(buffer, counts) {
+  const total = counts.reduce((sum, n) => sum + n, 0);
+  if (buffer.byteLength !== 4 * total) throw new Error(`the solution has ${buffer.byteLength} bytes, expected ${4 * total}`);
+  const view = new DataView(buffer);
+  const out = [];
+  let at = 0;
+  for (const nodes of counts) {
+    const values = new Float32Array(nodes);
+    for (let i = 0; i < nodes; i++) values[i] = view.getFloat32(4 * (at + i), true);
+    at += nodes;
+    out.push(values);
+  }
+  return out;
 }
 
 // Splits float32 little-endian values (snapshots x nodes, in order) into

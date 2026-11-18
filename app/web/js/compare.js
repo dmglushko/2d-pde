@@ -13,6 +13,7 @@
 
 import { api, ApiError } from "./api.js";
 import { fieldScale } from "./pure/color.js";
+import { snapshotNodes } from "./pure/run_values.js";
 import { freshResult, notify, requestTicket, setViewOption, store } from "./state.js";
 
 const empty = () => ({
@@ -128,7 +129,7 @@ export function comparisonValues(kind, k) {
   const ticket = requestTicket(`difference-${kind}`, () => comparisons[kind], { exclusive: false });
   fetching.add(id);
   api
-    .compareDifference(c.result.job, requestBody(c.against), k, c.result.layout.nodes)
+    .compareDifference(c.result.job, requestBody(c.against), k, snapshotNodes(c.result.layout, k))
     .then((values) => {
       if (!ticket.holds()) return;
       c.errors[k] = values;

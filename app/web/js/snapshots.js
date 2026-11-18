@@ -74,7 +74,10 @@ export function snapshotValues(data, k) {
 // values, else the nearest loaded one, and the failure of the last fetch.
 export function snapshotState(data, k) {
   const values = snapshotValues(data, k);
-  const near = values ? -1 : nearestLoaded(data.values, k);
+  // A run on several meshes (adaptive in time): only a snapshot on k's
+  // mesh can stand in for it.
+  const meshOf = data.adaptive_time?.snapshot_mesh;
+  const near = values ? -1 : nearestLoaded(data.values, k, meshOf ? (i) => meshOf[i] === meshOf[k] : undefined);
   return { values, nearest: near >= 0 ? { index: near, values: data.values[near] } : null, failure: failures.get(data) ?? null };
 }
 

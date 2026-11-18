@@ -13,6 +13,7 @@
 import { followedRun } from "./actions.js";
 import { drawnSolve } from "./display.js";
 import { formatNumber } from "./pure/format.js";
+import { isTimeRun } from "./pure/stages.js";
 import { addPaceSample, frameAt, measuredPace, PLAYBACK_SPEEDS, playbackStep, speedLabel } from "./pure/playback.js";
 import { h } from "./dom.js";
 import { prefetchSnapshots } from "./snapshots.js";
@@ -34,7 +35,7 @@ const LOADED_AHEAD = 1;
 export function timeSolution() {
   const drawn = drawnSolve();
   const result = drawn?.data;
-  return result && result.mode === "time" && result.values.length > 0 && store.fieldSource === "solve" ? result : null;
+  return result && isTimeRun(result) && result.values.length > 0 && store.fieldSource === "solve" ? result : null;
 }
 
 export function stopPlaying() {

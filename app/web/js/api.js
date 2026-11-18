@@ -1,7 +1,7 @@
 // The server's JSON API (docs/app.md, "The API").
 
 import { decodeMesh } from "./pure/mesh_math.js";
-import { splitSnapshots } from "./pure/run_values.js";
+import { splitCounted, splitSnapshots } from "./pure/run_values.js";
 
 export class ApiError extends Error {
   constructor(error) {
@@ -208,7 +208,11 @@ export const api = {
   solveRange: async (job, first, count, layout) => {
     if (layout?.format !== "float32le") throw new ApiError({ stage: "solve", message: `unknown values format ${layout?.format}` });
     if (count <= 0) return [];
-    return splitSnapshots(await requestBinary(layout.path, { job, first, count }), count, layout.nodes);
+    const buffer = await requestBinary(layout.path, { job, first, count });
+    // Snapshots on several meshes (an adaptive run in time) have their own
+    // node counts.
+    if (layout.snapshot_nodes) return splitCounted(buffer, layout.snapshot_nodes.slice(first, first + count));
+    return splitSnapshots(buffer, count, layout.nodes);
   },
   // The run against {exact: text} or {reference: true}, in double.
   compare: (job, against) => request("/api/solve/compare", { job, ...against }),

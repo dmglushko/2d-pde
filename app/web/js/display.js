@@ -24,10 +24,18 @@ export function drawnSolve() {
   return { data, fresh: Boolean(fresh) };
 }
 
-// The mesh the picture draws: an adaptive solution's own mesh while the
-// solution is what is shown, else the Mesh step's. {mesh, fresh}.
+// The mesh the picture draws: an adaptive solution's own mesh (in time:
+// the shown snapshot's) while the solution is what is shown, else the Mesh
+// step's. {mesh, fresh}.
 export function pictureMesh() {
   const drawn = store.fieldSource === "solve" ? drawnSolve() : null;
+  // An adaptive run in time: the shown snapshot's mesh.
+  const meshes = drawn?.data.meshes;
+  if (meshes) {
+    const frame = Math.max(0, Math.min(store.solveFrame, drawn.data.values.length - 1));
+    const index = drawn.data.adaptive_time.snapshot_mesh[frame] ?? meshes.length - 1;
+    return { mesh: meshes[index], fresh: drawn.fresh };
+  }
   if (drawn?.data.mesh) return { mesh: drawn.data.mesh, fresh: drawn.fresh };
   return { mesh: lastResult("mesh")?.mesh ?? null, fresh: freshResult("mesh") !== null };
 }

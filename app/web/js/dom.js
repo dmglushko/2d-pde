@@ -210,34 +210,45 @@ export function labelWithInfo(label, description, tag = "div") {
 
 // {absolute, relative}: a length bound (relative to the domain size) or
 // a tolerance (relative to the first error estimate).
+// The two fields of each pair kind: [key, text before the field].
+const PAIR_FIELDS = {
+  length_bound: [
+    ["absolute", "absolute"],
+    ["relative", "× domain size"],
+  ],
+  tolerance: [
+    ["absolute", "absolute"],
+    ["relative", "× first estimate"],
+  ],
+  schedule: [
+    ["interval", "time"],
+    ["steps", "or steps"],
+  ],
+};
+
+// A pair of optional numbers in one object: a length bound, a tolerance
+// or a schedule ({"interval", "steps"}). An empty field is null.
 function lengthBoundInputs(spec, value, path, onChange) {
-  const bound = { absolute: null, relative: null, ...(value ?? spec.default ?? {}) };
+  const fields = PAIR_FIELDS[spec.kind];
+  const bound = { ...Object.fromEntries(fields.map(([key]) => [key, null])), ...(value ?? spec.default ?? {}) };
   const set = (key) => (v) => {
     bound[key] = v;
     onChange({ ...bound });
   };
-  return h(
-    "div",
-    { class: "bound", dataset: { path } },
-    h("span", {}, "absolute"),
-    numberInput({
-      value: bound.absolute,
-      label: `${spec.label}, absolute`,
-      placeholder: "no bound",
-      path: `${path}.absolute`,
-      onNumber: set("absolute"),
-      onEmpty: () => set("absolute")(null),
-    }),
-    h("span", {}, spec.kind === "tolerance" ? "× first estimate" : "× domain size"),
-    numberInput({
-      value: bound.relative,
-      label: `${spec.label}, relative`,
-      placeholder: "no bound",
-      path: `${path}.relative`,
-      onNumber: set("relative"),
-      onEmpty: () => set("relative")(null),
-    }),
-  );
+  const parts = [];
+  for (const [key, text] of fields)
+    parts.push(
+      h("span", {}, text),
+      numberInput({
+        value: bound[key],
+        label: `${spec.label}, ${key}`,
+        placeholder: spec.kind === "schedule" ? "not set" : "no bound",
+        path: `${path}.${key}`,
+        onNumber: set(key),
+        onEmpty: () => set(key)(null),
+      }),
+    );
+  return h("div", { class: "bound", dataset: { path } }, parts);
 }
 
 function choiceInput(spec, value, path, onChange) {
@@ -253,7 +264,7 @@ function choiceInput(spec, value, path, onChange) {
 export function optionField(spec, value, path, onChange) {
   let input;
   if (spec.kind === "choice") input = choiceInput(spec, value, path, onChange);
-  else if (spec.kind === "length_bound" || spec.kind === "tolerance") input = lengthBoundInputs(spec, value, path, onChange);
+  else if (PAIR_FIELDS[spec.kind]) input = lengthBoundInputs(spec, value, path, onChange);
   else
     input = numberInput({
       value: value ?? spec.default,

@@ -136,6 +136,13 @@ async function solveData(summary) {
     summary.mesh = await api.meshArrays(adapted);
     if (summary.adaptive.indicators) summary.indicators = await api.indicators(summary.job, summary.adaptive.indicators);
   }
+  // An adaptive run in time: every mesh its snapshots are on
+  // (adaptive_time.snapshot_mesh indexes them); `mesh` is the last.
+  const meshes = summary.adaptive_time?.meshes;
+  if (meshes?.length > 0) {
+    summary.meshes = await Promise.all(meshes.map((m) => api.meshArrays(m)));
+    summary.mesh = summary.meshes[summary.meshes.length - 1];
+  }
   if (summary.values.length > 0) await loadAround(summary, summary.state === "running" ? 0 : summary.values.length - 1);
   return summary;
 }

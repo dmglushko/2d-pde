@@ -49,6 +49,7 @@ all=(
   "geometry_editor 1280 800 geometry"
   "drawing_incomplete 1280 800 geometry"
   "adaptive 1440 900 solve"
+  "adaptive_time 1440 900 solve"
   "equation_line 1280 800 problem"
 )
 

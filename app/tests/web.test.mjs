@@ -35,7 +35,7 @@ import {
 import { SETTINGS_DEFAULTS, clampPictureHeight, freeProbeSlot, normalizeSettings, parseFolds } from "../web/js/pure/prefs.js";
 import { addPaceSample, frameAt, measuredPace, PACE_SHARE, playbackStep, speedLabel, START_SNAPSHOTS } from "../web/js/pure/playback.js";
 import { isLine } from "../web/js/pure/case_model.js";
-import { keptSnapshots, nearestLoaded, snapshotPlan, splitSnapshots, valueRange } from "../web/js/pure/run_values.js";
+import { keptSnapshots, nearestLoaded, snapshotNodes, snapshotPlan, splitCounted, splitSnapshots, valueRange } from "../web/js/pure/run_values.js";
 import { LARGE_SOLUTION_BYTES, RUN_ALL, STAGES, STEPS, errorPath, errorPathOf, requestCase, solutionBytes, stageKey, stagesToRun, stepOfPath } from "../web/js/pure/stages.js";
 import { Tickets } from "../web/js/pure/tickets.js";
 import { displayKey, resolveDisplay } from "../web/js/pure/display.js";
@@ -43,7 +43,7 @@ import { backoffDelay, isTransient, plainError, serverBusyText } from "../web/js
 import { adaptiveRows, observedOrders, referenceSlope, studyLevels } from "../web/js/pure/study.js";
 import { bytesText, colorbarTicks, csvText, logTicks, seriesCsv } from "../web/js/pure/format.js";
 import { COLOR_MAPS, colorMapOf } from "../web/js/pure/color.js";
-import { serverRunBytes } from "../web/js/pure/stages.js";
+import { isTimeRun, serverRunBytes } from "../web/js/pure/stages.js";
 
 const cases = [];
 const test = (name, body) => cases.push([name, body]);
@@ -391,6 +391,10 @@ test("solution sizes and binary snapshots", () => {
   // An adaptive solve sends its last solution: at most max_nodes values.
   assert.equal(solutionBytes({ mode: "adaptive", adaptive: { max_nodes: 500 } }, 1000), 2000);
   assert.equal(solutionBytes({ mode: "adaptive", adaptive: {} }, 1000), null);
+  // Adaptive in time: every snapshot up to max_nodes values, and the meshes.
+  const inTime = { mode: "adaptive_time", time: { snapshots: 4 }, adaptive_time: { max_nodes: 100, max_refinements: 2 } };
+  assert.equal(solutionBytes(inTime, 10), 4 * 100 * 5 + 28 * 100 * 3);
+  assert.equal(solutionBytes({ ...inTime, adaptive_time: {} }, 10), null);
   assert.ok(solutionBytes({ mode: "time", time: { snapshots: 1000 } }, 2000) < LARGE_SOLUTION_BYTES, "8 MB is not large");
   assert.ok(solutionBytes({ mode: "time", time: { snapshots: 1000 } }, 20000) > LARGE_SOLUTION_BYTES, "80 MB is");
   const buffer = new ArrayBuffer(4 * 6);
@@ -877,6 +881,11 @@ test("chart data as CSV, sizes in bytes", () => {
   // An adaptive run reserves max_cycles meshes of max_nodes (runs.cpp).
   assert.equal(serverRunBytes({ mode: "adaptive", adaptive: { max_nodes: 1000, max_cycles: 3 } }, { snapshot_bytes: 100, budget: 1e9 }).bytes, 3 * (1000 * 64 + 512));
   assert.equal(serverRunBytes({ mode: "adaptive", adaptive: { max_nodes: 0, max_cycles: 3 } }, { snapshot_bytes: 100, budget: 1e9 }), null);
+  // Adaptive in time: max_refinements + 1 meshes and the snapshots, each of
+  // at most max_nodes nodes (runs.cpp, adaptive_time_run_bytes).
+  const inTime = { mode: "adaptive_time", time: { snapshots: 4 }, adaptive_time: { max_nodes: 1000, max_refinements: 2 } };
+  assert.equal(serverRunBytes(inTime, { snapshot_bytes: 100, budget: 1e9 }).bytes, 3 * (1000 * 56 + 512) + 5 * (1000 * 8 + 128) + 1000 * 8);
+  assert.equal(serverRunBytes({ ...inTime, adaptive_time: { max_nodes: 1000 } }, { snapshot_bytes: 100, budget: 1e9 }), null);
   assert.equal(serverRunBytes({ mode: "time", time: {} }, { snapshot_bytes: 1, budget: 1 }), null);
   assert.equal(serverRunBytes({ mode: "static" }, null), null);
 });
@@ -1313,3 +1322,25 @@ for (const [name, body] of cases) {
 }
 console.log(`${cases.length - failed}/${cases.length} cases passed`);
 process.exit(failed ? 1 : 0);
+
+test("a run on several meshes: values split by each snapshot's count, a stand-in only on the same mesh", () => {
+  const buffer = new ArrayBuffer(4 * 5);
+  const view = new DataView(buffer);
+  [1, 2, 3, 4, 5].forEach((v, i) => view.setFloat32(4 * i, v, true));
+  const [a, b] = splitCounted(buffer, [2, 3]);
+  assert.deepEqual([...a], [1, 2]);
+  assert.deepEqual([...b], [3, 4, 5]);
+  assert.throws(() => splitCounted(buffer, [2, 2]), /expected 16/);
+  assert.equal(snapshotNodes({ nodes: 7, snapshot_nodes: [2, 3] }, 1), 3);
+  assert.equal(snapshotNodes({ nodes: 7 }, 1), 7);
+  // Snapshot 2 is not loaded; 1 is nearer, but only 3 is on its mesh.
+  const values = [null, [1], null, [2]];
+  const mesh = [0, 0, 1, 1];
+  assert.equal(nearestLoaded(values, 2), 1);
+  assert.equal(nearestLoaded(values, 2, (i) => mesh[i] === mesh[2]), 3);
+  assert.equal(nearestLoaded([null, [1], null], 2, (i) => mesh[i] === mesh[2]), -1);
+  assert.equal(isTimeRun({ mode: "adaptive_time" }), true);
+  assert.equal(isTimeRun({ mode: "time" }), true);
+  assert.equal(isTimeRun({ mode: "adaptive" }), false);
+  assert.equal(isTimeRun(null), false);
+});

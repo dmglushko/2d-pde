@@ -13,7 +13,7 @@ import { comparisonControls, currentDisplay } from "../display.js";
 import { runStudy, stopStudy, study, studyOrders } from "../refinement.js";
 import { bytesText, formatNumber } from "../pure/format.js";
 import { isTransient, plainError } from "../pure/requests.js";
-import { LARGE_SOLUTION_BYTES, serverRunBytes, solutionBytes } from "../pure/stages.js";
+import { isTimeRun, LARGE_SOLUTION_BYTES, serverRunBytes, solutionBytes } from "../pure/stages.js";
 import { adaptiveRows, referenceSlope } from "../pure/study.js";
 import { actionButton, errorBox, exportButton, fill, foldable, h, infoToggle, markError, optionsForm, reportsView, stat, warningChip } from "../dom.js";
 import { currentError, editCase, freshResult, lastResult, notify, openStep, outdatedError, setViewOption, store } from "../state.js";
@@ -41,7 +41,7 @@ function sizeWarning() {
     const share = `${Math.round(100 * server.share)}%`;
     lines.push(
       server.share > 1
-        ? `This run would keep about ${bytesText(server.bytes)} on the server, more than its whole memory budget for runs (${bytesText(server.budget)}): it will be refused. ${store.caseData.solve?.mode === "adaptive" ? "Lower the maximum nodes or cycles." : "Keep fewer snapshots or use a coarser mesh."}`
+        ? `This run would keep about ${bytesText(server.bytes)} on the server, more than its whole memory budget for runs (${bytesText(server.budget)}): it will be refused. ${{ adaptive: "Lower the maximum nodes or cycles.", adaptive_time: "Lower the maximum nodes or refinements, or keep fewer snapshots." }[store.caseData.solve?.mode] ?? "Keep fewer snapshots or use a coarser mesh."}`
         : `This run will keep about ${bytesText(server.bytes)} on the server: ${share} of its memory budget for runs (${bytesText(server.budget)}). Other tabs' finished runs may be dropped to make room.`,
     );
   }
@@ -50,7 +50,7 @@ function sizeWarning() {
     lines.push(
       `The page holds up to ${bytesText(bytes)} of it as float32 (${formatNumber(nodes)} nodes × ${formatNumber(bytes / 4 / nodes)} times), loading snapshots as they are shown.`,
     );
-  const path = store.caseData.solve?.mode === "adaptive" ? "solve.adaptive.max_nodes" : "solve.time.snapshots";
+  const path = { adaptive: "solve.adaptive.max_nodes", adaptive_time: "solve.adaptive_time.max_nodes" }[store.caseData.solve?.mode] ?? "solve.time.snapshots";
   return lines.length ? h("div", { class: "notice", dataset: { path } }, lines.map((line) => h("p", {}, line))) : null;
 }
 
@@ -78,6 +78,22 @@ function resultStats(result) {
       stat("max u", formatNumber(result.max)),
       iterations(staticReport.linear_iterations),
       stat("Residual", formatNumber(staticReport.residual, 2), "‖b − A U‖ of the last linear solve: how well the system was solved, not the error of u"),
+    ];
+  }
+  if (result.mode === "adaptive_time") {
+    const adaptive = result.adaptive_time ?? {};
+    const meshes = adaptive.meshes ?? [];
+    const last = meshes.at(-1);
+    return [
+      stat("Snapshots", formatNumber(result.values.length)),
+      stat("Steps", formatNumber(adaptive.steps), adaptive.damping_steps > 0 ? `${formatNumber(adaptive.damping_steps)} of them damping steps` : null),
+      stat("Refinements", formatNumber(adaptive.refinements), `${formatNumber(adaptive.adaptations?.length ?? 0)} adaptation times`),
+      last ? stat("Nodes", formatNumber(last.nodes), `From ${formatNumber(meshes[0].nodes)} at t0 to the last mesh`) : null,
+      stat("Unknowns", formatNumber(result.free_unknowns), "Of the last mesh"),
+      stat("Time order", timeOrderText(result.time_order, result.problem_time_order)),
+      adaptive.mesh_stats ? stat("Smallest angle", `${formatNumber(adaptive.mesh_stats.min_angle_degrees, 3)}°`, "Of the last mesh") : null,
+      stat("min u", formatNumber(result.min), "Over every snapshot"),
+      stat("max u", formatNumber(result.max), "Over every snapshot"),
     ];
   }
   return [
@@ -121,7 +137,17 @@ function headStatus(result, fresh, running) {
   }
   if (fresh && result.state === "stopped") return { status: "stopped", text: `Stopped at t = ${formatNumber(result.t, 5)}` };
   if (fresh && result.state === "failed") return { status: "failed", text: `Failed after t = ${formatNumber(result.t, 5)}` };
-  if (fresh) return { detail: result.mode === "time" ? `${result.values.length} snapshots` : result.mode === "adaptive" ? `adaptive · ${result.adaptive?.cycles?.length ?? 0} cycles` : "static" };
+  if (fresh)
+    return {
+      detail:
+        result.mode === "time"
+          ? `${result.values.length} snapshots`
+          : result.mode === "adaptive"
+            ? `adaptive · ${result.adaptive?.cycles?.length ?? 0} cycles`
+            : result.mode === "adaptive_time"
+              ? `adaptive in time · ${result.values.length} snapshots · ${formatNumber(result.adaptive_time?.refinements ?? 0)} refinements`
+              : "static",
+    };
   return {};
 }
 
@@ -137,10 +163,18 @@ const EXPORTS = [
 // An adaptive solve's last mesh, which the Mesh step does not have.
 const ADAPTED_MESH_EXPORT = ["solution-mesh.pde2d", "Export adapted mesh", "The last mesh of the adaptive solve in the .pde2d format: open it as a mesh file to start from it."];
 
+// The exports of a result: a run on several meshes (adaptive in time) has
+// no one-mesh CSV or VTK file, only the series (a file per snapshot).
+function exportKinds(result) {
+  if (result.mode === "adaptive") return [...EXPORTS, ADAPTED_MESH_EXPORT];
+  if (result.mode === "adaptive_time") return [...EXPORTS.filter(([kind]) => kind !== "solution.csv" && kind !== "solution.vtk"), ADAPTED_MESH_EXPORT];
+  return EXPORTS;
+}
+
 function exportsRow(result, fresh) {
   const done = fresh && result.state === "done";
   const stale = result.state === "done" ? "The solution shown is outdated: solve again to export it." : "The run did not reach t1: continue it to export.";
-  const kinds = result.mode === "adaptive" ? [...EXPORTS, ADAPTED_MESH_EXPORT] : EXPORTS;
+  const kinds = exportKinds(result);
   return h(
     "div",
     { class: "row actions-row" },
@@ -173,6 +207,86 @@ const STOP_REASONS = {
 // cycle's errors) and a log–log chart against the number of nodes with
 // the slopes N^(-1/2) and N^(-1). Drawn again when the result or its
 // comparison changes.
+// What an outcome of an adaptation time means, in words.
+const OUTCOMES = {
+  refined: "refined",
+  tolerance_met: "tolerance met",
+  nothing_changed: "nothing marked",
+  node_budget: "node budget: stopped",
+};
+
+// The adaptation times of an adaptive run in time: a row per time (the
+// step count, the mesh's nodes, the estimate and what happened), and a
+// chart of the nodes against t.
+function adaptationsSection(result) {
+  const rows = result.adaptive_time?.adaptations ?? [];
+  if (rows.length === 0) return null;
+  const number = (v, digits = 3) => (v === null || v === undefined ? "–" : formatNumber(v, digits));
+  const table = h(
+    "table",
+    { class: "data study-table cycles-table adaptations-table" },
+    h(
+      "thead",
+      {},
+      h(
+        "tr",
+        {},
+        h("th", { class: "num" }, "t"),
+        h("th", { class: "num", title: "Nodes of the mesh the solution was on" }, "N"),
+        h("th", { class: "num", title: "The error estimator's total √(Σ η_T²) at that time" }, "Estimate"),
+        h("th", {}, "Outcome"),
+      ),
+    ),
+    h(
+      "tbody",
+      {},
+      rows.map((r) =>
+        h(
+          "tr",
+          {},
+          h("td", { class: "num", title: `after ${formatNumber(r.steps)} steps` }, formatNumber(r.time, 4)),
+          h("td", { class: "num" }, formatNumber(r.nodes)),
+          h("td", { class: "num" }, number(r.estimate)),
+          h(
+            "td",
+            { title: r.marked === null || r.marked === undefined ? "" : `${formatNumber(r.marked)} triangles marked` },
+            r.outcome === "refined" ? `refined → ${formatNumber(r.nodes_after)}` : (OUTCOMES[r.outcome] ?? r.outcome),
+          ),
+        ),
+      ),
+    ),
+  );
+  const times = [result.t0, ...rows.map((r) => r.time), result.t1];
+  const nodes = [rows[0].nodes, ...rows.map((r) => r.nodes_after), rows.at(-1).nodes_after];
+  const chart = h(
+    "div",
+    { class: "study-chart" },
+    h("div", { class: "chart-title" }, "Nodes of the mesh against t"),
+    lineChart({
+      times,
+      series: [{ name: "nodes", cls: "s1", values: nodes }],
+      current: null,
+      xName: "t",
+      width: 340,
+      height: 140,
+      label: "The number of nodes of the mesh against time: it grows at each refinement",
+      csvName: "adaptations.csv",
+      endLabels: false,
+    }),
+  );
+  const messages = result.adaptive_time?.messages ?? [];
+  const info = infoToggle(
+    "At each adaptation time the run estimates the error of the solution on every triangle; above the tolerance (or always, without one) it marks triangles, refines them and moves the solution to the new mesh by interpolation, then goes on. The mesh only grows: the library has no coarsening yet, so a feature that moves leaves refined triangles behind. Each snapshot is drawn on the mesh it was computed on.",
+    "the adaptation times",
+  );
+  return foldable(
+    { id: "solve.adaptations", title: "Adaptation times", kind: "section", extras: [info.button], info: info.panel, attributes: { class: "cycles" } },
+    table,
+    chart,
+    messages.map((m) => h("p", { class: "note" }, m)),
+  );
+}
+
 function updateCycles(container) {
   const slot = container.querySelector("#solve-cycles");
   if (!slot) return;
@@ -182,6 +296,7 @@ function updateCycles(container) {
   const key = [result, errors];
   if (slot.shown && slot.shown[0] === key[0] && slot.shown[1] === key[1]) return;
   slot.shown = key;
+  if (result?.mode === "adaptive_time") return fill(slot, adaptationsSection(result));
   if (result?.mode !== "adaptive" || !result.adaptive?.cycles?.length) return fill(slot);
   const rows = adaptiveRows(result.adaptive.cycles, errors);
   const number = (v, digits = 3) => (v === null || v === undefined ? "–" : formatNumber(v, digits));
@@ -336,7 +451,7 @@ function compareSection(result) {
     h("div", { class: "field", dataset: { path: "exact" } }, h("div", { class: "row compare-line" }, text, actionButton("Compare", run, { small: true }))),
     h("div", { class: "compare-result" }),
     differenceBox("exact"),
-    result.mode === "time" ? h("div", { class: "compare-chart" }) : null,
+    isTimeRun(result) ? h("div", { class: "compare-chart" }) : null,
   );
 }
 
@@ -357,7 +472,7 @@ function referenceSection(result, fresh) {
   keepButton.disabled = !done || reference?.job === result.job;
   if (!done) keepButton.title = "Only a finished, up-to-date run can be the reference.";
   else if (reference?.job === result.job) keepButton.title = "This run is the reference.";
-  const describe = (r) => `run ${r.job}, ${r.mode === "time" ? `in time, ${r.times.length} snapshots` : "static"}`;
+  const describe = (r) => `run ${r.job}, ${isTimeRun(r) ? `in time, ${r.times.length} snapshots` : "static"}`;
   const info = infoToggle(
     "Keep a finished run, change the case (dt, the method, a coefficient) and solve again: the server compares the new run with it node by node, at the same times, in double. Both runs must be on the same mesh object: changing the geometry or the mesh makes another mesh, and the comparison is refused.",
     "the reference run",
@@ -380,7 +495,7 @@ function referenceSection(result, fresh) {
     ),
     h("div", { class: "compare-result" }),
     reference && reference.job !== result.job ? differenceBox("reference") : null,
-    result.mode === "time" ? h("div", { class: "compare-chart" }) : null,
+    isTimeRun(result) ? h("div", { class: "compare-chart" }) : null,
   );
 }
 
@@ -433,7 +548,7 @@ function updateComparison(section, kind, result, frame, display) {
     return;
   }
   const label = kind === "exact" ? "|u − exact|" : "|u − reference|";
-  const at = result.mode === "time" ? `At t = ${formatNumber(result.times[frame], 5)}` : null;
+  const at = isTimeRun(result) ? `At t = ${formatNumber(result.times[frame], 5)}` : null;
   fill(
     slot,
     outdated
@@ -445,7 +560,7 @@ function updateComparison(section, kind, result, frame, display) {
       stat(`max ${label}`, shownNumber(c.linf[frame]), at),
       kind === "exact" ? stat("RMS (nodes)", shownNumber(c.rms[frame]), "sqrt(Σ d_i² / N) over the N nodes") : null,
       kind === "exact" ? stat("L2 (lumped)", shownNumber(c.l2[frame]), "sqrt(Σ w_i d_i²), w_i a third of the area around node i") : null,
-      result.mode === "time" ? stat(`largest max ${label}`, shownNumber(largest(c.linf)), "Over every snapshot") : null,
+      isTimeRun(result) ? stat(`largest max ${label}`, shownNumber(largest(c.linf)), "Over every snapshot") : null,
       c.busy ? stat("Compared", "…") : null,
     ),
     h("p", { class: "note" }, NOTES[kind], " ", FLOAT_NOTE),
@@ -518,7 +633,7 @@ function updateStudy(container) {
   if (!slot) return;
   const expression = (store.caseData.view?.exact_solution ?? "").trim();
   // Not for an adaptive solve, which refines its mesh itself.
-  const adaptive = store.caseData.solve?.mode === "adaptive";
+  const adaptive = ["adaptive", "adaptive_time"].includes(store.caseData.solve?.mode);
   const offered = study.running || study.rows.length > 0 || study.message || (expression && !adaptive && freshResult("solve")?.state === "done");
   const key = JSON.stringify([offered, study.running, study.stopping, study.rows.length, study.message, expression !== ""]);
   if (slot.shown === key) return;
@@ -637,20 +752,34 @@ function orderHint(solveCase) {
   const check = freshResult("problem");
   if (!check?.ok || typeof check.time_order !== "number") return null;
   const order = check.time_order;
-  if (solveCase.mode !== "time" && order > 0)
+  if (!isTimeRun(solveCase) && order > 0)
     return h(
       "div",
       { class: "notice" },
       `The problem has time order ${order}: a ${solveCase.mode === "adaptive" ? "adaptive (static) " : "static "}solve drops u_t and u_tt. `,
-      h("button", { type: "button", class: "small", onclick: () => editCase((c) => (c.solve.mode = "time"), "structure") }, "Solve in time"),
+      h("button", { type: "button", class: "small", onclick: () => editCase((c) => (c.solve.mode = solveCase.mode === "adaptive" ? "adaptive_time" : "time"), "structure") }, solveCase.mode === "adaptive" ? "Adapt in time" : "Solve in time"),
     );
-  if (solveCase.mode === "time" && order === 0) return h("div", { class: "notice" }, "The problem has time order 0: each step is a static solve, which only some methods support.");
+  if (isTimeRun(solveCase) && order === 0) return h("div", { class: "notice" }, "The problem has time order 0: each step is a static solve, which only some methods support.");
   return null;
 }
 
-function settingsPart(section, solveCase, mode) {
+// One mode's part of the solve section: its settings and its slots.
+function modePart(mode, solveCase) {
   const key = mode.settings.key;
   const modeSettings = (solveCase[key] ??= {});
+  return [
+    foldable(
+      { id: `solve.${key}`, title: mode.settings.label, attributes: { dataset: { path: `solve.${key}` } } },
+      optionsForm(mode.settings.options, modeSettings, `solve.${key}`, () => editCase(() => {}, "edit", { sections: ["solve"] })),
+    ),
+    mode.slots.map((slot) => choiceCard(slot, modeSettings[slot.id], `solve.${key}.${slot.id}`, (next) => editCase((c) => (c.solve[key][slot.id] = next), "structure"))),
+  ];
+}
+
+function settingsPart(section, solveCase, mode) {
+  // A mode may also use other modes' parts (adaptive in time: the time
+  // integration's), shown first.
+  const others = (mode.with ?? []).map((id) => section.modes.find((m) => m.id === id)).filter(Boolean);
   const pickLinear = (next) => editCase((c) => (c.solve.linear_solver = next), "structure");
   const modeInfo = infoToggle(mode.description, mode.label);
   return h(
@@ -661,11 +790,8 @@ function settingsPart(section, solveCase, mode) {
     modeInfo.panel,
     h("div", { id: "solve-hint" }),
     h("div", { id: "solve-size" }),
-    foldable(
-      { id: `solve.${key}`, title: mode.settings.label, attributes: { dataset: { path: `solve.${key}` } } },
-      optionsForm(mode.settings.options, modeSettings, `solve.${key}`, () => editCase(() => {}, "edit", { sections: ["solve"] })),
-    ),
-    mode.slots.map((slot) => choiceCard(slot, modeSettings[slot.id], `solve.${key}.${slot.id}`, (next) => editCase((c) => (c.solve[key][slot.id] = next), "structure"))),
+    others.map((other) => modePart(other, solveCase)),
+    modePart(mode, solveCase),
     // Its options are rarely changed: folded for a new viewer.
     choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear, { folded: true }),
     assemblerPart(section, solveCase),
@@ -710,7 +836,7 @@ export const solvePanel = {
       fill(hint, orderHint(store.caseData.solve));
     }
     const size = container.querySelector("#solve-size");
-    const sizeKey = JSON.stringify([freshResult("mesh")?.stats?.nodes ?? null, store.caseData.solve?.mode, store.caseData.solve?.time?.snapshots, store.caseData.solve?.adaptive?.max_nodes, store.caseData.solve?.adaptive?.max_cycles]);
+    const sizeKey = JSON.stringify([freshResult("mesh")?.stats?.nodes ?? null, store.caseData.solve?.mode, store.caseData.solve?.time?.snapshots, store.caseData.solve?.adaptive?.max_nodes, store.caseData.solve?.adaptive?.max_cycles, store.caseData.solve?.adaptive_time?.max_nodes, store.caseData.solve?.adaptive_time?.max_refinements]);
     if (size.shown !== sizeKey) {
       size.shown = sizeKey;
       fill(size, sizeWarning());
@@ -759,7 +885,7 @@ export const solvePanel = {
       compared ? compareSection(result) : null,
       // Two adaptive solves end on different meshes: no node-by-node
       // comparison between them.
-      compared && result.mode !== "adaptive" ? referenceSection(result, fresh) : null,
+      compared && result.mode !== "adaptive" && result.mode !== "adaptive_time" ? referenceSection(result, fresh) : null,
       result && !running ? foldable({ id: "solve.reports", title: "Reports", kind: "section", folded: true }, reportsView(result.reports)) : null,
     );
     slot.classList.toggle("outdated-result", Boolean(result) && !fresh);
