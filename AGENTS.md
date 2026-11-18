@@ -313,8 +313,11 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `residual_tolerance`, never the relative residual (`residual`, which a
   coefficient contrast makes large for an accurate answer). They throw on
   an exact zero pivot (the Cholesky on any pivot that is not positive);
-  a tiny pivot is reported in `pivot_ratio`, never judged by a threshold
-  (a pure Neumann problem gets one of its solutions). ParU's ratio must
+  a tiny pivot is reported in `pivot_ratio`, never refused by a
+  threshold (a pure Neumann problem gets one of its solutions); below
+  `detail::small_pivot_ratio` (1e-10, the one place: `src/solve/pivot_ratio.hpp`)
+  the result carries the warning of `detail::pivot_ratio_warning`, made
+  once per prepared solver so that its text is the same on every solve. ParU's ratio must
   include its singleton pivots, and no NaN may enter it: a zero row is
   refused before ParU sees the matrix, a zero singleton before dividing.
   A residual entry that is not finite gives a NaN backward error
@@ -327,10 +330,12 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   copies them into its report and the `Integrator` logs every solve's
   through its private `LoggingSolver`, so a time method never has to pass
   them on. A new caller that solves must put them in its report. The
-  Integrator's log is shared per-run state behind a mutex (held only to
-  add or copy, never during a solve): a time method may solve from
-  several threads at once and keep a prepared solver beyond
-  `integrate()`.
+  Integrator's log (`SolveLog`) is shared per-run state behind a mutex
+  (held only to add or copy, never during a solve): a time method may
+  solve from several threads at once and keep a prepared solver beyond
+  `integrate()`. The report's `max_backward_error` and `min_pivot_ratio`
+  come from that log (every solve, `start()`'s too), never from
+  `StepSolveInfo`.
 - **`LinearSolveResult` grows at the end.** Its first members (values,
   iterations, residual, threads) keep their order so that positional
   initializations keep their meaning; add a new member after the last.

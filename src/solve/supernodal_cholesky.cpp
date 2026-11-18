@@ -1,6 +1,7 @@
 #include "pde2d/solve/supernodal_cholesky.hpp"
 
 #include "factorization_threads.hpp"
+#include "pivot_ratio.hpp"
 #include "suitesparse.hpp"
 
 #include <cholmod.h>
@@ -146,6 +147,7 @@ public:
     // Neumann problem, a very ill-conditioned one) is accepted, and the
     // backward error of each solve is checked.
     pivot_ratio_ = cholmod_l_rcond(factor_, c);
+    pivot_warning_ = detail::pivot_ratio_warning(solver_name, pivot_ratio_);
   }
 
   ~PreparedSupernodalCholesky() override { free_factor(); }
@@ -165,6 +167,8 @@ public:
     result.pivot_ratio = pivot_ratio_;
     if (negated_)
       result.messages.emplace_back(negated_message);
+    if (!pivot_warning_.empty())
+      result.messages.push_back(pivot_warning_);
     // Allocated before CHOLMOD's result exists, so nothing can throw
     // between its allocation and its release (review finding).
     result.values.resize(n);
@@ -211,8 +215,9 @@ private:
   // A pointer, so that the const solve() can use CHOLMOD's workspace.
   std::unique_ptr<Common> common_;
   cholmod_factor *factor_ = nullptr;
-  double pivot_ratio_ = 0.0; // 0 for an empty matrix
-  bool negated_ = false;     // factor_ is that of -A
+  double pivot_ratio_ = 0.0;  // 0 for an empty matrix
+  bool negated_ = false;      // factor_ is that of -A
+  std::string pivot_warning_; // empty unless pivot_ratio_ is tiny
 };
 
 } // namespace

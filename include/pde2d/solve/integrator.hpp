@@ -53,12 +53,17 @@ struct IntegrationResult {
   // solve at t0 for time order 0), assemblies (counting the one at t0 only
   // when the method's start reads it), snapshots, assembly_threads (the
   // assembler's thread count, 0 resolved; see the "assembly" report) and
-  // linear_threads (the most threads the linear solver used in a step).
+  // linear_threads (the most threads the linear solver used in a step),
+  // max_backward_error (the largest LinearSolveResult::backward_error)
+  // and min_pivot_ratio (the smallest measured pivot_ratio, above 0; 0
+  // when no solve measured one, as with an iterative solver), both over
+  // every solve of the call, start()'s included.
   // Its messages are the linear solver's warnings
   // (LinearSolveResult::messages) of every solve of the call, the steps'
   // and those a method's start() does: each distinct message once, in the
   // order they first appeared (SupernodalCholesky's, when it factored -A,
-  // once however many steps it solved).
+  // once however many steps it solved; a direct solver's pivot ratio
+  // warning once per distinct ratio, so once per prepared solver).
   mesh::StageReport report{};
 };
 

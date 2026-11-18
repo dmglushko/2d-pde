@@ -12,6 +12,7 @@
 #include "support/l_shape_mesh.hpp"
 
 #include "pde2d/fem/assembler.hpp"
+#include "pde2d/solve/conjugate_gradient.hpp"
 #include "pde2d/solve/fixed_step.hpp"
 #include "pde2d/solve/implicit_euler.hpp"
 #include "pde2d/solve/implicit_midpoint.hpp"
@@ -72,6 +73,20 @@ double relative_difference(std::span<const double> x,
 constexpr const char *negative_warning =
     "supernodal_cholesky: the matrix is negative definite (every diagonal "
     "entry is negative";
+
+// The start of the warning of a direct solver whose pivot ratio is below
+// 1e-10 (docs/decisions.md, "A tiny pivot ratio is a warning").
+std::string pivot_warning(const std::string &solver) {
+  return solver + ": the matrix is nearly singular (pivot ratio ";
+}
+
+// Whether one of `messages` starts with `start`.
+bool has_message(const std::vector<std::string> &messages,
+                 const std::string &start) {
+  return std::ranges::any_of(messages, [&](const std::string &message) {
+    return message.starts_with(start);
+  });
+}
 
 std::shared_ptr<const pde2d::mesh::Mesh> l_shape() {
   static const auto mesh = pde2d::test::refined_l_shape(0.04);
@@ -249,6 +264,7 @@ public:
              TimeState &) const override {
     kept = linear_solver.prepare(options_.start_matrix);
     start_result = kept->solve(ones());
+    seen.push_back(start_result);
   }
   StepSolveInfo advance(const AssembledProblem &problem, double dt,
                         const PreparedLinearSolver &solver,
@@ -279,9 +295,11 @@ public:
         std::rethrow_exception(failure);
       check(same_bits(solved.values, other_solved.values),
             "both threads solve to the same bits");
+      seen.push_back(other_solved);
     } else {
       solved = solver.solve(rhs);
     }
+    seen.push_back(solved);
     state.values = std::move(solved.values);
     return {.linear_iterations = solved.iterations,
             .residual = solved.residual,
@@ -295,6 +313,8 @@ public:
   // Set by start(): test state, so a const method writes it.
   mutable std::shared_ptr<const PreparedLinearSolver> kept;
   mutable LinearSolveResult start_result;
+  // Every result start() and the steps got, in order.
+  mutable std::vector<LinearSolveResult> seen;
 
 private:
   Options options_;
@@ -302,11 +322,25 @@ private:
 
 IntegrationResult
 integrate_test_euler(std::shared_ptr<const TimeMethod> method,
-                     const std::shared_ptr<const MeshedProblem> &p, double t1) {
+                     const std::shared_ptr<const MeshedProblem> &p, double t1,
+                     std::shared_ptr<const LinearSolver> solver =
+                         std::make_shared<SupernodalCholesky>()) {
   return Integrator(std::move(method),
                     std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.01}),
-                    std::make_shared<SupernodalCholesky>())
+                    std::move(solver))
       .integrate(p, 0.0, t1);
+}
+
+// The largest backward error and the smallest pivot ratio above 0 (0 when
+// none is) of `results`.
+std::pair<double, double> worst(const std::vector<LinearSolveResult> &results) {
+  double backward = 0.0, pivot = 0.0;
+  for (const auto &r : results) {
+    backward = std::max(backward, r.backward_error);
+    if (r.pivot_ratio > 0.0)
+      pivot = pivot > 0.0 ? std::min(pivot, r.pivot_ratio) : r.pivot_ratio;
+  }
+  return {backward, pivot};
 }
 
 } // namespace
@@ -642,6 +676,95 @@ int main() {
            check(error / 5e8 < 0.5, "the magnitude of the exact solution");
          }
        }},
+      {"a very ill-conditioned problem: the pivot ratio warning, through "
+       "the StaticSolver's report",
+       [] {
+         // The weak Robin strip: pivot ratio about 4e-12, below 1e-10. The
+         // answer is returned (the backward error is rounding), with the
+         // warning naming the solver, once.
+         const auto meshed = weak_robin_problem();
+         for (const auto &solver : std::vector<std::shared_ptr<LinearSolver>>{
+                  std::make_shared<SupernodalCholesky>(),
+                  std::make_shared<MultifrontalLu>(),
+                  std::make_shared<SimplicialLdlt>()}) {
+           const auto solved = StaticSolver(solver).solve(meshed);
+           const auto &report = solved.reports.at(1);
+           const double ratio = report.metrics.at("pivot_ratio");
+           check(ratio > 0.0 && ratio < 1e-10,
+                 solver->name() + ": a pivot ratio below 1e-10");
+           check(report.metrics.at("backward_error") < 1e-14,
+                 solver->name() + ": an answer, with a backward error of "
+                                  "rounding");
+           check(has_message(report.messages, pivot_warning(solver->name())),
+                 solver->name() + ": the warning in the report");
+           check(report.messages.size() == 1,
+                 solver->name() + ": no other message");
+           // Its text names the ratio, as the report gives it.
+           check(has_message(report.messages, pivot_warning(solver->name()) +
+                                                  std::format("{:.3g}", ratio)),
+                 solver->name() + ": the ratio in the text");
+         }
+       }},
+      {"a well-conditioned Poisson problem: no pivot ratio warning",
+       [] {
+         for (const auto &solver : std::vector<std::shared_ptr<LinearSolver>>{
+                  std::make_shared<SupernodalCholesky>(),
+                  std::make_shared<MultifrontalLu>(),
+                  std::make_shared<SimplicialLdlt>()}) {
+           const auto solved = StaticSolver(solver).solve(problem("-1"));
+           const auto &report = solved.reports.at(1);
+           check(report.metrics.at("pivot_ratio") >= 1e-10,
+                 solver->name() + ": a pivot ratio above 1e-10");
+           check(report.messages.empty(), solver->name() + ": no message");
+         }
+       }},
+      {"the integrator reports its worst solve",
+       [] {
+         // The heat equation with m1 = 1 + 10 t: the step matrix depends on
+         // t, so it is prepared at every step and each solve has its own
+         // pivot ratio; start() solves with another matrix (A of a
+         // negative definite problem). The report's figures are the worst
+         // of the results the method got, start() included.
+         const auto heat = problem("-1", "0", "0", "1 + 10*t");
+         const auto method = std::make_shared<TestEuler>(TestEuler::Options{
+             .start_matrix =
+                 system_of(problem("1", "0", "0", "0", false, true)).matrix});
+         const auto result = integrate_test_euler(method, heat, 0.05);
+         const auto &m = result.report.metrics;
+         check(m.at("prepares") == 5 && method->seen.size() == 6,
+               "five steps, five prepares, six solves");
+         const auto [backward, pivot] = worst(method->seen);
+         check(pivot > 0.0 && backward > 0.0, "measured");
+         check(m.at("max_backward_error") == backward,
+               "the largest backward error");
+         check(m.at("min_pivot_ratio") == pivot, "the smallest pivot ratio");
+         // The steps alone: without start(), the worst of the steps.
+         const auto steps_only =
+             std::make_shared<TestEuler>(TestEuler::Options{});
+         const auto steps = integrate_test_euler(steps_only, heat, 0.05);
+         const auto [step_backward, step_pivot] = worst(steps_only->seen);
+         check(steps.report.metrics.at("max_backward_error") == step_backward &&
+                   steps.report.metrics.at("min_pivot_ratio") == step_pivot,
+               "the worst of the steps");
+         check(step_pivot != pivot || step_backward != backward,
+               "start() changed the worst figures");
+       }},
+      {"the integrator's worst solve with an iterative solver: no pivot "
+       "ratio",
+       [] {
+         // Conjugate gradients measure no pivot ratio: min_pivot_ratio is
+         // 0 ("not measured"); the backward error is still the largest.
+         const auto method = std::make_shared<TestEuler>(TestEuler::Options{});
+         const auto result =
+             integrate_test_euler(method, problem("-1", "0", "0", "1"), 0.05,
+                                  std::make_shared<ConjugateGradient>());
+         const auto [backward, pivot] = worst(method->seen);
+         check(pivot == 0.0 && backward > 0.0, "a backward error, no ratio");
+         check(result.report.metrics.at("min_pivot_ratio") == 0.0,
+               "min_pivot_ratio 0: not measured");
+         check(result.report.metrics.at("max_backward_error") == backward,
+               "the largest backward error");
+       }},
       {"a pure Neumann problem with a compatible load: one of its solutions",
        [] {
          // -u_xx - u_yy = x - 1/2 (mean zero) with u_n = 0 on the unit
@@ -674,6 +797,11 @@ int main() {
                      result.pivot_ratio <
                          4225 * std::numeric_limits<double>::epsilon(),
                  "a tiny pivot ratio");
+           check(has_message(result.messages, "multifrontal_lu: the matrix "
+                                              "is nearly singular") ||
+                     has_message(result.messages, "supernodal_cholesky: the "
+                                                  "matrix is nearly singular"),
+                 "the pivot ratio warning");
            check(result.residual < 1e-10, "a solution: rounding residual");
            check(result.backward_error < 1e-14, "backward error of rounding");
            const double shift = mean(result.values);

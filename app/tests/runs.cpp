@@ -347,17 +347,34 @@ int main() {
                              {"max_residual", t1}};
            return report;
          };
+         // The worst solve: the largest backward error, the smallest pivot
+         // ratio above 0 (0 is "not measured").
+         const auto solves = [](mesh::StageReport report, double backward,
+                                double pivot) {
+           report.metrics["max_backward_error"] = backward;
+           report.metrics["min_pivot_ratio"] = pivot;
+           return report;
+         };
          std::optional<mesh::StageReport> total;
-         app::combine_report(total, part(2, 0.1, 0.2, 1));
+         app::combine_report(total, solves(part(2, 0.1, 0.2, 1), 2e-16, 0));
          app::combine_report(total, part(0, 0, 0, 2)); // no steps
-         app::combine_report(total, part(3, 0.05, 0.3, 3));
+         app::combine_report(total, solves(part(3, 0.05, 0.3, 3), 1e-16, 1e-5));
+         app::combine_report(total, solves(part(1, 0.1, 0.1, 4), 0, 1e-3));
          const auto &m = total->metrics;
-         check(m.at("steps") == 5 && m.at("prepares") == 3, "sums");
+         check(m.at("max_backward_error") == 2e-16 &&
+                   m.at("min_pivot_ratio") == 1e-5,
+               "the worst solve, 0 pivot ratios ignored");
+         std::optional<mesh::StageReport> unmeasured;
+         app::combine_report(unmeasured, solves(part(1, 1, 1, 1), 0, 0));
+         app::combine_report(unmeasured, solves(part(1, 1, 1, 2), 0, 0));
+         check(unmeasured->metrics.at("min_pivot_ratio") == 0,
+               "no measured pivot ratio: 0");
+         check(m.at("steps") == 6 && m.at("prepares") == 4, "sums");
          check(m.at("min_dt") == 0.05 && m.at("max_dt") == 0.3,
                "extremes over chunks with steps");
-         check(m.at("t0") == 0 && m.at("t1") == 3, "first and last");
-         check(m.at("max_residual") == 3, "largest");
-         mesh::StageReport unknown = part(1, 1, 1, 4);
+         check(m.at("t0") == 0 && m.at("t1") == 4, "first and last");
+         check(m.at("max_residual") == 4, "largest");
+         mesh::StageReport unknown = part(1, 1, 1, 5);
          unknown.metrics["something_new"] = 1;
          expect_throws<std::logic_error>(
              [&] { app::combine_report(total, unknown); }, "something_new");

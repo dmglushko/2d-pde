@@ -36,15 +36,15 @@ struct MultifrontalLuOptions {
 // exactly zero (an exactly singular matrix, a row without entries). A tiny
 // pivot is accepted: the ratio of the smallest pivot of the scaled matrix
 // to the largest, over every pivot (the fronts and the singletons
-// eliminated before them), is reported (LinearSolveResult::pivot_ratio),
-// not judged. So a pure Neumann problem, whose constant is not fixed and
-// whose last pivot is rounding (a ratio of about 1e-17), gets one of its
-// solutions, and a very ill-conditioned but well-posed problem is solved.
-// Every solve checks its backward error against residual_tolerance, so it
-// never returns an unchecked answer; the relative residual |b - A x| /
-// |b| is reported but not checked (for an accurate answer it is machine
-// epsilon times |A| |x| / |b|, which a coefficient contrast of 1e6 makes
-// large).
+// eliminated before them), is reported (LinearSolveResult::pivot_ratio,
+// with a warning in the messages below 1e-10), not judged. So a pure Neumann
+// problem, whose constant is not fixed and whose last pivot is rounding (a
+// ratio of about 1e-17), gets one of its solutions, and a very ill-conditioned
+// but well-posed problem is solved. Every solve checks its backward error
+// against residual_tolerance, so it never returns an unchecked answer; the
+// relative residual |b - A x| / |b| is reported but not checked (for an
+// accurate answer it is machine epsilon times |A| |x| / |b|, which a
+// coefficient contrast of 1e6 makes large).
 //
 // Threads: OpenBLAS has one thread count for the whole process, so this
 // solver sets it for the duration of each factorization and solve and

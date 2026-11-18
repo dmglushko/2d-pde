@@ -63,16 +63,22 @@ struct LinearSolveResult {
   // factorization that solved, where the solver measures it:
   // SimplicialLdlt and SupernodalCholesky (the diagonal D of L D L^T, for
   // the Cholesky the squares of the diagonal of L), MultifrontalLu (the
-  // diagonal of U of the row-scaled matrix). Reported, not judged: a tiny
-  // ratio (1e-17 for a pure Neumann problem) says the matrix is singular
-  // or nearly so, but these solvers refuse only an exact zero pivot. 0
+  // diagonal of U of the row-scaled matrix). Not refused: a tiny ratio
+  // (1e-17 for a pure Neumann problem) says the matrix is singular or
+  // nearly so, but these solvers refuse only an exact zero pivot; below
+  // 1e-10 they add a warning to `messages` and return the answer. 0
   // when not measured (the iterative solvers, SparseLu, an empty system);
   // a measured ratio is above 0.
   double pivot_ratio = 0.0;
   // Warnings: the solve worked, but the caller should know something
   // (failures are exceptions). Each names the solver. Empty for most
   // solves; SupernodalCholesky gives one on every solve with a matrix it
-  // prepared as negative definite (it factored -A). The StaticSolver puts
+  // prepared as negative definite (it factored -A), and SimplicialLdlt,
+  // SupernodalCholesky and MultifrontalLu one on every solve whose pivot
+  // ratio is below 1e-10 ("<solver>: the matrix is nearly singular (pivot
+  // ratio <ratio>, below 1e-10), so the answer may have few correct
+  // digits; ..."; the ratio is the factorization's, so the text is the
+  // same for every solve of one prepared solver). The StaticSolver puts
   // them in its "static_solver" report, the Integrator each distinct one
   // once in its "integrator" report.
   std::vector<std::string> messages{};

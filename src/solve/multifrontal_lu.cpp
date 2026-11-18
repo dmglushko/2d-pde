@@ -1,6 +1,7 @@
 #include "pde2d/solve/multifrontal_lu.hpp"
 
 #include "factorization_threads.hpp"
+#include "pivot_ratio.hpp"
 #include "suitesparse.hpp"
 
 #include <ParU.h>
@@ -142,6 +143,7 @@ public:
       check(ParU_Factorize(&a, symbolic_, &numeric_, control_),
             "the factorization failed");
       pivot_ratio_ = pivot_ratio();
+      pivot_warning_ = detail::pivot_ratio_warning(solver_name, pivot_ratio_);
     } catch (...) {
       release();
       throw;
@@ -162,6 +164,8 @@ public:
       return result;
     result.threads = static_cast<std::size_t>(threads_);
     result.pivot_ratio = pivot_ratio_;
+    if (!pivot_warning_.empty())
+      result.messages.push_back(pivot_warning_);
     {
       const detail::FactorizationThreads scope(threads_, threads_);
       // ParU reads b through a non-const pointer: give it a copy.
@@ -291,7 +295,8 @@ private:
   ParU_Control control_ = nullptr;
   ParU_Symbolic symbolic_ = nullptr;
   ParU_Numeric numeric_ = nullptr;
-  double pivot_ratio_ = 0.0; // 0 for an empty matrix
+  double pivot_ratio_ = 0.0;  // 0 for an empty matrix
+  std::string pivot_warning_; // empty unless pivot_ratio_ is tiny
 };
 
 } // namespace

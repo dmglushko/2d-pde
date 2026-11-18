@@ -147,36 +147,57 @@ Solution make_solution(const fem::MeshedProblem &meshed, const TimeState &state,
   return solution;
 }
 
-// The linear solver's warnings (LinearSolveResult::messages) of one
-// integrate() call: each distinct message once (a solver prepared for a
-// negative definite step matrix warns at every step), in the order they
-// were added. A time method may solve from several threads at once (a
-// prepared solver is const and may be used concurrently), so the log is
-// guarded by a mutex; it is held only to add or copy, never during a
-// solve. Solves that overlap add their messages in the order they take
-// the lock; a warning's text says which solver and matrix it is about, so
-// that order carries no information the report needs.
-class MessageLog {
+// What the integrator keeps of every linear solve of one integrate()
+// call, also of the solves a method's start() does: the warnings
+// (LinearSolveResult::messages), each distinct one once (a solver
+// prepared for a negative definite step matrix warns at every step), in
+// the order they were added; the largest backward error; and the
+// smallest measured pivot ratio (one above 0; 0 is "not measured"). A
+// time method may solve from several threads at once (a prepared solver
+// is const and may be used concurrently), so the log is guarded by a
+// mutex; it is held only to add or copy, never during a solve. Solves
+// that overlap add their messages in the order they take the lock; a
+// warning's text says which solver and matrix it is about, so that order
+// carries no information the report needs (the largest and smallest
+// values do not depend on it).
+class SolveLog {
 public:
-  void add(const std::vector<std::string> &messages) {
-    if (messages.empty())
-      return;
+  void add(const LinearSolveResult &result) {
     const std::scoped_lock lock(mutex_);
-    for (const std::string &message : messages)
+    for (const std::string &message : result.messages)
       if (std::ranges::find(messages_, message) == messages_.end())
         messages_.push_back(message);
+    // A NaN backward error stays (solvers that check it throw first).
+    if (!std::isnan(max_backward_error_) &&
+        !(result.backward_error <= max_backward_error_))
+      max_backward_error_ = result.backward_error;
+    if (result.pivot_ratio > 0.0)
+      min_pivot_ratio_ = std::min(min_pivot_ratio_, result.pivot_ratio);
   }
   std::vector<std::string> messages() const {
     const std::scoped_lock lock(mutex_);
     return messages_;
   }
+  // 0 before any solve.
+  double max_backward_error() const {
+    const std::scoped_lock lock(mutex_);
+    return max_backward_error_;
+  }
+  // 0 when no solve measured its pivot ratio (an iterative solver,
+  // SparseLu, an empty system, no solve).
+  double min_pivot_ratio() const {
+    const std::scoped_lock lock(mutex_);
+    return std::isinf(min_pivot_ratio_) ? 0.0 : min_pivot_ratio_;
+  }
 
 private:
   mutable std::mutex mutex_;
   std::vector<std::string> messages_;
+  double max_backward_error_ = 0.0;
+  double min_pivot_ratio_ = std::numeric_limits<double>::infinity();
 };
 
-// A prepared solver that passes every solve on and logs its messages. It
+// A prepared solver that passes every solve on and logs its result. It
 // shares the log of its integrate() call: a method may keep a prepared
 // solver beyond that call (from its start() or a step) and solve with it
 // later, which still works and adds to a log that no report reads any
@@ -184,29 +205,30 @@ private:
 class LoggingPreparedSolver final : public PreparedLinearSolver {
 public:
   LoggingPreparedSolver(std::unique_ptr<const PreparedLinearSolver> solver,
-                        std::shared_ptr<MessageLog> log)
+                        std::shared_ptr<SolveLog> log)
       : solver_(std::move(solver)), log_(std::move(log)) {}
   LinearSolveResult
   solve(std::span<const double> right_hand_side) const override {
     LinearSolveResult result = solver_->solve(right_hand_side);
-    log_->add(result.messages);
+    log_->add(result);
     return result;
   }
 
 private:
   std::unique_ptr<const PreparedLinearSolver> solver_;
-  std::shared_ptr<MessageLog> log_;
+  std::shared_ptr<SolveLog> log_;
 };
 
 // The integrator's linear solver as the time method sees it: the same
-// solver, whose prepared solvers log the messages of every solve, also of
-// the solves a method's start() does (Newmark's acceleration, the state at
-// t0 for time order 0). So the messages reach the report whatever a method
-// does with a LinearSolveResult.
+// solver, whose prepared solvers log every solve, also the solves a
+// method's start() does (Newmark's acceleration, the state at t0 for time
+// order 0). So the messages, the largest backward error and the smallest
+// pivot ratio reach the report whatever a method does with a
+// LinearSolveResult.
 class LoggingSolver final : public LinearSolver {
 public:
   LoggingSolver(std::shared_ptr<const LinearSolver> solver,
-                std::shared_ptr<MessageLog> log)
+                std::shared_ptr<SolveLog> log)
       : solver_(std::move(solver)), log_(std::move(log)) {}
   std::string name() const override { return solver_->name(); }
   LinearSolverRequirements requirements() const override {
@@ -220,7 +242,7 @@ public:
 
 private:
   std::shared_ptr<const LinearSolver> solver_;
-  std::shared_ptr<MessageLog> log_;
+  std::shared_ptr<SolveLog> log_;
 };
 
 // The running summary of the step records.
@@ -277,7 +299,7 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   check_output(output, t0, t1);
   const fem::MeshedProblem &meshed = *meshed_problem;
   const auto start = Clock::now();
-  const auto log = std::make_shared<MessageLog>();
+  const auto log = std::make_shared<SolveLog>();
   const LoggingSolver linear_solver(linear_solver_, log);
 
   // 1. The time order, from assembly's formula facts without evaluating
@@ -449,6 +471,10 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // read from the assembly's own report.
   m["assembly_threads"] = current->report().metrics.at("threads");
   m["linear_threads"] = static_cast<double>(summary.linear_threads);
+  // Over every solve of the run, start() included (the log); the pivot
+  // ratio over the solves that measured it, 0 when none did.
+  m["max_backward_error"] = log->max_backward_error();
+  m["min_pivot_ratio"] = log->min_pivot_ratio();
   report.messages = log->messages();
   report.time = Clock::now() - start;
   return result;

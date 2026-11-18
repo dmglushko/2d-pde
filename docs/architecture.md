@@ -604,7 +604,7 @@ module: it is a program over the public headers, described in
 | `include/pde2d/fem/` | `expression.hpp` (`Expression`, `ExpressionFacts`, `Parameters`), `compiled_expression.hpp` (`CompiledExpression`), `problem.hpp` (`Equation`, `BoundaryCondition`, `InitialConditions`, `Problem`, `ConditionKind`, `classify`, the summaries), `equation_text.hpp` (`parse_equation`, `parse_condition`, `equation_text`, `condition_text`), `meshed_problem.hpp` (`MeshedProblem` and its compiled parts), `csr_matrix.hpp` (`SparsityPattern`, `CsrMatrix`, `has_only_zero_entries`, `is_symmetric`), `assembled_problem.hpp` (`Operator`, `AssembledProblem`), `assembler.hpp` (`AssemblerOptions`, `Assembler`), `quadrature.hpp` (`TriangleRule`, `EdgeRule`, `triangle_rule`, `edge_rule`, `point_at`) |
 | `src/fem/` | implementation; private headers `symengine_expression.hpp` (the only file that includes SymEngine; `Expression::Impl`), `derivative.hpp` (`detail::derivative`, the only place derivatives are taken), `fact_summaries.hpp` (the summaries, written once for `Problem` and `MeshedProblem`), `element_blocks.hpp` (assembly's pure element block functions) and `threads.hpp` (checking and resolving `AssemblerOptions::threads`; includes `<omp.h>`); `assembler.cpp` holds the driver (with the OpenMP loop over a colour), patterns, colouring and `detail::AssemblyInternals` |
 | `include/pde2d/solve/` | `linear_solver.hpp` (`LinearSolver`, `LinearSolverRequirements`, `PreparedLinearSolver`, `LinearSolveResult`), `sparse_lu.hpp`, `bicgstab.hpp`, `conjugate_gradient.hpp`, `simplicial_ldlt.hpp`, `solution.hpp` (`Solution`, `build_solution`), `static_solver.hpp` (`StaticSolver`, `StaticResult`), `time_method.hpp` (`TimeMethod`, `TimeMethodCapabilities`, `StartNeeds`, `StepMatrixWeights`, `TimeState`, `StepSolveInfo`), `implicit_euler.hpp`, `implicit_midpoint.hpp`, `newmark.hpp`, `step_controller.hpp`, `fixed_step.hpp`, `integrator.hpp` (`Integrator`, `IntegrationOutput`, `StepRecord`, `IntegrationResult`), `supernodal_cholesky.hpp` (`SupernodalCholeskyOptions`, `SupernodalCholesky`), `multifrontal_lu.hpp` (`MultifrontalLuOptions`, `MultifrontalLu`) |
-| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `threads.hpp` (checking and resolving a `threads` option; includes `<omp.h>`), `eigen_threads.hpp` (`detail::EigenThreads`, the scope every Eigen computation runs in), `factorization_threads.hpp` (`detail::FactorizationThreads`, the scope every SuiteSparse call runs in: a process-wide lock, OpenBLAS's count and the calling thread's OpenMP count; the OpenBLAS calls are in `factorization_threads.cpp`), `suitesparse.hpp` (what the two SuiteSparse solvers share: their options check, CHOLMOD's view of a `CsrMatrix` as the compressed columns of its transpose, the checks of a result; includes `cholmod.h`) and `vectors.hpp` (norms, the residual measures: relative residual and backward error, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the Eigen solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`), SuiteSparse only in `suitesparse.hpp`, `supernodal_cholesky.cpp` and `multifrontal_lu.cpp`; `time_methods.cpp` holds the three time methods |
+| `src/solve/` | implementation; private headers `eigen_view.hpp` (`Eigen::Map` views of `CsrMatrix` and vectors), `iterative_solve.hpp` (the prepared solver shared by `BiCgStab` and `ConjugateGradient`), `requirements.hpp` (checking a solver's requirements against assembly's facts), `threads.hpp` (checking and resolving a `threads` option; includes `<omp.h>`), `eigen_threads.hpp` (`detail::EigenThreads`, the scope every Eigen computation runs in), `factorization_threads.hpp` (`detail::FactorizationThreads`, the scope every SuiteSparse call runs in: a process-wide lock, OpenBLAS's count and the calling thread's OpenMP count; the OpenBLAS calls are in `factorization_threads.cpp`), `suitesparse.hpp` (what the two SuiteSparse solvers share: their options check, CHOLMOD's view of a `CsrMatrix` as the compressed columns of its transpose, the checks of a result; includes `cholmod.h`), `pivot_ratio.hpp` (`detail::small_pivot_ratio` = 1e-10 and the warning below it, shared by `SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; no heavy dependency) and `vectors.hpp` (norms, the residual measures: relative residual and backward error, operator products); Eigen is included only in `eigen_view.hpp`, `eigen_threads.hpp`, `iterative_solve.hpp` and the Eigen solver `.cpp` files (`sparse_lu.cpp`, `bicgstab.cpp`, `conjugate_gradient.cpp`, `simplicial_ldlt.cpp`), SuiteSparse only in `suitesparse.hpp`, `supernodal_cholesky.cpp` and `multifrontal_lu.cpp`; `time_methods.cpp` holds the three time methods |
 | `app/` | the graphical interface (`pde2d_app`): `src/` (case format with its migrations and generated schema, the geometry sources with the drawing and the boundary locator, the mesh and solve catalogs, the stage cache, runs in chunks per client under two locks, comparisons and probes, exporters with a stored zip writer, problem presets, `--set` and `--sweep`, local HTTP server), `web/` (the page, plain JS modules, with the geometry editor on the picture), `examples/` (cases), `Start pde2d app.cmd` and `start-app.sh` (double-click launcher), `tests/` (`browser/`: the page in headless Chrome; `example_checks.json`: the examples' expected figures), `third_party/cpp-httplib/`; its own guide is `app/AGENTS.md`, its design `docs/app.md` and its decisions `docs/app-decisions.md` |
 | `include/pde2d/adapt/` | `error_estimator.hpp` (`ErrorEstimator`, `ErrorEstimate`, `TimeDerivatives`), `residual_estimator.hpp` (`ResidualEstimatorOptions`), `kelly_estimator.hpp` (`KellyEstimatorOptions`), `recovery_estimator.hpp` (`RecoveryEstimatorOptions`, `RecoveryNorm`), `marking.hpp` (`MarkingStrategy`), one header per marking strategy (`maximum_marking.hpp`, `dorfler_marking.hpp`, `fixed_fraction_marking.hpp`, `equidistribution_marking.hpp`), `adaptation.hpp` (`Adaptation`, `AdaptationCapabilities`, `AdaptationResult`, `SolvedState`), `mesh_refinement.hpp` (`MeshRefinement`), `adaptive_static_solver.hpp` (`AdaptiveStaticSolver`, `AdaptiveTarget`, `ErrorTolerance`, `StopReason`, `AdaptiveCycle`, `AdaptiveStaticResult`); refinement of marked triangles is `mesh::Remesher::refine` |
 | `src/adapt/` | `error_estimator.cpp` (the shared checks of `estimate`), `residual_estimators.cpp` (the residual terms, shared by the residual and Kelly estimators), `recovery_estimator.cpp`, `marking.cpp` (the shared checks and the four strategies), `mesh_refinement.cpp`, `adaptive_static_solver.cpp`; private header `estimator_geometry.hpp` (per-triangle area, diameter and gradient of u_h, interior edges with their two triangles, the triangle of each boundary edge, checked coefficient values, the check of a quadrature degree option) |
@@ -1440,16 +1440,25 @@ tolerance accepts), `pivot_ratio` (the smallest pivot over the largest,
 from `SimplicialLdlt`, `SupernodalCholesky` and `MultifrontalLu`; 0 when
 not measured) and `messages` (warnings, "worked, but…", each naming the
 solver; empty except for `SupernodalCholesky` on a matrix it factored as
-−A). The members are in this order: the first four (values, iterations,
+−A, and for the three solvers that measure `pivot_ratio` when it is below
+`detail::small_pivot_ratio` = 1e-10 (`src/solve/pivot_ratio.hpp`, fixed,
+not an option): "<solver>: the matrix is nearly singular (pivot ratio
+<ratio, 3 digits>, below 1e-10), so the answer may have few correct
+digits; …", made once in `prepare` by `detail::pivot_ratio_warning` and
+added to every solve's result, after the −A warning; the answer is
+returned and the backward error checked as before). The members are in this order: the first four (values, iterations,
 residual, threads) are those the struct had before the other three were
 added, so a positional initialization written then keeps its meaning;
 new members go at the end. The `StaticSolver`
 copies the messages into its "static_solver" report; the `Integrator`
 passes its time method a private wrapper of the linear solver
 (`LoggingSolver` in `integrator.cpp`) whose prepared solvers
-(`LoggingPreparedSolver`) log the messages of every solve, the steps' and
-those of `start()`, and its "integrator" report gets each distinct
-message once, in the order they were added. The log (`MessageLog`) is
+(`LoggingPreparedSolver`) log every solve's result, the steps' and
+those of `start()`: its "integrator" report gets each distinct
+message once, in the order they were added, and the largest
+`backward_error` (`max_backward_error`) and smallest `pivot_ratio` above
+0 (`min_pivot_ratio`, 0 when no solve measured one) over those solves.
+The log (`SolveLog`) is
 per-run state shared (`std::shared_ptr`) by the wrapper and every
 prepared solver it made, and guarded by a mutex held only to add or copy,
 never during a solve: a time method may solve from several threads at
@@ -1557,7 +1566,8 @@ its compatible load then gives one of its solutions (residual about
 (a Robin coefficient of 2e-9 on one end of a 1 × 1/128 strip: pivot ratio
 4e-12, the answer as accurate as its condition number of about 1e15
 allows, which is about 10% here). The ratio of the smallest pivot to the
-largest is reported in `pivot_ratio`, not judged: CHOLMOD's
+largest is reported in `pivot_ratio`, not judged (below 1e-10 the
+result carries a warning, see above): CHOLMOD's
 `cholmod_l_rcond`; for ParU, its smallest and largest |U_kk| over the
 fronts (`PARU_GET_MIN_UDIAG`, `PARU_GET_MAX_UDIAG`) combined with the
 singletons, which ParU eliminates before the fronts and leaves out: a
@@ -1700,7 +1710,11 @@ history, report}`.
   steps, once per step. The summary becomes the report "integrator"
   (t0, t1, time_order, steps, rejected_steps, min_dt, max_dt,
   linear_iterations, max_linear_iterations, max_residual, assemblies,
-  prepares, snapshots, assembly_threads, linear_threads), whose messages
+  prepares, snapshots, assembly_threads, linear_threads,
+  max_backward_error, min_pivot_ratio: the worst of every solve of the
+  call, `start()`'s included, from the logging wrapper, not from
+  `StepSolveInfo`; min_pivot_ratio is 0 when nothing measured it), whose
+  messages
   are the linear solver's warnings of every solve of the call (also of
   `start()`), each distinct one once, in the order they were added
   (solves from several threads at once: the order in which they took the

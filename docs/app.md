@@ -747,8 +747,10 @@ there take the same steps.
 - The combined `integrator` report combines each metric by its declared
   rule (`integrator_metric_rules`): `steps`, `rejected_steps`,
   `linear_iterations`, `assemblies`, `prepares`, `snapshots` add up;
-  `max_linear_iterations`, `max_residual`, `linear_threads` take the
-  largest; `min_dt` and
+  `max_linear_iterations`, `max_residual`, `linear_threads`,
+  `max_backward_error` take the largest; `min_pivot_ratio` the smallest
+  above 0 (`Combine::min_measured`: 0 means "not measured", so it stays 0
+  only when no chunk measured one); `min_dt` and
   `max_dt` the smallest and largest over the chunks that took steps; `t0`
   is the first's, `t1`, `time_order` and `assembly_threads` the last's;
   `chunks` is added. A

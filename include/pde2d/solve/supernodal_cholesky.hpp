@@ -46,7 +46,8 @@ struct SupernodalCholeskyOptions {
 // -A, for a negative diagonal) is not positive definite: a pivot is zero
 // (an exactly singular matrix) or negative (an indefinite matrix). A tiny
 // positive pivot is accepted: the ratio of the smallest pivot to the
-// largest is reported (LinearSolveResult::pivot_ratio), not judged, so a
+// largest is reported (LinearSolveResult::pivot_ratio, with a warning in
+// the messages below 1e-10), not judged, so a
 // pure Neumann problem whose last pivot rounds to a tiny positive number
 // gets one of its solutions, and a very ill-conditioned but well-posed
 // problem is solved. Every solve checks its backward error against

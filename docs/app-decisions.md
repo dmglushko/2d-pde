@@ -1082,3 +1082,10 @@ time from its start.
   the field moving, the meaning, a symbol at the caret, an error after a
   pause, switching forms, a condition line; `time_bar`: a run plays from
   its start).
+- **The worst solve combines over chunks** (2026-11-18): the integrator's
+  new `max_backward_error` takes the largest over the chunks and
+  `min_pivot_ratio` the smallest above 0 (a new rule,
+  `Combine::min_measured`), since the library reports 0 for "not
+  measured" and a plain minimum would let a chunk without a measured
+  ratio hide the others'. The page does not show them yet; the pivot
+  ratio warning reaches it as one of the report's messages.
