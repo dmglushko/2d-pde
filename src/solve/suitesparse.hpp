@@ -19,11 +19,9 @@
 
 #include <cholmod.h>
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
-#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -78,19 +76,11 @@ inline cholmod_sparse transposed_view(const fem::CsrMatrix &matrix, int stype) {
   return a;
 }
 
-// Whether a factorization of an n x n matrix whose smallest pivot is
-// `rcond` times its largest counts as singular: below n machine epsilons
-// the smallest pivot is rounding noise. A singular matrix factorized in
-// floating point rarely meets an exact zero pivot; its last pivot is a
-// few epsilons times n instead (a pure Neumann problem: about 1e-17 n),
-// while a matrix from a well-posed problem keeps pivots near 1/n.
-inline bool singular_to_working_precision(double rcond, std::size_t n) {
-  return !(rcond >=
-           static_cast<double>(n) * std::numeric_limits<double>::epsilon());
-}
-
-// The checks after a direct solve: the result is finite and its relative
-// residual is at most `tolerance`. Sets result.residual; throws
+// The checks after a direct solve: the result is finite and its backward
+// error |b - A x| / (|A| |x| + |b|) is at most `tolerance` (the
+// relative residual is reported, not checked: for an accurate x it is
+// about machine epsilon times |A| |x| / |b|, large for a large coefficient
+// contrast). Sets result.residual and result.backward_error; throws
 // std::runtime_error naming `solver` otherwise.
 inline void check_direct_result(LinearSolveResult &result,
                                 const fem::CsrMatrix &matrix,
@@ -100,12 +90,16 @@ inline void check_direct_result(LinearSolveResult &result,
     throw std::runtime_error(
         solver +
         ": the solution is not finite (the matrix is singular or nearly so)");
-  result.residual = relative_residual(matrix, right_hand_side, result.values);
-  if (!(result.residual <= tolerance))
+  const auto measures =
+      measure_residual(matrix, right_hand_side, result.values);
+  result.residual = measures.relative_residual;
+  result.backward_error = measures.backward_error;
+  if (!(result.backward_error <= tolerance))
     throw std::runtime_error(std::format(
-        "{}: the relative residual {} is above the tolerance {} (the matrix "
-        "is nearly singular)",
-        solver, result.residual, tolerance));
+        "{}: the backward error {} is above the tolerance {} "
+        "(residual_tolerance; the factorization lost accuracy on this "
+        "matrix, pivot ratio {})",
+        solver, result.backward_error, tolerance, result.pivot_ratio));
 }
 
 } // namespace pde2d::solve::detail

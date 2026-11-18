@@ -7,10 +7,13 @@
 #include "pde2d/solve/sparse_lu.hpp"
 #include "pde2d/solve/supernodal_cholesky.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 // Small systems with known solutions: b is computed by hand from a chosen
@@ -87,6 +90,52 @@ void solves_symmetric_systems(const LinearSolver &solver) {
 // pivoting meets a zero pivot. Neither may return an answer.
 const Dense indefinite = {{0, 1}, {1, 0}};
 const std::vector<double> indefinite_b = {1, 0};
+
+// |b - A x| / (|A| |x| + |b|) in the infinity norm, computed here in
+// long double from the dense matrix.
+double backward_error(const Dense &a, const std::vector<double> &b,
+                      const std::vector<double> &x) {
+  long double r = 0, norm_a = 0, norm_x = 0, norm_b = 0;
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    long double product = 0, row_sum = 0;
+    for (std::size_t j = 0; j < a[i].size(); ++j) {
+      product += static_cast<long double>(a[i][j]) * x[j];
+      row_sum += std::abs(static_cast<long double>(a[i][j]));
+    }
+    r = std::max(r, std::abs(b[i] - product));
+    norm_a = std::max(norm_a, row_sum);
+    norm_x = std::max(norm_x, std::abs(static_cast<long double>(x[i])));
+    norm_b = std::max(norm_b, std::abs(static_cast<long double>(b[i])));
+  }
+  return static_cast<double>(r / (norm_a * norm_x + norm_b));
+}
+
+// `dense` with an explicitly stored zero at (row, column).
+std::shared_ptr<const pde2d::fem::CsrMatrix>
+with_explicit_zero(const Dense &dense, std::size_t row, std::size_t column) {
+  auto pattern = std::make_shared<pde2d::fem::SparsityPattern>();
+  pattern->rows = pattern->columns = dense.size();
+  pattern->row_offsets.push_back(0);
+  pde2d::fem::CsrMatrix matrix;
+  for (std::size_t i = 0; i < dense.size(); ++i) {
+    for (std::size_t j = 0; j < dense[i].size(); ++j)
+      if (dense[i][j] != 0.0 || (i == row && j == column)) {
+        pattern->column_indices.push_back(static_cast<std::ptrdiff_t>(j));
+        matrix.values.push_back(dense[i][j]);
+      }
+    pattern->row_offsets.push_back(
+        static_cast<std::ptrdiff_t>(pattern->column_indices.size()));
+  }
+  matrix.pattern = std::move(pattern);
+  return std::make_shared<const pde2d::fem::CsrMatrix>(std::move(matrix));
+}
+
+const SparseLu sparse_lu;
+const SimplicialLdlt simplicial_ldlt;
+const SupernodalCholesky supernodal_cholesky;
+const MultifrontalLu multifrontal_lu;
+const ConjugateGradient conjugate_gradient({.tolerance = 1e-14});
+const BiCgStab bicgstab({.tolerance = 1e-14});
 
 void rejects_bad_input(const LinearSolver &solver) {
   expect_throws<std::invalid_argument>([&] { (void)solver.prepare(nullptr); },
@@ -247,11 +296,21 @@ int main() {
              MultifrontalLu().prepare(sparse(indefinite))->solve(indefinite_b),
              {0, 1}, 0.0);
        }},
-      {"MultifrontalLu throws for a singular matrix",
+      {"MultifrontalLu throws for an exact zero pivot",
        [] {
          expect_throws<std::runtime_error>(
              [] { (void)MultifrontalLu().prepare(sparse({{1, 2}, {2, 4}})); },
-             "multifrontal_lu: the matrix is singular");
+             "multifrontal_lu: the matrix is singular (a pivot is exactly "
+             "zero)");
+         // An explicitly stored zero as the only entry of column 0: a
+         // singleton whose pivot is zero.
+         expect_throws<std::runtime_error>(
+             [] {
+               (void)MultifrontalLu().prepare(
+                   with_explicit_zero({{0, 1}, {0, 1}}, 0, 0));
+             },
+             "multifrontal_lu: the matrix is singular (a pivot is exactly "
+             "zero)");
          // A row without entries.
          expect_throws<std::runtime_error>(
              [] { (void)MultifrontalLu().prepare(sparse({{1, 0}, {0, 0}})); },
@@ -267,19 +326,133 @@ int main() {
       {"SupernodalCholesky throws on a matrix that is not positive definite",
        [] {
          // Indefinite with a zero diagonal, indefinite with nonzero pivots
-         // (which LDL^T handles), negative definite, singular.
-         for (const Dense &a : {indefinite, Dense{{2, 1}, {1, -3}},
-                                Dense{{-2, 1}, {1, -2}}, Dense{{1, 2}, {2, 4}}})
+         // (which LDL^T handles), singular.
+         for (const Dense &a :
+              {indefinite, Dense{{2, 1}, {1, -3}}, Dense{{1, 2}, {2, 4}}})
            expect_throws<std::runtime_error>(
                [&] { (void)SupernodalCholesky().prepare(sparse(a)); },
-               "supernodal_cholesky: the matrix is not positive definite");
-         // Positive semidefinite (singular): the last pivot is rounding.
+               "supernodal_cholesky: the matrix is not positive definite (the "
+               "factorization stopped at column");
+         // Positive semidefinite (singular), with an exact zero pivot.
          expect_throws<std::runtime_error>(
              [] {
                (void)SupernodalCholesky().prepare(
                    sparse({{1, -1, 0}, {-1, 2, -1}, {0, -1, 1}}));
              },
-             "supernodal_cholesky: the matrix is");
+             "at a pivot that is zero or negative); for an indefinite matrix "
+             "use simplicial_ldlt or a LU solver");
+         // A negative diagonal: -A is factored. Negative semidefinite
+         // (singular) and indefinite (-A has a negative pivot): refused.
+         for (const Dense &a : {Dense{{-1, 1, 0}, {1, -2, 1}, {0, 1, -1}},
+                                Dense{{-1, 2}, {2, -1}}})
+           expect_throws<std::runtime_error>(
+               [&] { (void)SupernodalCholesky().prepare(sparse(a)); },
+               "supernodal_cholesky: the matrix is not positive definite, and "
+               "not negative definite although its diagonal is negative (the "
+               "factorization of -A stopped at column");
+       }},
+      {"SupernodalCholesky solves a negative definite system, with a warning",
+       [] {
+         // -A is factored: the same x as the Eigen LU on A, a warning on
+         // every solve, the residual measured with A and b.
+         const Dense a = {{-4, 1, 0}, {1, -4, 1}, {0, 1, -4}};
+         const std::vector<double> b = {1, -2, 3};
+         const auto prepared = SupernodalCholesky().prepare(sparse(a));
+         const auto lu = SparseLu().prepare(sparse(a))->solve(b);
+         for (int i = 0; i < 2; ++i) {
+           const auto r = prepared->solve(b);
+           for (std::size_t k = 0; k < 3; ++k)
+             near(r.values[k], lu.values[k], 1e-14, "the same x");
+           check(r.residual < 1e-14, "the residual with A and b");
+           check(r.messages.size() == 1 &&
+                     r.messages[0].starts_with(
+                         "supernodal_cholesky: the matrix is negative "
+                         "definite") &&
+                     r.messages[0].find("-A was factored") != std::string::npos,
+                 "the warning on every solve");
+         }
+         // No message for the positive definite form, nor from the other
+         // solvers.
+         Dense minus_a = a;
+         for (auto &row : minus_a)
+           for (double &value : row)
+             value = -value;
+         check(SupernodalCholesky()
+                   .prepare(sparse(minus_a))
+                   ->solve(b)
+                   .messages.empty(),
+               "no message for a positive definite matrix");
+         check(lu.messages.empty(), "no message from sparse_lu");
+       }},
+      {"every solver reports its backward error",
+       [] {
+         const auto check_backward_error = [](const LinearSolver &solver,
+                                              const Dense &a,
+                                              const std::vector<double> &b) {
+           // An accurate answer: rounding, both as reported and as
+           // computed here (they differ, since r is itself rounding).
+           const auto r = solver.prepare(sparse(a))->solve(b);
+           check(r.backward_error >= 0.0 && r.backward_error < 1e-14 &&
+                     backward_error(a, b, r.values) < 1e-14,
+                 solver.name() + ": rounding");
+         };
+         for (const LinearSolver *solver :
+              std::initializer_list<const LinearSolver *>{
+                  &sparse_lu, &simplicial_ldlt, &supernodal_cholesky,
+                  &multifrontal_lu, &conjugate_gradient, &bicgstab})
+           check_backward_error(*solver, spd, spd_b);
+         // A loose tolerance: an iterative answer with a visible backward
+         // error (about 0.05), measured on the scaled system it solved.
+         Dense a(30, std::vector<double>(30, 0.0));
+         for (std::size_t i = 0; i < 30; ++i) {
+           a[i][i] = 2.0;
+           if (i + 1 < 30)
+             a[i][i + 1] = -1.5;
+           if (i > 0)
+             a[i][i - 1] = -0.4;
+         }
+         const std::vector<double> b(30, 1e-3);
+         const auto r =
+             BiCgStab({.tolerance = 0.5}).prepare(sparse(a))->solve(b);
+         const double expected = backward_error(a, b, r.values);
+         check(expected > 1e-12, "a visible backward error");
+         near(r.backward_error, expected, 1e-6 * expected,
+              "bicgstab: the infinity-norm formula");
+         // b = 0: x = 0, nothing to measure.
+         check(multifrontal_lu.prepare(sparse(spd))
+                       ->solve(std::vector<double>(3, 0.0))
+                       .backward_error == 0.0,
+               "0 for b = 0");
+       }},
+      {"the pivot ratio: measured by the factorizations that have pivots",
+       [] {
+         // Diagonal: the pivots are 2 and 8 in any order.
+         const Dense diagonal = {{2, 0}, {0, 8}};
+         const std::vector<double> b = {1, 1};
+         for (const LinearSolver *solver :
+              {static_cast<const LinearSolver *>(&simplicial_ldlt),
+               static_cast<const LinearSolver *>(&supernodal_cholesky)})
+           near(solver->prepare(sparse(diagonal))->solve(b).pivot_ratio, 0.25,
+                1e-15, solver->name());
+         // ParU's pivots are those of the matrix with each row divided by
+         // its largest entry. Only singletons: every pivot is 1.
+         near(multifrontal_lu.prepare(sparse(diagonal))->solve(b).pivot_ratio,
+              1.0, 1e-15, "multifrontal_lu, singletons only");
+         // Column 0 is a singleton with pivot 1 / 3; the rest, [[2, 1],
+         // [1, 2]] scaled, is a front with pivots 1 and 3/4. Without the
+         // singleton the ratio would be 3/4.
+         near(
+             multifrontal_lu.prepare(sparse({{1, 3, 0}, {0, 2, 1}, {0, 1, 2}}))
+                 ->solve(std::vector<double>{1, 1, 1})
+                 .pivot_ratio,
+             1.0 / 3.0, 1e-15, "multifrontal_lu, a singleton and a front");
+         // Not measured.
+         for (const LinearSolver *solver :
+              {static_cast<const LinearSolver *>(&sparse_lu),
+               static_cast<const LinearSolver *>(&conjugate_gradient),
+               static_cast<const LinearSolver *>(&bicgstab)})
+           check(solver->prepare(sparse(spd))->solve(spd_b).pivot_ratio == 0.0,
+                 solver->name() + ": 0, not measured");
        }},
       {"the parallel direct solvers validate their options",
        [] {

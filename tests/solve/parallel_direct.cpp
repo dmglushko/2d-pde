@@ -1,9 +1,13 @@
 // The parallel direct solvers (SupernodalCholesky, MultifrontalLu) on
 // assembled problems (docs/decisions.md, "Parallel direct solvers come from
 // SuiteSparse"): their solutions agree with the Eigen direct solvers', they
-// refuse what they cannot handle, and the thread count changes the answer
-// at most in the last digits, never with 1 thread. At most 4 threads.
+// refuse what they cannot handle, the Cholesky solves a negative definite
+// matrix by factoring -A and warns ("The Cholesky factors -A when A is
+// negative definite, with a warning"), and the thread count changes the
+// answer at most in the last digits, never with 1 thread. At most 4
+// threads.
 
+#include "solve_support.hpp"
 #include "support/check.hpp"
 #include "support/l_shape_mesh.hpp"
 
@@ -24,6 +28,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -36,6 +42,7 @@ using namespace pde2d::fem;
 using namespace pde2d::solve;
 using pde2d::test::check;
 using pde2d::test::expect_throws;
+using pde2d::test::max_nodal_error;
 
 namespace {
 
@@ -59,6 +66,11 @@ double relative_difference(std::span<const double> x,
   return difference / scale;
 }
 
+// The start of SupernodalCholesky's warning when it factored -A.
+constexpr const char *negative_warning =
+    "supernodal_cholesky: the matrix is negative definite (every diagonal "
+    "entry is negative";
+
 std::shared_ptr<const pde2d::mesh::Mesh> l_shape() {
   static const auto mesh = pde2d::test::refined_l_shape(0.04);
   return mesh;
@@ -68,19 +80,20 @@ const std::vector<std::string> sides = {"bottom", "right", "inner", "top",
                                         "left"};
 
 // a (u_xx + u_yy) + b_x u_x + c u + m1 u_t = f on the L-shape, u = 0 on
-// the whole boundary (or u_n = 0 with `neumann`). a = -1 gives a positive
-// definite matrix, a = 1 a negative definite one; b_x not 0 makes it
-// non-symmetric; c below minus the first eigenvalue of -Laplace (about
-// 9.6) makes it indefinite.
+// the whole boundary (or u_n = 0 with `neumann`), f = 1 + sin(t) x (its
+// negative with `negate_f`). a = -1 gives a positive definite matrix, a = 1
+// a negative definite one; b_x not 0 makes it non-symmetric; c below minus
+// the first eigenvalue of -Laplace (about 9.6) makes it indefinite (for
+// a = 1: c above it).
 std::shared_ptr<const MeshedProblem>
 problem(const char *a, const char *b_x = "0", const char *c = "0",
-        const char *m1 = "0", bool neumann = false) {
+        const char *m1 = "0", bool neumann = false, bool negate_f = false) {
   Problem p{.equation = {.a_xx = e(a),
                          .a_yy = e(a),
                          .b_x = e(b_x),
                          .c = e(c),
                          .m1 = e(m1),
-                         .f = e("1 + sin(t)*x")},
+                         .f = e(negate_f ? "-(1 + sin(t)*x)" : "1 + sin(t)*x")},
             .initial = {.u = e("x*y")}};
   for (const auto &side : sides)
     p.boundary_conditions.emplace(
@@ -142,6 +155,58 @@ template <class Solver, class Options> void thread_counts(const System &s) {
   }
 }
 
+// -1e6 u_xx - u_yy = 0 on the unit square cut into 128 x 128 cells, with
+// Robin conditions u + u_n = g on the horizontal sides and u_n = 0 on the
+// vertical ones; u = y is exact, also for P1 (review finding: the relative
+// residual of an accurate answer was 1.25e-7, and the Cholesky refused
+// it).
+std::shared_ptr<const MeshedProblem> contrast_problem() {
+  Problem p{.equation = {.a_xx = e("-1000000"), .a_yy = e("-1")}};
+  // Bottom: u = 0, u_n = -u_y = -1. Top: u = 1, u_n = 1.
+  p.boundary_conditions.emplace(
+      "bottom",
+      BoundaryCondition{.alpha = e("1"), .beta_n = e("1"), .g = e("-1")});
+  p.boundary_conditions.emplace(
+      "top", BoundaryCondition{.alpha = e("1"), .beta_n = e("1"), .g = e("2")});
+  for (const char *side : {"left", "right"})
+    p.boundary_conditions.emplace(
+        side, BoundaryCondition{.beta_n = e("1"), .g = e("0")});
+  return std::make_shared<const MeshedProblem>(pde2d::test::unit_square(128),
+                                               std::move(p));
+}
+
+// -u_xx - u_yy = 1 on [0, 1] x [0, 1/128], cut into 2048 x 16 square cells
+// (34833 unknowns), with the Robin condition 2e-9 u + u_n = 0 on the left
+// side and u_n = 0 on the others (review finding: well-posed, but its
+// smallest pivot was below n machine epsilons times the largest, and both
+// solvers refused it). The solution is u = 5e8 + x - x^2 / 2; P1 on this
+// mesh gives it exactly at the nodes, as the 1D problem does.
+std::shared_ptr<const MeshedProblem> weak_robin_problem() {
+  Problem p{.equation = {.a_xx = e("-1"), .a_yy = e("-1"), .f = e("1")}};
+  p.boundary_conditions.emplace(
+      "left",
+      BoundaryCondition{.alpha = e("2e-9"), .beta_n = e("1"), .g = e("0")});
+  for (const char *side : {"bottom", "right", "top"})
+    p.boundary_conditions.emplace(
+        side, BoundaryCondition{.beta_n = e("1"), .g = e("0")});
+  return std::make_shared<const MeshedProblem>(
+      pde2d::test::rectangle(2048, 16, 1.0, 1.0 / 128.0), std::move(p));
+}
+
+void print(const std::string &what, const LinearSolveResult &r) {
+  std::cout << std::format("{}: residual {:.3g}, backward error {:.3g}, pivot "
+                           "ratio {:.3g}\n",
+                           what, r.residual, r.backward_error, r.pivot_ratio);
+}
+
+// The mean of `v`.
+double mean(std::span<const double> v) {
+  double sum = 0.0;
+  for (const double x : v)
+    sum += x;
+  return sum / static_cast<double>(v.size());
+}
+
 IntegrationResult
 integrate_with(std::shared_ptr<const LinearSolver> solver,
                const std::shared_ptr<const MeshedProblem> &p) {
@@ -174,15 +239,134 @@ int main() {
          agrees(MultifrontalLu(), SparseLu(), s);
          expect_throws<std::runtime_error>(
              [&] { (void)SupernodalCholesky().prepare(s.matrix); },
-             "supernodal_cholesky: the matrix is not positive definite");
-         // Negative definite: the equation written with a = 1.
+             "supernodal_cholesky: the matrix is not positive definite (the "
+             "factorization stopped at column");
+       }},
+      {"Cholesky refuses diagonals of both signs, a zero one, and an "
+       "indefinite matrix with a negative diagonal",
+       [] {
+         // Diagonal entries of both signs: factored as it is, refused at
+         // its negative pivot.
          expect_throws<std::runtime_error>(
-             [&] {
-               (void)SupernodalCholesky().prepare(
-                   system_of(problem("1")).matrix);
+             [] {
+               (void)SupernodalCholesky().prepare(pde2d::test::sparse(
+                   {{-2.0, 1.0, 0.0}, {1.0, -3.0, 1.0}, {0.0, 1.0, 4.0}}));
              },
              "supernodal_cholesky: the matrix is not positive definite (the "
-             "factorization stopped at column 0 of");
+             "factorization stopped at column");
+         // A zero diagonal entry (missing from the pattern), the others
+         // negative: also factored as it is.
+         expect_throws<std::runtime_error>(
+             [] {
+               (void)SupernodalCholesky().prepare(
+                   pde2d::test::sparse({{-2.0, 1.0}, {1.0, 0.0}}));
+             },
+             "supernodal_cholesky: the matrix is not positive definite (the "
+             "factorization stopped at column");
+         // Every diagonal entry negative, but indefinite (u_xx + u_yy + 40 u
+         // = f: c above the first eigenvalue of -Laplace): -A is factored
+         // and refused.
+         const auto s = system_of(problem("1", "0", "40"));
+         bool negative = true;
+         for (std::size_t i = 0; i < s.matrix->rows(); ++i)
+           negative = negative && s.matrix->entry(i, i) < 0.0;
+         check(negative, "every diagonal entry is negative");
+         expect_throws<std::runtime_error>(
+             [&] { (void)SupernodalCholesky().prepare(s.matrix); },
+             "supernodal_cholesky: the matrix is not positive definite, and "
+             "not negative definite although its diagonal is negative (the "
+             "factorization of -A stopped at column");
+       }},
+      {"a negative definite matrix: Cholesky factors -A, with a warning",
+       [] {
+         // u_xx + u_yy = -(1 + sin(t) x) is -u_xx - u_yy = 1 + sin(t) x
+         // written with the opposite sign: a = 1 gives a negative definite
+         // matrix.
+         const auto negative = problem("1", "0", "0", "0", false, true);
+         const auto positive = problem("-1");
+         const auto cholesky =
+             StaticSolver(std::make_shared<SupernodalCholesky>(
+                              SupernodalCholeskyOptions{.threads = 2}))
+                 .solve(negative);
+         const auto ldlt =
+             StaticSolver(std::make_shared<SimplicialLdlt>()).solve(positive);
+         check(relative_difference(cholesky.solution.values,
+                                   ldlt.solution.values) < 1e-12,
+               "the same answer as simplicial_ldlt on the positive form");
+         const auto &report = cholesky.reports.at(1);
+         check(report.stage == "static_solver", "the static solver's report");
+         check(report.messages.size() == 1 &&
+                   report.messages[0].find(negative_warning) == 0,
+               "one warning in the static solver's report");
+         check(report.metrics.at("backward_error") < 1e-14,
+               "the backward error, measured with A and b as given");
+         check(ldlt.reports.at(1).messages.empty(),
+               "no message from simplicial_ldlt");
+         // The positive form: no message.
+         const auto plain = StaticSolver(std::make_shared<SupernodalCholesky>())
+                                .solve(positive);
+         check(plain.reports.at(1).messages.empty(),
+               "no message for a positive definite matrix");
+         check(relative_difference(plain.solution.values,
+                                   cholesky.solution.values) < 1e-12,
+               "the same answer from both forms");
+         // Every solve of the prepared solver carries the warning.
+         const auto s = system_of(negative);
+         const auto prepared = SupernodalCholesky().prepare(s.matrix);
+         for (int i = 0; i < 2; ++i) {
+           const auto result = prepared->solve(s.right_hand_side);
+           check(result.messages.size() == 1 &&
+                     result.messages[0].find(negative_warning) == 0,
+                 "a warning on every solve");
+           check(result.residual < 1e-10 && result.backward_error < 1e-14,
+                 "an accurate answer");
+           check(result.pivot_ratio > 0.0, "a pivot ratio");
+         }
+       }},
+      {"a negative definite step matrix: the warning once in the integrator's "
+       "report",
+       [] {
+         // The heat equation u_t - u_xx - u_yy = f written as -u_t + u_xx +
+         // u_yy = -f: the midpoint step matrix -M1 / dt - K / 2 is negative
+         // definite. dt = 0.05 to t1 = 0.22: four steps of 0.05, one of
+         // 0.02, so the solver is prepared twice and solves five times.
+         const auto negative = problem("1", "0", "0", "-1", false, true);
+         const auto positive = problem("-1", "0", "0", "1");
+         const auto run = [](std::shared_ptr<const LinearSolver> solver,
+                             const std::shared_ptr<const MeshedProblem> &p) {
+           return Integrator(
+                      std::make_shared<ImplicitMidpoint>(),
+                      std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.05}),
+                      std::move(solver))
+               .integrate(p, 0.0, 0.22);
+         };
+         const auto cholesky =
+             run(std::make_shared<SupernodalCholesky>(), negative);
+         const auto ldlt = run(std::make_shared<SimplicialLdlt>(), positive);
+         check(cholesky.report.metrics.at("steps") == 5 &&
+                   cholesky.report.metrics.at("prepares") == 2,
+               "five steps, two prepares");
+         check(relative_difference(cholesky.final.values, ldlt.final.values) <
+                   1e-12,
+               "the same answer as simplicial_ldlt on the positive form");
+         check(cholesky.report.messages.size() == 1 &&
+                   cholesky.report.messages[0].find(negative_warning) == 0,
+               "the warning once in the integrator's report");
+         check(ldlt.report.messages.empty(), "no message from simplicial_ldlt");
+         check(run(std::make_shared<SupernodalCholesky>(), positive)
+                   .report.messages.empty(),
+               "no message for a positive definite step matrix");
+         // Time order 0 with ImplicitEuler: its start() solves with A at t0,
+         // then each step again; the warning still once.
+         const auto static_negative = problem("1", "0", "0", "0", false, true);
+         const auto euler = Integrator(std::make_shared<ImplicitEuler>(),
+                                       std::make_shared<FixedStep>(
+                                           FixedStepOptions{.dt = 0.1}),
+                                       std::make_shared<SupernodalCholesky>())
+                                .integrate(static_negative, 0.0, 0.3);
+         check(euler.report.messages.size() == 1 &&
+                   euler.report.messages[0].find(negative_warning) == 0,
+               "time order 0: the warning once");
        }},
       {"time steps: both agree with the Eigen solvers",
        [] {
@@ -227,21 +411,123 @@ int main() {
              "the linear solver supernodal_cholesky requires a symmetric "
              "matrix");
        }},
-      {"a pure Neumann problem: both refuse the singular matrix",
+      {"a coefficient contrast of 1e6: the direct solvers accept u = y",
        [] {
-         const auto neumann = problem("-1", "0", "0", "0", true);
-         expect_throws<std::runtime_error>(
-             [&] {
-               (void)StaticSolver(std::make_shared<MultifrontalLu>())
-                   .solve(neumann);
-             },
-             "multifrontal_lu: the matrix is singular");
-         expect_throws<std::runtime_error>(
-             [&] {
-               (void)StaticSolver(std::make_shared<SupernodalCholesky>())
-                   .solve(neumann);
-             },
-             "supernodal_cholesky: the matrix is");
+         // The three that check their backward error, and SparseLu (which
+         // checks nothing) as a fourth measurement. All four reach a
+         // backward error of about 2e-16 and nodal errors of 2e-7 to 1e-6
+         // (measured): the condition number of this matrix is about 5e9,
+         // so no backward stable solver in double precision does better
+         // than about 1e-6. The relative residual of the same answers is
+         // about 1e-7, which the old check refused.
+         const auto meshed = contrast_problem();
+         const auto u = [](double, double y) { return y; };
+         for (const auto &solver : std::vector<std::shared_ptr<LinearSolver>>{
+                  std::make_shared<SupernodalCholesky>(),
+                  std::make_shared<MultifrontalLu>(),
+                  std::make_shared<SimplicialLdlt>(),
+                  std::make_shared<SparseLu>()}) {
+           const auto solved = StaticSolver(solver).solve(meshed);
+           const auto &metrics = solved.reports.at(1).metrics;
+           const double error =
+               max_nodal_error(*meshed->mesh(), solved.solution.values, u);
+           std::cout << std::format(
+               "contrast, {}: residual {:.3g}, backward error {:.3g}, pivot "
+               "ratio {:.3g}, nodal error {:.3g}\n",
+               solver->name(), metrics.at("residual"),
+               metrics.at("backward_error"), metrics.at("pivot_ratio"), error);
+           check(metrics.at("residual") > 1e-8,
+                 solver->name() + ": a relative residual above the tolerance");
+           check(metrics.at("backward_error") < 1e-14,
+                 solver->name() + ": a backward error of rounding");
+           check(error < 5e-6,
+                 solver->name() + ": nodal error " + std::format("{}", error));
+         }
+       }},
+      {"a very ill-conditioned well-posed problem: both accept it",
+       [] {
+         // Accepted, with a backward error of rounding and a pivot ratio
+         // below n machine epsilons (about 4e-12; the old rule refused
+         // that). But the answer is only as good as the conditioning
+         // allows: |x| is 5e8, so the rounding of A x (about 1e-7 per row)
+         // is amplified by 1 / (second eigenvalue, about 2e-6) in the
+         // varying part, and more in the constant, which only the 2e-9
+         // Robin term fixes. Measured: Cholesky and LU differ from LDL^T
+         // by 13% and 4% (relative to 5e8), from the exact solution by 3%
+         // and 11%, and, the constant removed, from LDL^T by 0.04 and
+         // 0.01. So the checks are loose: the right magnitude.
+         const auto meshed = weak_robin_problem();
+         const auto s = system_of(meshed);
+         check(s.matrix->rows() == 34833, "34833 unknowns");
+         const auto ldlt = solve_with(SimplicialLdlt(), s);
+         print("weak Robin, simplicial_ldlt", ldlt);
+         const auto &nodes = meshed->mesh()->nodes;
+         for (const auto &result : {solve_with(SupernodalCholesky(), s),
+                                    solve_with(MultifrontalLu(), s)}) {
+           print("weak Robin", result);
+           check(result.pivot_ratio > 0.0 &&
+                     result.pivot_ratio <
+                         34833 * std::numeric_limits<double>::epsilon(),
+                 "a pivot ratio below the rule that used to refuse it");
+           check(result.backward_error < 1e-14, "backward error of rounding");
+           const double difference =
+               relative_difference(result.values, ldlt.values);
+           double error = 0.0;
+           for (std::size_t i = 0; i < nodes.size(); ++i) {
+             const double x = nodes[i].x;
+             error = std::max(
+                 error, std::abs(result.values[i] - (5e8 + x - x * x / 2)));
+           }
+           std::cout << std::format("  relative difference to LDL^T {:.3g}, "
+                                    "relative error {:.3g}\n",
+                                    difference, error / 5e8);
+           check(difference < 0.5, "the magnitude of simplicial_ldlt's");
+           check(error / 5e8 < 0.5, "the magnitude of the exact solution");
+         }
+       }},
+      {"a pure Neumann problem with a compatible load: one of its solutions",
+       [] {
+         // -u_xx - u_yy = x - 1/2 (mean zero) with u_n = 0 on the unit
+         // square: the solutions are x^2 / 4 - x^3 / 6 + C. The load sums
+         // to zero up to rounding (the rule integrates a linear f exactly),
+         // so the singular system is compatible. Each solver returns one
+         // of its solutions: the residual is rounding and, the constant
+         // removed, the values are the P1 solution (within its
+         // discretization error of the exact one); the pivot ratio says
+         // the matrix is singular.
+         Problem p{
+             .equation = {.a_xx = e("-1"), .a_yy = e("-1"), .f = e("x - 1/2")}};
+         for (const char *side : {"bottom", "right", "top", "left"})
+           p.boundary_conditions.emplace(
+               side, BoundaryCondition{.beta_n = e("1"), .g = e("0")});
+         const auto meshed = std::make_shared<const MeshedProblem>(
+             pde2d::test::unit_square(64), std::move(p));
+         const auto s = system_of(meshed);
+         // Every node is free, in node order.
+         check(s.matrix->rows() == 4225, "4225 unknowns");
+         std::vector<double> exact;
+         for (const auto &node : meshed->mesh()->nodes)
+           exact.push_back(node.x * node.x / 4 - node.x * node.x * node.x / 6);
+         const double exact_mean = mean(exact);
+         for (const auto &result : {solve_with(SupernodalCholesky(), s),
+                                    solve_with(MultifrontalLu(), s)}) {
+           print("pure Neumann", result);
+           // n = 4225: below the old rule's n machine epsilons (9.4e-13).
+           check(result.pivot_ratio > 0.0 &&
+                     result.pivot_ratio <
+                         4225 * std::numeric_limits<double>::epsilon(),
+                 "a tiny pivot ratio");
+           check(result.residual < 1e-10, "a solution: rounding residual");
+           check(result.backward_error < 1e-14, "backward error of rounding");
+           const double shift = mean(result.values);
+           double error = 0.0;
+           for (std::size_t i = 0; i < exact.size(); ++i)
+             error = std::max(error, std::abs((result.values[i] - shift) -
+                                              (exact[i] - exact_mean)));
+           std::cout << std::format("  error up to the constant {:.3g}\n",
+                                    error);
+           check(error < 1e-4, "the solution up to its constant");
+         }
        }},
       {"StaticSolver reports the solver's threads",
        [] {

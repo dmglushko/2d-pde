@@ -10,10 +10,13 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace pde2d::solve {
 
@@ -143,6 +146,65 @@ Solution make_solution(const fem::MeshedProblem &meshed, const TimeState &state,
   return solution;
 }
 
+// The linear solver's warnings (LinearSolveResult::messages) of one
+// integrate() call: each distinct message once, in the order they first
+// appeared (a solver prepared for a negative definite step matrix warns at
+// every step).
+class MessageLog {
+public:
+  void add(const std::vector<std::string> &messages) {
+    for (const std::string &message : messages)
+      if (std::ranges::find(messages_, message) == messages_.end())
+        messages_.push_back(message);
+  }
+  const std::vector<std::string> &messages() const { return messages_; }
+
+private:
+  std::vector<std::string> messages_;
+};
+
+// A prepared solver that passes every solve on and logs its messages.
+class LoggingPreparedSolver final : public PreparedLinearSolver {
+public:
+  LoggingPreparedSolver(std::unique_ptr<const PreparedLinearSolver> solver,
+                        MessageLog &log)
+      : solver_(std::move(solver)), log_(&log) {}
+  LinearSolveResult
+  solve(std::span<const double> right_hand_side) const override {
+    LinearSolveResult result = solver_->solve(right_hand_side);
+    log_->add(result.messages);
+    return result;
+  }
+
+private:
+  std::unique_ptr<const PreparedLinearSolver> solver_;
+  MessageLog *log_;
+};
+
+// The integrator's linear solver as the time method sees it: the same
+// solver, whose prepared solvers log the messages of every solve, also of
+// the solves a method's start() does (Newmark's acceleration, the state at
+// t0 for time order 0). So the messages reach the report whatever a method
+// does with a LinearSolveResult.
+class LoggingSolver final : public LinearSolver {
+public:
+  LoggingSolver(const LinearSolver &solver, MessageLog &log)
+      : solver_(&solver), log_(&log) {}
+  std::string name() const override { return solver_->name(); }
+  LinearSolverRequirements requirements() const override {
+    return solver_->requirements();
+  }
+  std::unique_ptr<const PreparedLinearSolver>
+  prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const override {
+    return std::make_unique<const LoggingPreparedSolver>(
+        solver_->prepare(std::move(matrix)), *log_);
+  }
+
+private:
+  const LinearSolver *solver_;
+  MessageLog *log_;
+};
+
 // The running summary of the step records.
 struct Summary {
   std::size_t steps = 0;
@@ -197,6 +259,8 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   check_output(output, t0, t1);
   const fem::MeshedProblem &meshed = *meshed_problem;
   const auto start = Clock::now();
+  MessageLog log;
+  const LoggingSolver linear_solver(*linear_solver_, log);
 
   // 1. The time order, from assembly's formula facts without evaluating
   // anything (d/dt sqrt(t) may be infinite at t0), against the method's
@@ -230,7 +294,7 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
     const int max_time_order = needs == StartNeeds::static_part ? 0 : 2;
     current = assembler.assemble(meshed_problem, t0, nullptr, max_time_order);
     ++assemblies;
-    method_->start(*current, *linear_solver_, state);
+    method_->start(*current, linear_solver, state);
   }
   // A method of time order 0 must compute the state at t0 in its start (it
   // has no initial conditions); one that does not is a mistake in that
@@ -312,9 +376,9 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
         step_matrix_depends_on_t(*current, weights)) {
       auto matrix = step_matrix(*current, weights);
       detail::check_step_matrix_requirements(
-          *linear_solver_, *current, weights, *matrix, "integrator",
+          linear_solver, *current, weights, *matrix, "integrator",
           "the step matrix of " + method_->name());
-      prepared = linear_solver_->prepare(std::move(matrix));
+      prepared = linear_solver.prepare(std::move(matrix));
       prepared_dt = h;
       ++prepares;
     }
@@ -367,6 +431,7 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // read from the assembly's own report.
   m["assembly_threads"] = current->report().metrics.at("threads");
   m["linear_threads"] = static_cast<double>(summary.linear_threads);
+  report.messages = log.messages();
   report.time = Clock::now() - start;
   return result;
 }
