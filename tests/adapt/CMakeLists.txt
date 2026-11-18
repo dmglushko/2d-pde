@@ -4,3 +4,4 @@ pde2d_add_test(NAME adapt_review_dorfler SOURCE review_dorfler.cpp LIBS pde2d_ad
 pde2d_add_test(NAME adapt_estimators SOURCE estimators.cpp LIBS pde2d_adapt)
 pde2d_add_test(NAME adapt_adaptive_loop SOURCE adaptive_loop.cpp LIBS pde2d_adapt)
 pde2d_add_test(NAME adapt_solution_transfer SOURCE solution_transfer.cpp LIBS pde2d_adapt)
+pde2d_add_test(NAME adapt_adaptive_integrator SOURCE adaptive_integrator.cpp LIBS pde2d_adapt)

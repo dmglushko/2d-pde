@@ -129,10 +129,9 @@ SolutionTransfer transfer_solution(const solve::Solution &old,
   SolutionTransfer result;
   mesh::StageReport &report = result.report;
   report.stage = stage;
-  const Plan plan =
-      parents ? plan_from_parents(*parents, old_mesh.nodes.size(), new_mesh,
-                                  report)
-              : plan_by_location(old_mesh, new_mesh, report);
+  const Plan plan = parents ? plan_from_parents(*parents, old_mesh.nodes.size(),
+                                                new_mesh, report)
+                            : plan_by_location(old_mesh, new_mesh, report);
 
   solve::Solution &solution = result.solution;
   solution.mesh = problem.mesh();

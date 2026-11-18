@@ -57,8 +57,8 @@ void validate(const solve::IntegrationOutput &output, double t0, double t1) {
       throw std::invalid_argument(std::format(
           "{}: snapshot time {} is not within [t0, t1]", stage, times[i]));
     if (i > 0 && !(times[i] > times[i - 1]))
-      throw std::invalid_argument(std::format(
-          "{}: snapshot times must be strictly increasing", stage));
+      throw std::invalid_argument(
+          std::format("{}: snapshot times must be strictly increasing", stage));
   }
 }
 
@@ -192,9 +192,9 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
       }
       max_steps = target.every.steps;
     }
-    solve::IntegrationOutput piece_output{
-        .keep_step_history = output.keep_step_history,
-        .keep_before_last_step = adapting};
+    solve::IntegrationOutput piece_output{.keep_step_history =
+                                              output.keep_step_history,
+                                          .keep_before_last_step = adapting};
     for (std::size_t s = next_snapshot; s < times.size() && times[s] <= end;
          ++s)
       piece_output.snapshot_times.push_back(times[s]);
@@ -275,8 +275,8 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
             t, next->nodes.size(), *target.max_nodes,
             problem->mesh()->nodes.size());
       } else {
-        auto next_problem =
-            std::make_shared<const fem::MeshedProblem>(next, problem->problem());
+        auto next_problem = std::make_shared<const fem::MeshedProblem>(
+            next, problem->problem());
         point.reports.push_back(next_problem->report());
         SolutionTransfer transfer = transfer_solution(
             solution, *next_problem, parents ? &*parents : nullptr);

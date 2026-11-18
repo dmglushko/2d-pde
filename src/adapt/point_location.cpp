@@ -61,8 +61,7 @@ PointLocator::PointLocator(const mesh::Mesh &mesh) : mesh_(mesh) {
     if (!(side > 0.0) || !(length > 0.0))
       return std::size_t{1};
     const double k = std::ceil(length / side);
-    return static_cast<std::size_t>(
-        std::clamp(k, 1.0, static_cast<double>(n)));
+    return static_cast<std::size_t>(std::clamp(k, 1.0, static_cast<double>(n)));
   };
   nx_ = cells(w);
   ny_ = cells(h);
@@ -82,7 +81,8 @@ PointLocator::PointLocator(const mesh::Mesh &mesh) : mesh_(mesh) {
     const auto &v = mesh.triangles[t].nodes;
     const Point a = mesh.nodes[v[0]], b = mesh.nodes[v[1]],
                 c = mesh.nodes[v[2]];
-    insert(triangles_, t, {std::min({a.x, b.x, c.x}), std::min({a.y, b.y, c.y})},
+    insert(triangles_, t,
+           {std::min({a.x, b.x, c.x}), std::min({a.y, b.y, c.y})},
            {std::max({a.x, b.x, c.x}), std::max({a.y, b.y, c.y})});
   }
   for (std::size_t e = 0; e < mesh.boundary_edges.size(); ++e) {
@@ -99,9 +99,8 @@ std::array<std::size_t, 2> PointLocator::cell_of(Point p) const {
   // its nearest cell.
   const auto clamp_cell = [](double position, std::size_t count) {
     const double k = std::floor(position);
-    return static_cast<std::size_t>(
-        std::clamp(std::isfinite(k) ? k : 0.0, 0.0,
-                   static_cast<double>(count - 1)));
+    return static_cast<std::size_t>(std::clamp(std::isfinite(k) ? k : 0.0, 0.0,
+                                               static_cast<double>(count - 1)));
   };
   return {clamp_cell((p.x - box_.min.x) / cell_width_, nx_),
           clamp_cell((p.y - box_.min.y) / cell_height_, ny_)};
@@ -137,9 +136,9 @@ std::optional<NodeWeights> PointLocator::in_triangle(Point p) const {
       lambda[i] = std::max(0.0, area2(x[(i + 1) % 3], x[(i + 2) % 3], p));
       sum += lambda[i];
     }
-    return NodeWeights{.nodes = v,
-                       .weights = {lambda[0] / sum, lambda[1] / sum,
-                                   lambda[2] / sum}};
+    return NodeWeights{
+        .nodes = v,
+        .weights = {lambda[0] / sum, lambda[1] / sum, lambda[2] / sum}};
   }
   return std::nullopt;
 }
@@ -157,8 +156,8 @@ NodeWeights PointLocator::nearest_on_boundary(Point p) const {
   const auto visit = [&](std::ptrdiff_t i, std::ptrdiff_t j) {
     if (i < 0 || j < 0 || i >= nx || j >= ny)
       return;
-    for (const std::size_t e :
-         edges_[index(static_cast<std::size_t>(i), static_cast<std::size_t>(j))]) {
+    for (const std::size_t e : edges_[index(static_cast<std::size_t>(i),
+                                            static_cast<std::size_t>(j))]) {
       const auto &v = mesh_.boundary_edges[e].nodes;
       const SegmentPoint q = on_segment(mesh_, v[0], v[1], p);
       if (q.distance2 < best || (q.distance2 == best && e < best_edge)) {

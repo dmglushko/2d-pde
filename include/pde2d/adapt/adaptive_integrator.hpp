@@ -20,8 +20,8 @@ namespace pde2d::adapt {
 // `steps` steps since the last adaptation (or t0), whichever comes first.
 // Both optional, at least one set (like mesh::LengthBound).
 struct AdaptationSchedule {
-  std::optional<double> interval{};     // finite and positive
-  std::optional<std::size_t> steps{};   // at least 1
+  std::optional<double> interval{};   // finite and positive
+  std::optional<std::size_t> steps{}; // at least 1
 };
 
 // The target of an adaptive time-dependent run.
@@ -138,6 +138,14 @@ struct AdaptiveIntegrationResult {
 // (values, and velocities for time order 2; Dirichlet nodes from the new
 // problem).
 //
+// A transfer leaves the old mesh's interpolation error in the new mesh's
+// fine modes. Implicit Euler damps them within a step; the midpoint method
+// and Newmark (beta = 1/4) do not, so with them each refinement's error
+// stays in the solution (tests/adapt/adaptive_integrator.cpp, a moving
+// bump: implicit Euler adaptive 2518 nodes, energy error 0.088 against
+// uniform 2927 nodes, 0.25; the midpoint method adaptive 3699 nodes,
+// 0.51, against uniform 0.27).
+//
 // Output: snapshot_times as for the Integrator (the pieces land on them),
 // keep_step_history concatenates the pieces' records; snapshot_every is
 // not supported (it counts the steps of one integrate() call).
@@ -149,8 +157,9 @@ class AdaptiveIntegrator {
 public:
   // Throws std::invalid_argument without adaptations, for a null one, and
   // when more than one declares changes_mesh.
-  AdaptiveIntegrator(solve::Integrator integrator,
-                     std::vector<std::shared_ptr<const Adaptation>> adaptations);
+  AdaptiveIntegrator(
+      solve::Integrator integrator,
+      std::vector<std::shared_ptr<const Adaptation>> adaptations);
 
   // Integrates `problem` (its mesh is the starting mesh) from t0 to t1,
   // adapting as the target says; `initial` as for Integrator::integrate

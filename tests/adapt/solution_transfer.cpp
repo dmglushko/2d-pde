@@ -22,6 +22,7 @@
 #include "pde2d/mesh/newest_vertex_bisection.hpp"
 #include "pde2d/mesh/red_green_blue_refinement.hpp"
 #include "pde2d/mesh/remesher.hpp"
+#include "pde2d/mesh/ruppert.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -63,15 +64,16 @@ std::optional<double> evaluate(const mesh::Mesh &m,
 std::shared_ptr<const mesh::Mesh> meshed(const geometry::CurveGeometry &g,
                                          double h) {
   const mesh::Mesher mesher(std::make_shared<mesh::ChordLengthDiscretizer>(),
-                            std::make_shared<mesh::Cdt>());
+                            std::make_shared<mesh::Cdt>(),
+                            std::make_shared<mesh::Ruppert>());
   return std::make_shared<const mesh::Mesh>(
       mesher.run(g, {.max_edge_length = {.absolute = h}}).mesh);
 }
 
 std::shared_ptr<const mesh::Mesh> square() {
-  return meshed(geometry::CurveGeometry(
-                    {test::square_loop({0, 0}, 1, "boundary")}),
-                0.25);
+  return meshed(
+      geometry::CurveGeometry({test::square_loop({0, 0}, 1, "boundary")}),
+      0.25);
 }
 
 std::shared_ptr<const mesh::Mesh> disk() {
@@ -119,11 +121,10 @@ std::vector<std::size_t> some_triangles(const mesh::Mesh &m) {
   return marked;
 }
 
-mesh::RefinementResult refine(const mesh::Mesh &m,
-                              std::shared_ptr<const mesh::Refiner> refiner,
-                              const std::vector<std::size_t> &marked,
-                              std::vector<std::shared_ptr<const mesh::Improver>>
-                                  improvers = {}) {
+mesh::RefinementResult
+refine(const mesh::Mesh &m, std::shared_ptr<const mesh::Refiner> refiner,
+       const std::vector<std::size_t> &marked,
+       std::vector<std::shared_ptr<const mesh::Improver>> improvers = {}) {
   return mesh::Remesher(std::move(refiner), std::move(improvers))
       .refine(m, marked);
 }
@@ -137,9 +138,9 @@ void check_same_function(const solve::Solution &old,
   for (const auto &t : m.triangles) {
     const Point a = m.nodes[t.nodes[0]], b = m.nodes[t.nodes[1]],
                 c = m.nodes[t.nodes[2]];
-    for (const auto &l : {std::array{1.0 / 3, 1.0 / 3, 1.0 / 3},
-                          std::array{0.6, 0.3, 0.1},
-                          std::array{0.1, 0.15, 0.75}}) {
+    for (const auto &l :
+         {std::array{1.0 / 3, 1.0 / 3, 1.0 / 3}, std::array{0.6, 0.3, 0.1},
+          std::array{0.1, 0.15, 0.75}}) {
       const Point p = l[0] * a + l[1] * b + l[2] * c;
       const auto before = evaluate(*old.mesh, old.values, p);
       if (!before)
@@ -155,8 +156,7 @@ void check_same_function(const solve::Solution &old,
 }
 
 void reproduces_with_parents() {
-  for (const auto &refiner :
-       std::vector<std::shared_ptr<const mesh::Refiner>>{
+  for (const auto &refiner : std::vector<std::shared_ptr<const mesh::Refiner>>{
            std::make_shared<mesh::NewestVertexBisection>(),
            std::make_shared<mesh::RedGreenBlueRefinement>()}) {
     const auto old_mesh = square();
@@ -245,9 +245,8 @@ void curved_boundary() {
   // boundary edge.
   const auto rgb = std::make_shared<mesh::RedGreenBlueRefinement>();
   mesh::RefinementResult with = refine(*old_mesh, rgb, marked);
-  mesh::RefinementResult without =
-      refine(*old_mesh, rgb, marked,
-             {std::make_shared<mesh::LaplacianSmoothing>()});
+  mesh::RefinementResult without = refine(
+      *old_mesh, rgb, marked, {std::make_shared<mesh::LaplacianSmoothing>()});
   check(with.parents && !without.parents, "parents only without smoothing");
   const auto with_mesh = std::make_shared<const mesh::Mesh>(with.mesh);
   const auto without_mesh = std::make_shared<const mesh::Mesh>(without.mesh);
@@ -300,14 +299,13 @@ void velocities_and_dirichlet() {
       refine(*old_mesh, std::make_shared<mesh::NewestVertexBisection>(),
              some_triangles(*old_mesh));
   const auto new_mesh = std::make_shared<const mesh::Mesh>(r.mesh);
-  fem::Problem wave{
-      .equation = {.a_xx = Expression("-1"),
-                   .a_yy = Expression("-1"),
-                   .m2 = Expression("1")},
-      .boundary_conditions = {{"boundary",
-                               {.alpha = Expression("1"),
-                                .g = Expression("x + t^2")}}},
-      .initial = {.u = Expression("0"), .u_t = Expression("0")}};
+  fem::Problem wave{.equation = {.a_xx = Expression("-1"),
+                                 .a_yy = Expression("-1"),
+                                 .m2 = Expression("1")},
+                    .boundary_conditions = {{"boundary",
+                                             {.alpha = Expression("1"),
+                                              .g = Expression("x + t^2")}}},
+                    .initial = {.u = Expression("0"), .u_t = Expression("0")}};
   const fem::MeshedProblem problem(new_mesh, wave);
   solve::Solution old = sampled(old_mesh, wavy, 0.75);
   for (const Point &p : old_mesh->nodes)
@@ -315,8 +313,8 @@ void velocities_and_dirichlet() {
   const auto moved = transfer_solution(old, problem, &*r.parents);
   solve::Solution only_velocities = sampled(old_mesh, wavy, 0.75);
   only_velocities.values = old.velocities;
-  const auto reference = transfer_solution(only_velocities, problem,
-                                           &*r.parents);
+  const auto reference =
+      transfer_solution(only_velocities, problem, &*r.parents);
   check(moved.solution.velocities.size() == new_mesh->nodes.size(),
         "velocities on the new mesh");
   std::vector<bool> dirichlet(new_mesh->nodes.size(), false);
@@ -324,14 +322,14 @@ void velocities_and_dirichlet() {
     dirichlet[d.node] = true;
   for (std::size_t v = 0; v < new_mesh->nodes.size(); ++v) {
     if (dirichlet[v]) {
-      near(moved.solution.values[v], new_mesh->nodes[v].x + 0.75 * 0.75,
-           1e-14, "Dirichlet value g(t)");
+      near(moved.solution.values[v], new_mesh->nodes[v].x + 0.75 * 0.75, 1e-14,
+           "Dirichlet value g(t)");
       near(moved.solution.velocities[v], 1.5, 1e-14, "Dirichlet rate g_t(t)");
     } else {
       check(moved.solution.velocities[v] == reference.solution.values[v],
             "velocities interpolated like values");
-      near(moved.solution.velocities[v], 3 * linear(new_mesh->nodes[v]),
-           1e-13, "a linear velocity reproduced");
+      near(moved.solution.velocities[v], 3 * linear(new_mesh->nodes[v]), 1e-13,
+           "a linear velocity reproduced");
     }
   }
   check(moved.report.metrics.at("dirichlet_nodes") ==
@@ -345,8 +343,8 @@ void rejects_bad_input() {
   mesh::RefinementResult r =
       refine(*old_mesh, std::make_shared<mesh::NewestVertexBisection>(),
              some_triangles(*old_mesh));
-  const auto problem = natural_problem(
-      std::make_shared<const mesh::Mesh>(r.mesh), "boundary");
+  const auto problem =
+      natural_problem(std::make_shared<const mesh::Mesh>(r.mesh), "boundary");
   const solve::Solution good = sampled(old_mesh, wavy);
 
   solve::Solution no_mesh = good;
