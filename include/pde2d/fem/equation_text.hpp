@@ -26,6 +26,10 @@ namespace pde2d::fem {
 // - the same with nabla: ∇s, ∇·v (or ∇⋅v), ∇²s and Δs; a·b (or a⋅b) is
 //   the dot product of two vectors and the product otherwise, and a
 //   factor directly in front of ∇ or Δ multiplies it (k∇u, A ∇u).
+// Precedence, loosest first: + and -; ·; * and /; a sign; a factor in
+// front of ∇ or Δ; ^; ∇ and Δ, whose operand is a power or such a
+// product. So n·k∇u is n·(k∇u), ∇·k∇u is ∇·(k∇u), Δx^2 is Δ(x^2), and
+// 1/2 Δu is 1/(2Δu), refused (write Δu/2).
 // For example "u_t - div(k*grad(u)) = 1",
 // "-∇·([[k1, 0], [0, k2]] ∇u) + (1, 0)·∇u = f", "-Δu + c*u = 0".
 //
@@ -63,13 +67,16 @@ BoundaryCondition parse_condition(std::string_view text);
 // The equation as one line in the coefficient form, terms in the order
 // above, zero ones left out, for example "-u_xx - u_yy + u_t = 1";
 // "0 = f" when every coefficient on the left is zero. The coefficients
-// are printed from their parsed form, powers with ^, so the text may
-// differ from what was written (1 + x for x+1) but parse_equation reads it
-// back to the same coefficients.
+// are printed from their parsed form, powers with ^ and floating numbers
+// with all their digits, so the text may differ from what was written
+// (1 + x for x+1) but parse_equation reads it back to the same
+// coefficients. Throws std::invalid_argument when a coefficient uses a
+// parameter the line would read otherwise (one named u, u_x, ...): the
+// line would mean another equation.
 std::string equation_text(const Equation &equation);
 
 // The condition as one line ("u_n + 2*u = 0"), like equation_text, without
-// the priority.
+// the priority; it also throws for a parameter named n or tau.
 std::string condition_text(const BoundaryCondition &condition);
 
 } // namespace pde2d::fem

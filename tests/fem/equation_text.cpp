@@ -265,5 +265,64 @@ int main() {
          equation_is(parse_equation(equation_text(decimals)),
                      {.c = "0.1", .f = "1e-7*x"});
        }},
+      {"precedence: the dot, a factor in front of nabla, powers",
+       [] {
+         // The operand of Δ includes its power: Δx^2 is Δ(x^2) = 2.
+         equation_is(parse_equation("-Δu = -Δx^2"),
+                     {.a_xx = "-1", .a_yy = "-1", .f = "-2"});
+         equation_is(parse_equation("-Δu = -Δ(x^2)"),
+                     {.a_xx = "-1", .a_yy = "-1", .f = "-2"});
+         equation_is(parse_equation("-lap(u) = -lap(x^2)"),
+                     {.a_xx = "-1", .a_yy = "-1", .f = "-2"});
+         // n·k∇u is n·(k∇u); ∇·k∇u is ∇·(k∇u).
+         condition_is(parse_condition("n·k∇u = q"), {.beta_n = "k", .g = "q"});
+         condition_is(parse_condition("n·(k∇u) = q"),
+                      {.beta_n = "k", .g = "q"});
+         equation_is(
+             parse_equation("-∇·(1 + x)∇u = 1"),
+             {.a_xx = "-(1 + x)", .a_yy = "-(1 + x)", .b_x = "-1", .f = "1"});
+         // The dot binds loosest among products: 2*b·∇u is (2*b)·∇u.
+         equation_is(parse_equation("2*(x, 1)·∇u = 0"),
+                     {.b_x = "2*x", .b_y = "2"});
+         equation_is(parse_equation("(x, 1)·∇u*3 = 0"),
+                     {.b_x = "3*x", .b_y = "3"});
+         equation_is(parse_equation("u_t - Δu/2 = 0"),
+                     {.a_xx = "-0.5", .a_yy = "-0.5", .m1 = "1"});
+         refused("u_t - 1/2 Δu = 0", "write (1/2)Δu or Δu/2");
+         // A pasted no-break space is a space.
+         condition_is(parse_condition("u = 1 +\u00a0x"),
+                      {.alpha = "1", .g = "1 + x"});
+       }},
+      {"printing keeps every digit and refuses reserved names",
+       [] {
+         // 0.30000000000000004 is not 0.3: the branch at t = 3*0.1 holds.
+         const Equation e{
+             .c = Expression("1"),
+             .f = Expression("Piecewise((1, t <= 0.30000000000000004), "
+                             "(0, True))")};
+         const auto back = parse_equation(equation_text(e));
+         const CompiledExpression f(back.f, parameters);
+         check(f(0, 0, 3 * 0.1) == 1.0,
+               "the branch at t = 3*0.1: " + equation_text(e));
+         const auto doubled =
+             equation_text({.c = Expression("2.0*x"), .f = Expression("0")});
+         check(doubled == "2.0*x*u = 0", "a whole floating number: " + doubled);
+         expect_throws<std::invalid_argument>(
+             [] {
+               equation_text({.a_xx = Expression("-1"),
+                              .a_yy = Expression("-1"),
+                              .f = Expression("u")});
+             },
+             "the right side uses the parameter 'u'");
+         expect_throws<std::invalid_argument>(
+             [] {
+               condition_text({.alpha = Expression("n"), .g = Expression("0")});
+             },
+             "the coefficient of u uses the parameter 'n'");
+         // In an equation n is an ordinary parameter.
+         check(equation_text({.c = Expression("n"), .f = Expression("0")}) ==
+                   "n*u = 0",
+               "n in an equation");
+       }},
   });
 }

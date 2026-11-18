@@ -58,6 +58,8 @@ struct Symbol {
   TokenKind kind;
 };
 
+constexpr std::string_view no_break_space = "\u00a0";
+
 // The non-ASCII symbols, in UTF-8, and the two-character ASCII one.
 constexpr std::array<Symbol, 8> symbols{{
     {"**", TokenKind::power},
@@ -220,6 +222,8 @@ struct Node {
   bool plain = false;
   // multiply only: written with · (the dot product of two vectors).
   bool dot_symbol = false;
+  // multiply only: a factor written in front of ∇ or Δ (k∇u).
+  bool juxtaposed = false;
 };
 
 // u_x, u_yx, u_tt...: the derivative a name means, if it names one of u.
@@ -390,11 +394,15 @@ private:
     return std::ranges::all_of(nodes, [](const Node &n) { return n.plain; });
   }
 
+  // Precedence, loosest first: + and -; the dot ·; * and /; a sign; a
+  // factor written in front of ∇ or Δ (k∇u); ^; then ∇ and Δ, whose
+  // operand is a power or such a product (Δx^2 is Δ(x^2), ∇·k∇u is
+  // ∇·(k∇u)). So n·k∇u is n·(k∇u), and 1/2 Δu is 1/(2Δu), refused.
   Node expression() {
-    auto left = term();
+    auto left = dotted();
     while (is(TokenKind::plus) || is(TokenKind::minus)) {
       const bool plus = take().kind == TokenKind::plus;
-      auto right = term();
+      auto right = dotted();
       const auto begin = left.begin, end = right.end;
       std::vector<Node> children;
       children.push_back(std::move(left));
@@ -406,33 +414,49 @@ private:
     return left;
   }
 
+  // a·b·c: the dot product of two vectors, the product otherwise.
+  Node dotted() {
+    auto left = term();
+    while (is(TokenKind::dot)) {
+      take();
+      auto right = term();
+      const auto begin = left.begin, end = right.end;
+      std::vector<Node> children;
+      children.push_back(std::move(left));
+      children.push_back(std::move(right));
+      left = make(NodeKind::multiply, begin, end, std::move(children));
+      left.dot_symbol = true;
+    }
+    return left;
+  }
+
   Node term() {
     auto left = unary();
-    for (;;) {
-      bool dot_symbol = false;
-      bool written = true;
-      NodeKind kind = NodeKind::multiply;
-      if (is(TokenKind::times)) {
-        take();
-      } else if (is(TokenKind::divide)) {
-        take();
-        kind = NodeKind::divide;
-      } else if (is(TokenKind::dot)) {
-        take();
-        dot_symbol = true;
-      } else if (is(TokenKind::nabla) || is(TokenKind::delta)) {
-        written = false; // k∇u: the factor in front multiplies
-      } else {
-        break;
-      }
+    while (is(TokenKind::times) || is(TokenKind::divide)) {
+      const auto kind = take().kind == TokenKind::times ? NodeKind::multiply
+                                                        : NodeKind::divide;
       auto right = unary();
       const auto begin = left.begin, end = right.end;
       std::vector<Node> children;
       children.push_back(std::move(left));
       children.push_back(std::move(right));
       left = make(kind, begin, end, std::move(children));
-      left.dot_symbol = dot_symbol;
-      left.plain = written && !dot_symbol && all_plain(left.children);
+      left.plain = all_plain(left.children);
+    }
+    return left;
+  }
+
+  // k∇u, A ∇u, 2Δu: a factor directly in front of ∇ or Δ multiplies it.
+  Node juxtaposed() {
+    auto left = power();
+    while (is(TokenKind::nabla) || is(TokenKind::delta)) {
+      auto right = power();
+      const auto begin = left.begin, end = right.end;
+      std::vector<Node> children;
+      children.push_back(std::move(left));
+      children.push_back(std::move(right));
+      left = make(NodeKind::multiply, begin, end, std::move(children));
+      left.juxtaposed = true;
     }
     return left;
   }
@@ -452,7 +476,7 @@ private:
       node.plain = all_plain(node.children);
       return node;
     }
-    return power();
+    return juxtaposed();
   }
 
   Node power() {
@@ -470,12 +494,9 @@ private:
     return node;
   }
 
-  // The operand of ∇, ∇·, ∇² and Δ: another of them, or an atom.
-  Node nabla_operand() {
-    if (is(TokenKind::nabla) || is(TokenKind::delta))
-      return nabla();
-    return atom();
-  }
+  // The operand of ∇, ∇·, ∇² and Δ: a power, or a product with a factor
+  // in front of ∇ or Δ (another of them is an atom).
+  Node nabla_operand() { return juxtaposed(); }
 
   Node nabla() {
     const auto &symbol = take();
@@ -827,7 +848,12 @@ private:
   // A plain part, read by Expression as it is written.
   RCP<const Basic> expression(const Node &node) {
     try {
-      const Expression read(parser_.text_of(node));
+      // A no-break space, skipped by the line, is a space to Expression.
+      std::string text(parser_.text_of(node));
+      for (auto at = text.find(no_break_space); at != std::string::npos;
+           at = text.find(no_break_space, at + 1))
+        text.replace(at, no_break_space.size(), " ");
+      const Expression read(text);
       return detail::ExpressionAccess::impl(read).form;
     } catch (const std::invalid_argument &e) {
       parser_.fail(e.what());
@@ -921,7 +947,12 @@ private:
       parser_.fail(parser_.quote(node) + " divides by " +
                    (b.shape != Shape::scalar ? std::string(shape_name(b.shape))
                                              : std::string("u or the normal")) +
-                   "; only coefficients may divide");
+                   "; only coefficients may divide" +
+                   (node.children[1].juxtaposed
+                        ? std::string(" (a factor written in front of ∇ or "
+                                      "Δ belongs to it: write (1/2)Δu or "
+                                      "Δu/2, not 1/2 Δu)")
+                        : std::string()));
     const auto denominator = constant_part(b.parts[0]);
     if (zero_number(*denominator))
       parser_.fail(parser_.quote(node) + " divides by zero");
@@ -1075,7 +1106,33 @@ Printed printed(const RCP<const Basic> &form) {
         down_cast<const Number &>(*down_cast<const Mul &>(*form).get_coef())
             .is_negative();
   const auto magnitude = negative ? neg(form) : form;
-  return {negative, magnitude->__str__()};
+  return {negative, detail::form_text(magnitude)};
+}
+
+// Throws when a coefficient uses a parameter that the line would read as
+// u, a derivative of u, the normal or the tangent: printed as it is, the
+// line would mean another problem.
+void check_names(
+    const std::vector<std::pair<const Expression *, const char *>> &terms,
+    const Expression &right, Mode mode, std::string_view what) {
+  const auto check = [&](const Expression &expression, const std::string &of) {
+    const auto &form = detail::ExpressionAccess::impl(expression).form;
+    for (const auto &symbol : SymEngine::free_symbols(*form)) {
+      const auto name =
+          SymEngine::down_cast<const SymEngine::Symbol &>(*symbol).get_name();
+      const bool unknown = unknown_name(name, mode).is_unknown;
+      if (unknown ||
+          (mode == Mode::condition && (name == "n" || name == "tau")))
+        throw std::invalid_argument(
+            "Cannot write the " + std::string(what) + " as one line: " + of +
+            " uses the parameter '" + name + "', which a line reads as " +
+            (unknown ? "u or a derivative of u" : "the normal or tangent") +
+            "; rename the parameter");
+    }
+  };
+  for (const auto &[expression, name] : terms)
+    check(*expression, "the coefficient of " + std::string(name));
+  check(right, "the right side");
 }
 
 std::string
@@ -1102,7 +1159,7 @@ line(const std::vector<std::pair<const Expression *, const char *>> &terms,
   }
   if (out.empty())
     out = "0";
-  out += " = " + detail::ExpressionAccess::impl(right).form->__str__();
+  out += " = " + detail::form_text(detail::ExpressionAccess::impl(right).form);
   // Powers as ^, as they are usually typed (SymEngine prints **).
   for (auto at = out.find("**"); at != std::string::npos;
        at = out.find("**", at + 1))
@@ -1193,25 +1250,22 @@ BoundaryCondition parse_condition(std::string_view text) {
 }
 
 std::string equation_text(const Equation &equation) {
-  return line({{&equation.a_xx, "u_xx"},
-               {&equation.a_xy, "u_xy"},
-               {&equation.a_yy, "u_yy"},
-               {&equation.b_x, "u_x"},
-               {&equation.b_y, "u_y"},
-               {&equation.c, "u"},
-               {&equation.m1, "u_t"},
-               {&equation.m2, "u_tt"}},
-              equation.f);
+  const std::vector<std::pair<const Expression *, const char *>> terms = {
+      {&equation.a_xx, "u_xx"}, {&equation.a_xy, "u_xy"},
+      {&equation.a_yy, "u_yy"}, {&equation.b_x, "u_x"},
+      {&equation.b_y, "u_y"},   {&equation.c, "u"},
+      {&equation.m1, "u_t"},    {&equation.m2, "u_tt"}};
+  check_names(terms, equation.f, Mode::equation, "equation");
+  return line(terms, equation.f);
 }
 
 std::string condition_text(const BoundaryCondition &condition) {
-  return line({{&condition.alpha, "u"},
-               {&condition.beta_n, "u_n"},
-               {&condition.beta_tau, "u_tau"},
-               {&condition.beta_x, "u_x"},
-               {&condition.beta_y, "u_y"},
-               {&condition.gamma, "u_t"}},
-              condition.g);
+  const std::vector<std::pair<const Expression *, const char *>> terms = {
+      {&condition.alpha, "u"},        {&condition.beta_n, "u_n"},
+      {&condition.beta_tau, "u_tau"}, {&condition.beta_x, "u_x"},
+      {&condition.beta_y, "u_y"},     {&condition.gamma, "u_t"}};
+  check_names(terms, condition.g, Mode::condition, "boundary condition");
+  return line(terms, condition.g);
 }
 
 } // namespace pde2d::fem

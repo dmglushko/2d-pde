@@ -1106,11 +1106,17 @@ differentiate by the product rule, the coefficients through
 side minus the right side gives the coefficients and −(the part without
 u) the right-hand side; a condition's normal components must form
 β_n u_n + β_τ u_τ (the u_x n_x and u_y n_y coefficients equal, the u_x
-n_y one the negative of the u_y n_x one), after `expand`. Coefficients
-are built with `detail::expression_from_form` (checked, printed by
-SymEngine). `equation_text` and `condition_text` print the coefficient
-form back from the parsed forms, which `parse_*` reads to the same
-coefficients.
+n_y one the negative of the u_y n_x one), after `expand`. Precedence, loosest first: `+ -`, `·`, `* /`, a sign, a factor in
+front of ∇ or Δ, `^`, then ∇ and Δ, whose operand is a power or such a
+product: `n·k∇u` is `n·(k∇u)`, `∇·k∇u` is `∇·(k∇u)`, `Δx^2` is
+`Δ(x^2)`, and `1/2 Δu` is refused with a hint. A no-break space is a
+space. Coefficients are built with `detail::expression_from_form`
+(checked, printed by `detail::form_text`: SymEngine's printer with every
+floating number in full, so the text reads back to the same doubles).
+`equation_text` and `condition_text` print the coefficient form back
+from the parsed forms, which `parse_*` reads to the same coefficients;
+they throw `std::invalid_argument` when a coefficient uses a parameter
+the line would read otherwise (u, u_x, ...; n and tau in a condition).
 
 **Expressions.** SymEngine parses the text when an `Expression` is built
 (`parse`, with `^` as power). Floating literals are restored in a bottom-up

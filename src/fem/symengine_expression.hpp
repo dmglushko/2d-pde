@@ -37,6 +37,7 @@
 #include <symengine/number.h>
 #include <symengine/parser.h>
 #include <symengine/pow.h>
+#include <symengine/printers/strprinter.h>
 #include <symengine/rational.h>
 #include <symengine/real_double.h>
 #include <symengine/subs.h>
@@ -93,6 +94,11 @@ std::optional<std::string> unsupported(const SymEngine::Basic &form);
 // derivative, derivative.hpp), checked like one built from text. Its text is
 // SymEngine's printed form. Throws std::invalid_argument like Expression(text).
 Expression expression_from_form(SymEngine::RCP<const SymEngine::Basic> form);
+
+// A form as text that SymEngine's parser reads back to the same form:
+// SymEngine's printing, except that a floating number is written with all
+// the digits it needs (0.30000000000000004, not 0.3).
+std::string form_text(const SymEngine::RCP<const SymEngine::Basic> &form);
 
 // Throws std::invalid_argument when a parameter name is not a plain symbol
 // other than x, y and t, or a value is not finite.

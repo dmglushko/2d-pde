@@ -648,6 +648,23 @@ int main() {
                (void)app::build_problem(problem);
              },
              "problem.equation.text: Cannot read the equation");
+         // No form while a coefficient has an error: switching would drop
+         // what is being typed.
+         problem = app::default_problem_section();
+         problem["equation"] = {{"a_xx", "-1"}, {"a_yy", "-1"}, {"f", "sin("}};
+         check(
+             !app::check_problem(problem)["forms"].contains("problem.equation"),
+             "no form with an error in a coefficient");
+         // A parameter named u cannot be printed in a line: the reason.
+         problem["equation"] = {{"a_xx", "-1"}, {"a_yy", "-1"}, {"f", "u"}};
+         problem["parameters"] = {{"u", 1.0}};
+         const Json reserved = app::check_problem(problem);
+         check(reserved["ok"].get<bool>(), "a parameter named u is valid");
+         const Json &form = reserved["forms"]["problem.equation"];
+         check(form["text"].is_null() &&
+                   form["reason"].get<std::string>().find(
+                       "uses the parameter 'u'") != std::string::npos,
+               "no line, with the reason: " + form.dump());
        }},
       {"the default case runs to the end",
        [] {

@@ -181,6 +181,10 @@ function switchForm(path, toLine, replace) {
     toast(toLine ? "It can be written as a line once the check finds no error in it." : "The coefficients are known once the check finds no error in the line.");
     return;
   }
+  if (toLine && typeof form.text !== "string") {
+    toast(form.reason ?? "It cannot be written as a line.");
+    return;
+  }
   edit((c) => replace(c, toLine ? { text: form.text } : { ...form.coefficients }), "structure");
 }
 
@@ -388,13 +392,16 @@ function checkingFor() {
   return store.busy.has("problem") && since !== undefined ? performance.now() - since : null;
 }
 
-// The status line: checking, no errors, or how many. A check that is
-// still quick keeps the words of the last one (no flicker while typing).
-function checkStatus(check, fresh, error, shown) {
+// The status line: checking, no errors, or how many. Until a check has
+// run SLOW_MS (also while the next one is only queued), the words of the
+// last finished one stay (no flicker while typing).
+function checkStatus(check, fresh, error, lastDone) {
   if (error) return { status: "failed", text: "The check failed" };
-  const running = checkingFor();
-  if (!fresh && running !== null && running < SLOW_MS && shown) return shown;
-  if (store.busy.has("problem") || !fresh) return { status: "busy", text: "Checking…" };
+  if (!fresh || store.busy.has("problem")) {
+    const running = checkingFor();
+    if (lastDone && (running === null || running < SLOW_MS)) return lastDone;
+    return { status: "busy", text: "Checking…" };
+  }
   if (!check.ok) return { status: "failed", text: `${check.errors.length} error${check.errors.length > 1 ? "s" : ""}` };
   return { status: "done", text: "No errors" };
 }
@@ -499,8 +506,9 @@ export const problemPanel = {
       chip.classList.toggle("bad", !kind && errors.has(`problem.boundary_conditions.${chip.dataset.kindOf}`));
     }
 
-    container.head.lastCheckStatus = checkStatus(check, fresh, error, container.head.lastCheckStatus);
-    setStepStatus(container.head, "problem", container.head.lastCheckStatus);
+    const status = checkStatus(check, fresh, error, container.head.lastDoneStatus);
+    if (status.status !== "busy") container.head.lastDoneStatus = status;
+    setStepStatus(container.head, "problem", status);
     // While a check runs, the summary of the last one stays (fields below
     // it do not move on every key).
     if (!fresh && !error && !old && summary.childElementCount > 0) {

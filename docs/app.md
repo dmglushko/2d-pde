@@ -275,7 +275,7 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 | `POST /api/geometry/drawing` | case | `{"geometry": drawing}`: the case's curves after its region edits as a drawing section, curve for curve (refused for a mesh file) |
 | `POST /api/mesh` | case | `mesh`: the mesh's summary (`id`, counts `nodes`, `triangles`, `boundary_edges`, `region_names`, `has_links`, and `arrays`: where its arrays are, see "Binary answers"); `stats`, `target_met`, `longest_edge`, `max_edge_length`, `domain_size`, every stage's `reports`, `memory` (`snapshot_bytes`: what a run on this mesh keeps per snapshot, about `snapshot_bytes` × (snapshots + 1) in all; `budget`) |
 | `POST /api/mesh/arrays` | `{"mesh": id}` | the mesh's arrays in binary. The session keeps the last 16 meshes it built and the meshes of every kept run |
-| `POST /api/problem` | case | the check: `ok`, `errors` (`path`, `message`), `facts` per coefficient path (also for a line; none for a text that did not parse), each condition's kind, `forms` (per equation and condition that was read: `line` whether it was given as a line, `text` the line as written or printed from the coefficients by `fem::equation_text`/`condition_text`, `coefficients` the non-zero ones as written or read from the line), time order, needed initial conditions |
+| `POST /api/problem` | case | the check: `ok`, `errors` (`path`, `message`), `facts` per coefficient path (also for a line; none for a text that did not parse), each condition's kind, `forms` (per equation and condition that was read without an error in any of its fields: `line` whether it was given as a line, `text` the line as written or printed from the coefficients by `fem::equation_text`/`condition_text` (null, with `reason`, when the library cannot print it), `coefficients` the non-zero ones as written or read from the line), time order, needed initial conditions |
 | `POST /api/assemble` | case | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
 | `POST /api/field` | `{"case", "field"}` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`) |
 | `POST /api/solve` | case | starts the client's solve of the case, or finds its current one with the same inputs (see "Runs"), and answers its progress (below) |
@@ -876,7 +876,9 @@ for 0.7 s and then takes the place of the meaning (a line is wrong after
 almost every key). "Coefficients" (beside the equation's heading and in
 each condition card's head) switches to the coefficient form and "As a
 line" back, both from the fresh check's `forms` (the library reads and
-prints them; a form with an error cannot switch, a toast says so).
+prints them; a form with an error in any of its fields cannot switch,
+and neither can coefficients the library cannot print as a line, such as
+a parameter named u; a toast says why).
 Templates give lines. **Nothing above a field changes while a check
 runs**: the summary (time order, chips) and the step's status keep the
 last check's words, and only a check slower than 0.4 s says "Checking…"
@@ -927,8 +929,9 @@ also shows how far the run got and how the playback keeps up.
 simulated time by real time, about 60 ticks a second (a timer): at 1×
 (the default speed, a preference) one simulated second takes one second,
 whatever the steps and snapshots; the snapshot shown is the last one at
-or before the clock. It never runs past the snapshots loaded from the
-shown one on (they are fetched ahead, `prefetchSnapshots`), and a tick
+or before the clock. It never moves onto a snapshot that is not loaded
+(it waits, "loading…"; the window from the shown one on is fetched
+ahead, `prefetchSnapshots`), and a tick
 counts at most 0.25 s (a hidden tab does not jump). A run being computed
 plays from t0: it waits until 4 snapshots are there, then plays at the
 speed or at 90 % of the run's measured pace (simulated time per second
