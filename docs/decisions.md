@@ -1128,6 +1128,41 @@ coarsening, moving nodes or enrichment for now.
   it is not a fallback. A Newmark variant that damps only the highest
   frequencies (generalized-α), the better answer for waves: GitHub issue
   #40.
+- **Details of the damping hand-over, accepted 2026-11-18:** a method
+  declares `velocity_quotient_is_acceleration(order)` (implicit Euler at
+  order 2), next to `keeps_acceleration`; after damping steps the state
+  carries the damping method's own acceleration or that quotient, and any
+  other damping method ahead of a method that keeps an acceleration is
+  refused when the run starts (`std::invalid_argument` naming both). A run
+  reports where its step grid ends (`IntegrationResult::anchor`,
+  `StepAnchor{time, dt, steps}`) and `integrate` can continue on that grid
+  (it throws if the anchor does not end at t0). The last step's real
+  length is kept (`FreeState::dt`) and every quotient divides by it.
+  `Integrator::method()` returns the method.
+- **The anchor is passed across every piece on the same problem**
+  (decided 2026-11-18, extending "only where the method changes"): a piece
+  that continues on the same mesh continues the previous piece's step
+  grid, so step times, and adaptation times from the "every n steps"
+  rule, are those of one uninterrupted run.
+- **Adaptive time steps: each method estimates its own error** (decided
+  2026-11-18): a time method declares whether it can estimate a step's
+  local error, and computes it cheaply from states it already has (no
+  extra solves): implicit Euler from the change of u_t over the step,
+  Newmark from the change of the acceleration (Zienkiewicz–Xie), the
+  midpoint rule from the last steps. The error-controlled `StepController`
+  refuses a method that does not declare it (no fallback). *Why:* the
+  textbook practice and the cheapest; step doubling (about three solves a
+  step) could come later as its own controller for such methods.
+- **The error-controlled step, decided 2026-11-18:** the error is measured
+  in the usual ODE-solver norm, each entry divided by atol + rtol·|u_i|,
+  then the root mean square; options `{.atol, .rtol}`, a step is accepted
+  when the norm is at most 1. The next step is dt · safety · (1/err)^(1/(p+1))
+  for a method of order p, limited to a factor of 0.2 to 5 per step and to
+  a minimum and maximum dt; a rejected step is taken again with the
+  smaller dt (`StepRecord::accepted`). Because a new dt costs a new
+  factorization, the controller keeps dt when the proposal is only a small
+  change (inside 0.9 to 1.5 times the current dt); a rejection always
+  shrinks it.
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks
