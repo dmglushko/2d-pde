@@ -25,6 +25,8 @@ void TimeMethod::start(const fem::AssembledProblem &, const LinearSolver &,
 
 bool TimeMethod::keeps_acceleration(int) const { return false; }
 
+bool TimeMethod::velocity_quotient_is_acceleration(int) const { return false; }
+
 namespace {
 
 StepSolveInfo info(const LinearSolveResult &solved) {

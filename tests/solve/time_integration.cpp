@@ -915,6 +915,69 @@ void integration_result_keeps_its_order() {
         "Solution keeps its positional order");
 }
 
+// A run stopped by max_steps and continued with its anchor takes the step
+// times of one long run, bit for bit; without the anchor the continued
+// run starts a new stretch at its t0 and its times differ by rounding
+// (3 * 0.1 + 0.1 is not 4 * 0.1). The step length a landing kept is in
+// before_last_step. A bad anchor throws.
+void continues_a_stretch() {
+  const auto m = meshed(constant_heat_problem());
+  const auto i = integrator(std::make_shared<ImplicitEuler>(), 0.1);
+  const IntegrationOutput history{.keep_step_history = true};
+  const auto whole = i.integrate(m, 0.0, 1.0, history);
+  check(whole.anchor.time == 1.0 && whole.anchor.dt == 0.1 &&
+            whole.anchor.steps == 0,
+        "after landing on t1 the stretch starts there");
+  const auto part = i.integrate(m, 0.0, 1.0, history, nullptr, 3);
+  check(part.anchor.time == 0.0 && part.anchor.dt == 0.1 &&
+            part.anchor.steps == 3 && part.final.time == 3 * 0.1,
+        "3 steps of the stretch from 0");
+  const auto rest = i.integrate(m, part.final.time, 1.0, history, &part.final,
+                                std::nullopt, &part.anchor);
+  check(part.history.size() + rest.history.size() == whole.history.size(),
+        "as many steps");
+  for (std::size_t k = 0; k < whole.history.size(); ++k) {
+    const StepRecord &r =
+        k < 3 ? part.history[k] : rest.history[k - part.history.size()];
+    check(r.t == whole.history[k].t && r.dt == whole.history[k].dt,
+          "the step times of one long run");
+  }
+  check(rest.final.values == whole.final.values, "the same final state");
+  const auto restarted =
+      i.integrate(m, part.final.time, 1.0, history, &part.final);
+  bool differs = false;
+  for (std::size_t k = 0; k + 1 < restarted.history.size(); ++k)
+    differs = differs || restarted.history[k].t != whole.history[k + 3].t;
+  check(differs, "without the anchor a new stretch starts at t0");
+
+  // A step that lands within 1e-9 dt of t1 keeps its nominal length.
+  const double t1 = 0.5000000002;
+  const auto landed = integrator(std::make_shared<ImplicitEuler>(), 0.25)
+                          .integrate(m, 0.0, t1,
+                                     {.keep_step_history = true,
+                                      .keep_before_last_step = true});
+  check(landed.final.time == t1 && landed.history.back().dt == 0.25,
+        "landed on t1 with the nominal step");
+  check(landed.before_last_step->time == 0.25 &&
+            landed.before_last_step->dt == 0.25 && t1 - 0.25 != 0.25,
+        "before_last_step has the step's length, not the difference of the "
+        "times");
+
+  const StepAnchor elsewhere{.time = 0.0, .dt = 0.1, .steps = 2};
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)i.integrate(m, part.final.time, 1.0, {}, &part.final,
+                          std::nullopt, &elsewhere);
+      },
+      "the step anchor stands at 0 + 2 * 0.1");
+  const StepAnchor no_dt{.time = 0.0, .dt = 0.0, .steps = 3};
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)i.integrate(m, 0.0, 1.0, {}, nullptr, std::nullopt, &no_dt);
+      },
+      "the step anchor needs a finite time and a finite dt");
+}
+
 } // namespace
 
 int main() {
@@ -990,6 +1053,8 @@ int main() {
        mass_zero_at_start},
       {"snapshots land exactly on their times", lands_on_snapshots},
       {"a continued run equals one long run", continues_runs},
+      {"a run continued with its anchor keeps the step times",
+       continues_a_stretch},
       {"Newmark continues at a time where M2 vanishes",
        newmark_continues_where_m2_vanishes},
       {"max_steps ends a run early; the state before the last step",

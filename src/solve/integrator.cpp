@@ -322,11 +322,10 @@ Integrator::with_method(std::shared_ptr<const TimeMethod> method) const {
   return copy;
 }
 
-IntegrationResult
-Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
-                      double t0, double t1, const IntegrationOutput &output,
-                      const Solution *initial,
-                      std::optional<std::size_t> max_steps) const {
+IntegrationResult Integrator::integrate(
+    std::shared_ptr<const fem::MeshedProblem> meshed_problem, double t0,
+    double t1, const IntegrationOutput &output, const Solution *initial,
+    std::optional<std::size_t> max_steps, const StepAnchor *anchor_in) const {
   if (!meshed_problem)
     throw std::invalid_argument("integrator: the problem is null");
   if (!std::isfinite(t0) || !std::isfinite(t1))
@@ -336,6 +335,21 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   check_output(output, t0, t1);
   if (max_steps && *max_steps == 0)
     throw std::invalid_argument("integrator: max_steps must be at least 1");
+  if (anchor_in) {
+    const StepAnchor &a = *anchor_in;
+    if (!std::isfinite(a.time) || !std::isfinite(a.dt) || a.dt < 0.0 ||
+        (a.steps > 0 && !(a.dt > 0.0)))
+      throw std::invalid_argument(
+          "integrator: the step anchor needs a finite time and a finite "
+          "dt, positive when steps were taken");
+    // The same expression as the steps' times, so a run's own anchor
+    // stands exactly at its end.
+    if (a.time + static_cast<double>(a.steps) * a.dt != t0)
+      throw std::invalid_argument(std::format(
+          "integrator: the step anchor stands at {} + {} * {}, not at t0 = "
+          "{}",
+          a.time, a.steps, a.dt, t0));
+  }
   const fem::MeshedProblem &meshed = *meshed_problem;
   const auto start = Clock::now();
   const auto log = std::make_shared<SolveLog>();
@@ -410,12 +424,12 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
 
   // 3. The steps. On a stretch of equal steps from `anchor`, step k ends at
   // anchor + k dt; the stretch restarts after landing on a target or when
-  // the controller changes dt.
+  // the controller changes dt. A given anchor continues its stretch.
   const double fraction = method_->evaluation_fraction();
   double t = t0;
-  double anchor = t0;
-  std::size_t anchor_steps = 0;
-  double anchor_dt = 0.0;
+  double anchor = anchor_in ? anchor_in->time : t0;
+  std::size_t anchor_steps = anchor_in ? anchor_in->steps : 0;
+  double anchor_dt = anchor_in ? anchor_in->dt : 0.0;
   std::unique_ptr<const PreparedLinearSolver> prepared;
   double prepared_dt = 0.0;
   std::size_t prepares = 0;
@@ -482,8 +496,10 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
     const bool last =
         t_new == t1 || (max_steps && summary.steps + 1 == *max_steps);
     if (last && output.keep_before_last_step)
-      result.before_last_step = FreeState{
-          .time = t, .values = state.values, .velocities = state.velocities};
+      result.before_last_step = FreeState{.time = t,
+                                          .values = state.values,
+                                          .velocities = state.velocities,
+                                          .dt = h};
     const StepSolveInfo solved =
         method_->advance(*current, h, *prepared, state);
     t = t_new;
@@ -515,6 +531,7 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // t1 exactly otherwise).
   result.final =
       make_solution(meshed, state, time_order, keeps_acceleration, t);
+  result.anchor = {.time = anchor, .dt = anchor_dt, .steps = anchor_steps};
 
   auto &report = result.report;
   report.stage = "integrator";

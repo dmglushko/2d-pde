@@ -81,9 +81,12 @@ double resolve(const ErrorTolerance &tolerance, double first_estimate) {
 // nodes from the last step: u_t = (u(t) - u(t - dt)) / dt, or for time
 // order 2 u_t = the velocities and u_tt = their difference quotient. At
 // the Dirichlet nodes from the boundary data: for time order 1 (or 0) the
-// quotient of its values at t and t - dt; for time order 2 u_t is the
-// velocity (its rate at t) and u_tt its acceleration at t, so that no rate
-// is evaluated at t - dt (u = sqrt(t) has none at t0 = 0).
+// quotient of its values at t and at the step's start; for time order 2
+// u_t is the velocity (its rate at t) and u_tt its acceleration at t, so
+// that no rate is evaluated at t - dt (u = sqrt(t) has none at t0 = 0).
+// dt is the step's length as the method used it (FreeState::dt), not the
+// difference of the times, which differs from it by rounding when the
+// step landed on a target.
 struct Derivatives {
   std::vector<double> u_t, u_tt;
 };
@@ -91,7 +94,7 @@ struct Derivatives {
 Derivatives last_step_derivatives(const fem::MeshedProblem &problem,
                                   const solve::Solution &end,
                                   const solve::FreeState &before) {
-  const double dt = end.time - before.time;
+  const double dt = before.dt;
   const auto &free_nodes = problem.free_nodes();
   const auto &dirichlet = problem.dirichlet_nodes();
   const auto quotient = [&](const std::vector<double> &now,
@@ -188,14 +191,36 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   if (has_tolerance && !estimating)
     throw std::invalid_argument(std::format(
         "{}: a tolerance needs an adaptation that estimates the error", stage));
+  // Whether the state after damping steps gets the velocity quotient of
+  // their last step as its acceleration (declared by the damping method;
+  // one that keeps its own acceleration hands that over).
+  bool quotient_acceleration = false;
   if (damping_) {
     // From the formula facts, as the Integrator decides it, so that a run
-    // does not fail at its first transfer.
+    // does not fail at its first transfer. A transfer keeps the Problem,
+    // so the time order is that of every piece.
     const int time_order = fem::Assembler().time_order(*problem);
-    if (!options_.damping_method->capabilities().supports(time_order))
+    const solve::TimeMethod &damping_method = *options_.damping_method;
+    const solve::TimeMethod &method = *integrator_.method();
+    if (!damping_method.capabilities().supports(time_order))
       throw std::invalid_argument(std::format(
           "{}: the damping method {} does not support time order {}", stage,
-          options_.damping_method->name(), time_order));
+          damping_method.name(), time_order));
+    const bool keeps = damping_method.keeps_acceleration(time_order);
+    quotient_acceleration =
+        !keeps && damping_method.velocity_quotient_is_acceleration(time_order);
+    // The method continues after the damping steps from the acceleration
+    // at their end; without one it would solve for it again (its start),
+    // where M2 may be singular, or continue from a wrong one.
+    if (method.keeps_acceleration(time_order) && !keeps &&
+        !quotient_acceleration)
+      throw std::invalid_argument(std::format(
+          "{}: {} continues after the damping steps from the acceleration "
+          "at their end (it keeps the acceleration), but the damping "
+          "method {} gives none at time order {} (it neither keeps one nor "
+          "declares velocity_quotient_is_acceleration); use a damping "
+          "method that does, such as implicit_euler",
+          stage, method.name(), damping_method.name(), time_order));
   }
   if (target.max_nodes && problem->mesh()->nodes.size() > *target.max_nodes)
     throw std::invalid_argument(std::format(
@@ -215,6 +240,10 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   // The state the next piece starts from: the caller's for the first.
   std::optional<solve::Solution> carried;
   const solve::Solution *state_in = initial;
+  // The step anchor the next piece continues: set only after damping steps
+  // that ended before the adaptation time, where only the method changes,
+  // so the steps keep the times of an uninterrupted stretch.
+  std::optional<solve::StepAnchor> anchor;
   double t = t0;
   // The stretch to the next adaptation time (or to t1 once adapting has
   // stopped): its end, its step limit and the steps taken in it. Usually
@@ -275,26 +304,37 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     // damping steps for the acceleration of their last step.
     solve::IntegrationOutput piece_output{
         .keep_step_history = output.keep_step_history,
-        .keep_before_last_step =
-            damping || (adapting && (end < t1 || max_steps))};
+        .keep_before_last_step = (damping && quotient_acceleration) ||
+                                 (adapting && (end < t1 || max_steps))};
     for (std::size_t s = next_snapshot; s < times.size() && times[s] <= end;
          ++s)
       piece_output.snapshot_times.push_back(times[s]);
     const solve::Integrator &stepper = damping ? *damping_ : integrator_;
     solve::IntegrationResult run =
-        stepper.integrate(problem, t, end, piece_output, state_in, piece_steps);
+        stepper.integrate(problem, t, end, piece_output, state_in, piece_steps,
+                          anchor ? &*anchor : nullptr);
+    anchor.reset();
     const auto taken = static_cast<std::size_t>(run.report.metrics.at("steps"));
     steps += taken;
     stretch_steps += taken;
     if (damping) {
       damping_steps += taken;
       pending_damping -= std::min(pending_damping, taken);
-      // The acceleration of the last damping step, for a method that keeps
-      // one (Newmark continues from it without its start).
-      if (!run.final.velocities.empty())
+      // The acceleration at the end of the damping steps, for a method
+      // that keeps one (Newmark continues from it without its start): the
+      // damping method's own when it keeps one (already in its
+      // Solutions), else the velocity quotient of the last step when the
+      // damping method declares it the acceleration there. Also in a
+      // snapshot at that time, so that a run continued from the snapshot
+      // has it too.
+      if (quotient_acceleration && !run.final.velocities.empty()) {
         run.final.accelerations =
             last_step_derivatives(*problem, run.final, *run.before_last_step)
                 .u_tt;
+        for (auto &snapshot : run.snapshots)
+          if (snapshot.time == run.final.time)
+            snapshot.accelerations = run.final.accelerations;
+      }
     }
     // The snapshots taken are the first of the times passed, in order.
     next_snapshot += run.snapshots.size();
@@ -320,6 +360,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     if (t < end && !(max_steps && stretch_steps >= *max_steps)) {
       carried = std::move(run.final);
       state_in = &*carried;
+      anchor = run.anchor;
       result.pieces.push_back(std::move(piece));
       continue;
     }

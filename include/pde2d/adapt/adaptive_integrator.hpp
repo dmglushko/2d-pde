@@ -133,8 +133,13 @@ struct AdaptiveIntegratorOptions {
   std::size_t damping_steps = 0;
   // Required when damping_steps > 0; typically solve::ImplicitEuler. It
   // must support the problem's time order (checked by integrate() from
-  // its capabilities before the first step). Never used for anything
-  // else: no method is switched to on a failure.
+  // its capabilities before the first step), and when the integrator's
+  // method keeps the acceleration (Newmark) it must hand one over: keep
+  // its own (keeps_acceleration) or declare that its velocity quotient is
+  // the acceleration at the end of a step
+  // (velocity_quotient_is_acceleration: implicit Euler), else integrate()
+  // throws before the first step. Never used for anything else: no method
+  // is switched to on a failure.
   std::shared_ptr<const solve::TimeMethod> damping_method{};
 };
 
@@ -164,14 +169,16 @@ struct AdaptiveIntegratorOptions {
 // boundary data's values); time order 2 u_t = the integrator's
 // velocities, u_tt = (u_t(t) - u_t(t - dt)) / dt at the free nodes and
 // the boundary data's acceleration at t at the Dirichlet nodes (its rate
-// at t - dt may not exist: u = sqrt(t) at t0 = 0). The state before the
-// last step (IntegrationOutput::keep_before_last_step: the free unknowns,
-// so no boundary data is evaluated for it) is kept only for a piece that
-// can end in an adaptation; the boundary data above is evaluated only at
-// an adaptation time, so a run that never adapts evaluates nothing a
-// plain Integrator run would not. The cycle's estimate is that of
-// the first adaptation that declares estimates_error, which is then given
-// it. When the estimate is at most the tolerance nothing adapts;
+// at t - dt may not exist: u = sqrt(t) at t0 = 0). dt is the length the
+// method used for the step (solve::FreeState::dt), which differs from the
+// difference of the times by rounding when the step landed on a time.
+// The state before the last step (IntegrationOutput::keep_before_last_step:
+// the free unknowns, so no boundary data is evaluated for it) is kept only
+// for a piece that can end in an adaptation; the boundary data above is
+// evaluated only at an adaptation time, so a run that never adapts
+// evaluates nothing a plain Integrator run would not. The cycle's estimate
+// is that of the first adaptation that declares estimates_error, which is
+// then given it. When the estimate is at most the tolerance nothing adapts;
 // otherwise every adaptation adapts in order. A new mesh with more nodes
 // than max_nodes is discarded and the run adapts no more (the mesh only
 // grows); after max_refinements refinements it adapts no more either; the
@@ -191,13 +198,22 @@ struct AdaptiveIntegratorOptions {
 // (IntegrationPiece::damping), then the integrator's method continues to
 // the same adaptation time (the schedule counts the damping steps too;
 // remaining damping steps carry over an adaptation time that changed
-// nothing, and a new transfer starts them again). For time order 2 the
-// state after damping steps gets the acceleration of their last step,
-// u_tt = (u_t(t) - u_t(t - dt)) / dt at the free nodes (for implicit
-// Euler it satisfies M2 u_tt + B u_t + A u = b at t, the equation Newmark's
-// start would solve, without needing M2 to be invertible) and the
-// boundary data's acceleration at the Dirichlet nodes, so a method that
-// keeps the acceleration continues from it without its start.
+// nothing, and a new transfer starts them again). Where only the method
+// changes, the integrator's method continues the damping steps' stretch
+// of steps (solve::StepAnchor), so the step times are those of one
+// uninterrupted run with the same step controller. For time order 2 the
+// state after damping steps carries an acceleration, so a method that
+// keeps one continues from it without its start, as the damping method
+// declares: its own when it keeps one (Newmark as damping method), else,
+// when it declares velocity_quotient_is_acceleration (implicit Euler),
+// the quotient of its last step, u_tt = (u_t(t) - u_t(t - dt)) / dt at the
+// free nodes (it satisfies M2 u_tt + B u_t + A u = b at t, the equation
+// Newmark's start would solve, without needing M2 to be invertible) and
+// the boundary data's acceleration at the Dirichlet nodes; a snapshot at
+// that time carries it too. A damping method that gives neither, ahead of
+// a method that keeps the acceleration, is refused before the first step
+// (the midpoint method's quotient is the acceleration at the middle of the
+// step).
 //
 // A transfer leaves the old mesh's interpolation error in the new mesh's
 // fine modes. Implicit Euler damps them within a step; the midpoint method
@@ -235,8 +251,9 @@ public:
   // nothing set or a value that is not finite and positive (steps at
   // least 1), a tolerance value, max_nodes or max_refinements that is not
   // finite and positive, a tolerance when no adaptation estimates, a
-  // damping method that does not support the problem's time order, a
-  // starting mesh
+  // damping method that does not support the problem's time order or that
+  // gives no acceleration at the end of its steps when the integrator's
+  // method keeps one (naming both methods), a starting mesh
   // with more nodes than max_nodes, snapshot times not strictly
   // increasing within [t0, t1], and snapshot_every; throws
   // std::runtime_error when an adaptation breaks its declarations and

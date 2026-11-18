@@ -21,6 +21,7 @@
 #include "pde2d/adapt/kelly_estimator.hpp"
 #include "pde2d/adapt/mesh_refinement.hpp"
 #include "pde2d/adapt/residual_estimator.hpp"
+#include "pde2d/fem/assembler.hpp"
 #include "pde2d/geometry/curve_geometry.hpp"
 #include "pde2d/mesh/cdt.hpp"
 #include "pde2d/mesh/chord_length_discretizer.hpp"
@@ -33,6 +34,7 @@
 #include "pde2d/solve/implicit_midpoint.hpp"
 #include "pde2d/solve/newmark.hpp"
 #include "pde2d/solve/sparse_lu.hpp"
+#include "pde2d/solve/step_controller.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1126,6 +1128,284 @@ void rejects_bad_input() {
       "not within [t0, t1]");
 }
 
+// --- the state after damping steps -----------------------------------------
+
+// Refines every triangle with a positive indicator.
+std::shared_ptr<const Adaptation> uniform_refinement() {
+  return std::make_shared<MeshRefinement>(
+      std::make_shared<ResidualEstimator>(),
+      std::make_shared<DorflerMarking>(DorflerMarkingOptions{.theta = 1.0}),
+      std::make_shared<mesh::Remesher>(
+          std::make_shared<mesh::NewestVertexBisection>()));
+}
+
+// u_tt - (u_xx + u_yy) = t on the unit square with u_n = 0, from rest:
+// the spatially constant mode u = t^3 / 6, u_t = t^2 / 2, u_tt = t, which
+// a transfer keeps exactly and the methods follow up to rounding (Newmark
+// and implicit Euler give u_tt = t at the end of a step, Newmark u_t
+// exactly; the review's case).
+fem::Problem constant_mode_problem() {
+  return {.equation = {.a_xx = Expression("-1"),
+                       .a_yy = Expression("-1"),
+                       .m2 = Expression("1"),
+                       .f = Expression("t")},
+          .boundary_conditions = {{"boundary", {.beta_n = Expression("1")}}},
+          .initial = {.u = Expression("0"), .u_t = Expression("0")}};
+}
+
+// Newmark with steps of 0.25, a refinement at 0.25 and then one damping
+// step, to 0.5 (or to t1 when it is closer).
+AdaptiveIntegrationResult
+constant_mode_run(std::shared_ptr<const solve::TimeMethod> method,
+                  std::shared_ptr<const solve::TimeMethod> damping, double t1,
+                  std::vector<double> snapshots = {}) {
+  const auto start = std::make_shared<const fem::MeshedProblem>(
+      unit_square_mesh(0.5), constant_mode_problem());
+  return AdaptiveIntegrator(
+             integrator(std::move(method), 0.25), {uniform_refinement()},
+             {.damping_steps = 1, .damping_method = std::move(damping)})
+      .integrate(start, 0.0, t1,
+                 {.every = {.interval = 0.25}, .max_refinements = 1},
+                 {.snapshot_times = std::move(snapshots)});
+}
+
+double max_deviation(const std::vector<double> &values, double expected) {
+  double deviation = 0.0;
+  for (const double v : values)
+    deviation = std::max(deviation, std::abs(v - expected));
+  return values.empty() ? std::numeric_limits<double>::infinity() : deviation;
+}
+
+// After damping steps Newmark continues from the acceleration that holds
+// at their end: implicit Euler's velocity quotient (declared), or the
+// damping method's own acceleration when it keeps one (Newmark as
+// damping method; the quotient there is the average of the two ends,
+// 0.375 instead of 0.5). The midpoint method's quotient is the
+// acceleration at the middle of the step: refused ahead of Newmark, not
+// ahead of a method that keeps none.
+void damping_hands_over_the_acceleration() {
+  const auto newmark = std::make_shared<solve::Newmark>();
+  const auto euler = std::make_shared<solve::ImplicitEuler>();
+  const auto midpoint = std::make_shared<solve::ImplicitMidpoint>();
+  check(euler->velocity_quotient_is_acceleration(2) &&
+            !euler->velocity_quotient_is_acceleration(1) &&
+            !midpoint->velocity_quotient_is_acceleration(2) &&
+            !newmark->velocity_quotient_is_acceleration(2),
+        "the declarations");
+
+  // Implicit Euler: u_tt = 0.5 at 0.5, then a Newmark step to 0.75 adds
+  // 0.25 (0.5 + 0.75) / 2 to u_t.
+  const auto by_euler = constant_mode_run(newmark, euler, 0.75, {0.5});
+  check(by_euler.pieces.size() == 3 && by_euler.pieces[1].damping &&
+            by_euler.pieces[1].t_end == 0.5,
+        "a refinement at 0.25, one damping step to 0.5");
+  const solve::Solution &at_half = by_euler.snapshots.at(0);
+  check(at_half.time == 0.5 &&
+            max_deviation(at_half.accelerations, 0.5) < 1e-12,
+        "Euler: the snapshot at the end of the damping step has u_tt = t");
+  check(max_deviation(by_euler.final.velocities,
+                      at_half.velocities[0] + 0.15625) < 1e-12 &&
+            max_deviation(by_euler.final.accelerations, 0.75) < 1e-12,
+        "Newmark continues from u_tt = 0.5");
+
+  // Newmark as damping method keeps its own acceleration: u_t at 0.75 is
+  // exact, 0.75^2 / 2 (0.265625 from the quotient 0.375).
+  const auto by_newmark = constant_mode_run(newmark, newmark, 0.75, {0.5});
+  check(max_deviation(by_newmark.snapshots.at(0).accelerations, 0.5) < 1e-12,
+        "Newmark: its own u_tt = t at the end of the damping step");
+  check(max_deviation(by_newmark.final.velocities, 0.28125) < 1e-12,
+        "Newmark: u_t exact at 0.75");
+
+  // The midpoint method gives no acceleration at the end of its steps.
+  for (const char *fragment :
+       {"newmark continues after the damping steps from the acceleration",
+        "the damping method implicit_midpoint gives none at time order 2"})
+    expect_throws<std::invalid_argument>(
+        [&] { (void)constant_mode_run(newmark, midpoint, 0.75); }, fragment);
+  // A method that keeps none needs none.
+  const auto euler_after_midpoint = constant_mode_run(euler, midpoint, 0.75);
+  check(euler_after_midpoint.final.time == 0.75 &&
+            euler_after_midpoint.pieces[1].damping,
+        "midpoint damping steps ahead of implicit Euler");
+
+  // The damping step lands on t1 = 0.5000000002 with its nominal length
+  // 0.25: the quotient divides by that, not by t1 - 0.25 (which gives
+  // 0.4999999998).
+  const double t1 = 0.5000000002;
+  const auto landing = constant_mode_run(newmark, euler, t1);
+  check(landing.final.time == t1 && landing.pieces.back().damping,
+        "the damping step lands on t1");
+  check(max_deviation(landing.final.accelerations, t1) < 1e-13,
+        "the quotient uses the step's length");
+}
+
+// A wave with coefficients that depend on t and moving Dirichlet data: the
+// acceleration handed over after an implicit Euler damping step satisfies
+// M2 u_tt + B u_t + A u = b at its end (assembled here), also where M2
+// vanishes there (m2 = (t - 0.5)^2 at t = 0.5, where Newmark's start
+// cannot solve for it); a snapshot at that time carries it, and Newmark
+// continued from the snapshot equals the adaptive run, bit for bit.
+void acceleration_after_damping_satisfies_the_equation() {
+  for (const std::string m2 : {"1 + t", "(t - 0.5)^2"}) {
+    const fem::BoundaryCondition dirichlet{.alpha = Expression("1"),
+                                           .g = Expression("x*t^2 + y")};
+    const fem::Problem wave{
+        .equation = {.a_xx = Expression("-(1 + t)"),
+                     .a_yy = Expression("-(1 + t)"),
+                     .m1 = Expression("t"),
+                     .m2 = Expression(m2),
+                     .f = Expression("x*y*t + 1")},
+        .boundary_conditions = {{"boundary", dirichlet}},
+        .initial = {.u = Expression("y"), .u_t = Expression("sin(x) + y")}};
+    const auto start = std::make_shared<const fem::MeshedProblem>(
+        unit_square_mesh(0.25), wave);
+    const auto newmark = integrator(std::make_shared<solve::Newmark>(), 0.25);
+    const auto r =
+        AdaptiveIntegrator(
+            newmark, {uniform_refinement()},
+            {.damping_steps = 1,
+             .damping_method = std::make_shared<solve::ImplicitEuler>()})
+            .integrate(start, 0.0, 1.0,
+                       {.every = {.interval = 0.25}, .max_refinements = 1},
+                       {.snapshot_times = {0.5}});
+    check(r.pieces.size() == 3 && r.pieces[1].damping &&
+              r.pieces[1].t_end == 0.5 && r.snapshots.size() == 1,
+          m2 + ": one damping step to the snapshot at 0.5");
+    const auto &problem = r.pieces[1].problem;
+    const solve::Solution &s = r.snapshots[0];
+    check(s.mesh == problem->mesh() &&
+              s.accelerations.size() == s.values.size(),
+          m2 + ": the snapshot has accelerations");
+
+    // The residual of the equation at the free nodes, assembled at 0.5.
+    const auto assembled = fem::Assembler().assemble(problem, 0.5);
+    const auto &free_nodes = problem->free_nodes();
+    std::vector<double> u, v, w;
+    for (const std::size_t node : free_nodes) {
+      u.push_back(s.values[node]);
+      v.push_back(s.velocities[node]);
+      w.push_back(s.accelerations[node]);
+    }
+    const auto mw = assembled.mass().free.multiply(w);
+    const auto bv = assembled.damping().free.multiply(v);
+    const auto au = assembled.stiffness().free.multiply(u);
+    const auto b = assembled.right_hand_side();
+    double residual = 0.0, scale = 0.0, mass_part = 0.0;
+    for (std::size_t i = 0; i < free_nodes.size(); ++i) {
+      residual = std::max(residual, std::abs(b[i] - mw[i] - bv[i] - au[i]));
+      scale = std::max(scale, std::abs(b[i]) + std::abs(mw[i]) +
+                                  std::abs(bv[i]) + std::abs(au[i]));
+      mass_part = std::max(mass_part, std::abs(mw[i]));
+    }
+    std::cout << "INFO " << m2 << ": endpoint residual " << residual << " of "
+              << scale << ", |M2 u_tt| " << mass_part << '\n';
+    check(residual <= 1e-10 * scale,
+          m2 + ": M2 u_tt + B u_t + A u = b at the end of the damping step");
+    if (m2 == "1 + t")
+      check(residual <= 1e-9 * mass_part,
+            "far below the acceleration term (a wrong u_tt would show)");
+    const auto &dirichlet_nodes = problem->dirichlet_nodes();
+    for (std::size_t k = 0; k < dirichlet_nodes.size(); ++k)
+      check(s.accelerations[dirichlet_nodes[k].node] ==
+                problem->dirichlet_acceleration(k, 0.5),
+            m2 + ": the boundary data's acceleration at the Dirichlet nodes");
+
+    // Newmark continued from the snapshot: no start (it would fail where
+    // M2 vanishes), the same run as the adaptive one.
+    const auto continued = newmark.integrate(problem, 0.5, 1.0, {}, &s);
+    check(continued.report.metrics.at("assemblies") ==
+              continued.report.metrics.at("steps"),
+          m2 + ": no start");
+    check(continued.final.values == r.final.values &&
+              continued.final.velocities == r.final.velocities &&
+              continued.final.accelerations == r.final.accelerations,
+          m2 + ": the adaptive run's continuation, bit for bit");
+  }
+}
+
+// Changes the step at t = 0.4: a split where only the method changes keeps
+// the stretch of steps (an uninterrupted Euler run steps 0.35, 0.4, then
+// 0.425; restarting at 0.35 would give 0.39999999999999997 and another
+// step of 0.05).
+class SteppedController final : public solve::StepController {
+public:
+  std::string name() const override { return "stepped"; }
+  double next_step(double t) const override { return t < 0.4 ? 0.05 : 0.025; }
+};
+
+void damping_keeps_the_step_times() {
+  mesh::Mesh square = *test::unit_square(4);
+  mesh::set_longest_edges_as_refinement_edges(square);
+  const auto start = std::make_shared<const fem::MeshedProblem>(
+      std::make_shared<const mesh::Mesh>(std::move(square)), decay_problem());
+  const auto euler = std::make_shared<solve::ImplicitEuler>();
+  const solve::Integrator stepped(euler, std::make_shared<SteppedController>(),
+                                  std::make_shared<solve::SparseLu>());
+  const AdaptiveTimeTarget target{.every = {.interval = 0.3},
+                                  .max_refinements = 1};
+  const solve::IntegrationOutput history{.keep_step_history = true};
+  const auto plain = AdaptiveIntegrator(stepped, {refinement()})
+                         .integrate(start, 0.0, 0.5, target, history);
+  const auto damped =
+      AdaptiveIntegrator(stepped, {refinement()},
+                         {.damping_steps = 1, .damping_method = euler})
+          .integrate(start, 0.0, 0.5, target, history);
+  check(plain.report.metrics.at("refinements") == 1.0 &&
+            damped.pieces.size() == 3 && damped.pieces[1].damping &&
+            damped.pieces[1].t_end == 0.35,
+        "a refinement at 0.3, then one damping step");
+  bool reaches = false;
+  for (std::size_t k = 0; k + 1 < plain.history.size(); ++k)
+    reaches = reaches || (plain.history[k].t == 0.4 &&
+                          plain.history[k + 1].t == 0.4 + 0.025);
+  check(reaches && 0.35 + 0.05 < 0.4,
+        "the uninterrupted run steps 0.4, then 0.425 (from 0.35 a new "
+        "stretch would not reach 0.4)");
+  check(damped.history.size() == plain.history.size(), "as many steps");
+  for (std::size_t k = 0;
+       k < std::min(plain.history.size(), damped.history.size()); ++k)
+    check(damped.history[k].t == plain.history[k].t &&
+              damped.history[k].dt == plain.history[k].dt,
+          "the same step times");
+  check(damped.final.values == plain.final.values,
+        "Euler as both methods: the same run, bit for bit");
+}
+
+// The estimator's u_t after a step that landed within 1e-9 dt of the
+// adaptation time: the quotient divides by the step's length 0.25, as
+// the method did, not by the difference of the times.
+void derivatives_use_the_step_length() {
+  fem::Problem moving = decay_problem();
+  for (auto &[region, condition] : moving.boundary_conditions)
+    condition.g = Expression("x*t");
+  const auto problem =
+      std::make_shared<const fem::MeshedProblem>(test::unit_square(4), moving);
+  const double at = 0.5000000002;
+  const auto euler = integrator(std::make_shared<solve::ImplicitEuler>(), 0.25);
+  const auto plain =
+      euler.integrate(problem, 0.0, at, {.keep_before_last_step = true});
+  const solve::FreeState &before = *plain.before_last_step;
+  check(plain.final.time == at && before.time == 0.25 && before.dt == 0.25,
+        "the step landed with its nominal length");
+  const auto recorder = std::make_shared<Recorder>(true);
+  (void)AdaptiveIntegrator(euler, {recorder})
+      .integrate(problem, 0.0, 1.0, {.every = {.interval = at}});
+  check(recorder->calls.size() == 1 && recorder->calls[0].time == at,
+        "one adaptation, at the landing time");
+  const auto &u_t = recorder->calls[0].u_t;
+  const auto &free_nodes = problem->free_nodes();
+  for (std::size_t i = 0; i < free_nodes.size(); ++i)
+    check(u_t[free_nodes[i]] ==
+              (recorder->calls[0].values[free_nodes[i]] - before.values[i]) /
+                  0.25,
+          "free: (u(t) - u(t - dt)) / dt with the step's dt");
+  for (const auto &d : problem->dirichlet_nodes()) {
+    const double x = problem->mesh()->nodes[d.node].x;
+    near(u_t[d.node], (x * at - x * 0.25) / 0.25, 1e-14,
+         "Dirichlet: the boundary data's quotient over the step's dt");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -1151,5 +1431,12 @@ int main() {
       {"the node budget stops adapting, not the run", node_budget},
       {"max_refinements stops adapting, not the run", refinement_limit},
       {"invalid configurations and targets throw", rejects_bad_input},
+      {"after damping steps: the acceleration at their end",
+       damping_hands_over_the_acceleration},
+      {"after damping steps: the endpoint equation holds",
+       acceleration_after_damping_satisfies_the_equation},
+      {"damping steps keep the step times", damping_keeps_the_step_times},
+      {"the derivatives use the step's length",
+       derivatives_use_the_step_length},
   });
 }

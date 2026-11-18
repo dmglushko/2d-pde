@@ -295,7 +295,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   from dt and the operators' `depends_on_t` / `always_zero` for the
   non-zero weights of `step_matrix_weights(dt)`; whether `Solution`s
   carry accelerations, and whether a run given them skips the start,
-  from `keeps_acceleration(order)`. Never test a method's type or name.
+  from `keeps_acceleration(order)`; whether a step's velocity quotient
+  may serve as the acceleration at its end, from
+  `velocity_quotient_is_acceleration(order)`. Never test a method's type
+  or name.
 - **Linear solvers declare requirements; callers check them** before
   every `prepare` (`detail::check_requirements`): a symmetry requirement
   is met when the matrix is always symmetric by the facts or symmetric
@@ -365,6 +368,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   snapshot times and t1, so a continued run (`integrate(meshed, t1, t2,
   output, &previous.final)`) matches one long run that lands on t1 (bit
   for bit for the first-order methods; `tests/solve/time_integration.cpp`).
+  A run stopped by `max_steps` continues the same stretch only when given
+  its `IntegrationResult::anchor` (`StepAnchor`). A quotient of the last
+  step divides by the step's own length (`FreeState::dt`), never by a
+  difference of times (a landing keeps the nominal dt).
 - **A triangle's refinement edge is the edge opposite its vertex 0**
   (the convention in `include/pde2d/mesh/mesh.hpp`). The bisection
   refiners read it from the vertex order and write it into every triangle
@@ -427,12 +434,21 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   no boundary data evaluated), requested only for a piece that can end
   in an adaptation; at the Dirichlet nodes u_tt is the boundary data's
   acceleration at t, never a quotient that needs the rate at t − dt.
+  Where only the method changes (after damping steps, before the
+  adaptation time) the next piece continues the damping piece's
+  `anchor`, so damping steps never change the step times.
   The transfer moves accelerations like velocities. Damping steps after
   a transfer run only when `AdaptiveIntegratorOptions::damping_steps` asks
   for them, as their own piece with `Integrator::with_method`; never
   switch methods for any other reason (no fallback). After damping
-  steps at time order 2 the state carries their last step's acceleration,
-  so a method that keeps one continues without its start.
+  steps at time order 2 the state (and a snapshot at that time) carries
+  the acceleration the damping method declares: its own if it
+  `keeps_acceleration`, else its last step's velocity quotient if it
+  declares `velocity_quotient_is_acceleration` (implicit Euler), so a
+  method that keeps one continues without its start; any other damping
+  method ahead of such a method is refused before the first step
+  (`std::invalid_argument` naming both), never given a wrong
+  acceleration.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
   adaptive time stepping, explicit time methods,
   handling pure Neumann problems, well-posedness

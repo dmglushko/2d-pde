@@ -43,6 +43,31 @@ struct FreeState {
   std::vector<double> values{};
   // For time order 2, else empty.
   std::vector<double> velocities{};
+  // For IntegrationResult::before_last_step: the length of the step taken
+  // from this state, as the method used it (StepRecord::dt). A step that
+  // lands on a target time within 1e-9 dt of its nominal end keeps the
+  // nominal dt, so the end time minus `time` can differ from it by
+  // rounding; a difference quotient of the step divides by this. (After
+  // the members above, so that positional initializations keep their
+  // meaning: new members go at the end.)
+  double dt = 0.0;
+};
+
+// Where the steps of a run stand: the stretch of equal steps it is on.
+// Step k of the stretch ends at time + k dt (computed so, not summed), and
+// `steps` of them were taken, so the run stands at time + steps dt. After
+// a step that landed on a target (a snapshot time or t1) the stretch
+// starts there: time is the landing time and steps 0. Given back to
+// integrate() (its `anchor`), a run continues the same stretch, so that
+// it takes the step times one run would have taken: integrate() stopped
+// by max_steps and continued from its final state with its anchor equals
+// one longer run, also when the step controller's answer depends on t.
+struct StepAnchor {
+  double time = 0.0;
+  // The nominal step of the stretch (the step controller's); 0 before any
+  // step.
+  double dt = 0.0;
+  std::size_t steps = 0;
 };
 
 // The record of one step.
@@ -92,6 +117,9 @@ struct IntegrationResult {
   // members above, so that positional initializations keep their meaning:
   // new members go at the end.)
   std::optional<FreeState> before_last_step{};
+  // Where the steps stand at the end of the run, to continue the same
+  // stretch of steps (integrate()'s `anchor`).
+  StepAnchor anchor{};
 };
 
 // Integrates a MeshedProblem in time (docs/decisions.md, "Solvers and time
@@ -148,7 +176,11 @@ public:
   //
   // Times on a stretch of equal steps are computed as start + k dt (not
   // summed), so a run that lands on a time and one that starts there take
-  // the same steps. Continuing a run: integrate(meshed, t1, t2, output,
+  // the same steps. A run starts a new stretch at t0, unless `anchor` is
+  // given (IntegrationResult::anchor of the run that ended at t0): then
+  // its first step continues that stretch when the step controller gives
+  // the same dt, so a run continued after max_steps takes the step times
+  // of one long run. Continuing a run: integrate(meshed, t1, t2, output,
   // &previous.final); the returned Solutions carry the accelerations of a
   // method that keeps them (Newmark), so such a run continues without its
   // start and equals one long run that lands on t1, bit for bit.
@@ -165,17 +197,24 @@ public:
   // not meet, and an `initial` on another mesh object, of the wrong size, with
   // values that are not finite, without the velocities time order 2 needs
   // or (for a method that keeps the acceleration) with accelerations of
-  // the wrong size or not finite. Throws std::runtime_error when the
-  // method's start() leaves no state at t0 (a method of time order 0 must
-  // compute it), or no acceleration for a method that keeps it. Passes on
-  // the
-  // exceptions of assembly, of the method's start() and of the linear
+  // the wrong size or not finite, and an `anchor` that does not stand at
+  // t0 (time + steps dt != t0, or a dt that is not finite and positive with
+  // steps > 0). Throws std::runtime_error when the method's start() leaves
+  // no state at t0 (a method of time order 0 must compute it), or no
+  // acceleration for a method that keeps it. Passes on the exceptions of
+  // assembly, of the method's start() and of the linear
   // solver.
   [[nodiscard]] IntegrationResult
   integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem, double t0,
             double t1, const IntegrationOutput &output = {},
             const Solution *initial = nullptr,
-            std::optional<std::size_t> max_steps = std::nullopt) const;
+            std::optional<std::size_t> max_steps = std::nullopt,
+            const StepAnchor *anchor = nullptr) const;
+
+  // The time method, so that a driver can read its declarations.
+  [[nodiscard]] const std::shared_ptr<const TimeMethod> &method() const {
+    return method_;
+  }
 
   // The same step controller, linear solver and assembler options with
   // another time method (for example the damping steps of the adaptive

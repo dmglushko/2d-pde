@@ -100,6 +100,19 @@ public:
   // returned, and start() runs as start_needs says.
   virtual bool keeps_acceleration(int time_order) const;
 
+  // Whether, at this time order (one the method supports), the quotient
+  // (V1 - V0) / dt of a step's velocities, dt the step's length as
+  // advance() received it, satisfies the equation M2 U'' + B U' + A U = b
+  // at the end of the step, with the problem assembled there: then it is
+  // the acceleration a method that keeps one (keeps_acceleration) can
+  // continue from without its start. Only time order 2 has velocities.
+  // ImplicitEuler: true at time order 2 (its step is that equation with
+  // U'' = (V1 - V0) / dt). The midpoint method's quotient is the
+  // acceleration at the middle of the step, Newmark's the average of the
+  // two ends, so theirs is false (Newmark keeps its own). The adaptive
+  // loop reads it after damping steps. The default is false.
+  virtual bool velocity_quotient_is_acceleration(int time_order) const;
+
   // Called once before the first step, and only when start_needs(time
   // order) is not StartNeeds::nothing (and not when keeps_acceleration
   // holds and the initial Solution has accelerations), with the problem
