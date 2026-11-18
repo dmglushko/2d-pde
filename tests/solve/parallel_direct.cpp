@@ -12,6 +12,7 @@
 #include "support/l_shape_mesh.hpp"
 
 #include "pde2d/fem/assembler.hpp"
+#include "pde2d/solve/conjugate_gradient.hpp"
 #include "pde2d/solve/fixed_step.hpp"
 #include "pde2d/solve/implicit_euler.hpp"
 #include "pde2d/solve/implicit_midpoint.hpp"
@@ -21,12 +22,14 @@
 #include "pde2d/solve/sparse_lu.hpp"
 #include "pde2d/solve/static_solver.hpp"
 #include "pde2d/solve/supernodal_cholesky.hpp"
+#include "pde2d/solve/time_method.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <format>
 #include <iostream>
 #include <limits>
@@ -70,6 +73,20 @@ double relative_difference(std::span<const double> x,
 constexpr const char *negative_warning =
     "supernodal_cholesky: the matrix is negative definite (every diagonal "
     "entry is negative";
+
+// The start of the warning of a direct solver whose pivot ratio is below
+// 1e-10 (docs/decisions.md, "A tiny pivot ratio is a warning").
+std::string pivot_warning(const std::string &solver) {
+  return solver + ": the matrix is nearly singular (pivot ratio ";
+}
+
+// Whether one of `messages` starts with `start`.
+bool has_message(const std::vector<std::string> &messages,
+                 const std::string &start) {
+  return std::ranges::any_of(messages, [&](const std::string &message) {
+    return message.starts_with(start);
+  });
+}
 
 std::shared_ptr<const pde2d::mesh::Mesh> l_shape() {
   static const auto mesh = pde2d::test::refined_l_shape(0.04);
@@ -180,9 +197,12 @@ std::shared_ptr<const MeshedProblem> contrast_problem() {
 // side and u_n = 0 on the others (review finding: well-posed, but its
 // smallest pivot was below n machine epsilons times the largest, and both
 // solvers refused it). The solution is u = 5e8 + x - x^2 / 2; P1 on this
-// mesh gives it exactly at the nodes, as the 1D problem does.
-std::shared_ptr<const MeshedProblem> weak_robin_problem() {
-  Problem p{.equation = {.a_xx = e("-1"), .a_yy = e("-1"), .f = e("1")}};
+// mesh gives it exactly at the nodes, as the 1D problem does. With `m1`,
+// the heat equation m1 u_t - u_xx - u_yy = 1 on the same strip, from u = 0.
+std::shared_ptr<const MeshedProblem> weak_robin_problem(const char *m1 = "0") {
+  Problem p{
+      .equation = {.a_xx = e("-1"), .a_yy = e("-1"), .m1 = e(m1), .f = e("1")},
+      .initial = {.u = e("0")}};
   p.boundary_conditions.emplace(
       "left",
       BoundaryCondition{.alpha = e("2e-9"), .beta_n = e("1"), .g = e("0")});
@@ -214,6 +234,116 @@ integrate_with(std::shared_ptr<const LinearSolver> solver,
                     std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.05}),
                     std::move(solver))
       .integrate(p, 0.0, 0.2);
+}
+
+// Implicit Euler for time order 1, (B / dt + A) U1 = b(t1) + B U0 / dt
+// with the same arithmetic as ImplicitEuler, written here so that a test
+// chooses what start() and the steps do with the linear solver (review
+// findings on the integrator's log of warnings). With `start_matrix`,
+// start() prepares it, solves for a right-hand side of ones and keeps the
+// prepared solver and that result; with `concurrent`, every step solves
+// its right-hand side twice, from two threads at once.
+class TestEuler final : public TimeMethod {
+public:
+  struct Options {
+    std::shared_ptr<const CsrMatrix> start_matrix = nullptr;
+    bool concurrent = false;
+  };
+  explicit TestEuler(Options options) : options_(std::move(options)) {}
+
+  std::string name() const override { return "test_euler"; }
+  TimeMethodCapabilities capabilities() const override {
+    return {.time_order_1 = true};
+  }
+  double evaluation_fraction() const override { return 1.0; }
+  StepMatrixWeights step_matrix_weights(double dt) const override {
+    return {.damping = 1.0 / dt, .stiffness = 1.0};
+  }
+  StartNeeds start_needs(int) const override {
+    return options_.start_matrix ? StartNeeds::static_part
+                                 : StartNeeds::nothing;
+  }
+  void start(const AssembledProblem &, const LinearSolver &linear_solver,
+             TimeState &) const override {
+    kept = linear_solver.prepare(options_.start_matrix);
+    start_result = kept->solve(ones());
+    seen.push_back(start_result);
+  }
+  StepSolveInfo advance(const AssembledProblem &problem, double dt,
+                        const PreparedLinearSolver &solver,
+                        TimeState &state) const override {
+    std::vector<double> rhs(problem.right_hand_side().begin(),
+                            problem.right_hand_side().end());
+    const auto damped = problem.damping().free.multiply(state.values);
+    for (std::size_t i = 0; i < rhs.size(); ++i)
+      rhs[i] += (1.0 / dt) * damped[i];
+    LinearSolveResult solved, other_solved;
+    if (options_.concurrent) {
+      std::exception_ptr failure;
+      std::thread other([&] {
+        try {
+          other_solved = solver.solve(rhs);
+        } catch (...) {
+          failure = std::current_exception();
+        }
+      });
+      try {
+        solved = solver.solve(rhs);
+      } catch (...) {
+        other.join();
+        throw;
+      }
+      other.join();
+      if (failure)
+        std::rethrow_exception(failure);
+      check(same_bits(solved.values, other_solved.values),
+            "both threads solve to the same bits");
+      seen.push_back(other_solved);
+    } else {
+      solved = solver.solve(rhs);
+    }
+    seen.push_back(solved);
+    state.values = std::move(solved.values);
+    return {.linear_iterations = solved.iterations,
+            .residual = solved.residual,
+            .linear_threads = solved.threads};
+  }
+
+  std::vector<double> ones() const {
+    return std::vector<double>(options_.start_matrix->rows(), 1.0);
+  }
+
+  // Set by start(): test state, so a const method writes it.
+  mutable std::shared_ptr<const PreparedLinearSolver> kept;
+  mutable LinearSolveResult start_result;
+  // Every result start() and the steps got, in order.
+  mutable std::vector<LinearSolveResult> seen;
+
+private:
+  Options options_;
+};
+
+IntegrationResult
+integrate_test_euler(std::shared_ptr<const TimeMethod> method,
+                     const std::shared_ptr<const MeshedProblem> &p, double t1,
+                     std::shared_ptr<const LinearSolver> solver =
+                         std::make_shared<SupernodalCholesky>()) {
+  return Integrator(std::move(method),
+                    std::make_shared<FixedStep>(FixedStepOptions{.dt = 0.01}),
+                    std::move(solver))
+      .integrate(p, 0.0, t1);
+}
+
+// The largest backward error and the smallest pivot ratio above 0 (0 when
+// none is) of `results`.
+std::pair<double, double> worst(const std::vector<LinearSolveResult> &results) {
+  double backward = 0.0, pivot = 0.0;
+  for (const auto &r : results) {
+    backward = std::max(backward, r.backward_error);
+    if (r.pivot_ratio > 0.0)
+      pivot = pivot > 0.0 ? std::min(pivot, r.pivot_ratio) : r.pivot_ratio;
+  }
+  return {backward, pivot};
 }
 
 } // namespace
@@ -368,6 +498,70 @@ int main() {
                    euler.report.messages[0].find(negative_warning) == 0,
                "time order 0: the warning once");
        }},
+      {"the integrator's log: concurrent solves of one prepared solver",
+       [] {
+         // A negative definite step matrix: every solve warns. Each step
+         // solves twice at once with the same prepared solver (review
+         // finding: the log was not guarded and a probe crashed). The
+         // answer is ImplicitEuler's, bit for bit.
+         const auto negative = problem("1", "0", "0", "-1", false, true);
+         const auto concurrent =
+             integrate_test_euler(std::make_shared<TestEuler>(
+                                      TestEuler::Options{.concurrent = true}),
+                                  negative, 0.2);
+         check(concurrent.report.metrics.at("steps") == 20, "20 steps");
+         check(concurrent.report.messages.size() == 1 &&
+                   concurrent.report.messages[0].find(negative_warning) == 0,
+               "the warning once");
+         const auto euler = Integrator(std::make_shared<ImplicitEuler>(),
+                                       std::make_shared<FixedStep>(
+                                           FixedStepOptions{.dt = 0.01}),
+                                       std::make_shared<SupernodalCholesky>())
+                                .integrate(negative, 0.0, 0.2);
+         check(same_bits(concurrent.final.values, euler.final.values),
+               "the same bits as ImplicitEuler");
+       }},
+      {"the integrator's log: a warning from start() alone",
+       [] {
+         // The heat equation in its positive form: the step matrix is
+         // positive definite, so the steps give no warning; start() solves
+         // with a negative definite matrix, which does (review finding:
+         // the earlier test got the same warning from start() and from
+         // every step).
+         const auto positive = problem("-1", "0", "0", "1");
+         const auto negative_matrix =
+             system_of(problem("1", "0", "0", "0", false, true)).matrix;
+         const auto method = std::make_shared<TestEuler>(
+             TestEuler::Options{.start_matrix = negative_matrix});
+         const auto result = integrate_test_euler(method, positive, 0.05);
+         check(result.report.messages.size() == 1 &&
+                   result.report.messages[0].find(negative_warning) == 0,
+               "the warning of start()");
+         check(integrate_test_euler(
+                   std::make_shared<TestEuler>(TestEuler::Options{}), positive,
+                   0.05)
+                   .report.messages.empty(),
+               "no warning from the steps");
+       }},
+      {"the integrator's log: a prepared solver used after integrate()",
+       [] {
+         // The method keeps the prepared solver of its start() and solves
+         // with it once the Integrator and its run are gone (review
+         // finding: the log was a local of integrate(), and AddressSanitizer
+         // showed a stack-use-after-return). The solve works and carries
+         // its warning; the log it adds to is no report's any more.
+         const auto method = std::make_shared<TestEuler>(TestEuler::Options{
+             .start_matrix =
+                 system_of(problem("1", "0", "0", "0", false, true)).matrix});
+         (void)integrate_test_euler(method, problem("-1", "0", "0", "1"), 0.05);
+         check(method->kept != nullptr, "start() kept its prepared solver");
+         const auto later = method->kept->solve(method->ones());
+         check(same_bits(later.values, method->start_result.values),
+               "the same answer as in start()");
+         check(later.messages.size() == 1 &&
+                   later.messages[0].find(negative_warning) == 0,
+               "its warning");
+       }},
       {"time steps: both agree with the Eigen solvers",
        [] {
          // Heat equation, symmetric step matrix M1 / dt + A / 2.
@@ -485,6 +679,150 @@ int main() {
            check(error / 5e8 < 0.5, "the magnitude of the exact solution");
          }
        }},
+      {"a very ill-conditioned problem: the pivot ratio warning, through "
+       "the StaticSolver's report",
+       [] {
+         // The weak Robin strip: pivot ratio about 4e-12, below 1e-10. The
+         // answer is returned (the backward error is rounding), with the
+         // warning naming the solver, once.
+         const auto meshed = weak_robin_problem();
+         for (const auto &solver : std::vector<std::shared_ptr<LinearSolver>>{
+                  std::make_shared<SupernodalCholesky>(),
+                  std::make_shared<MultifrontalLu>(),
+                  std::make_shared<SimplicialLdlt>()}) {
+           const auto solved = StaticSolver(solver).solve(meshed);
+           const auto &report = solved.reports.at(1);
+           const double ratio = report.metrics.at("pivot_ratio");
+           check(ratio > 0.0 && ratio < 1e-10,
+                 solver->name() + ": a pivot ratio below 1e-10");
+           check(report.metrics.at("backward_error") < 1e-14,
+                 solver->name() + ": an answer, with a backward error of "
+                                  "rounding");
+           check(has_message(report.messages, pivot_warning(solver->name())),
+                 solver->name() + ": the warning in the report");
+           check(report.messages.size() == 1,
+                 solver->name() + ": no other message");
+           // Its text names the threshold, not the ratio (the ratio is
+           // the report's pivot_ratio), so every solve of a solver gives
+           // the same text.
+           check(has_message(report.messages,
+                             pivot_warning(solver->name()) +
+                                 "below 1e-10; its value is the result's "
+                                 "pivot_ratio, in reports pivot_ratio or "
+                                 "min_pivot_ratio), so the answer may have "
+                                 "few correct digits"),
+                 solver->name() + ": the threshold in the text");
+           check(report.messages[0].find(std::format("{:.3g}", ratio)) ==
+                     std::string::npos,
+                 solver->name() + ": not the ratio");
+         }
+       }},
+      {"a nearly singular step matrix prepared at every step: the warning "
+       "once in the integrator's report",
+       [] {
+         // The weak Robin strip as a heat equation with m1 = 1e-11 (1 +
+         // 10 t): the step matrix M1 / dt + K depends on t, so it is
+         // prepared at every step, and its mass adds about as much as the
+         // weak Robin term, so each step has its own pivot ratio, all below
+         // 1e-10 (review finding: the text held the ratio, and a 1000-step
+         // run reported 904 warnings).
+         const auto method = std::make_shared<TestEuler>(TestEuler::Options{});
+         const auto result = integrate_test_euler(
+             method, weak_robin_problem("1e-11*(1 + 10*t)"), 0.05);
+         const auto &report = result.report;
+         check(report.metrics.at("prepares") == 5 && method->seen.size() == 5,
+               "five steps, five prepares, five solves");
+         std::vector<std::string> ratios;
+         for (const auto &r : method->seen) {
+           std::cout << std::format("  step pivot ratio {:.6g}\n",
+                                    r.pivot_ratio);
+           check(r.pivot_ratio > 0.0 && r.pivot_ratio < 1e-10,
+                 "every step's pivot ratio below 1e-10");
+           check(r.messages == method->seen.front().messages &&
+                     r.messages.size() == 1,
+                 "every step's warning, the same text");
+           const auto shown = std::format("{:.3g}", r.pivot_ratio);
+           if (std::ranges::find(ratios, shown) == ratios.end())
+             ratios.push_back(shown);
+         }
+         check(ratios.size() > 1, "ratios that differ in three digits");
+         check(report.messages.size() == 1 &&
+                   report.messages[0].starts_with(
+                       pivot_warning("supernodal_cholesky")),
+               "the warning once in the report");
+         check(report.metrics.at("min_pivot_ratio") ==
+                   worst(method->seen).second,
+               "the smallest ratio in min_pivot_ratio");
+       }},
+      {"a well-conditioned Poisson problem: no pivot ratio warning",
+       [] {
+         for (const auto &solver : std::vector<std::shared_ptr<LinearSolver>>{
+                  std::make_shared<SupernodalCholesky>(),
+                  std::make_shared<MultifrontalLu>(),
+                  std::make_shared<SimplicialLdlt>()}) {
+           const auto solved = StaticSolver(solver).solve(problem("-1"));
+           const auto &report = solved.reports.at(1);
+           check(report.metrics.at("pivot_ratio") >= 1e-10,
+                 solver->name() + ": a pivot ratio above 1e-10");
+           check(report.messages.empty(), solver->name() + ": no message");
+         }
+       }},
+      {"the integrator reports its worst solve",
+       [] {
+         // The heat equation with m1 = 1 + 10 t: the step matrix depends on
+         // t, so it is prepared at every step and each solve has its own
+         // pivot ratio; start() solves with another matrix, that of the
+         // weak Robin strip, whose solve alone has both the largest
+         // backward error and the smallest pivot ratio (review finding: a
+         // start() that owned only one of them would not show that the
+         // other comes from the log too). The report's figures are the
+         // worst of the results the method got, start() included.
+         const auto heat = problem("-1", "0", "0", "1 + 10*t");
+         const auto method = std::make_shared<TestEuler>(TestEuler::Options{
+             .start_matrix = system_of(weak_robin_problem()).matrix});
+         const auto result = integrate_test_euler(method, heat, 0.05);
+         const auto &m = result.report.metrics;
+         check(m.at("prepares") == 5 && method->seen.size() == 6,
+               "five steps, five prepares, six solves");
+         const auto &start = method->start_result;
+         const auto [step_backward, step_pivot] =
+             worst(std::vector(method->seen.begin() + 1, method->seen.end()));
+         check(step_pivot > 0.0 && step_backward > 0.0, "measured");
+         check(start.backward_error > step_backward &&
+                   start.pivot_ratio > 0.0 && start.pivot_ratio < step_pivot,
+               "start() alone has the largest backward error and the "
+               "smallest pivot ratio");
+         check(m.at("max_backward_error") == start.backward_error,
+               "the largest backward error: start()'s");
+         check(m.at("min_pivot_ratio") == start.pivot_ratio,
+               "the smallest pivot ratio: start()'s");
+         // The steps alone: without start(), the worst of the steps, the
+         // same as above (each step is deterministic).
+         const auto steps_only =
+             std::make_shared<TestEuler>(TestEuler::Options{});
+         const auto steps = integrate_test_euler(steps_only, heat, 0.05);
+         check(worst(steps_only->seen) == std::pair(step_backward, step_pivot),
+               "the same steps without start()");
+         check(steps.report.metrics.at("max_backward_error") == step_backward &&
+                   steps.report.metrics.at("min_pivot_ratio") == step_pivot,
+               "the worst of the steps");
+       }},
+      {"the integrator's worst solve with an iterative solver: no pivot "
+       "ratio",
+       [] {
+         // Conjugate gradients measure no pivot ratio: min_pivot_ratio is
+         // 0 ("not measured"); the backward error is still the largest.
+         const auto method = std::make_shared<TestEuler>(TestEuler::Options{});
+         const auto result =
+             integrate_test_euler(method, problem("-1", "0", "0", "1"), 0.05,
+                                  std::make_shared<ConjugateGradient>());
+         const auto [backward, pivot] = worst(method->seen);
+         check(pivot == 0.0 && backward > 0.0, "a backward error, no ratio");
+         check(result.report.metrics.at("min_pivot_ratio") == 0.0,
+               "min_pivot_ratio 0: not measured");
+         check(result.report.metrics.at("max_backward_error") == backward,
+               "the largest backward error");
+       }},
       {"a pure Neumann problem with a compatible load: one of its solutions",
        [] {
          // -u_xx - u_yy = x - 1/2 (mean zero) with u_n = 0 on the unit
@@ -517,6 +855,11 @@ int main() {
                      result.pivot_ratio <
                          4225 * std::numeric_limits<double>::epsilon(),
                  "a tiny pivot ratio");
+           check(has_message(result.messages, "multifrontal_lu: the matrix "
+                                              "is nearly singular") ||
+                     has_message(result.messages, "supernodal_cholesky: the "
+                                                  "matrix is nearly singular"),
+                 "the pivot ratio warning");
            check(result.residual < 1e-10, "a solution: rounding residual");
            check(result.backward_error < 1e-14, "backward error of rounding");
            const double shift = mean(result.values);

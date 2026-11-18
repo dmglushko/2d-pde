@@ -11,6 +11,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -52,8 +53,12 @@ std::vector<double> free_part(const fem::MeshedProblem &meshed,
   return part;
 }
 
+// The starting state. With `take_accelerations` (the method keeps the
+// acceleration) and an initial solution that has accelerations, they are
+// taken too, and the method's start is not needed.
 TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
-                         int time_order, const Solution *initial) {
+                         int time_order, const Solution *initial,
+                         bool take_accelerations) {
   TimeState state;
   if (initial) {
     const std::size_t nodes = meshed.mesh()->nodes.size();
@@ -78,6 +83,14 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
             "velocities, one per node");
       state.velocities = free_part(meshed, initial->velocities);
     }
+    if (take_accelerations && !initial->accelerations.empty()) {
+      if (initial->accelerations.size() != nodes)
+        throw std::invalid_argument(
+            "integrator: the initial solution has " +
+            std::to_string(initial->accelerations.size()) +
+            " accelerations for " + std::to_string(nodes) + " nodes");
+      state.accelerations = free_part(meshed, initial->accelerations);
+    }
   } else if (time_order >= 1) {
     // The problem's own time order is at least the assembled one, so the
     // values (and for time order 2 the velocities) exist.
@@ -90,7 +103,8 @@ TimeState starting_state(const fem::MeshedProblem &meshed, double t0,
       state.velocities = std::move(initial_state.velocities);
   }
   if (!detail::all_finite(state.values) ||
-      !detail::all_finite(state.velocities))
+      !detail::all_finite(state.velocities) ||
+      !detail::all_finite(state.accelerations))
     throw std::invalid_argument(
         "integrator: the initial state is not finite at a free node");
   return state;
@@ -130,66 +144,119 @@ bool step_matrix_depends_on_t(const fem::AssembledProblem &problem,
          changes(problem.stiffness(), weights.stiffness);
 }
 
+// The Solution of `state` at t: velocities for time order 2 (Dirichlet
+// nodes: the boundary data's rate at t), and accelerations when the method
+// keeps them (Dirichlet nodes: the boundary data's acceleration at t).
 Solution make_solution(const fem::MeshedProblem &meshed, const TimeState &state,
-                       int time_order, double t) {
+                       int time_order, bool accelerations, double t) {
   Solution solution = build_solution(meshed, state.values, t);
+  const auto &free_nodes = meshed.free_nodes();
+  const auto &dirichlet_nodes = meshed.dirichlet_nodes();
   if (time_order == 2) {
     solution.velocities.assign(solution.values.size(), 0.0);
-    const auto &free_nodes = meshed.free_nodes();
     for (std::size_t i = 0; i < free_nodes.size(); ++i)
       solution.velocities[free_nodes[i]] = state.velocities[i];
-    const auto &dirichlet_nodes = meshed.dirichlet_nodes();
     for (std::size_t k = 0; k < dirichlet_nodes.size(); ++k)
       solution.velocities[dirichlet_nodes[k].node] =
           meshed.dirichlet_rate(k, t);
   }
+  if (accelerations) {
+    solution.accelerations.assign(solution.values.size(), 0.0);
+    for (std::size_t i = 0; i < free_nodes.size(); ++i)
+      solution.accelerations[free_nodes[i]] = state.accelerations[i];
+    for (std::size_t k = 0; k < dirichlet_nodes.size(); ++k)
+      solution.accelerations[dirichlet_nodes[k].node] =
+          meshed.dirichlet_acceleration(k, t);
+  }
   return solution;
 }
 
-// The linear solver's warnings (LinearSolveResult::messages) of one
-// integrate() call: each distinct message once, in the order they first
-// appeared (a solver prepared for a negative definite step matrix warns at
-// every step).
-class MessageLog {
+// What the integrator keeps of every linear solve of one integrate()
+// call, also of the solves a method's start() does: the warnings
+// (LinearSolveResult::messages), each distinct one once (a solver
+// prepared for a negative definite step matrix warns at every step), in
+// the order they were added; the largest backward error; and the
+// smallest measured pivot ratio (one above 0; 0 is "not measured"). A
+// time method may solve from several threads at once (a prepared solver
+// is const and may be used concurrently), so the log is guarded by a
+// mutex; it is held only to add or copy, never during a solve. Solves
+// that overlap add their messages in the order they take the lock; a
+// warning's text says which solver and matrix it is about, so that order
+// carries no information the report needs (the largest and smallest
+// values do not depend on it).
+class SolveLog {
 public:
-  void add(const std::vector<std::string> &messages) {
-    for (const std::string &message : messages)
+  void add(const LinearSolveResult &result) {
+    const std::scoped_lock lock(mutex_);
+    for (const std::string &message : result.messages)
       if (std::ranges::find(messages_, message) == messages_.end())
         messages_.push_back(message);
+    // A NaN backward error stays (solvers that check it throw first).
+    if (!std::isnan(max_backward_error_) &&
+        !(result.backward_error <= max_backward_error_))
+      max_backward_error_ = result.backward_error;
+    if (result.pivot_ratio > 0.0)
+      min_pivot_ratio_ = std::min(min_pivot_ratio_, result.pivot_ratio);
   }
-  const std::vector<std::string> &messages() const { return messages_; }
+  // What the report shows, read under one lock so that its three parts
+  // agree (a prepared solver kept beyond integrate() may finish a solve
+  // at any time).
+  struct Snapshot {
+    std::vector<std::string> messages;
+    // 0 before any solve.
+    double max_backward_error = 0.0;
+    // 0 when no solve measured its pivot ratio (an iterative solver,
+    // SparseLu, an empty system, no solve).
+    double min_pivot_ratio = 0.0;
+  };
+  Snapshot snapshot() const {
+    const std::scoped_lock lock(mutex_);
+    return {.messages = messages_,
+            .max_backward_error = max_backward_error_,
+            .min_pivot_ratio =
+                std::isinf(min_pivot_ratio_) ? 0.0 : min_pivot_ratio_};
+  }
 
 private:
+  mutable std::mutex mutex_;
   std::vector<std::string> messages_;
+  double max_backward_error_ = 0.0;
+  double min_pivot_ratio_ = std::numeric_limits<double>::infinity();
 };
 
-// A prepared solver that passes every solve on and logs its messages.
+// A prepared solver that passes every solve on and logs its result. It
+// shares the log of its integrate() call: a method may keep a prepared
+// solver beyond that call (from its start() or a step) and solve with it
+// later, which still works and adds to a log that no report reads any
+// more.
 class LoggingPreparedSolver final : public PreparedLinearSolver {
 public:
   LoggingPreparedSolver(std::unique_ptr<const PreparedLinearSolver> solver,
-                        MessageLog &log)
-      : solver_(std::move(solver)), log_(&log) {}
+                        std::shared_ptr<SolveLog> log)
+      : solver_(std::move(solver)), log_(std::move(log)) {}
   LinearSolveResult
   solve(std::span<const double> right_hand_side) const override {
     LinearSolveResult result = solver_->solve(right_hand_side);
-    log_->add(result.messages);
+    log_->add(result);
     return result;
   }
 
 private:
   std::unique_ptr<const PreparedLinearSolver> solver_;
-  MessageLog *log_;
+  std::shared_ptr<SolveLog> log_;
 };
 
 // The integrator's linear solver as the time method sees it: the same
-// solver, whose prepared solvers log the messages of every solve, also of
-// the solves a method's start() does (Newmark's acceleration, the state at
-// t0 for time order 0). So the messages reach the report whatever a method
-// does with a LinearSolveResult.
+// solver, whose prepared solvers log every solve, also the solves a
+// method's start() does (Newmark's acceleration, the state at t0 for time
+// order 0). So the messages, the largest backward error and the smallest
+// pivot ratio reach the report whatever a method does with a
+// LinearSolveResult.
 class LoggingSolver final : public LinearSolver {
 public:
-  LoggingSolver(const LinearSolver &solver, MessageLog &log)
-      : solver_(&solver), log_(&log) {}
+  LoggingSolver(std::shared_ptr<const LinearSolver> solver,
+                std::shared_ptr<SolveLog> log)
+      : solver_(std::move(solver)), log_(std::move(log)) {}
   std::string name() const override { return solver_->name(); }
   LinearSolverRequirements requirements() const override {
     return solver_->requirements();
@@ -197,12 +264,12 @@ public:
   std::unique_ptr<const PreparedLinearSolver>
   prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const override {
     return std::make_unique<const LoggingPreparedSolver>(
-        solver_->prepare(std::move(matrix)), *log_);
+        solver_->prepare(std::move(matrix)), log_);
   }
 
 private:
-  const LinearSolver *solver_;
-  MessageLog *log_;
+  std::shared_ptr<const LinearSolver> solver_;
+  std::shared_ptr<SolveLog> log_;
 };
 
 // The running summary of the step records.
@@ -246,10 +313,19 @@ Integrator::Integrator(std::shared_ptr<const TimeMethod> method,
     throw std::invalid_argument("integrator: the linear solver is null");
 }
 
-IntegrationResult
-Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
-                      double t0, double t1, const IntegrationOutput &output,
-                      const Solution *initial) const {
+Integrator
+Integrator::with_method(std::shared_ptr<const TimeMethod> method) const {
+  if (!method)
+    throw std::invalid_argument("integrator: the time method is null");
+  Integrator copy = *this;
+  copy.method_ = std::move(method);
+  return copy;
+}
+
+IntegrationResult Integrator::integrate(
+    std::shared_ptr<const fem::MeshedProblem> meshed_problem, double t0,
+    double t1, const IntegrationOutput &output, const Solution *initial,
+    std::optional<std::size_t> max_steps, const StepAnchor *anchor_in) const {
   if (!meshed_problem)
     throw std::invalid_argument("integrator: the problem is null");
   if (!std::isfinite(t0) || !std::isfinite(t1))
@@ -257,10 +333,27 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   if (!(t1 > t0))
     throw std::invalid_argument("integrator: t1 must be greater than t0");
   check_output(output, t0, t1);
+  if (max_steps && *max_steps == 0)
+    throw std::invalid_argument("integrator: max_steps must be at least 1");
+  if (anchor_in) {
+    const StepAnchor &a = *anchor_in;
+    if (!std::isfinite(a.time) || !std::isfinite(a.dt) || a.dt < 0.0 ||
+        (a.steps > 0 && !(a.dt > 0.0)))
+      throw std::invalid_argument(
+          "integrator: the step anchor needs a finite time and a finite "
+          "dt, positive when steps were taken");
+    // The same expression as the steps' times, so a run's own anchor
+    // stands exactly at its end.
+    if (a.time + static_cast<double>(a.steps) * a.dt != t0)
+      throw std::invalid_argument(std::format(
+          "integrator: the step anchor stands at {} + {} * {}, not at t0 = "
+          "{}",
+          a.time, a.steps, a.dt, t0));
+  }
   const fem::MeshedProblem &meshed = *meshed_problem;
   const auto start = Clock::now();
-  MessageLog log;
-  const LoggingSolver linear_solver(*linear_solver_, log);
+  const auto log = std::make_shared<SolveLog>();
+  const LoggingSolver linear_solver(linear_solver_, log);
 
   // 1. The time order, from assembly's formula facts without evaluating
   // anything (d/dt sqrt(t) may be infinite at t0), against the method's
@@ -286,10 +379,20 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // method declares what its start reads at t0"); the steps assemble at
   // their own times, so U_D' and U_D'' are never evaluated at t0 for a
   // method whose start reads nothing.
-  TimeState state = starting_state(meshed, t0, time_order, initial);
+  // A method that keeps the acceleration continues from the initial
+  // solution's accelerations, when it has them, without its start (which
+  // computes only the acceleration): so a continued run equals one long
+  // run, also from a time where M2 is singular.
+  const bool keeps_acceleration = method_->keeps_acceleration(time_order);
+  TimeState state =
+      starting_state(meshed, t0, time_order, initial, keeps_acceleration);
+  const bool acceleration_given =
+      keeps_acceleration && initial && !initial->accelerations.empty();
   std::optional<fem::AssembledProblem> current;
   std::size_t assemblies = 0;
-  const StartNeeds needs = method_->start_needs(time_order);
+  const StartNeeds needs = acceleration_given
+                               ? StartNeeds::nothing
+                               : method_->start_needs(time_order);
   if (needs != StartNeeds::nothing) {
     const int max_time_order = needs == StartNeeds::static_part ? 0 : 2;
     current = assembler.assemble(meshed_problem, t0, nullptr, max_time_order);
@@ -304,28 +407,35 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
         "integrator: {} gave no state at t0 = {} for time order {} (its "
         "start must compute it)",
         method_->name(), t0, time_order));
+  if (keeps_acceleration &&
+      state.accelerations.size() != meshed.free_nodes().size())
+    throw std::runtime_error(std::format(
+        "integrator: {} declares that it keeps the acceleration but gave "
+        "none at t0 = {} (its start must compute it)",
+        method_->name(), t0));
 
   IntegrationResult result;
   std::size_t next_snapshot = 0; // into output.snapshot_times
   if (!output.snapshot_times.empty() && output.snapshot_times[0] == t0) {
-    result.snapshots.push_back(make_solution(meshed, state, time_order, t0));
+    result.snapshots.push_back(
+        make_solution(meshed, state, time_order, keeps_acceleration, t0));
     ++next_snapshot;
   }
 
   // 3. The steps. On a stretch of equal steps from `anchor`, step k ends at
   // anchor + k dt; the stretch restarts after landing on a target or when
-  // the controller changes dt.
+  // the controller changes dt. A given anchor continues its stretch.
   const double fraction = method_->evaluation_fraction();
   double t = t0;
-  double anchor = t0;
-  std::size_t anchor_steps = 0;
-  double anchor_dt = 0.0;
+  double anchor = anchor_in ? anchor_in->time : t0;
+  std::size_t anchor_steps = anchor_in ? anchor_in->steps : 0;
+  double anchor_dt = anchor_in ? anchor_in->dt : 0.0;
   std::unique_ptr<const PreparedLinearSolver> prepared;
   double prepared_dt = 0.0;
   std::size_t prepares = 0;
   Summary summary;
 
-  while (t < t1) {
+  while (t < t1 && !(max_steps && summary.steps >= *max_steps)) {
     const auto step_start = Clock::now();
     const double dt = step_controller_->next_step(t);
     if (!std::isfinite(dt) || !(dt > 0.0))
@@ -382,6 +492,14 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
       prepared_dt = h;
       ++prepares;
     }
+    // The last step of the run: it lands on t1, or it is the max_steps-th.
+    const bool last =
+        t_new == t1 || (max_steps && summary.steps + 1 == *max_steps);
+    if (last && output.keep_before_last_step)
+      result.before_last_step = FreeState{.time = t,
+                                          .values = state.values,
+                                          .velocities = state.velocities,
+                                          .dt = h};
     const StepSolveInfo solved =
         method_->advance(*current, h, *prepared, state);
     t = t_new;
@@ -405,16 +523,22 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
     if (output.snapshot_every > 0 && summary.steps % output.snapshot_every == 0)
       take_snapshot = true;
     if (take_snapshot)
-      result.snapshots.push_back(make_solution(meshed, state, time_order, t));
+      result.snapshots.push_back(
+          make_solution(meshed, state, time_order, keeps_acceleration, t));
   }
 
-  result.final = make_solution(meshed, state, time_order, t1);
+  // t is t1 unless max_steps ended the run first (the last step landed on
+  // t1 exactly otherwise).
+  result.final =
+      make_solution(meshed, state, time_order, keeps_acceleration, t);
+  result.anchor = {.time = anchor, .dt = anchor_dt, .steps = anchor_steps};
 
   auto &report = result.report;
   report.stage = "integrator";
   auto &m = report.metrics;
   m["t0"] = t0;
   m["t1"] = t1;
+  m["t_end"] = t;
   m["time_order"] = time_order;
   m["steps"] = static_cast<double>(summary.steps);
   m["rejected_steps"] = static_cast<double>(summary.rejected);
@@ -431,7 +555,12 @@ Integrator::integrate(std::shared_ptr<const fem::MeshedProblem> meshed_problem,
   // read from the assembly's own report.
   m["assembly_threads"] = current->report().metrics.at("threads");
   m["linear_threads"] = static_cast<double>(summary.linear_threads);
-  report.messages = log.messages();
+  // Over every solve of the run, start() included (the log); the pivot
+  // ratio over the solves that measured it, 0 when none did.
+  SolveLog::Snapshot solves = log->snapshot();
+  m["max_backward_error"] = solves.max_backward_error;
+  m["min_pivot_ratio"] = solves.min_pivot_ratio;
+  report.messages = std::move(solves.messages);
   report.time = Clock::now() - start;
   return result;
 }

@@ -22,7 +22,11 @@ namespace pde2d::solve {
 // std::runtime_error saying so before trying; when the solve with M2
 // fails, it throws std::runtime_error saying that M2 is singular at t0.
 // Both name ImplicitMidpoint and ImplicitEuler, which need no
-// acceleration; there is no fallback (docs/decisions.md). No options.
+// acceleration; there is no fallback (docs/decisions.md). It keeps the
+// acceleration (keeps_acceleration): the Integrator returns W in its
+// Solutions, and a run continued from one with accelerations does not call
+// start(), so it continues exactly, also from a time where M2 is singular.
+// No options.
 class Newmark final : public TimeMethod {
 public:
   std::string name() const override { return "newmark"; }
@@ -34,6 +38,8 @@ public:
   StartNeeds start_needs(int) const override {
     return StartNeeds::whole_problem;
   }
+  // The state carries W, and start() computes only W0.
+  bool keeps_acceleration(int) const override { return true; }
   void start(const fem::AssembledProblem &problem,
              const LinearSolver &linear_solver,
              TimeState &state) const override;

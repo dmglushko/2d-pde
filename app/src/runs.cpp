@@ -55,9 +55,10 @@ void publish_snapshot(Run::Published &out, solve::Solution solution) {
       std::make_shared<const solve::Solution>(std::move(solution)));
 }
 
-constexpr std::array<MetricRule, 15> metric_rules{{
+constexpr std::array<MetricRule, 18> metric_rules{{
     {"t0", Combine::first},
     {"t1", Combine::last},
+    {"t_end", Combine::last},
     {"time_order", Combine::last},
     {"steps", Combine::sum},
     {"rejected_steps", Combine::sum},
@@ -71,6 +72,8 @@ constexpr std::array<MetricRule, 15> metric_rules{{
     {"snapshots", Combine::sum},
     {"assembly_threads", Combine::last},
     {"linear_threads", Combine::max},
+    {"max_backward_error", Combine::max},
+    {"min_pivot_ratio", Combine::min_measured},
 }};
 
 // The run's sections, for provenance.
@@ -266,10 +269,17 @@ void combine_report(std::optional<mesh::StageReport> &total,
       into += value;
       break;
     case Combine::max:
-      into = std::max(into, value);
+      // A NaN stays, from either side (std::max would drop a later one),
+      // as in the integrator's own maximum of the backward error.
+      if (!std::isnan(into) && !(value <= into))
+        into = value;
       break;
     case Combine::min:
       into = std::min(into, value);
+      break;
+    case Combine::min_measured:
+      if (value > 0.0)
+        into = into > 0.0 ? std::min(into, value) : value;
       break;
     case Combine::first:
       break;

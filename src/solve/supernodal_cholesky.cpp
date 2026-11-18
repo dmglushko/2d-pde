@@ -1,6 +1,7 @@
 #include "pde2d/solve/supernodal_cholesky.hpp"
 
 #include "factorization_threads.hpp"
+#include "pivot_ratio.hpp"
 #include "suitesparse.hpp"
 
 #include <cholmod.h>
@@ -79,13 +80,26 @@ constexpr const char *negated_message =
     "a_yy), so -A was factored and -A x = -b solved; the answer is "
     "unchanged";
 
+// Frees a CHOLMOD factor with the Common that made it.
+struct FreeFactor {
+  Common *common;
+  void operator()(cholmod_factor *factor) const {
+    cholmod_l_free_factor(&factor, common->get());
+  }
+};
+
+// Owns the factor from its analysis on, so that an exception anywhere in
+// the constructor (also after the factorization) frees it.
+using Factor = std::unique_ptr<cholmod_factor, FreeFactor>;
+
 class PreparedSupernodalCholesky final : public PreparedLinearSolver {
 public:
   PreparedSupernodalCholesky(std::shared_ptr<const fem::CsrMatrix> matrix,
                              const SupernodalCholeskyOptions &options)
       : matrix_(std::move(matrix)), options_(options),
         threads_(detail::resolve_threads(options.threads)),
-        common_(std::make_unique<Common>(threads_)) {
+        common_(std::make_unique<Common>(threads_)),
+        factor_(nullptr, FreeFactor{common_.get()}) {
     const std::size_t n = matrix_->rows();
     if (n == 0)
       return; // nothing to factorize: every solve returns an empty vector
@@ -105,24 +119,21 @@ public:
     cholmod_common *c = common_->get();
     // The lower triangle of the matrix (stype 1 of its transpose).
     cholmod_sparse a = detail::transposed_view(factored, 1);
-    factor_ = cholmod_l_analyze(&a, c);
+    factor_.reset(cholmod_l_analyze(&a, c));
     if (!factor_)
       throw std::runtime_error(std::format(
           "{}: the analysis failed ({})", solver_name, status_text(c->status)));
-    cholmod_l_factorize(&a, factor_, c);
-    if (c->status < CHOLMOD_OK) {
-      free_factor();
+    cholmod_l_factorize(&a, factor_.get(), c);
+    if (c->status < CHOLMOD_OK)
       throw std::runtime_error(std::format("{}: the factorization failed ({})",
                                            solver_name,
                                            status_text(c->status)));
-    }
     // CHOLMOD_NOT_POSDEF: a pivot that is not positive (zero, also
     // exactly zero for a singular matrix, or negative); factor_->minor is
     // its column (in the ordering), n when all pivots are positive.
     if (c->status == CHOLMOD_NOT_POSDEF ||
         static_cast<std::size_t>(factor_->minor) < n) {
       const auto column = static_cast<std::size_t>(factor_->minor);
-      free_factor();
       // A negative definite matrix never gets here (its diagonal is
       // negative, and -A is positive definite), so the advice is only for
       // an indefinite or singular one.
@@ -145,13 +156,9 @@ public:
     // magnitude). Reported, not judged: a tiny positive pivot (a pure
     // Neumann problem, a very ill-conditioned one) is accepted, and the
     // backward error of each solve is checked.
-    pivot_ratio_ = cholmod_l_rcond(factor_, c);
+    pivot_ratio_ = cholmod_l_rcond(factor_.get(), c);
+    pivot_warning_ = detail::pivot_ratio_warning(solver_name, pivot_ratio_);
   }
-
-  ~PreparedSupernodalCholesky() override { free_factor(); }
-  PreparedSupernodalCholesky(const PreparedSupernodalCholesky &) = delete;
-  PreparedSupernodalCholesky &
-  operator=(const PreparedSupernodalCholesky &) = delete;
 
   LinearSolveResult
   solve(std::span<const double> right_hand_side) const override {
@@ -165,6 +172,8 @@ public:
     result.pivot_ratio = pivot_ratio_;
     if (negated_)
       result.messages.emplace_back(negated_message);
+    if (!pivot_warning_.empty())
+      result.messages.push_back(pivot_warning_);
     // Allocated before CHOLMOD's result exists, so nothing can throw
     // between its allocation and its release (review finding).
     result.values.resize(n);
@@ -185,7 +194,7 @@ public:
       dense_b.x = b.data();
       dense_b.xtype = CHOLMOD_REAL;
       dense_b.dtype = CHOLMOD_DOUBLE;
-      cholmod_dense *x = cholmod_l_solve(CHOLMOD_A, factor_, &dense_b, c);
+      cholmod_dense *x = cholmod_l_solve(CHOLMOD_A, factor_.get(), &dense_b, c);
       if (!x)
         throw std::runtime_error(std::format(
             "{}: the solve failed ({})", solver_name, status_text(c->status)));
@@ -200,19 +209,16 @@ public:
   }
 
 private:
-  void free_factor() {
-    if (factor_)
-      cholmod_l_free_factor(&factor_, common_->get());
-  }
-
   std::shared_ptr<const fem::CsrMatrix> matrix_;
   SupernodalCholeskyOptions options_;
   int threads_; // options_.threads, 0 resolved
   // A pointer, so that the const solve() can use CHOLMOD's workspace.
   std::unique_ptr<Common> common_;
-  cholmod_factor *factor_ = nullptr;
-  double pivot_ratio_ = 0.0; // 0 for an empty matrix
-  bool negated_ = false;     // factor_ is that of -A
+  // After common_, so that it is freed first.
+  Factor factor_;
+  double pivot_ratio_ = 0.0;  // 0 for an empty matrix
+  bool negated_ = false;      // factor_ is that of -A
+  std::string pivot_warning_; // empty unless pivot_ratio_ is tiny
 };
 
 } // namespace

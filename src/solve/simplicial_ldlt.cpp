@@ -2,6 +2,7 @@
 
 #include "eigen_threads.hpp"
 #include "eigen_view.hpp"
+#include "pivot_ratio.hpp"
 #include "vectors.hpp"
 
 #include <Eigen/OrderingMethods>
@@ -10,6 +11,7 @@
 #include <format>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace pde2d::solve {
@@ -41,6 +43,8 @@ public:
     // The pivots are the diagonal D; none is zero after a success.
     const Eigen::VectorXd d = ldlt_.vectorD().cwiseAbs();
     pivot_ratio_ = d.minCoeff() / d.maxCoeff();
+    pivot_warning_ =
+        detail::pivot_ratio_warning("simplicial_ldlt", pivot_ratio_);
   }
 
   LinearSolveResult
@@ -64,6 +68,8 @@ public:
     result.residual = measures.relative_residual;
     result.backward_error = measures.backward_error;
     result.pivot_ratio = pivot_ratio_;
+    if (!pivot_warning_.empty())
+      result.messages.push_back(pivot_warning_);
     // The check that makes LDL^T without pivoting safe: a tiny pivot of an
     // indefinite matrix factorizes "successfully" and gives a wrong x,
     // with a large backward error (the growth of the factors). The
@@ -83,7 +89,8 @@ private:
   std::shared_ptr<const fem::CsrMatrix> matrix_;
   SimplicialLdltOptions options_;
   Ldlt ldlt_;
-  double pivot_ratio_ = 0.0; // min |D| / max |D|; 0 for an empty matrix
+  double pivot_ratio_ = 0.0;  // min |D| / max |D|; 0 for an empty matrix
+  std::string pivot_warning_; // empty unless pivot_ratio_ is tiny
 };
 
 } // namespace

@@ -21,7 +21,9 @@ namespace pde2d::solve {
 // residual of an accurate answer is rounding of size machine epsilon times
 // |A| |x|, which a coefficient contrast of 1e6 makes larger than |b| times
 // any useful tolerance. Every result also reports the ratio of the
-// smallest pivot |D_ii| to the largest (pivot_ratio), which is not judged.
+// smallest pivot |D_ii| to the largest (pivot_ratio), which is not
+// judged; below 1e-10 the result carries a warning in its messages (the
+// matrix is nearly singular).
 struct SimplicialLdltOptions {
   // The bound on the backward error of every solve (the name is kept from
   // when it bounded the relative residual); in (0, 1).

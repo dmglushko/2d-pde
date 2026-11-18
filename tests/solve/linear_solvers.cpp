@@ -314,7 +314,26 @@ int main() {
          // A row without entries.
          expect_throws<std::runtime_error>(
              [] { (void)MultifrontalLu().prepare(sparse({{1, 0}, {0, 0}})); },
-             "multifrontal_lu: the matrix is singular");
+             "multifrontal_lu: the matrix is singular (a pivot is exactly "
+             "zero): row 1 of 2 has no entry that is not zero");
+         // A row whose only entry is an explicitly stored zero, on the
+         // diagonal: a singleton whose row scale factor is zero too (ParU
+         // alone accepted it, with a pivot 0 / 0; review finding). The
+         // other row has a negative entry, so the scale is |a_00| = 1.
+         expect_throws<std::runtime_error>(
+             [] {
+               (void)MultifrontalLu().prepare(
+                   with_explicit_zero({{-1, 0}, {0, 0}}, 1, 1));
+             },
+             "multifrontal_lu: the matrix is singular (a pivot is exactly "
+             "zero): row 1 of 2 has no entry that is not zero");
+         // A zero row among larger ones, stored zeros only.
+         expect_throws<std::runtime_error>(
+             [] {
+               (void)MultifrontalLu().prepare(
+                   with_explicit_zero({{2, 1, 0}, {0, 0, 0}, {0, 1, 3}}, 1, 0));
+             },
+             "row 1 of 3 has no entry that is not zero");
        }},
       {"SupernodalCholesky solves symmetric positive definite systems",
        [] {
@@ -418,11 +437,115 @@ int main() {
          check(expected > 1e-12, "a visible backward error");
          near(r.backward_error, expected, 1e-6 * expected,
               "bicgstab: the infinity-norm formula");
+         // Above the tolerance: refused. LDL^T without pivoting on
+         // [[1e-12, 1], [1, 1]] (pivots 1e-12 and 1 - 1e12) loses about
+         // 1e-16 * 1e12 of accuracy: a backward error of about 2.79e-5
+         // (measured).
+         {
+           const Dense tiny_pivot = {{1e-12, 1}, {1, 1}};
+           const std::vector<double> tiny_b = {1.234567, 0.7654321};
+           const auto tiny = SimplicialLdlt({.residual_tolerance = 1e-3})
+                                 .prepare(sparse(tiny_pivot))
+                                 ->solve(tiny_b);
+           near(tiny.backward_error, 2.79e-5, 0.01e-5,
+                "simplicial_ldlt: the backward error of a tiny pivot");
+           near(tiny.backward_error,
+                backward_error(tiny_pivot, tiny_b, tiny.values),
+                1e-3 * tiny.backward_error, "as computed here");
+           expect_throws<std::runtime_error>(
+               [&] {
+                 (void)SimplicialLdlt()
+                     .prepare(sparse(tiny_pivot))
+                     ->solve(tiny_b);
+               },
+               "simplicial_ldlt: the backward error 2.79");
+           expect_throws<std::runtime_error>(
+               [&] {
+                 (void)SimplicialLdlt()
+                     .prepare(sparse(tiny_pivot))
+                     ->solve(tiny_b);
+               },
+               "is above the tolerance 1e-08 (residual_tolerance");
+         }
+         // The Cholesky of a positive definite matrix and the LU with
+         // threshold pivoting are backward stable: no small matrix gives
+         // them a large backward error. Their check is shown with a
+         // tolerance below the rounding of an accurate answer instead.
+         {
+           const Dense small = {{4.1, 1.3, 0}, {1.3, 3.7, 0.9}, {0, 0.9, 2.3}};
+           const std::vector<double> small_b = {0.123, 0.789, 0.456};
+           const auto cholesky =
+               supernodal_cholesky.prepare(sparse(small))->solve(small_b);
+           const auto lu =
+               multifrontal_lu.prepare(sparse(small))->solve(small_b);
+           check(cholesky.backward_error > 1e-300 && lu.backward_error > 1e-300,
+                 "rounding: a backward error above 1e-300");
+           expect_throws<std::runtime_error>(
+               [&] {
+                 (void)SupernodalCholesky({.residual_tolerance = 1e-300})
+                     .prepare(sparse(small))
+                     ->solve(small_b);
+               },
+               "supernodal_cholesky: the backward error");
+           expect_throws<std::runtime_error>(
+               [&] {
+                 (void)MultifrontalLu({.residual_tolerance = 1e-300})
+                     .prepare(sparse(small))
+                     ->solve(small_b);
+               },
+               "multifrontal_lu: the backward error");
+           expect_throws<std::runtime_error>(
+               [&] {
+                 (void)MultifrontalLu({.residual_tolerance = 1e-300})
+                     .prepare(sparse(small))
+                     ->solve(small_b);
+               },
+               "is above the tolerance 1e-300 (residual_tolerance");
+         }
          // b = 0: x = 0, nothing to measure.
          check(multifrontal_lu.prepare(sparse(spd))
                        ->solve(std::vector<double>(3, 0.0))
                        .backward_error == 0.0,
                "0 for b = 0");
+       }},
+      {"a residual entry that is not finite: refused by the backward error "
+       "check",
+       [] {
+         // An infinite diagonal entry: the factorizations give the finite
+         // x = (1 / inf, 4 / 2) = (0, 2), but row 0 of the residual is
+         // 1 - inf * 0 = NaN (row 1 is 0). The NaN must reach the backward
+         // error (review finding: a maximum that skipped NaN made it 0, and
+         // the answer was accepted).
+         const double inf = std::numeric_limits<double>::infinity();
+         const Dense a = {{inf, 0}, {0, 2}};
+         const std::vector<double> b = {1, 4};
+         for (const LinearSolver *solver :
+              std::initializer_list<const LinearSolver *>{
+                  &simplicial_ldlt, &supernodal_cholesky}) {
+           // NaN (printed "nan" or "-nan"), refused.
+           expect_throws<std::runtime_error>(
+               [&] { (void)solver->prepare(sparse(a))->solve(b); },
+               solver->name() + ": the backward error ");
+           expect_throws<std::runtime_error>(
+               [&] { (void)solver->prepare(sparse(a))->solve(b); },
+               "nan is above the tolerance");
+         }
+       }},
+      {"LinearSolveResult keeps its positional order",
+       [] {
+  // The members that existed before backward_error, pivot_ratio and
+  // messages keep their order: a positional initialization written
+  // then means the same (review finding).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+         const LinearSolveResult r{{1.0, 2.0}, 3, 0.5, 4};
+#pragma GCC diagnostic pop
+         check(r.values == std::vector<double>{1.0, 2.0} && r.iterations == 3 &&
+                   r.residual == 0.5 && r.threads == 4,
+               "values, iterations, residual, threads");
+         check(r.backward_error == 0.0 && r.pivot_ratio == 0.0 &&
+                   r.messages.empty(),
+               "the new members keep their defaults");
        }},
       {"the pivot ratio: measured by the factorizations that have pivots",
        [] {

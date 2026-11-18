@@ -31,7 +31,10 @@ struct LinearSolverRequirements {
   bool symmetric_matrix = false;
 };
 
-// The result of one solve.
+// The result of one solve. The first four members keep the order they
+// had before backward_error, pivot_ratio and messages were added, so a
+// positional initialization {values, iterations, residual, threads}
+// keeps its meaning; new members go at the end.
 struct LinearSolveResult {
   // The solution x of matrix * x = right-hand side, one value per row
   // (for the assembled systems: per free unknown).
@@ -41,6 +44,12 @@ struct LinearSolveResult {
   // The relative residual |b - A x| / |b| in the Euclidean norm, computed
   // from x after the solve (|b - A x| when b is zero).
   double residual = 0.0;
+  // The threads the solve could use: the resolved `threads` option of the
+  // iterative solvers (for their matrix-vector products) and of the
+  // parallel direct solvers (SupernodalCholesky, MultifrontalLu); 1 for
+  // the Eigen direct solvers (SparseLu, SimplicialLdlt), which run in one
+  // thread, and for an empty system.
+  std::size_t threads = 1;
   // The normwise backward error |b - A x| / (|A| |x| + |b|) in the
   // infinity norm (|A| the largest absolute row sum), from the same
   // residual: the smallest relative change of A and b for which x is the
@@ -54,22 +63,23 @@ struct LinearSolveResult {
   // factorization that solved, where the solver measures it:
   // SimplicialLdlt and SupernodalCholesky (the diagonal D of L D L^T, for
   // the Cholesky the squares of the diagonal of L), MultifrontalLu (the
-  // diagonal of U of the row-scaled matrix). Reported, not judged: a tiny
-  // ratio (1e-17 for a pure Neumann problem) says the matrix is singular
-  // or nearly so, but these solvers refuse only an exact zero pivot. 0
+  // diagonal of U of the row-scaled matrix). Not refused: a tiny ratio
+  // (1e-17 for a pure Neumann problem) says the matrix is singular or
+  // nearly so, but these solvers refuse only an exact zero pivot; below
+  // 1e-10 they add a warning to `messages` and return the answer. 0
   // when not measured (the iterative solvers, SparseLu, an empty system);
   // a measured ratio is above 0.
   double pivot_ratio = 0.0;
-  // The threads the solve could use: the resolved `threads` option of the
-  // iterative solvers (for their matrix-vector products) and of the
-  // parallel direct solvers (SupernodalCholesky, MultifrontalLu); 1 for
-  // the Eigen direct solvers (SparseLu, SimplicialLdlt), which run in one
-  // thread, and for an empty system.
-  std::size_t threads = 1;
   // Warnings: the solve worked, but the caller should know something
   // (failures are exceptions). Each names the solver. Empty for most
   // solves; SupernodalCholesky gives one on every solve with a matrix it
-  // prepared as negative definite (it factored -A). The StaticSolver puts
+  // prepared as negative definite (it factored -A), and SimplicialLdlt,
+  // SupernodalCholesky and MultifrontalLu one on every solve whose pivot
+  // ratio is below 1e-10 ("<solver>: the matrix is nearly singular (pivot
+  // ratio below 1e-10; its value is the result's pivot_ratio, ...), so the
+  // answer may have few correct digits; ..."; it names the threshold, not
+  // the ratio, so the text is the same for every solve of a solver, also
+  // one prepared again at every step). The StaticSolver puts
   // them in its "static_solver" report, the Integrator each distinct one
   // once in its "integrator" report.
   std::vector<std::string> messages{};

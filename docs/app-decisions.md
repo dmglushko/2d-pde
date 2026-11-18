@@ -1090,3 +1090,19 @@ time from its start.
   the field moving, the meaning, a symbol at the caret, an error after a
   pause, switching forms, a condition line; `time_bar`: a run plays from
   its start).
+- **The worst solve combines over chunks** (2026-11-18): the integrator's
+  new `max_backward_error` takes the largest over the chunks and
+  `min_pivot_ratio` the smallest above 0 (a new rule,
+  `Combine::min_measured`), since the library reports 0 for "not
+  measured" and a plain minimum would let a chunk without a measured
+  ratio hide the others'. The page does not show them yet; the pivot
+  ratio warning reaches it as one of the report's messages.
+- **A NaN stays in the largest over chunks** (2026-11-18, review
+  finding): `Combine::max` keeps a NaN from any chunk instead of
+  `std::max`, which dropped a NaN `max_backward_error` of a later chunk
+  behind an earlier finite one. The integrator keeps NaN in its own
+  maximum, so the combined report says the same as one long run would.
+- **`t_end` combines as the last chunk's** (2026-11-18, the library's
+  integrator gained the metric `t_end`, where a run ended, with its
+  `max_steps`): like `t1`, the combined run ends where its last chunk
+  did. The app never passes `max_steps`, so `t_end` equals `t1`.
