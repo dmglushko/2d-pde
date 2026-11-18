@@ -572,6 +572,119 @@ int main() {
              },
              "solve", "no error indicators");
        }},
+      {"an adaptive run in time keeps each snapshot on its own mesh",
+       [] {
+         Json case_json = load_example("l_shape_heat_adaptive.json");
+         // Fewer steps: adapt every 2 steps of 0.05 up to t = 0.5.
+         case_json["solve"]["time"]["t1"] = 0.5;
+         case_json["solve"]["time"]["snapshots"] = 5;
+         case_json["solve"]["time"]["step"]["options"]["dt"] = 0.05;
+         case_json["solve"]["adaptive_time"]["every"] = {{"interval", nullptr},
+                                                         {"steps", 2}};
+         app::Session session;
+         const Json result = session.solve(case_json);
+         check(result["mode"] == "adaptive_time" && result["state"] == "done",
+               "done");
+         const Json &adaptive = result["adaptive_time"];
+         const Json &meshes = adaptive["meshes"];
+         const Json &snapshot_mesh = adaptive["snapshot_mesh"];
+         check(meshes.size() >= 3, "several meshes");
+         check(snapshot_mesh.size() == 6 && snapshot_mesh[0] == 0 &&
+                   snapshot_mesh.back() == meshes.size() - 1,
+               "from the starting mesh to the last " + snapshot_mesh.dump());
+         check(meshes[0]["id"] == result["start_mesh_id"] &&
+                   meshes.back()["id"] == result["mesh_id"],
+               "the starting mesh keeps its id, the last is the run's");
+         check(adaptive["adaptations"].size() == 4 &&
+                   adaptive["adaptations"][0]["outcome"] == "refined",
+               "an adaptation every 2 steps, none at t1 " +
+                   adaptive["adaptations"].dump());
+         // The values: each snapshot as many as its mesh's nodes.
+         const Json &layout = result["values"];
+         check(layout.contains("snapshot_nodes"), "the counts vary");
+         std::size_t total = 0;
+         for (std::size_t k = 0; k < 6; ++k) {
+           const auto nodes =
+               meshes[snapshot_mesh[k].get<std::size_t>()]["nodes"]
+                   .get<std::size_t>();
+           check(layout["snapshot_nodes"][k] == nodes,
+                 "snapshot " + std::to_string(k) + " nodes");
+           total += nodes;
+         }
+         const auto job = result["job"].get<std::uint64_t>();
+         check(session.solution_values_float32(job, 0, 6).size() == 4 * total,
+               "the bytes of every snapshot");
+         // Every mesh is served by its id.
+         for (const Json &mesh : meshes)
+           check(!session.mesh_arrays(Json{{"mesh", mesh["id"]}}).empty(),
+                 "mesh " + mesh["id"].dump());
+         // Probes: one value per snapshot, each on its mesh.
+         const Json probes = session.probes(
+             Json{{"job", job}, {"points", Json::array({{-0.5, 0.5}})}});
+         check(probes["probes"][0]["inside"] == true &&
+                   probes["probes"][0]["values"].size() == 6,
+               "a probe value per snapshot");
+         // The exact comparison: each snapshot against its own mesh.
+         const Json comparison = session.compare(Json{
+             {"job", job}, {"exact", case_json["view"]["exact_solution"]}});
+         const Json &last = comparison["snapshots"].back();
+         check(last["l2"].get<double>() < 0.01,
+               "the last snapshot's error " + last.dump());
+         // One-mesh exports refuse; the VTK series has a file per snapshot.
+         expect_stage_error(
+             [&] { (void)session.export_file(case_json, "solution.csv"); },
+             "export", "several");
+         (void)session.export_file(case_json, "solution-vtk.zip");
+         check(session.export_file(case_json, "solution-mesh.pde2d")
+                       .text()
+                       .find("NODES " + meshes.back()["nodes"].dump()) !=
+                   std::string::npos,
+               "the last mesh exports");
+         // A reference comparison needs one mesh.
+         (void)session.keep_reference(Json{{"job", job}});
+         expect_stage_error(
+             [&] {
+               (void)session.compare(Json{{"job", job}, {"reference", true}});
+             },
+             "compare", "several meshes");
+       }},
+      {"the library's refusal of an adaptive setting in time lands on its "
+       "field",
+       [] {
+         Json case_json = load_example("l_shape_heat_adaptive.json");
+         app::Session session;
+         const auto refused = [&](const char *path) {
+           try {
+             (void)session.solve(case_json);
+             throw test::Failure(std::string(path) + " should be refused");
+           } catch (const app::StageError &error) {
+             check(error.path() == path,
+                   "path " + error.path() + ": " + error.what());
+           }
+         };
+         case_json["solve"]["adaptive_time"]["every"] = {{"interval", nullptr},
+                                                         {"steps", 0}};
+         refused("solve.adaptive_time.every.steps");
+         case_json["solve"]["adaptive_time"]["every"] = {{"interval", -1.0},
+                                                         {"steps", nullptr}};
+         refused("solve.adaptive_time.every.interval");
+         case_json["solve"]["adaptive_time"]["every"] = {{"interval", nullptr},
+                                                         {"steps", nullptr}};
+         refused("solve.adaptive_time.every");
+         case_json["solve"]["adaptive_time"]["every"] = {{"interval", nullptr},
+                                                         {"steps", 5}};
+         case_json["solve"]["adaptive_time"]["max_refinements"] = 0;
+         refused("solve.adaptive_time.max_refinements");
+         case_json["solve"]["adaptive_time"]["max_refinements"] = 5;
+         case_json["solve"]["adaptive_time"]["max_nodes"] = 5;
+         refused("solve.adaptive_time.max_nodes");
+         // Newmark as damping method needs time order 2; the problem has 1.
+         case_json["solve"]["adaptive_time"]["max_nodes"] = 20000;
+         case_json["solve"]["adaptive_time"]["damping_steps"] = 2;
+         case_json["solve"]["adaptive_time"]["damping_method"] = {
+             {"type", "newmark"}, {"options", Json::object()}};
+         refused("solve.adaptive_time.damping_method");
+       }},
       {"the parallel direct solvers and the threads solve a linear solution",
        [] {
          app::Session session;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pde2d/adapt/adaptive_integrator.hpp"
 #include "pde2d/adapt/adaptive_static_solver.hpp"
 #include "pde2d/mesh/mesh_spec.hpp"
 
@@ -31,6 +32,7 @@ enum class OptionKind {
   choice,       // one of OptionSpec::choices
   length_bound, // {"absolute": number or null, "relative": number or null}
   tolerance,    // the same object; relative to the first error estimate
+  schedule,     // {"interval": number or null, "steps": integer or null}
 };
 
 struct OptionSpec {
@@ -43,7 +45,8 @@ struct OptionSpec {
   std::string unit;                 // shown after the field, may be empty
 };
 
-// "number", "integer", "choice", "length_bound" or "tolerance".
+// "number", "integer", "choice", "length_bound", "tolerance" or
+// "schedule".
 std::string_view option_kind_name(OptionKind kind);
 
 // What the page receives for one option.
@@ -79,6 +82,7 @@ public:
   std::string choice(std::string_view name) const;
   mesh::LengthBound length_bound(std::string_view name) const;
   adapt::ErrorTolerance tolerance(std::string_view name) const;
+  adapt::AdaptationSchedule schedule(std::string_view name) const;
   // Reads every option by its kind (and a choice against its choices),
   // throwing what the getters throw; for a part of a case that is checked
   // but not built.

@@ -3,6 +3,7 @@
 #include "problem_input.hpp"
 #include "views.hpp"
 
+#include "pde2d/adapt/adaptive_integrator.hpp"
 #include "pde2d/adapt/adaptive_static_solver.hpp"
 #include "pde2d/adapt/mesh_refinement.hpp"
 #include "pde2d/fem/assembler.hpp"
@@ -186,6 +187,39 @@ solve_adaptive(const SolveSetup &setup,
   }
 }
 
+// The library's adaptive loop in time with one MeshRefinement, over the
+// run's snapshot times. Its refusal of a setting is marked at that setting.
+adapt::AdaptiveIntegrationResult solve_adaptive_time(const Run &run) {
+  const SolveSetup &setup = run.setup;
+  const auto refinement = std::make_shared<const adapt::MeshRefinement>(
+      setup.estimator, setup.marking,
+      std::make_shared<const mesh::Remesher>(setup.refiner));
+  const adapt::AdaptiveIntegrator integrator(
+      solve::Integrator(setup.method, setup.step_controller,
+                        setup.linear_solver, setup.assembler),
+      {refinement}, setup.time_options);
+  solve::IntegrationOutput output;
+  output.snapshot_times = run.times;
+  try {
+    return integrator.integrate(run.meshed, setup.t0, setup.t1,
+                                setup.time_target, output);
+  } catch (const std::invalid_argument &error) {
+    const std::string_view message = error.what();
+    if (message.starts_with("adaptive_integrator:")) {
+      if (message.find("damping method") != std::string_view::npos)
+        throw PathError("solve.adaptive_time.damping_method",
+                        std::string(message));
+      if (message.find("the schedule") != std::string_view::npos)
+        throw PathError("solve.adaptive_time.every", std::string(message));
+      if (const std::string option =
+              named_option(message, solve_catalog().adaptive_time_settings);
+          !option.empty())
+        throw PathError("solve.adaptive_time" + option, std::string(message));
+    }
+    throw;
+  }
+}
+
 // The metric `name` of the report of `stage` among `reports`, or null.
 Json metric_of(std::span<const mesh::StageReport> reports,
                std::string_view stage, std::string_view name) {
@@ -261,6 +295,102 @@ void publish_adaptive(Run &run, adapt::AdaptiveStaticResult result,
   out.indicators = std::move(indicators);
   publish_snapshot(out, *kept.back());
   out.cycles = std::move(kept);
+  out.state = RunState::done;
+}
+// Keeps an adaptive run in time's result: its snapshots, each on its
+// piece's mesh; every mesh with an id (the starting mesh keeps its own, a
+// new one takes the next reserved id); the last problem and mesh as the
+// run's; and the summary (a row per adaptation time, the mesh of each
+// snapshot).
+void publish_adaptive_time(Run &run, adapt::AdaptiveIntegrationResult result,
+                           std::mutex &run_lock) {
+  std::vector<std::pair<std::uint64_t, std::shared_ptr<const mesh::Mesh>>>
+      meshes;
+  std::uint64_t reserved = 0;
+  const std::uint64_t reserved_count =
+      run.setup.time_target.max_refinements.value_or(0);
+  const auto index_of = [&](const std::shared_ptr<const mesh::Mesh> &mesh) {
+    for (std::size_t i = 0; i < meshes.size(); ++i)
+      if (meshes[i].second == mesh)
+        return i;
+    std::uint64_t id = run.mesh_id;
+    if (mesh != run.mesh) {
+      if (reserved == reserved_count)
+        throw StageError("solve", "internal",
+                         "the run made more meshes than it has ids for");
+      id = run.adapted_mesh_id + reserved++;
+    }
+    meshes.emplace_back(id, mesh);
+    return meshes.size() - 1;
+  };
+  for (const adapt::IntegrationPiece &piece : result.pieces)
+    (void)index_of(piece.problem->mesh());
+
+  Json adaptations = Json::array();
+  for (std::size_t k = 0; k < result.pieces.size(); ++k) {
+    const adapt::IntegrationPiece &piece = result.pieces[k];
+    if (!piece.adaptation)
+      continue;
+    const adapt::AdaptationPoint &point = *piece.adaptation;
+    const mesh::Mesh &before = *piece.problem->mesh();
+    Json row = Json::object();
+    row["time"] = point.time;
+    row["steps"] = point.steps;
+    row["estimate"] =
+        point.estimate ? number_or_null(point.estimate->total) : Json(nullptr);
+    row["outcome"] = adapt::to_string(point.outcome);
+    row["nodes"] = before.nodes.size();
+    row["marked"] = metric_of(point.reports, "mesh_refinement", "marked");
+    // The mesh the run goes on with (the next piece's).
+    const mesh::Mesh &after = k + 1 < result.pieces.size()
+                                  ? *result.pieces[k + 1].problem->mesh()
+                                  : before;
+    row["nodes_after"] = after.nodes.size();
+    row["mesh"] = index_of(k + 1 < result.pieces.size()
+                               ? result.pieces[k + 1].problem->mesh()
+                               : piece.problem->mesh());
+    adaptations.push_back(std::move(row));
+  }
+  Json snapshot_mesh = Json::array();
+  for (const solve::Solution &snapshot : result.snapshots)
+    snapshot_mesh.push_back(index_of(snapshot.mesh));
+  const auto &metrics = result.report.metrics;
+  const auto metric = [&](const char *name) {
+    const auto found = metrics.find(name);
+    return found == metrics.end() ? Json(nullptr)
+                                  : number_or_null(found->second);
+  };
+  Json summary = Json::object();
+  summary["adaptations"] = std::move(adaptations);
+  summary["snapshot_mesh"] = std::move(snapshot_mesh);
+  summary["refinements"] = metric("refinements");
+  summary["pieces"] = metric("pieces");
+  summary["steps"] = metric("steps");
+  summary["damping_steps"] = metric("damping_steps");
+  summary["tolerance"] = metric("tolerance");
+  summary["messages"] = result.report.messages;
+  const auto &last = result.pieces.back().problem;
+  summary["mesh_stats"] = mesh_stats_json(*last->mesh());
+
+  Json reports = Json::array();
+  reports.push_back(report_json(result.report));
+  reports.push_back(report_json(result.pieces.back().report));
+
+  const std::scoped_lock lock(run_lock);
+  Run::Published &out = run.published;
+  run.meshed = last;
+  run.mesh = last->mesh();
+  run.mesh_id = meshes[index_of(last->mesh())].first;
+  run.base["free_unknowns"] = last->free_nodes().size();
+  out.meshes = std::move(meshes);
+  out.static_reports = std::move(reports);
+  out.adaptive = std::move(summary);
+  for (solve::Solution &snapshot : result.snapshots) {
+    snapshot.accelerations = {};
+    publish_snapshot(out, std::move(snapshot));
+  }
+  out.t = run.setup.t1;
+  out.chunks = 1;
   out.state = RunState::done;
 }
 } // namespace
@@ -428,6 +558,17 @@ std::size_t adaptive_run_bytes(std::size_t max_nodes, std::size_t max_cycles) {
   return max_cycles * (max_nodes * per_node + per_cycle);
 }
 
+std::size_t adaptive_time_run_bytes(std::size_t max_nodes,
+                                    std::size_t snapshots, std::size_t meshes,
+                                    int time_order) {
+  // A mesh as in adaptive_run_bytes (less the values), the snapshots and
+  // the state as in run_bytes.
+  constexpr std::size_t per_mesh_node = 56;
+  constexpr std::size_t per_mesh = 512;
+  return meshes * (max_nodes * per_mesh_node + per_mesh) +
+         run_bytes(max_nodes, snapshots, time_order);
+}
+
 void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
   {
     const std::scoped_lock lock(run_lock);
@@ -514,7 +655,15 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
     // The Mesh step's mesh it starts from (mesh_id becomes its last one).
     made->base["start_mesh_id"] = made->mesh_id;
   } else {
-    made->base["mode"] = "time";
+    const bool adaptive = made->setup.mode == SolveMode::adaptive_time;
+    made->base["mode"] = adaptive ? "adaptive_time" : "time";
+    if (adaptive) {
+      made->adapted_mesh_id =
+          made->setup.time_target.max_refinements
+              ? cache.new_mesh_ids(*made->setup.time_target.max_refinements)
+              : 0;
+      made->base["start_mesh_id"] = made->mesh_id;
+    }
     made->times = snapshot_times(made->setup);
     if (made->times.size() < 2) {
       // An interval the library refuses: let it say why.
@@ -536,6 +685,13 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
         std::max<std::size_t>(1, target.max_cycles.value_or(1)));
     return made;
   }
+  if (made->setup.mode == SolveMode::adaptive_time) {
+    const adapt::AdaptiveTimeTarget &target = made->setup.time_target;
+    made->bytes = adaptive_time_run_bytes(
+        std::max(made->mesh->nodes.size(), target.max_nodes.value_or(0)),
+        made->times.size(), target.max_refinements.value_or(0) + 1, time_order);
+    return made;
+  }
   made->bytes =
       run_bytes(made->mesh->nodes.size(), made->times.size(),
                 made->setup.mode == SolveMode::static_solve ? 0 : time_order);
@@ -543,6 +699,19 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
 }
 
 void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock) {
+  if (run.setup.mode == SolveMode::adaptive_time) {
+    try {
+      adapt::AdaptiveIntegrationResult result =
+          staged("solve", [&] { return solve_adaptive_time(run); });
+      publish_adaptive_time(run, std::move(result), run_lock);
+    } catch (const StageError &error) {
+      const std::scoped_lock lock(run_lock);
+      run.published.state = RunState::failed;
+      run.published.error = error;
+      throw;
+    }
+    return;
+  }
   if (run.setup.mode == SolveMode::adaptive) {
     try {
       adapt::AdaptiveStaticResult result = staged(
@@ -605,7 +774,21 @@ Json progress_json(const Run &run, std::size_t memory_budget) {
   out["max"] = number_or_null(high);
   out["snapshot_min"] = std::move(minima);
   out["snapshot_max"] = std::move(maxima);
-  if (run.setup.mode == SolveMode::time_integration) {
+  if (run.setup.mode == SolveMode::adaptive_time) {
+    out["t0"] = run.setup.t0;
+    out["t1"] = run.setup.t1;
+    out["t"] = p.t;
+    out["snapshots_total"] = run.times.size();
+    out["reports"] = p.static_reports;
+    Json adaptive = p.adaptive.is_null() ? Json::object() : p.adaptive;
+    // Every mesh the snapshots are on (snapshot_mesh indexes it), whose
+    // arrays POST /api/mesh/arrays sends.
+    Json meshes = Json::array();
+    for (const auto &[mesh_id, mesh] : p.meshes)
+      meshes.push_back(mesh_summary_json(*mesh, mesh_id));
+    adaptive["meshes"] = std::move(meshes);
+    out["adaptive_time"] = std::move(adaptive);
+  } else if (run.setup.mode == SolveMode::time_integration) {
     out["t0"] = run.setup.t0;
     out["t1"] = run.setup.t1;
     out["t"] = p.t;
@@ -631,13 +814,29 @@ Json progress_json(const Run &run, std::size_t memory_budget) {
   }
   // Where the values are: POST {"job", "first", "count"} to
   // /api/solve/values.
-  const std::size_t nodes = run.mesh->nodes.size();
+  // Snapshots on several meshes (an adaptive run in time) have their own
+  // counts (snapshot_nodes); `nodes` is then the largest.
+  std::size_t nodes = run.mesh->nodes.size();
+  std::size_t values = 0;
+  bool varied = false;
+  for (const Snapshot &snapshot : p.snapshots) {
+    const std::size_t count = snapshot->values.size();
+    varied = varied || count != run.mesh->nodes.size();
+    nodes = std::max(nodes, count);
+    values += count;
+  }
   Json layout = Json::object();
   layout["path"] = "/api/solve/values";
   layout["format"] = "float32le";
   layout["snapshots"] = p.snapshots.size();
   layout["nodes"] = nodes;
-  layout["bytes"] = p.snapshots.size() * nodes * 4;
+  layout["bytes"] = values * 4;
+  if (varied) {
+    Json counts = Json::array();
+    for (const Snapshot &snapshot : p.snapshots)
+      counts.push_back(snapshot->values.size());
+    layout["snapshot_nodes"] = std::move(counts);
+  }
   out["values"] = std::move(layout);
   Json memory = Json::object();
   memory["bytes"] = run.bytes;
@@ -782,8 +981,13 @@ RunManager::mesh_of(std::uint64_t mesh_id) const {
   for (const auto &[name, entry] : clients_)
     for (const Run *run :
          {static_cast<const Run *>(entry.run.get()), entry.reference.get()})
-      if (run != nullptr && run->mesh_id == mesh_id)
-        return run->mesh;
+      if (run != nullptr) {
+        if (run->mesh_id == mesh_id)
+          return run->mesh;
+        for (const auto &[id, mesh] : run->published.meshes)
+          if (id == mesh_id)
+            return mesh;
+      }
   return nullptr;
 }
 

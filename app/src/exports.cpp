@@ -197,9 +197,24 @@ ExportedFile write_operator(const ExportInfo &info, const ExportInputs &in) {
 
 // "x,y,u(t=...),..." with one row per mesh node, after "#" comment lines,
 // written row by row.
+// A CSV or one VTK file has one mesh: a run whose snapshots are on several
+// (adaptive in time) goes out as the VTK series, a file per snapshot.
+void require_one_mesh(const RunSnapshots &run, std::string_view name) {
+  for (const Snapshot &snapshot : run.snapshots)
+    if (snapshot->mesh != run.mesh)
+      throw StageError(
+          "export", "input",
+          std::format("{} has one mesh, but this run's snapshots are on "
+                      "several (an adaptive run in time): export the VTK "
+                      "series (solution-vtk.zip), a file per snapshot on "
+                      "its own mesh",
+                      name));
+}
+
 ExportedFile write_solution_csv(const ExportInfo &info,
                                 const ExportInputs &in) {
   const RunSnapshots run = *in.run;
+  require_one_mesh(run, info.name);
   std::string header = comment_block(in.provenance, "#");
   header += "x,y";
   for (const Snapshot &solution : run.snapshots)
@@ -294,6 +309,7 @@ void write_vtk(const ExportedFile::Sink &sink, const mesh::Mesh &mesh,
 ExportedFile write_solution_vtk(const ExportInfo &info,
                                 const ExportInputs &in) {
   const RunSnapshots run = *in.run;
+  require_one_mesh(run, info.name);
   ExportedFile file = text_file(info, {});
   file.stream = [run, title = vtk_title(in)](const ExportedFile::Sink &sink) {
     write_vtk(sink, *run.mesh, title, run.snapshots,
@@ -338,7 +354,8 @@ ExportedFile write_solution_vtk_zip(const ExportInfo &info,
     Json files = Json::array();
     for (std::size_t k = 0; k < run.snapshots.size(); ++k) {
       std::string text;
-      write_vtk([&](std::string_view piece) { text += piece; }, *run.mesh,
+      write_vtk([&](std::string_view piece) { text += piece; },
+                *run.snapshots[k]->mesh,
                 std::format("{}, t = {}", title, run.snapshots[k]->time)
                     .substr(0, 255),
                 std::span(run.snapshots).subspan(k, 1),

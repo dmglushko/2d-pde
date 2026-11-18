@@ -63,6 +63,12 @@ public:
   // A new mesh id, for a mesh made elsewhere (an adaptive run's last
   // mesh): never one this cache gives.
   std::uint64_t new_mesh_id() { return next_mesh_++; }
+  // `count` new mesh ids in a row; the first.
+  std::uint64_t new_mesh_ids(std::uint64_t count) {
+    const std::uint64_t first = next_mesh_;
+    next_mesh_ += count;
+    return first;
+  }
 
   static constexpr std::size_t recent_meshes = 16;
 

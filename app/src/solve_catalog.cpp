@@ -300,6 +300,36 @@ SolveCatalog make_solve_catalog() {
                    "Stops before solving a refined mesh with more nodes "
                    "than this; at least the starting mesh's nodes.",
                    OptionKind::integer, 50000)};
+  catalog.adaptive_time_settings = {
+      plain_option("every", "Adapt every",
+                   "When the run adapts: after this much time or this many "
+                   "steps since the last adaptation, whichever comes first "
+                   "(at least one of them).",
+                   OptionKind::schedule,
+                   Json{{"interval", nullptr}, {"steps", 10}}),
+      plain_option("tolerance", "Tolerance",
+                   "At an adaptation time, refines only when the estimated "
+                   "error is above the smaller of the absolute value and the "
+                   "relative one times the estimate at the first adaptation "
+                   "time. Empty: refines every time.",
+                   OptionKind::tolerance,
+                   Json{{"absolute", nullptr}, {"relative", nullptr}}),
+      plain_option("max_nodes", "Maximum nodes",
+                   "A refined mesh with more nodes than this is discarded "
+                   "and the run adapts no more (the mesh only grows); at "
+                   "least the starting mesh's nodes.",
+                   OptionKind::integer, 20000),
+      plain_option("max_refinements", "Maximum refinements",
+                   "After this many refinements the run adapts no more and "
+                   "goes on to t1 on the last mesh; at least 1.",
+                   OptionKind::integer, 20),
+      plain_option("damping_steps", "Damping steps",
+                   "After each transfer to a new mesh, this many steps with "
+                   "the damping method (Rannacher smoothing) before the "
+                   "time method goes on: methods that do not damp (midpoint, "
+                   "Newmark) keep the transfer's error otherwise. 0: off.",
+                   OptionKind::integer,
+                   adapt::AdaptiveIntegratorOptions{}.damping_steps)};
 
   const auto degree_option = [](std::string name, std::string label,
                                 std::string what, int value) {
@@ -514,6 +544,29 @@ AdaptivePart split_adaptive_part(const Json &part) {
   return out;
 }
 
+// The "adaptive_time" part: its settings and its four component slots.
+struct AdaptiveTimePart {
+  Json settings;
+  Json estimator;
+  Json marking;
+  Json refiner;
+  Json damping_method;
+};
+AdaptiveTimePart split_adaptive_time_part(const Json &part) {
+  AdaptiveTimePart out{.settings = part.is_null() ? Json::object() : part,
+                       .estimator = nullptr,
+                       .marking = nullptr,
+                       .refiner = nullptr,
+                       .damping_method = nullptr};
+  out.estimator = member(out.settings, "estimator");
+  out.marking = member(out.settings, "marking");
+  out.refiner = member(out.settings, "refiner");
+  out.damping_method = member(out.settings, "damping_method");
+  for (const char *key : {"estimator", "marking", "refiner", "damping_method"})
+    out.settings.erase(key);
+  return out;
+}
+
 // A slot of the adaptive part: a missing choice is the catalog's first
 // component with its defaults.
 template <class Interface>
@@ -548,6 +601,26 @@ void check_adaptive_part(const AdaptivePart &part) {
                     "solve.adaptive.refiner");
 }
 
+// Checks the adaptive_time part without building it.
+void check_adaptive_time_part(const AdaptiveTimePart &part) {
+  const SolveCatalog &catalog = solve_catalog();
+  OptionReader(part.settings, "solve.adaptive_time",
+               catalog.adaptive_time_settings)
+      .check_kinds();
+  if (!part.estimator.is_null())
+    check_component(catalog.estimators, part.estimator,
+                    "solve.adaptive_time.estimator");
+  if (!part.marking.is_null())
+    check_component(catalog.markings, part.marking,
+                    "solve.adaptive_time.marking");
+  if (!part.refiner.is_null())
+    check_component(mesh_catalog().refiners, part.refiner,
+                    "solve.adaptive_time.refiner");
+  if (!part.damping_method.is_null())
+    check_component(catalog.time_methods, part.damping_method,
+                    "solve.adaptive_time.damping_method");
+}
+
 } // namespace
 
 const SolveCatalog &solve_catalog() {
@@ -571,9 +644,12 @@ SolveSetup build_solve_setup(const Json &solve_section) {
     setup.mode = SolveMode::time_integration;
   else if (mode == "adaptive")
     setup.mode = SolveMode::adaptive;
+  else if (mode == "adaptive_time")
+    setup.mode = SolveMode::adaptive_time;
   else
-    throw PathError("solve.mode",
-                    "unknown mode '" + mode + "' (static, time or adaptive)");
+    throw PathError("solve.mode", "unknown mode '" + mode +
+                                      "' (static, time, adaptive or "
+                                      "adaptive_time)");
   setup.linear_solver =
       build_component(catalog.linear_solvers, member(section, "linear_solver"),
                       "solve.linear_solver");
@@ -592,7 +668,8 @@ SolveSetup build_solve_setup(const Json &solve_section) {
     throw PathError("solve.assembler.threads", error.what());
   }
 
-  for (const std::string_view part : {"static", "time", "adaptive"}) {
+  for (const std::string_view part :
+       {"static", "time", "adaptive", "adaptive_time"}) {
     const Json &value = member(section, part);
     if (!value.is_null())
       require_object(value, "solve." + std::string(part));
@@ -604,6 +681,8 @@ SolveSetup build_solve_setup(const Json &solve_section) {
   const TimePart time = split_time_part(member(section, "time"));
   const AdaptivePart adaptive =
       split_adaptive_part(member(section, "adaptive"));
+  const AdaptiveTimePart adaptive_time =
+      split_adaptive_time_part(member(section, "adaptive_time"));
   const auto check_time_part = [&] {
     OptionReader(time.settings, "solve.time", catalog.time_settings)
         .check_kinds();
@@ -612,6 +691,8 @@ SolveSetup build_solve_setup(const Json &solve_section) {
     if (!time.step.is_null())
       check_component(catalog.step_controllers, time.step, "solve.time.step");
   };
+  if (setup.mode != SolveMode::adaptive_time)
+    check_adaptive_time_part(adaptive_time);
   if (setup.mode == SolveMode::adaptive) {
     OptionReader(member(section, "static"), "solve.static",
                  catalog.static_settings)
@@ -638,7 +719,39 @@ SolveSetup build_solve_setup(const Json &solve_section) {
     return setup;
   }
   check_adaptive_part(adaptive);
-  if (setup.mode == SolveMode::static_solve) {
+  if (setup.mode == SolveMode::adaptive_time) {
+    const OptionReader settings(adaptive_time.settings, "solve.adaptive_time",
+                                catalog.adaptive_time_settings);
+    setup.time_target = {.every = settings.schedule("every"),
+                         .tolerance = settings.tolerance("tolerance"),
+                         .max_nodes = settings.count("max_nodes"),
+                         .max_refinements = settings.count("max_refinements")};
+    setup.estimator = build_component(
+        catalog.estimators,
+        choice_or_default(adaptive_time.estimator, catalog.estimators),
+        "solve.adaptive_time.estimator");
+    setup.marking = build_component(
+        catalog.markings,
+        choice_or_default(adaptive_time.marking, catalog.markings),
+        "solve.adaptive_time.marking");
+    setup.refiner = build_component(
+        mesh_catalog().refiners,
+        choice_or_default(adaptive_time.refiner, mesh_catalog().refiners,
+                          default_adaptive_refiner()),
+        "solve.adaptive_time.refiner");
+    setup.time_options.damping_steps = settings.count("damping_steps");
+    // The damping method is built only when it is used: without damping
+    // steps the library takes none.
+    if (setup.time_options.damping_steps > 0)
+      setup.time_options.damping_method = build_component(
+          catalog.time_methods,
+          choice_or_default(adaptive_time.damping_method, catalog.time_methods),
+          "solve.adaptive_time.damping_method");
+    else if (!adaptive_time.damping_method.is_null())
+      check_component(catalog.time_methods, adaptive_time.damping_method,
+                      "solve.adaptive_time.damping_method");
+    // The time part as for the mode "time", below.
+  } else if (setup.mode == SolveMode::static_solve) {
     const OptionReader settings(member(section, "static"), "solve.static",
                                 catalog.static_settings);
     setup.t = settings.number("t");
@@ -689,6 +802,13 @@ Json default_solve_section() {
   adaptive["refiner"] =
       default_choice(mesh_catalog().refiners.at(default_adaptive_refiner()));
   out["adaptive"] = std::move(adaptive);
+  Json adaptive_time = defaults(catalog.adaptive_time_settings);
+  adaptive_time["estimator"] = default_choice(catalog.estimators.at(0));
+  adaptive_time["marking"] = default_choice(catalog.markings.at(0));
+  adaptive_time["refiner"] =
+      default_choice(mesh_catalog().refiners.at(default_adaptive_refiner()));
+  adaptive_time["damping_method"] = default_choice(catalog.time_methods.at(0));
+  out["adaptive_time"] = std::move(adaptive_time);
   return out;
 }
 
@@ -703,7 +823,7 @@ Json solve_component_choice(std::string_view slot, std::string_view type) {
   };
   if (slot == "linear_solver")
     return find(catalog.linear_solvers);
-  if (slot == "method")
+  if (slot == "method" || slot == "damping_method")
     return find(catalog.time_methods);
   if (slot == "step")
     return find(catalog.step_controllers);
@@ -794,10 +914,44 @@ Json solve_catalog_json() {
       settings("adaptive", "Adaptive loop", catalog.adaptive_settings);
   adaptive_mode["slots"] = std::move(adaptive_slots);
 
+  Json adaptive_time_slots = Json::array();
+  adaptive_time_slots.push_back(
+      slot_json("estimator", "Error estimator",
+                "Gives each triangle an error indicator η_T from the solution "
+                "and its time derivatives at an adaptation time.",
+                "one", components_json(catalog.estimators)));
+  adaptive_time_slots.push_back(
+      slot_json("marking", "Marking", "Chooses the triangles to refine.", "one",
+                components_json(catalog.markings)));
+  adaptive_time_slots.push_back(slot_json(
+      "refiner", "Refiner",
+      "Refines the marked triangles; the solution is moved to the new mesh "
+      "by interpolation. The same refiners as the Mesh step.",
+      "one", components_json(mesh_catalog().refiners)));
+  adaptive_time_slots.push_back(slot_json(
+      "damping_method", "Damping method",
+      "Takes the damping steps after each transfer (used only when Damping "
+      "steps is above 0); typically implicit Euler.",
+      "one", components_json(catalog.time_methods)));
+  Json adaptive_time_mode = Json::object();
+  adaptive_time_mode["id"] = "adaptive_time";
+  adaptive_time_mode["label"] = "Adaptive in time";
+  adaptive_time_mode["description"] =
+      "Integrates in time like In time, and at adaptation times estimates "
+      "the error, refines the marked triangles and moves the solution to "
+      "the new mesh, until a budget is reached. The mesh only grows (no "
+      "coarsening). Each snapshot is shown on its own mesh.";
+  adaptive_time_mode["settings"] = settings(
+      "adaptive_time", "Adaptation in time", catalog.adaptive_time_settings);
+  adaptive_time_mode["slots"] = std::move(adaptive_time_slots);
+  // The time integration's part (its settings and slots) applies too.
+  adaptive_time_mode["with"] = Json::array({"time"});
+
   Json modes = Json::array();
   modes.push_back(std::move(static_mode));
   modes.push_back(std::move(time_mode));
   modes.push_back(std::move(adaptive_mode));
+  modes.push_back(std::move(adaptive_time_mode));
 
   Json out = Json::object();
   out["id"] = "solve";

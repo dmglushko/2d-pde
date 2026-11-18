@@ -2,6 +2,7 @@
 
 #include "options.hpp"
 
+#include "pde2d/adapt/adaptive_integrator.hpp"
 #include "pde2d/adapt/adaptive_static_solver.hpp"
 #include "pde2d/adapt/error_estimator.hpp"
 #include "pde2d/adapt/marking.hpp"
@@ -117,6 +118,8 @@ struct SolveCatalog {
   std::vector<OptionSpec> time_settings;   // t0, t1, snapshots
   // t, tolerance, max_cycles, max_nodes
   std::vector<OptionSpec> adaptive_settings;
+  // every, tolerance, max_nodes, max_refinements, damping_steps
+  std::vector<OptionSpec> adaptive_time_settings;
   // threads (fem::AssemblerOptions), for every mode
   std::vector<OptionSpec> assembler_settings;
   std::vector<Component<solve::LinearSolver>> linear_solvers;
@@ -130,13 +133,21 @@ const SolveCatalog &solve_catalog();
 
 // The keys of the solve section; "time" also holds "method" and "step"
 // beside its settings, "adaptive" "estimator", "marking" and "refiner".
+// "adaptive_time" "estimator", "marking", "refiner" and "damping_method"
+// (the mode "adaptive_time" also reads "time").
 // "assembler" (may be missing: its defaults) holds the assembly's options.
 inline constexpr std::string_view solve_section_keys[] = {
-    "mode", "linear_solver", "assembler", "static", "time", "adaptive"};
-inline constexpr std::string_view solve_modes[] = {"static", "time",
-                                                   "adaptive"};
+    "mode", "linear_solver", "assembler",    "static",
+    "time", "adaptive",      "adaptive_time"};
+inline constexpr std::string_view solve_modes[] = {"static", "time", "adaptive",
+                                                   "adaptive_time"};
 
-enum class SolveMode { static_solve, time_integration, adaptive };
+enum class SolveMode {
+  static_solve,
+  time_integration,
+  adaptive,
+  adaptive_time
+};
 
 struct SolveSetup {
   SolveMode mode = SolveMode::static_solve;
@@ -150,11 +161,14 @@ struct SolveSetup {
   double t1 = 0.0;
   // Solutions are kept at t0 + k (t1 - t0) / snapshots, k = 0..snapshots.
   std::size_t snapshots = 0;
-  // Adaptive (at t):
+  // Adaptive (at t), and adaptive in time (with the time integration's):
   std::shared_ptr<const adapt::ErrorEstimator> estimator;
   std::shared_ptr<const adapt::MarkingStrategy> marking;
   std::shared_ptr<const mesh::Refiner> refiner;
   adapt::AdaptiveTarget target;
+  // Adaptive in time:
+  adapt::AdaptiveTimeTarget time_target;
+  adapt::AdaptiveIntegratorOptions time_options;
 };
 
 // The most snapshots a run keeps (each one is a value per mesh node sent

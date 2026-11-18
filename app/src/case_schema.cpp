@@ -82,6 +82,14 @@ Json option_schema(const OptionSpec &spec) {
                         {}, true);
     break;
   }
+  case OptionKind::schedule: {
+    static constexpr std::string_view keys[] = {"interval", "steps"};
+    out = object_schema(keys,
+                        {{"interval", typed({"number", "null"})},
+                         {"steps", typed({"integer", "null"})}},
+                        {}, true);
+    break;
+  }
   }
   out["title"] = spec.label;
   out["description"] = spec.description;
@@ -390,6 +398,15 @@ Json solve_schema() {
   adaptive["properties"]["marking"] = choice_schema(catalog.markings, true);
   adaptive["properties"]["refiner"] =
       choice_schema(mesh_catalog().refiners, true);
+  Json adaptive_time = options_schema(catalog.adaptive_time_settings);
+  adaptive_time["properties"]["estimator"] =
+      choice_schema(catalog.estimators, true);
+  adaptive_time["properties"]["marking"] =
+      choice_schema(catalog.markings, true);
+  adaptive_time["properties"]["refiner"] =
+      choice_schema(mesh_catalog().refiners, true);
+  adaptive_time["properties"]["damping_method"] =
+      choice_schema(catalog.time_methods, true);
   Json out =
       object_schema(solve_section_keys,
                     {{"mode", std::move(modes)},
@@ -397,11 +414,14 @@ Json solve_schema() {
                      {"assembler", options_schema(catalog.assembler_settings)},
                      {"static", options_schema(catalog.static_settings)},
                      {"time", std::move(time)},
-                     {"adaptive", std::move(adaptive)}},
+                     {"adaptive", std::move(adaptive)},
+                     {"adaptive_time", std::move(adaptive_time)}},
                     {"mode", "linear_solver"}, true);
-  // In time, the time part needs its method and step.
+  // In time (adaptive or not), the time part needs its method and step.
   Json condition = Json::object();
-  condition["properties"]["mode"] = constant("time");
+  Json time_modes = Json::object();
+  time_modes["enum"] = Json::array({"time", "adaptive_time"});
+  condition["properties"]["mode"] = std::move(time_modes);
   condition["required"] = types({"mode"});
   Json then = Json::object();
   then["required"] = types({"time"});

@@ -25,6 +25,15 @@
       "comparison.max_abs": {"max": 0.003},
       "comparison.max_l2": {"max": 0.0003}
     },
+    "l_shape_heat_adaptive": {
+      "solve.state": {"equals": "done"},
+      "solve.mode": {"equals": "adaptive_time"},
+      "solve.snapshots_total": {"equals": 21},
+      "solve.adaptive_time.refinements": {"min": 15},
+      "comparison.nodes": {"min": 3000, "max": 20000},
+      "comparison.final.l2": {"max": 0.0003},
+      "comparison.final.max_abs": {"max": 0.0015}
+    },
     "l_shape_corner": {
       "solve.state": {"equals": "done"},
       "solve.max": {"min": 1.25, "max": 1.26},

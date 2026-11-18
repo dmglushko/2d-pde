@@ -24,7 +24,9 @@
 
 // Solves as runs: a static one is done when it is started, and so is an
 // adaptive one (the library's AdaptiveStaticSolver, one call; its run's
-// mesh is the last adapted mesh, under an id of its own); a time
+// mesh is the last adapted mesh, under an id of its own) and an adaptive
+// one in time (the library's AdaptiveIntegrator, one call; each snapshot is
+// on its piece's mesh, Solution::mesh, every mesh under an id); a time
 // integration runs in chunks that end on snapshot times, each continuing
 // from the state the previous one ended with (Integrator::integrate with
 // `initial`), so the page sees the snapshots while the run goes on
@@ -139,7 +141,9 @@ struct Run {
   std::shared_ptr<const fem::MeshedProblem> meshed; // session mutex only
   std::shared_ptr<const mesh::Mesh> mesh;           // meshed's mesh
   std::uint64_t mesh_id = 0; // the StageCache's id of its mesh
-  // An adaptive run's id for its last mesh (StageCache::new_mesh_id).
+  // An adaptive run's id for its last mesh (StageCache::new_mesh_id); for
+  // an adaptive run in time the first of max_refinements ids reserved for
+  // its new meshes.
   std::uint64_t adapted_mesh_id = 0;
   fem::Parameters parameters; // the problem's, for comparisons
   Json settings;              // the sections it was made from
@@ -177,7 +181,11 @@ struct Run {
     // tolerance, a row per cycle).
     std::vector<Snapshot> cycles;
     std::shared_ptr<const std::vector<double>> indicators;
-    Json adaptive;
+    Json adaptive; // also an adaptive run in time's summary
+    // An adaptive run in time: every mesh its snapshots are on, with its
+    // id, in the order of use (the first is the starting mesh).
+    std::vector<std::pair<std::uint64_t, std::shared_ptr<const mesh::Mesh>>>
+        meshes;
     // RunManager's clock at its last use (a lookup marks it).
     mutable std::uint64_t used = 0;
   } published;
@@ -195,6 +203,12 @@ std::size_t run_bytes(std::size_t nodes, std::size_t snapshots, int time_order);
 // meshes of at most `max_nodes` nodes each (values, nodes, about two
 // triangles a node, boundary edges and the indicators).
 std::size_t adaptive_run_bytes(std::size_t max_nodes, std::size_t max_cycles);
+
+// The most an adaptive run in time keeps: `snapshots` snapshots and
+// `meshes` meshes of at most `max_nodes` nodes each, and its state.
+std::size_t adaptive_time_run_bytes(std::size_t max_nodes,
+                                    std::size_t snapshots, std::size_t meshes,
+                                    int time_order);
 
 // A new run of the case, ready to start: its setup, times and bytes are
 // known, nothing is solved. Throws the StageError of a stage it builds.
@@ -254,7 +268,8 @@ public:
   // or null.
   Run *next_running();
   std::size_t running() const;
-  // A run of any client that holds `mesh_id`'s mesh, or null.
+  // A run of any client that holds `mesh_id`'s mesh (its own, or one of
+  // an adaptive run in time's), or null.
   std::shared_ptr<const mesh::Mesh> mesh_of(std::uint64_t mesh_id) const;
   std::size_t clients() const { return clients_.size(); }
   std::uint64_t next_id() { return next_run_++; }

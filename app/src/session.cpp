@@ -563,6 +563,11 @@ Json Session::solve(const Json &input, const std::string &client) {
           const RunManager::Client *owner = state.runs.find(who);
           const bool has_reference = owner != nullptr && owner->reference;
           const bool in_time = made->setup.mode == SolveMode::time_integration;
+          const char *budget = made->setup.mode == SolveMode::adaptive
+                                   ? "solve.adaptive.max_nodes"
+                               : made->setup.mode == SolveMode::adaptive_time
+                                   ? "solve.adaptive_time.max_nodes"
+                                   : "";
           throw StageError(
               "solve", "memory",
               std::format(
@@ -579,7 +584,7 @@ Json Session::solve(const Json &input, const std::string &client) {
                                 : " (other pages' running runs hold the rest)",
                   in_time ? "Keep fewer snapshots, " : "",
                   has_reference ? ", forget the reference run" : ""),
-              in_time ? "solve.time.snapshots" : "");
+              in_time ? "solve.time.snapshots" : budget);
         }
         state.runs.set_run(state.runs.client(who), made);
       }
@@ -966,10 +971,16 @@ Json Session::run(const Json &input) {
         request["job"] = job;
         request["exact"] = exact;
         Json comparison = compare(request);
+        // The error at the last snapshot (t1 of a run in time), besides
+        // the largest over the snapshots.
+        if (!comparison["snapshots"].empty())
+          comparison["final"] = comparison["snapshots"].back();
         comparison.erase("snapshots");
-        // An adaptive run's mesh is its last one: the comparison's own
-        // node count, and no longest edge of the Mesh stage.
-        if (!comparison.contains("cycles")) {
+        // An adaptive run's mesh is its last one (in time: the last
+        // snapshot's): the comparison's own node count, and no longest
+        // edge of the Mesh stage.
+        const Json &mode = out["solve"]["mode"];
+        if (mode != "adaptive" && mode != "adaptive_time") {
           comparison["nodes"] = out["mesh"]["stats"]["nodes"];
           comparison["longest_edge"] = out["mesh"]["longest_edge"];
         }

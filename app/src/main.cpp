@@ -131,9 +131,14 @@ int run_case(const std::filesystem::path &case_path,
          {"mesh.pde2d", "mesh.svg", "solution.csv", "solution.vtk",
           "solution-vtk.zip", "provenance.json", "stiffness.mtx", "mass.mtx",
           "damping.mtx", "rhs.mtx", "solution-mesh.pde2d"}) {
-      // The solution's own mesh only when it is not the Mesh step's.
-      if (kind == "solution-mesh.pde2d" &&
-          summary["solve"]["mode"] != "adaptive")
+      // The solution's own mesh only when it is not the Mesh step's; a run
+      // on several meshes (adaptive in time) only as the VTK series.
+      const Json &mode = summary["solve"]["mode"];
+      const bool adapted = mode == "adaptive" || mode == "adaptive_time";
+      if (kind == "solution-mesh.pde2d" && !adapted)
+        continue;
+      if ((kind == "solution.csv" || kind == "solution.vtk") &&
+          mode == "adaptive_time")
         continue;
       const auto file = session.export_file(case_json, kind, context);
       // An archive's files go into the directory itself.

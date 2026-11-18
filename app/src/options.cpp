@@ -28,6 +28,8 @@ std::string_view option_kind_name(OptionKind kind) {
     return "length_bound";
   case OptionKind::tolerance:
     return "tolerance";
+  case OptionKind::schedule:
+    return "schedule";
   }
   throw std::logic_error("unknown option kind");
 }
@@ -199,6 +201,31 @@ adapt::ErrorTolerance OptionReader::tolerance(std::string_view name) const {
           .relative = optional_length(json, "relative", where)};
 }
 
+adapt::AdaptationSchedule OptionReader::schedule(std::string_view name) const {
+  const Json &json = value(spec(name, OptionKind::schedule));
+  const std::string where = path(name);
+  if (json.is_null())
+    return {};
+  require_object(json, where);
+  static constexpr std::string_view known[] = {"interval", "steps"};
+  reject_unknown_keys(json, where, known);
+  adapt::AdaptationSchedule out{
+      .interval = optional_length(json, "interval", where), .steps = {}};
+  if (const Json &steps = member(json, "steps"); !steps.is_null()) {
+    const OptionSpec whole{.name = "steps",
+                           .label = "",
+                           .description = "",
+                           .kind = OptionKind::integer,
+                           .default_value = nullptr,
+                           .choices = {},
+                           .unit = {}};
+    out.steps =
+        OptionReader(Json{{"steps", steps}}, where, std::span(&whole, 1))
+            .count("steps");
+  }
+  return out;
+}
+
 void OptionReader::check_kinds() const {
   for (const OptionSpec &option : specs_)
     switch (option.kind) {
@@ -216,6 +243,9 @@ void OptionReader::check_kinds() const {
       break;
     case OptionKind::tolerance:
       (void)tolerance(option.name);
+      break;
+    case OptionKind::schedule:
+      (void)schedule(option.name);
       break;
     }
 }
@@ -277,6 +307,10 @@ std::string named_option(std::string_view message,
       if (spec.kind == OptionKind::length_bound ||
           spec.kind == OptionKind::tolerance)
         for (const std::string_view part : {".absolute", ".relative"})
+          if (message.substr(end).starts_with(part))
+            suffix += part;
+      if (spec.kind == OptionKind::schedule)
+        for (const std::string_view part : {".interval", ".steps"})
           if (message.substr(end).starts_with(part))
             suffix += part;
       break;

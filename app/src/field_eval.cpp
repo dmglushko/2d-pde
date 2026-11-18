@@ -97,7 +97,20 @@ Comparison::Comparison(RunSnapshots run, const fem::Parameters &parameters,
   if (!reference)
     throw PathError("reference", "no reference run is kept (keep one with "
                                  "/api/solve/reference)");
-  // The same mesh object, so node i is the same point in both.
+  // The same mesh object, so node i is the same point in both (every
+  // snapshot of each: an adaptive run in time has several meshes).
+  const auto on_one_mesh = [](const RunSnapshots &snapshots) {
+    return std::ranges::all_of(snapshots.snapshots, [&](const Snapshot &s) {
+      return s->mesh == snapshots.mesh;
+    });
+  };
+  if (!on_one_mesh(run_) || !on_one_mesh(*reference))
+    throw PathError(
+        "reference",
+        std::format("the run {} or the reference run {} has snapshots on "
+                    "several meshes (an adaptive run in time); a comparison "
+                    "node by node needs one mesh",
+                    run_.id, reference->id));
   if (reference->mesh != run_.mesh)
     throw PathError(
         "reference",
@@ -123,14 +136,25 @@ Comparison::Comparison(RunSnapshots run, const fem::Parameters &parameters,
 
 std::optional<std::vector<double>> Comparison::other(std::size_t k) const {
   if (exact_)
-    return values_at_nodes(*run_.mesh, *exact_, run_.snapshots[k]->time);
+    return values_at_nodes(*run_.snapshots[k]->mesh, *exact_,
+                           run_.snapshots[k]->time);
   if (k >= matched_.size() || !matched_[k])
     return std::nullopt;
   return reference_->snapshots[*matched_[k]]->values;
 }
 
 Json Comparison::summary() const {
-  const std::vector<double> weights = lumped_weights(*run_.mesh);
+  // The lumped weights of each mesh the snapshots are on (one, except for
+  // an adaptive run in time).
+  std::vector<std::pair<const mesh::Mesh *, std::vector<double>>> weights;
+  const auto weights_of =
+      [&](const mesh::Mesh &mesh) -> const std::vector<double> & {
+    for (const auto &[known, values] : weights)
+      if (known == &mesh)
+        return values;
+    weights.emplace_back(&mesh, lumped_weights(mesh));
+    return weights.back().second;
+  };
   Json snapshots = Json::array();
   double max_abs = 0.0, max_rms = 0.0, max_l2 = 0.0;
   bool any = false, finite = true;
@@ -140,8 +164,8 @@ Json Comparison::summary() const {
       snapshots.push_back(nullptr);
       continue;
     }
-    const DifferenceStats stats =
-        difference_stats(values_of(run_, k), *values, weights);
+    const DifferenceStats stats = difference_stats(
+        values_of(run_, k), *values, weights_of(*run_.snapshots[k]->mesh));
     Json item = Json::object();
     item["t"] = run_.snapshots[k]->time;
     item["max_abs"] = number_or_null(stats.max_abs);
@@ -313,8 +337,22 @@ Json probe_series(const RunSnapshots &run, const Json &points) {
   if (points.size() > max_probes)
     throw PathError("points",
                     std::format("at most {} points at once", max_probes));
-  const mesh::Mesh &mesh = *run.mesh;
-  const PointLocator locator(mesh);
+  // A locator per mesh the snapshots are on (one, except for an adaptive
+  // run in time), each in the order of first use.
+  std::vector<const mesh::Mesh *> meshes;
+  std::vector<std::size_t> mesh_of; // per snapshot
+  for (const Snapshot &solution : run.snapshots) {
+    const auto found = std::ranges::find(meshes, solution->mesh.get());
+    mesh_of.push_back(static_cast<std::size_t>(found - meshes.begin()));
+    if (found == meshes.end())
+      meshes.push_back(solution->mesh.get());
+  }
+  if (meshes.empty())
+    meshes.push_back(run.mesh.get());
+  std::vector<PointLocator> locators;
+  locators.reserve(meshes.size());
+  for (const mesh::Mesh *mesh : meshes)
+    locators.emplace_back(*mesh);
   Json probes = Json::array();
   for (std::size_t k = 0; k < points.size(); ++k) {
     const std::string where = std::format("points[{}]", k);
@@ -326,16 +364,27 @@ Json probe_series(const RunSnapshots &run, const Json &points) {
     Json item = Json::object();
     item["x"] = p.x;
     item["y"] = p.y;
-    const auto found = locator.locate(p);
-    item["inside"] = found.has_value();
-    item["triangle"] = found ? Json(found->triangle) : Json(nullptr);
+    std::vector<std::optional<PointLocator::Found>> found;
+    for (const PointLocator &locator : locators)
+      found.push_back(locator.locate(p));
+    // Inside the last mesh's triangle (meshes only grow by refinement, so
+    // a point is inside all of them or none, up to rounding).
+    const auto &last = found[mesh_of.empty() ? 0 : mesh_of.back()];
+    item["inside"] = last.has_value();
+    item["triangle"] = last ? Json(last->triangle) : Json(nullptr);
     Json values = Json::array();
-    if (found)
-      for (const Snapshot &solution : run.snapshots) {
+    if (last)
+      for (std::size_t k = 0; k < run.snapshots.size(); ++k) {
+        const auto &at = found[mesh_of[k]];
+        if (!at) {
+          values.push_back(nullptr);
+          continue;
+        }
         double value = 0.0;
         for (int v = 0; v < 3; ++v)
-          value += found->weights[static_cast<std::size_t>(v)] *
-                   solution->values[found->nodes[static_cast<std::size_t>(v)]];
+          value +=
+              at->weights[static_cast<std::size_t>(v)] *
+              run.snapshots[k]->values[at->nodes[static_cast<std::size_t>(v)]];
         values.push_back(number_or_null(value));
       }
     item["values"] = std::move(values);
