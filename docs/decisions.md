@@ -1090,6 +1090,44 @@ coarsening, moving nodes or enrichment for now.
   jumps use the edge degree. A cycle of waiting refinement edges stays
   possible on a mesh mixing flipped and bisected triangles; it is
   conforming and reported (`incompatible_splits`).
+- **Details of slice 2 (the adaptive loop in time), accepted 2026-11-18:**
+  `transfer_solution` lives in `pde2d_adapt` and takes the new
+  `MeshedProblem` (Dirichlet nodes get g and g_t); a new node on a curved
+  boundary gets the average of its parent edge's ends (no extrapolation);
+  without parents a private bucket-grid point location finds the old
+  triangle, boundary nodes take their old boundary point on the same loop
+  (through the curve links when they exist), a node outside the old mesh
+  the nearest old boundary point. `Integrator::integrate` takes
+  `max_steps`, for the "every n steps" rule. u_t comes from the last step
+  ((u(t) − u(t − dt))/dt; for time order 2 the velocities and their
+  quotient, u_tt at Dirichlet nodes from the boundary data). At each
+  adaptation time the loop estimates and, above the tolerance, refines
+  once and continues (no re-solving; a relative tolerance is relative to
+  the first estimate). The schedule is "after an interval and/or n steps,
+  whichever comes first", steps landing on snapshots count, an adaptation
+  time near a snapshot time becomes it, no adaptation at t1. The node
+  budget and `max_refinements` stop adapting for the rest of the run,
+  which still reaches t1. Only `snapshot_times`, not `snapshot_every`.
+  The result is a list of pieces plus the joined snapshots and steps. At
+  most one adaptation changes the mesh. Public result structs grow at the
+  end.
+- **Newmark's acceleration is carried across pieces** (decided
+  2026-11-18, after a review finding: restarting Newmark at a piece
+  boundary solved M2 u_tt = … again and failed where M2 was singular at
+  that time): `Solution` gains optional accelerations, filled by the
+  integrator for a method that keeps u_tt; a run continued from such a
+  solution does not call `start()` and uses them; the transfer moves them
+  like the velocities. Continuation is then exact for Newmark too.
+- **Damping steps after a transfer, as an explicit option** (decided
+  2026-11-18): methods that do not damp (implicit midpoint, Newmark) keep
+  the interpolation error a transfer leaves in the finest modes, so
+  adaptive runs with them were worse than uniform ones. The adaptive loop
+  gets an option for a number of steps of a damping method (implicit
+  Euler) after each transfer before the chosen method continues (Rannacher
+  smoothing). Configured by the user, never switched on by a failure, so
+  it is not a fallback. A Newmark variant that damps only the highest
+  frequencies (generalized-α), the better answer for waves: GitHub issue
+  #40.
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks
