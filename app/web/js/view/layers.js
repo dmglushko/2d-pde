@@ -2,9 +2,11 @@
 // canvas (`v`: the Viewer, for its context, view transform and prepared
 // data): the geometry, the mesh edges and boundary, the colour layers
 // (smallest angle, a P1 field, |∇u| per triangle, values at some nodes),
-// isolines, nodes, probes and the line of a profile. No state here.
+// isolines, nodes, probes and the line of a profile. The only state is
+// the edge layer kept on the viewer (v.edgeCache).
 
 import { regionToken } from "../pure/color.js";
+import { meshEdges } from "../pure/mesh_math.js";
 import { colorTables, tableColor, token } from "./tokens.js";
 
 export const QUALITY_MAX_DEGREES = 60;
@@ -74,43 +76,77 @@ export function drawMeshBoundary(v, mesh) {
   const e = mesh.boundary_edges;
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
-  for (let i = 0; i < e.length; i += 3) {
+  // One path per region (a stroke per edge is slow on a fine mesh).
+  for (let region = 0; region < colors.length; region++) {
     ctx.beginPath();
-    ctx.moveTo(...v.toScreen(n[2 * e[i]], n[2 * e[i] + 1]));
-    ctx.lineTo(...v.toScreen(n[2 * e[i + 1]], n[2 * e[i + 1] + 1]));
-    ctx.strokeStyle = colors[e[i + 2]];
+    for (let i = 0; i < e.length; i += 3) {
+      if (e[i + 2] !== region) continue;
+      ctx.moveTo(...v.toScreen(n[2 * e[i]], n[2 * e[i] + 1]));
+      ctx.lineTo(...v.toScreen(n[2 * e[i + 1]], n[2 * e[i + 1] + 1]));
+    }
+    ctx.strokeStyle = colors[region];
     ctx.stroke();
   }
 }
 
 // The mesh edges at `alpha` (fainter over a field's colours, and for an
 // outdated mesh). Returns false when the triangles are too small on
-// screen to draw.
+// screen to draw. The edges are drawn once per mesh and view into a
+// layer of their own (edgeLayer) and copied from it, so a new snapshot,
+// another step or a key typed does not stroke them again.
 export function drawEdges(v, mesh, alpha) {
-  const ctx = v.context;
-  const n = mesh.nodes;
-  const t = mesh.triangles;
-  const count = t.length / 3;
+  const count = mesh.triangles.length / 3;
   const { clientWidth, clientHeight } = v.canvas.parentElement;
   const box = v.boundingBox();
   const area = (box.max[0] - box.min[0]) * (box.max[1] - box.min[1]) * v.scale * v.scale;
   if (count > 0 && area / count < 6 && area < 4 * clientWidth * clientHeight) return false;
+  const layer = edgeLayer(v, mesh);
+  const ctx = v.context;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = alpha;
-  ctx.strokeStyle = token("--mesh-edge");
-  ctx.lineWidth = 1 / v.ratio;
-  ctx.beginPath();
-  for (let i = 0; i < t.length; i += 3) {
-    const [ax, ay] = v.toScreen(n[2 * t[i]], n[2 * t[i] + 1]);
-    const [bx, by] = v.toScreen(n[2 * t[i + 1]], n[2 * t[i + 1] + 1]);
-    const [cx, cy] = v.toScreen(n[2 * t[i + 2]], n[2 * t[i + 2] + 1]);
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.lineTo(cx, cy);
-    ctx.closePath();
-  }
-  ctx.stroke();
-  ctx.globalAlpha = 1;
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
   return true;
+}
+
+// Segments per stroke: one path of every edge makes the stroke slow
+// (seconds for a few ten thousand triangles); short paths stay fast.
+const EDGES_PER_PATH = 2048;
+
+// The layer of the mesh edges, opaque in the edge colour, at the view
+// and size of the picture: drawn again only when one of them changed.
+function edgeLayer(v, mesh) {
+  const colour = token("--mesh-edge");
+  const key = `${v.canvas.width}x${v.canvas.height}|${v.ratio}|${v.scale}|${v.offset.x}|${v.offset.y}|${colour}`;
+  const cache = (v.edgeCache ??= { canvas: document.createElement("canvas"), mesh: null, edges: null, key: null });
+  if (cache.mesh === mesh && cache.key === key) return cache.canvas;
+  if (cache.mesh !== mesh) cache.edges = meshEdges(mesh.triangles, mesh.nodes.length / 2);
+  cache.mesh = mesh;
+  cache.key = key;
+  const canvas = cache.canvas;
+  canvas.width = v.canvas.width;
+  canvas.height = v.canvas.height;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const n = mesh.nodes;
+  const e = cache.edges;
+  const r = v.ratio;
+  const ox = v.offset.x * r;
+  const oy = v.offset.y * r;
+  const s = v.scale * r;
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = 1;
+  for (let start = 0; start < e.length; start += 2 * EDGES_PER_PATH) {
+    const end = Math.min(e.length, start + 2 * EDGES_PER_PATH);
+    ctx.beginPath();
+    for (let i = start; i < end; i += 2) {
+      ctx.moveTo(ox + n[2 * e[i]] * s, oy - n[2 * e[i] + 1] * s);
+      ctx.lineTo(ox + n[2 * e[i + 1]] * s, oy - n[2 * e[i + 1] + 1] * s);
+    }
+    ctx.stroke();
+  }
+  return canvas;
 }
 
 // Triangles grouped by the colour index (0..255) of a value per triangle,

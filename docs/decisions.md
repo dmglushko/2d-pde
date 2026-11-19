@@ -53,8 +53,11 @@ Started 2026-11-11.
 - **The graphical interface is delegated** (2026-11-14). It lives in
   `app/` as a separate program over the library's public headers;
   agents decide its design themselves and record it in
-  [app.md](app.md). The library's own design stays with the owner, and
-  the app may not change it. `pde2d::pde2d` links every module as one
+  [app.md](app.md). Since 2026-11-19 agents working on the app may also
+  change the library for what the app needs and decide that design
+  themselves (recorded here, marked "for the app, by an agent", and in
+  [library-requests.md](library-requests.md)); the rest of the library's
+  design stays with the owner. `pde2d::pde2d` links every module as one
   target; the modules stay separate libraries. *Why:* the owner wants a
   working interface to enter settings and see results without
   overseeing its details.

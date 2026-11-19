@@ -19,8 +19,18 @@ library, and **its design is delegated to agents**: inside `app/` you
 decide yourself and record the decision in
 [docs/app-decisions.md](docs/app-decisions.md) (the design as it is:
 [docs/app.md](docs/app.md)).
-Read [app/AGENTS.md](app/AGENTS.md) before working there. Everything
-below about the owner deciding applies to the library.
+Read [app/AGENTS.md](app/AGENTS.md) before working there.
+
+**Library changes the app needs are delegated too** (the owner,
+2026-11-19). An agent working on the app may change the library for what
+the app needs (a new option, a callback, a function the app would
+otherwise reimplement) and decides that design itself: keep this file's
+conventions and invariants, add tests, update
+[docs/architecture.md](docs/architecture.md), and record the decision
+with its reason in [docs/decisions.md](docs/decisions.md), marked "(for
+the app, by an agent)", and in
+[docs/library-requests.md](docs/library-requests.md). Everything below
+about the owner deciding applies to the rest of the library's work.
 
 ## Architecture decisions belong to the owner
 

@@ -25,6 +25,7 @@ import {
   isolineLevels,
   isolines,
   locatePoint,
+  meshEdges,
   meshGrid,
   nearestValuedNode,
   sampleLine,
@@ -47,6 +48,15 @@ import { isTimeRun, serverRunBytes } from "../web/js/pure/stages.js";
 
 const cases = [];
 const test = (name, body) => cases.push([name, body]);
+
+test("mesh edges: each edge once, two triangles share one", () => {
+  // Two triangles of a square share the diagonal 0-2.
+  const edges = meshEdges([0, 1, 2, 0, 2, 3], 4);
+  assert.equal(edges.length, 2 * 5);
+  const keys = new Set();
+  for (let i = 0; i < edges.length; i += 2) keys.add(`${Math.min(edges[i], edges[i + 1])}-${Math.max(edges[i], edges[i + 1])}`);
+  assert.deepEqual([...keys].sort(), ["0-1", "0-2", "0-3", "1-2", "2-3"]);
+});
 
 test("OKLab round trip", () => {
   for (const rgb of [[0, 0, 0], [255, 255, 255], [42, 120, 214], [235, 104, 52]]) {

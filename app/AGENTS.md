@@ -44,12 +44,16 @@ not need to ask the owner first. Record each decision with its reason at
 the end of `docs/app-decisions.md`, and keep `docs/app.md` a description
 of the app as it is (update it, do not append to it).
 
-The delegation stops at the library. The root [AGENTS.md](../AGENTS.md)
-still holds for everything outside `app/`: the library's architecture
-belongs to the owner. If the app needs something the library does not
-offer, raise it as a library change; do not work around the library's
-rules in the app, and never reimplement library logic (checks, physics,
-meshing) in the app or the page.
+**The delegation reaches into the library** (the owner, 2026-11-19).
+If the app needs something the library does not offer, change the
+library yourself: decide the design, keep the library's conventions and
+invariants (root [AGENTS.md](../AGENTS.md)), add its tests, update
+`docs/architecture.md`, and record the decision in `docs/decisions.md`
+(marked "for the app, by an agent") and in
+[docs/library-requests.md](../docs/library-requests.md). Do not work
+around the library's rules in the app, and never reimplement library
+logic (checks, physics, meshing) in the app or the page: put it in the
+library instead.
 
 ## Rules that keep the app honest
 

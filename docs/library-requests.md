@@ -1,10 +1,10 @@
 # Library requests from the app
 
-Things the app (`app/`) would use but the library does not offer. Each
-is a library change, so each is the owner's decision (see
-[decisions.md](decisions.md)); nothing here is decided or started. The
-app works without them. Newest at the bottom; when one is decided, move
-it to decisions.md and note it here.
+Things the app (`app/`) would use but the library does not offer. Since
+2026-11-19 the agent working on the app makes these library changes
+itself (root AGENTS.md); each one done is recorded in
+[decisions.md](decisions.md) (marked "for the app, by an agent") and
+noted here as **Done**. Newest at the bottom.
 
 ## 1. Parallel assembly and parallel linear solves
 

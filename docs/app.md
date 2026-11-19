@@ -6,10 +6,10 @@ by decision, is in [app-decisions.md](app-decisions.md).
 
 **The app's design is delegated** (the owner, 2026-11-14). Agents make
 the app's decisions themselves and record them in
-[app-decisions.md](app-decisions.md). The library's rules still hold: the
-app must not change the library's design, and anything the app needs from
-the library is a library change, raised with the owner
-([library-requests.md](library-requests.md)).
+[app-decisions.md](app-decisions.md). What the app needs from the library
+is made in the library by the agent working on the app (the owner,
+2026-11-19), following the library's conventions; the list of such needs
+and what became of them is [library-requests.md](library-requests.md).
 
 ## At a glance
 
