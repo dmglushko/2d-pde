@@ -408,15 +408,19 @@ IntegrationResult Integrator::integrate(
         throw std::invalid_argument(
             "integrator: the step anchor's next_dt must be finite and at "
             "least 0");
+      // Velocities at time order 2 (one per free unknown), none below.
+      const std::size_t free = meshed.free_nodes().size();
+      const std::size_t velocities = time_order == 2 ? free : 0;
       for (const PreviousStep &step : given)
-        if (step.values.size() != meshed.free_nodes().size() ||
-            !std::isfinite(step.dt) || !(step.dt > 0.0) ||
-            !detail::all_finite(step.values))
+        if (step.values.size() != free ||
+            step.velocities.size() != velocities || !std::isfinite(step.dt) ||
+            !(step.dt > 0.0) || !detail::all_finite(step.values) ||
+            !detail::all_finite(step.velocities))
           throw std::invalid_argument(std::format(
               "integrator: a previous step of the step anchor has {} "
-              "values for {} free unknowns, or a length or value that is "
-              "not finite and positive",
-              step.values.size(), meshed.free_nodes().size()));
+              "values and {} velocities for {} free unknowns at time order "
+              "{}, or a length or value that is not finite and positive",
+              step.values.size(), step.velocities.size(), free, time_order));
       const std::size_t take = std::min(remembered, given.size());
       previous.assign(given.end() - static_cast<std::ptrdiff_t>(take),
                       given.end());
@@ -622,7 +626,9 @@ IntegrationResult Integrator::integrate(
                                             .velocities = before->velocities,
                                             .dt = h};
       if (remembered > 0) {
-        previous.push_back({.values = std::move(before->values), .dt = h});
+        previous.push_back({.values = std::move(before->values),
+                            .dt = h,
+                            .velocities = std::move(before->velocities)});
         if (previous.size() > remembered)
           previous.erase(previous.begin());
       }

@@ -714,6 +714,58 @@ void midpoint_second_order_on_unequal_steps() {
   }
 }
 
+// The midpoint method at time order 2 continued with a hand-made anchor
+// whose earlier step was not one of its own: the state at its start is
+// the exact one (u = t^3 / 6, u_t = t^2 / 2 at t = 0, the step 0.3 long).
+// The estimate reads the stored velocity V_-1 = 0, so u''' = 2 V[0, 0.3,
+// 0.4] = 1 is exact and the estimate is the actual error h^3 / 12; the
+// velocity inferred from a midpoint update, 2 (U0 - U_-1) / dt_-1 - V0 =
+// -0.015, gave another estimate (review finding).
+void midpoint_after_a_step_of_another_method() {
+  const auto problem = meshed(acceleration("t^3/6", "t^2/2", "t"));
+  const std::size_t nodes = problem->mesh()->nodes.size(),
+                    free = problem->free_nodes().size();
+  const double start = 0.3;
+  const Solution initial{
+      .mesh = problem->mesh(),
+      .time = start,
+      .values = std::vector<double>(nodes, start * start * start / 6),
+      .velocities = std::vector<double>(nodes, start * start / 2)};
+  const StepAnchor anchor{
+      .time = start,
+      .next_dt = 0.1,
+      .previous_steps = {{.values = std::vector<double>(free, 0.0),
+                          .dt = 0.3,
+                          .velocities = std::vector<double>(free, 0.0)}}};
+  const AdaptiveStepOptions options{
+      .initial_dt = 0.1, .atol = 1e-3, .rtol = 0.0};
+  const Integrator integrator =
+      adaptive(std::make_shared<ImplicitMidpoint>(), options);
+  const auto r = integrator.integrate(
+      problem, start, 0.4, {.keep_step_history = true}, &initial, {}, &anchor);
+  check(r.history.size() == 1 && r.history[0].accepted &&
+            r.history[0].error_norm.has_value(),
+        "one step, estimated from the anchor's earlier step");
+  const double actual =
+      actual_norm(AdaptiveStep(options), *problem, initial, r.final,
+                  [](double u0, double v0, double t0, double t1) {
+                    const double h = t1 - t0;
+                    return u0 + v0 * h + t0 * h * h / 2.0 + h * h * h / 6.0;
+                  });
+  near(actual, 1.0 / 12.0, 1e-9, "the actual error is h^3 / 12 = atol / 12");
+  near(*r.history[0].error_norm, actual, 1e-8 * actual,
+       "the estimate is the actual error");
+  // An earlier step at time order 2 without its velocities is refused.
+  StepAnchor without = anchor;
+  without.previous_steps[0].velocities.clear();
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)integrator.integrate(problem, start, 0.4, {}, &initial, {},
+                                   &without);
+      },
+      "0 velocities");
+}
+
 // min_dt: a rejected step longer than min_dt is taken again at min_dt when
 // the proposal is below it (review finding: the run stopped although the
 // step at min_dt passes). Implicit Euler at time order 2 on u_tt = 2: the
@@ -932,6 +984,8 @@ int main() {
        euler_after_a_step_of_another_length},
       {"the midpoint method (order 2) on unequal steps",
        midpoint_second_order_on_unequal_steps},
+      {"the midpoint method (order 2) after another method's step",
+       midpoint_after_a_step_of_another_method},
       {"a rejected step is taken again at min_dt", retries_at_min_dt},
       {"no free unknowns: empty estimates", estimates_without_free_unknowns},
       {"time order 2: Newmark on a wave", wave_with_newmark},

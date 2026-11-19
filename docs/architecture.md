@@ -1694,7 +1694,7 @@ unknown) from states it already has, with no solve:
 | `ImplicitEuler` | 1 | 1 | 1 | dt²/2 u″, u″ = (d₁ − d₀)/dt, dᵢ the quotients of this step and the one before (Euler's quotients are the rates at the steps' ends, dt apart whatever dt₋₁ is): dt (d₁ − d₀)/2 |
 | `ImplicitEuler` | 2 | 1 | 0 | dt/2 (V₁ − V₀) |
 | `ImplicitMidpoint` | 1 | 2 | 2 | dt³/12 u‴ (the trapezoidal rule's term), u‴ = 6 U[t₋₂, t₋₁, t₀, t₁], the third divided difference of the values at the ends of the last three steps: dt³/2 U[…] |
-| `ImplicitMidpoint` | 2 | 2 | 1 | dt³/12 u‴ (U is the trapezoidal rule of V), u‴ = V″ from the endpoint velocities: a₁ = (V₁ − V₀)/dt, a₀ = (V₀ − V₋₁)/dt₋₁ (u″ at the two steps' middles), V₋₁ = 2(U₀ − U₋₁)/dt₋₁ − V₀ (that step's update): dt³(a₁ − a₀)/(6(dt + dt₋₁)) |
+| `ImplicitMidpoint` | 2 | 2 | 1 | dt³/12 u‴ (U is the trapezoidal rule of V), u‴ = V″ = 2 V[t₋₁, t₀, t₁] from the velocities at the three step ends, V₋₁ the one stored with the earlier step (`PreviousStep::velocities`, whichever method took it): with a₁ = (V₁ − V₀)/dt, a₀ = (V₀ − V₋₁)/dt₋₁, dt³(a₁ − a₀)/(6(dt + dt₋₁)) |
 | `Newmark` | 2 | 2 | 0 | Zienkiewicz–Xie (1991): dt²(β − 1/6)(W₁ − W₀) = dt²/12 (W₁ − W₀) |
 
 `ImplicitEuler` declares none at time order 0 (no time error). Without
@@ -1827,7 +1827,9 @@ its declarations.
   one gives the next dt and joins the last accepted steps the estimate
   reads. `max_steps`, `snapshot_every` and `keep_before_last_step` count
   accepted steps. The anchor carries `next_dt` and `previous_steps` (the
-  last accepted steps, values in the free unknowns and lengths), so a run
+  last accepted steps: `PreviousStep{values, dt, velocities}`, the values
+  and (time order 2, else empty) the velocities at each step's start in
+  the free unknowns, and its length), so a run
   continued with its anchor equals one long run, rejections included, bit
   for bit; they are empty for a controller that does not control the
   error, and checked (sizes, finite) only when used.

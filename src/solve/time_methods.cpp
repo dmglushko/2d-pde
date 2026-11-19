@@ -42,21 +42,27 @@ TimeMethod::local_error(const TimeState &, const TimeState &, double,
 namespace {
 
 // Checks the earlier steps a local error estimate reads: as many as
-// declared, each with a value per free unknown and a positive length.
+// declared, each with a value per free unknown and a positive length, and
+// a velocity per free unknown when the estimate reads them.
 void check_previous(const std::string &method,
                     std::span<const PreviousStep> previous, std::size_t count,
-                    std::size_t size) {
+                    std::size_t size, bool reads_velocities = false) {
   if (previous.size() != count)
     throw std::invalid_argument(
         std::format("{}: the local error estimate reads {} earlier steps, "
                     "given {}",
                     method, count, previous.size()));
-  for (const PreviousStep &step : previous)
+  for (const PreviousStep &step : previous) {
     if (step.values.size() != size || !(step.dt > 0.0))
       throw std::invalid_argument(std::format(
           "{}: an earlier step has {} values for {} unknowns or a length "
           "that is not positive",
           method, step.values.size(), size));
+    if (reads_velocities && step.velocities.size() != size)
+      throw std::invalid_argument(
+          std::format("{}: an earlier step has {} velocities for {} unknowns",
+                      method, step.velocities.size(), size));
+  }
 }
 
 // Entry by entry, Newton's divided difference U[s0, ..., sk] of the values
@@ -236,23 +242,20 @@ ImplicitMidpoint::local_error(const TimeState &before, const TimeState &after,
     // Time order 2. The displacement update (U1 - U0) / dt = (V0 + V1) / 2
     // is the trapezoidal rule for U' = V, whose error is dt^3 / 12 V'' =
     // dt^3 / 12 u''' (an error of V1 enters U1 only times dt / 2, at
-    // O(dt^4)). u''' = V'' is estimated from the endpoint velocities, not
-    // from the values, which carry the errors of earlier (possibly much
-    // longer) steps: a1 = (V1 - V0) / dt and a0 = (V0 - V_-1) / dt_-1 are
-    // u'' at the middles of this step and the one before, (dt + dt_-1) / 2
-    // apart, so u''' = 2 (a1 - a0) / (dt + dt_-1) and
-    // e = dt^3 (a1 - a0) / (6 (dt + dt_-1)). The velocity V_-1 at the start
-    // of the earlier step is not kept; that step was one of this method's
-    // (no other method keeps earlier steps at time order 2, so none comes
-    // with an anchor), so its own update gives it back:
-    // V_-1 = 2 (U0 - U_-1) / dt_-1 - V0.
-    check_previous(name(), previous, 1, n);
+    // O(dt^4)). u''' = V'' is estimated from the velocities at the three
+    // step ends t_-1, t0, t1, not from the values, which carry the errors
+    // of earlier (possibly much longer) steps: u''' = 2 V[t_-1, t0, t1],
+    // twice their second divided difference. With a1 = (V1 - V0) / dt and
+    // a0 = (V0 - V_-1) / dt_-1 that is u''' = 2 (a1 - a0) / (dt + dt_-1),
+    // so e = dt^3 (a1 - a0) / (6 (dt + dt_-1)). The velocity V_-1 at the
+    // start of the earlier step is the one stored with it
+    // (PreviousStep::velocities), whichever method took that step.
+    check_previous(name(), previous, 1, n, true);
     const PreviousStep &last = previous[0];
     std::vector<double> error(n);
     for (std::size_t i = 0; i < n; ++i) {
       const double v0 = before.velocities[i];
-      const double v_last =
-          2.0 * (before.values[i] - last.values[i]) / last.dt - v0;
+      const double v_last = last.velocities[i];
       const double a1 = (after.velocities[i] - v0) / dt;
       const double a0 = (v0 - v_last) / last.dt;
       error[i] = dt * dt * dt * (a1 - a0) / (6.0 * (dt + last.dt));

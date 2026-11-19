@@ -245,7 +245,8 @@ public:
   // t0 (time + steps dt != t0, or a dt that is not finite and positive with
   // steps > 0), or, for an error-controlling controller, whose next_dt is
   // not finite and at least 0 or whose previous_steps do not have a value
-  // per free unknown and a positive length; for an error-controlling
+  // per free unknown (and at time order 2 a velocity per free unknown,
+  // below none) and a positive length; for an error-controlling
   // controller, a method that declares no error estimate at the time
   // order. Throws std::runtime_error when the controller's answer is not
   // finite and positive or a rejection does not shrink the step, and

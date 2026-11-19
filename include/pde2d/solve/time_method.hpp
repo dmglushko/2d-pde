@@ -86,10 +86,14 @@ struct ErrorEstimateDeclaration {
 };
 
 // An accepted step before the current one: the values at its start, in
-// the free unknowns, and its length.
+// the free unknowns, its length, and the velocities at its start (time
+// order 2; empty when the run has no velocities), so that no estimate
+// infers them from which method took the step. (The velocities come
+// last, so that positional initializations keep their meaning.)
 struct PreviousStep {
   std::vector<double> values{};
   double dt = 0.0;
+  std::vector<double> velocities{};
 };
 
 class TimeMethod {
