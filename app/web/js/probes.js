@@ -7,14 +7,16 @@
 // says so; for a field of the Assemble step from its values (double, as
 // the server sent them). The list is the chart's legend. Under them, the
 // line profile: the shown field along the line drawn with the profile
-// tool (display-only, from the shown values).
+// tool (display-only, from the shown values). A probe's x and y, and the
+// line's ends A and B, can be typed (applied on Enter or when the field is
+// left). The panel shows only while there is a probe or a line.
 
 import { api } from "./api.js";
 import { plainError } from "./pure/requests.js";
 import { lineChart } from "./charts.js";
 import { formatNumber } from "./pure/format.js";
 import { interpolateAt, locatePoint, meshGrid, sampleLine } from "./pure/mesh_math.js";
-import { fill, h } from "./dom.js";
+import { fill, h, numberInput } from "./dom.js";
 import { freshResult, lastResult, notify, requestTicket, setProbes, setProfile, setViewOption, store } from "./state.js";
 import { showFrame } from "./timebar.js";
 
@@ -43,15 +45,51 @@ function probeValue(i, found, field, server, frame) {
   return { value: field ? interpolateAt(found, field.values) : NaN };
 }
 
-function probeRow(probe, found, shown, digits) {
+// A coordinate typed by hand: applied (`apply(value)`) on Enter or when
+// the field is left, the last number typed (invalid text is marked and
+// not applied).
+// The field shows six significant digits (a pinned point has many); left
+// as shown, nothing moves. While typed in (data-editing) the panel is not
+// drawn again under it.
+function coordinate(value, label, apply) {
+  const shown = Number(value.toPrecision(6));
+  let next = shown;
+  const input = numberInput({
+    value: shown,
+    label,
+    className: "coordinate",
+    onNumber: (v) => (next = v),
+    onCommit: () => {
+      delete input.dataset.editing;
+      if (next !== shown) apply(next);
+    },
+  });
+  input.addEventListener("input", () => (input.dataset.editing = ""));
+  return input;
+}
+
+// The label of the coordinate field focused inside `slot`, and a way to
+// focus the field of that label again once `slot` was drawn again.
+function keptFocus(slot) {
+  const active = document.activeElement;
+  const label = slot.contains(active) && active.tagName === "INPUT" ? active.getAttribute("aria-label") : null;
+  return () => {
+    if (label) slot.querySelector(`input[aria-label="${CSS.escape(label)}"]`)?.focus();
+  };
+}
+
+const moveProbe = (probe, change) => setProbes(store.probes.map((p) => (p === probe ? { ...p, ...change } : p)));
+
+function probeRow(probe, found, shown, digits, meshShown) {
   const value = shown.value;
+  const name = probeName(probe);
   return h(
     "tr",
     {},
-    h("td", {}, h("span", { class: "probe-key" }, h("span", { class: `probe-dot s${probe.slot + 1}`, "aria-hidden": "true" }), probeName(probe))),
-    h("td", { class: "num" }, formatNumber(probe.x)),
-    h("td", { class: "num" }, formatNumber(probe.y)),
-    h("td", { class: "num" }, !found ? "outside" : (shown.text ?? formatNumber(value, digits))),
+    h("td", {}, h("span", { class: "probe-key" }, h("span", { class: `probe-dot s${probe.slot + 1}`, "aria-hidden": "true" }), name)),
+    h("td", { class: "num" }, coordinate(probe.x, `x of ${name}`, (x) => moveProbe(probe, { x }))),
+    h("td", { class: "num" }, coordinate(probe.y, `y of ${name}`, (y) => moveProbe(probe, { y }))),
+    h("td", { class: "num" }, !meshShown ? "–" : !found ? "outside" : (shown.text ?? formatNumber(value, digits))),
     h(
       "td",
       { class: "num" },
@@ -67,28 +105,27 @@ let chartState = null;
 // coloured by a field), solution (a time solution or null), frame,
 // digits}.
 export function updateProbes(root, { mesh, field, display, solution, frame, digits }) {
-  root.hidden = !mesh;
-  if (!mesh) return;
-  updateProfile(root.querySelector(".profile-chart"), { mesh, field });
   const probes = store.probes;
+  // Shown while there is something in it, whatever the state of the
+  // results (so an outdated result never resizes the picture).
+  root.hidden = probes.length === 0 && !store.profile;
+  updateProfile(root.querySelector(".profile-chart"), { mesh, field });
+  if (root.hidden) return;
   const list = root.querySelector(".probe-list");
-  const grid = gridOf(mesh);
-  const located = probes.map((p) => locatePoint(mesh, grid, p.x, p.y));
+  // A coordinate being typed in keeps its text: the list waits.
+  if (list.contains(document.activeElement) && document.activeElement.dataset.editing !== undefined) {
+    updateChart(root.querySelector(".probe-chart"), { probes, solution, frame });
+    return;
+  }
+  const refocus = keptFocus(list);
+  const located = mesh ? probes.map((p) => locatePoint(mesh, gridOf(mesh), p.x, p.y)) : probes.map(() => null);
   // u of a solution (fresh or outdated): the server's values in double.
-  const run = display?.kind === "solution" && field ? (freshResult("solve") ?? lastResult("solve")) : null;
+  const run = mesh && display?.kind === "solution" && field ? (freshResult("solve") ?? lastResult("solve")) : null;
   const server = run && probes.length ? serverSeries(run, probes) : null;
   if (probes.length === 0) {
-    fill(list, h("p", { class: "note" }, "Click or tap the picture to pin a probe (up to 4); a click on the boundary selects its region."));
+    fill(list);
   } else {
-    const header = h(
-      "tr",
-      {},
-      h("th", {}, "Probe"),
-      h("th", { class: "num" }, "x"),
-      h("th", { class: "num" }, "y"),
-      h("th", { class: "num" }, field?.name ?? "value"),
-      h("th", {}, h("button", { type: "button", class: "link", onclick: () => setProbes([]) }, "Remove all")),
-    );
+    // Where the values come from: the value column's tooltip.
     const source = !field
       ? null
       : server
@@ -96,12 +133,21 @@ export function updateProbes(root, { mesh, field, display, solution, frame, digi
         : display?.kind === "difference"
           ? `${field.name} interpolated in the page from the float32 values drawn (display precision).`
           : `${field.name} interpolated in the page from the field's values.`;
+    const header = h(
+      "tr",
+      {},
+      h("th", {}, "Probe"),
+      h("th", { class: "num" }, "x"),
+      h("th", { class: "num" }, "y"),
+      h("th", { class: "num", title: source ?? "" }, field?.name ?? "value"),
+      h("th", {}, h("button", { type: "button", class: "link", onclick: () => setProbes([]) }, "Remove all")),
+    );
     fill(
       list,
-      h("table", { class: "data probes-table" }, h("thead", {}, header), h("tbody", {}, probes.map((p, i) => probeRow(p, located[i], probeValue(i, located[i], field, server, frame), digits)))),
-      source ? h("p", { class: "note probe-source" }, source) : null,
+      h("table", { class: "data probes-table" }, h("thead", {}, header), h("tbody", {}, probes.map((p, i) => probeRow(p, located[i], probeValue(i, located[i], field, server, frame), digits, Boolean(mesh))))),
       server?.failure ? failureLine(server.failure) : null,
     );
+    refocus();
   }
   updateChart(root.querySelector(".probe-chart"), { probes, solution, frame });
 }
@@ -228,7 +274,7 @@ const PROFILE_SAMPLES = 200;
 // the mesh, the field's values or the width change.
 function updateProfile(slot, { mesh, field }) {
   const line = store.profile;
-  if (!line) {
+  if (!line || !mesh) {
     profileState = null;
     fill(slot);
     slot.hidden = true;
@@ -241,15 +287,33 @@ function updateProfile(slot, { mesh, field }) {
   profileState = { line, mesh, values, width };
   const remove = h("button", { type: "button", class: "link", onclick: () => setProfile(null) }, "Remove line");
   const length = Math.hypot(line.to[0] - line.from[0], line.to[1] - line.from[1]);
+  // The line's ends, typed by hand.
+  const end = (name, key) =>
+    h(
+      "span",
+      { class: "line-end" },
+      h("span", { class: "line-end-name" }, name),
+      ["x", "y"].map((axis, k) =>
+        coordinate(line[key][k], `${axis} of ${name}`, (v) => {
+          const point = [...line[key]];
+          point[k] = v;
+          setProfile({ ...line, [key]: point });
+        }),
+      ),
+    );
+  const refocus = keptFocus(slot);
   const title = h(
     "div",
     { class: "chart-head" },
-    h("span", { class: "chart-title" }, field ? `${field.label} along A → B (length ${formatNumber(length)})` : "Line profile"),
+    h("span", { class: "chart-title", title: "Distance from A along the line; gaps are outside the mesh" }, field ? `${field.label} along A → B (length ${formatNumber(length)})` : "Line profile"),
     h("span", { class: "spacer" }),
     remove,
   );
+  const ends = h("div", { class: "line-ends" }, end("A", "from"), end("B", "to"));
+
   if (!values) {
-    fill(slot, title, h("p", { class: "note" }, "Colour the picture by a field to see it along the line."));
+    fill(slot, title, ends, h("p", { class: "note" }, "Colour the picture by a field to see it along the line."));
+    refocus();
     return;
   }
   const sampled = sampleLine(mesh, gridOf(mesh), values, line.from, line.to, PROFILE_SAMPLES);
@@ -262,7 +326,8 @@ function updateProfile(slot, { mesh, field }) {
     label: `${field.label} along the profile line`,
     csvName: "line-profile.csv",
   });
-  fill(slot, title, chart, h("p", { class: "note" }, "Distance from A along the line; gaps are outside the mesh."));
+  fill(slot, title, ends, chart);
+  refocus();
 }
 
 // Drawing a line ends the profile tool (the picture pans again).

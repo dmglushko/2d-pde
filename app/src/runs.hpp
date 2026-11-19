@@ -65,8 +65,8 @@ struct SessionOptions {
   std::size_t max_clients = 8;
   // The bytes every kept run together may hold (their snapshots); a run
   // that does not fit even after dropping other clients' finished runs is
-  // refused.
-  std::size_t memory_budget = std::size_t{1} << 30;
+  // refused. 0 (the default): no budget, every run is kept.
+  std::size_t memory_budget = 0;
 };
 
 enum class RunState { running, done, failed, stopped };
@@ -253,6 +253,9 @@ void request_stop(Run &run);
 // The run's summary so far (docs/app.md, "The API": POST /api/solve). The
 // run lock held.
 Json progress_json(const Run &run, std::size_t memory_budget);
+
+// A memory budget as the answers send it: its bytes, or null for none (0).
+Json budget_json(std::size_t memory_budget);
 
 // Why a run is no longer a client's current run.
 enum class GoneReason { replaced, memory_budget, client_limit };

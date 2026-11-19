@@ -38,8 +38,8 @@ constexpr std::string_view usage = R"(Usage:
       Default: 127.0.0.1:8765 and the page files of this checkout. A host
       that is not loopback needs a token on every request: TOKEN, or a
       random one; the printed address carries it. --memory-budget bounds
-      what the kept runs of all pages hold (default 1G; a number of bytes,
-      or with K, M or G for powers of 1024).
+      what the kept runs of all pages hold (default: no bound; a number of
+      bytes, or with K, M or G for powers of 1024).
   pde2d_app --run CASE.json [--set PATH=VALUE]... [--output DIR]
       Runs a saved case without the browser (geometry, mesh, problem,
       assembly, solve) and prints a JSON summary. Exit code 0 when every

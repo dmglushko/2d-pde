@@ -121,7 +121,7 @@ flowchart LR
 | `app/src/binary.hpp` | little-endian float32, float64 and uint32 |
 | `app/src/session.*` | `Session`: the facade the server and `--run` use (stages, runs, comparisons, probes, status, exports, `run`), the two locks and `Work` (a call under the session mutex, with what it does), the table of field kinds, the default case |
 | `app/src/server.*`, `app/src/main.cpp` | HTTP (the only file that includes `httplib.h`: routes, client ids, token, Origin, the queue bound for calls that wait for the session) and the command line |
-| `app/web/` | `index.html`, `css/` (one dark theme, every colour a token: `tokens.css` tokens and base, `panels.css` controls, step heads, forms, results, toast, settings, `picture.css` viewer, time bar, legend, overlays, charts, `layout.css` top bar, columns, tabs, narrow screens; loaded in that order), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing, chart, colour-bar and log ticks, CSV, byte sizes; `color.js` OKLab ramps, field scales, the locked range, the colour maps; `display.js` what the picture shows (`resolveDisplay`); `requests.js` retries, backoff, plain error texts, the server's busy text; `study.js` refinement levels and observed orders; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, the conditions that follow a drawing's region changes, visible coefficients, `isLine`; `playback.js` the playback clock and the run's pace; `drawing.js` the drawing's curves, hit testing, snapping, the split point, the drawing edits; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id kept per tab and its claim, the token header, requests that wait), `state.js` (the store, `editCase`, tickets, undo, invalid entries, the picture's state per tab), `actions.js` (stages, the coalesced requests of the problem check and the geometry, runs and their progress with retries, reattaching after a reload, presets, exports), `display.js` (the store gathered for `resolveDisplay`), `snapshots.js`, `settings.js`, `case_menu.js`, `server_status.js`, `refinement.js` (the refinement study), `geometry_editor.js` (the tools bar, the split tool, the drawing editor: the viewer's overlay), `region_popover.js` (a region's actions on the picture), `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, the overlay drawn over the kept frame, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile), `charts.js` (the SVG line chart: keyboard readout, CSV, log–log), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
+| `app/web/` | `index.html`, `css/` (one dark theme, every colour a token: `tokens.css` tokens and base, `panels.css` controls, step heads, forms, results, toast, settings, `picture.css` viewer, time bar, legend, overlays, charts, `layout.css` top bar, columns, tabs, narrow screens; loaded in that order), `js/`: `pure/` (no DOM, tested in Node: `format.js` numbers, decimal parsing, chart, colour-bar and log ticks, CSV, byte sizes; `color.js` OKLab ramps, field scales, the locked range, the colour maps; `display.js` what the picture shows (`resolveDisplay`); `requests.js` retries, backoff, plain error texts, the server's busy text; `study.js` refinement levels and observed orders; `mesh_math.js` angles, point location, interpolation, isolines, \|∇u\| per triangle, line sampling, the binary mesh; `case_model.js` normalization, region edits, the conditions that follow a drawing's region changes, visible coefficients, `isLine`; `playback.js` the playback clock and the run's pace; `drawing.js` the drawing's curves, hit testing, snapping, the split point, the drawing edits; `stages.js` the stage registry, keys, error paths; `run_values.js` the snapshot window; `prefs.js` settings, folds, probe slots, the picture's height; `tickets.js` request tickets; `history.js` undo steps), `api.js` (every call, the client id kept per tab and its claim, the token header, requests that wait), `state.js` (the store, `editCase`, tickets, undo, invalid entries, the picture's state per tab), `actions.js` (stages, the coalesced requests of the problem check and the geometry, runs and their progress with retries, reattaching after a reload, presets, exports), `display.js` (the store gathered for `resolveDisplay`), `snapshots.js`, `settings.js`, `case_menu.js`, `server_status.js`, `refinement.js` (the refinement study), `geometry_editor.js` (the tools bar, the split tool, the drawing editor: the viewer's overlay), `region_popover.js` (a region's actions on the picture), `dom.js` (forms from specs, `numberInput`, error marks, warning chips, info toggles, foldable sections), `view/` (`viewer.js` the picture's state and layer order, the overlay drawn over the kept frame, `layers.js` the drawing, `legend.js` the legend, its range lock and the saved picture, `interaction.js` pointer, pinch, wheel, keys, the readout, `tokens.js`), `timebar.js`, `probes.js` (probes, u(t), the line profile; a probe's x and y and the line's ends typed), `panes.js` (the steps panel, the view options and the probes' panel hidden or sized), `cycles.js` (an adaptive run's earlier cycles in the picture), `charts.js` (the SVG line chart: keyboard readout, CSV, log–log), `compare.js` (comparisons with an exact solution and the reference run), `panels/*.js` (one per step), `main.js` |
 | `app/examples/` | example cases (each runs as `app_run_*`) and an example SVG |
 | `app/tests/` | `browser/` (the page in headless Chrome: `run.sh`, `harness.html`, `scenarios/*.js`), `session.cpp`, `drawing.cpp` (drawings, their errors' paths, the exact conversion of every shape and example, the locator, a mesh file's split at a node), `solve.cpp` (the Solve step, with exact solutions), `runs.cpp` (runs in chunks, every preset), `compare.cpp` (comparisons in double, reference runs, probes, clients, the binary mesh), `exports.cpp` (exports never compute, provenance, VTK, the series zip, CRC-32 and SHA-256, error paths, `--set`, `--sweep`), `server.cpp` (HTTP, token, Origin, 429, status, clients), `example_checks.json` and `example_check.cpp` (each example's expected figures, `app_check_*`), `app_support.hpp` (the mesh decoded as the page decodes it), `web.test.mjs`, `web_actions.test.mjs` |
 | `app/third_party/cpp-httplib/` | `httplib.h` 0.18.3 and its MIT license |
@@ -986,9 +986,11 @@ Two locks (`session.hpp`, `runs.hpp`):
 
 ## Memory
 
-The kept runs of all clients (current and reference runs) together may
-reserve at most `SessionOptions::memory_budget` bytes (`--memory-budget`,
-default 1 GiB). A run's reservation is fixed when it is made
+By default there is no budget (`SessionOptions::memory_budget` 0): every
+run is kept, nothing is dropped or refused for room, the answers send
+`budget` (and the status `room`) as `null` and the Solve step warns of
+no budget. With `--memory-budget`, the kept runs of all clients (current
+and reference runs) together may reserve at most that many bytes. A run's reservation is fixed when it is made
 (`run_bytes`; for an adaptive run `adaptive_run_bytes`, in time
 `adaptive_time_run_bytes`, see "Adaptive runs"): its snapshots (times + 1 for a time run, 1 for a static
 solve) × (8 bytes a node + 128) plus the state a chunk starts from (8
@@ -1329,9 +1331,16 @@ between 300 px and what leaves the picture 360 px, `clampSidebarWidth`),
 kept in this browser as the chosen width (a narrower window clamps
 what is shown, a wide one gives it back); the separator carries its
 current, smallest and largest width; at phone width there is no
-handle. The toolbar has
-**Reset view** (fit the domain; also a double click, 0, and ⌂ on the
-picture). The step switches, the solve mode and the other segmented
+handle. Fitting the domain is ⌂ on the picture (also a double click,
+or 0). **Panes** (`panes.js`, kept in this browser): ◧ at the left of
+the top bar hides the steps panel (wide screens; the picture takes its
+column), ☰ beside the zoom buttons hides the view options, and the
+panel of the probes and the line profile under the picture has a height
+of its own (`--extra-height`, its header dragged or the arrow keys; it
+keeps at least 300 px for the picture) and hides to its header when
+dragged below 56 px (Show, or a drag up, brings it back). It shows only
+while there is a probe or a line, so a result going outdated never
+resizes the picture; no hint stands under the picture. The step switches, the solve mode and the other segmented
 choices are rows of equal cells, the chosen one filled with the accent.
 
 **Drawing cost** (`view/layers.js`): the mesh edges are drawn into a
@@ -1374,8 +1383,9 @@ press that does not move selects a boundary region or pins a probe), two
 pinch and pan, the wheel zooms, +/−/fit buttons on the picture; at phone
 width a handle under the picture sets its height and ▴ folds the picture
 away (both kept in this browser). Edges are drawn fainter over a field's
-colours. Results whose reports hold messages show a warning chip with the
-count and the first message; it opens the reports. A report (a row with a
+colours. Results whose reports hold messages show a chip with the count
+("N messages": the library does not tell a note from a warning, and most
+say what was done) and the first message; it opens the reports. A report (a row with a
 caret) opens to its messages, its notes (the remesher's plan, sent as
 `notes`, not as a message: `is_plan_message` in `views.cpp`, so it is
 never counted as a warning, also not from earlier adaptive cycles),
@@ -1452,7 +1462,7 @@ pde2d_app --run CASE.json --sweep PATH=V1,V2,... [--sweep ...] [--set ...] [--ou
 ```
 
 - `--memory-budget` (the server): a number of bytes, or with `K`, `M`,
-  `G` (powers of 1024; `iB` or `B` may follow); default `1G`.
+  `G` (powers of 1024; `iB` or `B` may follow); default: no budget.
 
 - Runs geometry, mesh, problem check, assembly and solve (to the end, in
   the same chunks as the page's runs) and prints a JSON summary; the exit

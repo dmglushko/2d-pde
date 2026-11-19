@@ -10,7 +10,7 @@ import { exportFile, followedRun, runWithPrerequisites, stopping, stopRun, toast
 import { lineChart } from "../charts.js";
 import { LABELS, clearComparison, compare, compareWith, comparisonState, comparisons, currentComparison, forgetReference, keepReference } from "../compare.js";
 import { comparisonControls, currentDisplay } from "../display.js";
-import { chooseCycle, chosenCycle, cycleCount, cycleLoading } from "../cycles.js";
+import { chooseCycle, chosenCycle, cycleCount } from "../cycles.js";
 import { runStudy, stopStudy, study, studyOrders } from "../refinement.js";
 import { bytesText, formatNumber } from "../pure/format.js";
 import { isTransient, plainError } from "../pure/requests.js";
@@ -320,7 +320,7 @@ function updateCycles(container) {
   const errors = compared && comparisonState("exact") === "current" ? (compared.summary?.cycles ?? null) : null;
   // A running adaptive run's result grows in place: its cycles' count is
   // part of the key.
-  const key = [result, errors, result?.adaptive?.cycles?.length ?? 0, result?.state, chosenCycle(result), cycleLoading(result)];
+  const key = [result, errors, result?.adaptive?.cycles?.length ?? 0, result?.state, chosenCycle(result)];
   if (slot.shown && key.every((part, i) => slot.shown[i] === part)) return;
   slot.shown = key;
   if (result?.mode === "adaptive_time") return fill(slot, adaptationsSection(result));
@@ -355,7 +355,7 @@ function updateCycles(container) {
           chosen === count
             ? "The picture shows the last cycle. Click a cycle's number (or a point of the chart) to see its solution on its mesh."
             : [
-                `The picture shows cycle ${chosen} of ${count}${cycleLoading(result) ? " (loading…)" : ""}: its mesh and its solution, on the run's colour range. `,
+                `The picture shows cycle ${chosen} of ${count}: its mesh and its solution, on the run's colour range. `,
                 h("button", { type: "button", class: "link", onclick: () => pick(count) }, "Show the last"),
               ],
         )

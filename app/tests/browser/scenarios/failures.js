@@ -40,7 +40,7 @@ export default async ({ example, w, q, qa, click, until, text, check, pointer, k
   click([...q(".probe-chart").querySelectorAll("button")].find((b) => b.textContent === "Retry"));
   await until(() => q(".probe-chart path.line"), "u(t) after Retry");
   check("Retry draws u(t)", true);
-  check("the table's value is the server's double", /in double from the server/.test(text(q(".probe-source"))));
+  check("the table's value is the server's double", /in double from the server/.test(q(".probes-table th[title]")?.title ?? ""));
   // The chart without a mouse: focus, arrows, a spoken readout; its data.
   const plot = q(".probe-chart .chart-plot");
   plot.focus();

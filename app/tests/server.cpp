@@ -316,8 +316,11 @@ int main() {
          check(status["busy"]["seconds"].is_number() &&
                    status["busy"]["since"].is_string(),
                "since when");
+         // No budget by default: null, and no room to count.
          check(status["waiting"].get<int>() >= 1 &&
-                   status["memory"]["budget"].is_number(),
+                   status["memory"]["budget"].is_null() &&
+                   status["memory"]["room"].is_null() &&
+                   status["memory"]["used"].is_number(),
                "waiting and memory");
          // A progress call does not wait and is not refused as busy.
          const auto start = std::chrono::steady_clock::now();

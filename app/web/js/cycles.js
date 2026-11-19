@@ -40,12 +40,6 @@ export function cycleView(data) {
   return cycle === null ? null : (kept.get(data)?.get(cycle)?.view ?? null);
 }
 
-// Whether the chosen cycle is still being fetched.
-export function cycleLoading(data) {
-  const cycle = chosenCycle(data);
-  return cycle !== null && Boolean(kept.get(data)?.get(cycle)?.loading);
-}
-
 async function load(data, cycle) {
   let cycles = kept.get(data);
   if (!cycles) kept.set(data, (cycles = new Map()));

@@ -20,6 +20,7 @@ import { meshPanel } from "./panels/mesh.js";
 import { problemPanel } from "./panels/problem.js";
 import { solvePanel } from "./panels/solve.js";
 import { forgetChartSize, profileDrawn, updateProbes } from "./probes.js";
+import { wirePanes } from "./panes.js";
 import { fileKind, normalizeCase } from "./pure/case_model.js";
 import { formatNumber, getDefaultDigits, pictureName } from "./pure/format.js";
 import { MAX_PROBES, clampPictureHeight, clampSidebarWidth, freeProbeSlot } from "./pure/prefs.js";
@@ -851,7 +852,6 @@ async function start() {
   element("color-by").addEventListener("change", (event) => setColorBy(event.target.value));
   element("layer-isolines").addEventListener("change", (event) => setViewOption("isolines", event.target.checked));
   element("fit-view").addEventListener("click", () => viewer.fit());
-  element("reset-view").addEventListener("click", () => viewer.fit());
   element("zoom-in").addEventListener("click", () => viewer.zoomBy(1.25));
   element("zoom-out").addEventListener("click", () => viewer.zoomBy(0.8));
   element("profile-tool").addEventListener("click", () => setViewOption("tool", store.view.tool === "profile" ? "pan" : "profile"));
@@ -915,6 +915,7 @@ async function start() {
   wireHistory();
   wireHeightHandle();
   wireSidebarHandle();
+  wirePanes();
   setInterval(tick, 1000);
 
   subscribe(refresh);

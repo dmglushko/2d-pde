@@ -49,6 +49,16 @@
   min-height: 0;
 }
 
+/* The steps panel hidden (◧, panes.js; wide screens only). */
+@media (min-width: 861px) {
+  .layout.no-sidebar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .layout.no-sidebar .sidebar {
+    display: none;
+  }
+}
+
 .layout > * {
   min-width: 0;
 }
@@ -241,7 +251,14 @@ body.resizing-sidebar {
   }
   .viewer-extra {
     order: 3;
-    max-height: none;
+    height: auto;
+  }
+  .extra-head {
+    cursor: default;
+  }
+  .extra-head::before,
+  #toggle-sidebar {
+    display: none;
   }
   .panels {
     order: 4;

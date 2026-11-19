@@ -435,11 +435,13 @@ export function warningChip(reports, foldId) {
     {
       type: "button",
       class: "warning-chip",
-      title: "Open the reports",
+      title: "Open the reports: what the library said while it worked (notes and warnings alike)",
       onclick: (event) => openReports(event.currentTarget, foldId),
     },
-    h("span", { class: "warning-mark", "aria-hidden": "true" }, "!"),
-    h("span", { class: "warning-count" }, `${count} warning${count > 1 ? "s" : ""}`),
+    h("span", { class: "warning-mark", "aria-hidden": "true" }, "i"),
+    // Messages, not warnings: many only say what was done (a marking, a
+    // transfer, a corner's value), and the library does not tell them apart.
+    h("span", { class: "warning-count" }, `${count} message${count > 1 ? "s" : ""}`),
     h("span", { class: "warning-first" }, messages[0]),
   );
 }

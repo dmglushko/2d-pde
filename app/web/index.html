@@ -17,6 +17,7 @@
   </head>
   <body>
     <header class="topbar">
+      <button id="toggle-sidebar" class="icon wide-only" type="button" aria-pressed="true" aria-controls="sidebar" aria-label="Steps panel" title="Hide the steps panel (the picture takes the room)">◧</button>
       <div class="brand">pde2d <small id="version"></small></div>
       <div class="case-actions">
         <div class="case-menu">
@@ -71,7 +72,7 @@
 
       <section class="viewer" aria-label="Picture">
         <div class="viewer-main">
-          <div class="viewer-toolbar">
+          <div class="viewer-toolbar" id="viewer-toolbar">
             <label><input type="checkbox" id="layer-geometry" checked /> Boundary</label>
             <label><input type="checkbox" id="layer-mesh" checked /> Edges</label>
             <label title="Dirichlet nodes"><input type="checkbox" id="layer-dirichlet" /> Dirichlet</label>
@@ -87,7 +88,6 @@
               </select>
             </label>
             <button id="profile-tool" class="small" type="button" aria-pressed="false" title="Drag across the picture to plot the shown field along a line"><span class="wide-only">Line profile</span><span class="phone-only">Profile</span></button>
-            <button id="reset-view" class="small wide-only" type="button" title="Centre the whole domain in the picture again (also: double-click, or 0)">Reset view</button>
             <button id="save-picture" class="small" type="button" title="Save the picture with its legend as PNG">Save<span class="wide-only"> picture</span></button>
             <button id="collapse-picture" class="icon phone-only" type="button" aria-expanded="true" aria-controls="canvas-wrap" aria-label="Hide the picture" title="Hide the picture">▴</button>
             <span class="status" id="view-status"></span>
@@ -105,7 +105,8 @@
             <div class="zoom-buttons" role="group" aria-label="Zoom">
               <button id="zoom-in" class="icon" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
               <button id="zoom-out" class="icon" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
-              <button id="fit-view" class="icon" type="button" aria-label="Fit the picture" title="Fit the picture (0)">⌂</button>
+              <button id="fit-view" class="icon" type="button" aria-label="Fit the picture" title="Fit the picture (also: double-click, or 0)">⌂</button>
+              <button id="toggle-toolbar" class="icon" type="button" aria-pressed="true" aria-label="View options" title="Hide the view options above the picture">☰</button>
             </div>
           </div>
           <div
@@ -121,9 +122,24 @@
           <div class="legend" id="legend"></div>
         </div>
         <div class="viewer-extra" id="probes" hidden>
-          <div class="probe-list"></div>
-          <div class="probe-chart" hidden></div>
-          <div class="profile-chart" hidden></div>
+          <div
+            class="extra-head"
+            id="extra-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-controls="extra-body"
+            aria-label="Height of the probes panel: drag (low enough hides it), or use the arrow keys"
+            aria-valuemin="0"
+            tabindex="0"
+          >
+            <span class="extra-title">Probes and line profile</span>
+          </div>
+          <button id="extra-toggle" class="small extra-toggle" type="button" aria-expanded="true" aria-controls="extra-body">Hide</button>
+          <div class="extra-body" id="extra-body">
+            <div class="probe-list"></div>
+            <div class="probe-chart" hidden></div>
+            <div class="profile-chart" hidden></div>
+          </div>
         </div>
       </section>
     </main>

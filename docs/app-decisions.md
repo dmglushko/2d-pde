@@ -1511,3 +1511,26 @@ steps). The owner asked the app to offer everything new.
   solution, and all of them stay as they were. The run's colour range is
   kept so the cycles compare at a glance; the indicators and the
   comparisons are the last cycle's and are not drawn on an earlier one.
+- **No text that comes and goes around the picture.** The hint "Click or
+  tap the picture to pin a probe…" stood in the panel under the picture
+  and left it when the mesh went outdated, so the picture grew and
+  shrank; the probes' and the profile's notes were noise to the owner.
+  The hint and the notes are gone (where u comes from is the value
+  column's tooltip, the profile's axis its title), the panel shows only
+  with a probe or a line, and its height is the user's (dragged), never
+  its content's. A cycle's "(loading…)" went for the same reason.
+- **Panes can be hidden.** The steps panel (◧), the view options (☰)
+  and the probes' panel (dragged low, or Hide) fold away, each
+  remembered in the browser: the owner wants the picture's room. "Reset
+  view" went from the toolbar: it was ⌂ again, and looked like doing
+  nothing when the picture was already fitted.
+- **Coordinates are typed.** A probe's x and y and the line's ends are
+  number fields (applied on Enter or leaving the field, six significant
+  digits shown), for placing a probe exactly.
+- **"N messages", not "N warnings".** Reports carry notes (a marking, a
+  transfer by parents, a corner's average) with the warnings, and the
+  library sends them alike; an adaptive run in time gave "36 warnings"
+  that were mostly notes. The chip counts messages and says so.
+- **No memory budget by default.** The owner works in one tab; the 1 GiB
+  budget only refused runs and dropped other tabs' results.
+  `--memory-budget` still sets one for a shared server.

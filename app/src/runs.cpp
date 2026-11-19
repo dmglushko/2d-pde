@@ -913,6 +913,10 @@ void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock,
     throw *run.published.error;
 }
 
+Json budget_json(std::size_t memory_budget) {
+  return memory_budget == 0 ? Json(nullptr) : Json(memory_budget);
+}
+
 Json progress_json(const Run &run, std::size_t memory_budget) {
   const Run::Published &p = run.published;
   Json out = run.base;
@@ -1011,7 +1015,7 @@ Json progress_json(const Run &run, std::size_t memory_budget) {
   out["values"] = std::move(layout);
   Json memory = Json::object();
   memory["bytes"] = run.bytes;
-  memory["budget"] = memory_budget;
+  memory["budget"] = budget_json(memory_budget);
   out["memory"] = std::move(memory);
   if (p.error)
     out["error"] = error_json(*p.error);
@@ -1184,6 +1188,8 @@ bool droppable(const Run &run) {
 
 std::size_t RunManager::room_for(const std::string &client,
                                  std::size_t budget) const {
+  if (budget == 0)
+    return std::numeric_limits<std::size_t>::max();
   std::set<const Run *> seen;
   std::size_t kept = 0;
   for (const auto &[name, entry] : clients_)
@@ -1202,6 +1208,8 @@ std::size_t RunManager::room_for(const std::string &client,
 
 bool RunManager::make_room(const std::string &client, std::size_t bytes,
                            std::size_t budget) {
+  if (budget == 0)
+    return true; // no budget: nothing is dropped
   if (bytes > room_for(client, budget))
     return false;
   // What is kept now, the client's current run aside (a solve replaces

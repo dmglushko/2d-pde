@@ -385,7 +385,7 @@ Json Session::mesh(const Json &input, const std::string &client) {
   Json memory = Json::object();
   memory["snapshot_bytes"] = run_bytes(outcome->mesh->nodes.size(), 1, 0) -
                              run_bytes(outcome->mesh->nodes.size(), 0, 0);
-  memory["budget"] = options_.memory_budget;
+  memory["budget"] = budget_json(options_.memory_budget);
   out["memory"] = std::move(memory);
   return out;
 }
@@ -842,9 +842,12 @@ Json Session::status(const std::string &client) {
   out["running"] = state_->runs.running();
   out["clients"] = state_->runs.clients();
   Json memory = Json::object();
-  memory["budget"] = options_.memory_budget;
+  memory["budget"] = budget_json(options_.memory_budget);
   memory["used"] = state_->runs.used_bytes();
-  memory["room"] = state_->runs.room_for(who, options_.memory_budget);
+  memory["room"] =
+      options_.memory_budget == 0
+          ? Json(nullptr)
+          : Json(state_->runs.room_for(who, options_.memory_budget));
   out["memory"] = std::move(memory);
   return out;
 }

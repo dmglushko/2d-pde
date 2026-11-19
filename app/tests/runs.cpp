@@ -547,9 +547,8 @@ int main() {
            app::Session probe;
            const Json progress = probe.solve(case_json);
            bytes = progress["memory"]["bytes"].get<std::size_t>();
-           check(bytes > 0 && progress["memory"]["budget"] ==
-                                  app::SessionOptions{}.memory_budget,
-                 "the estimate and the budget");
+           check(bytes > 0 && progress["memory"]["budget"].is_null(),
+                 "the estimate, and no budget by default");
          }
          app::Session session({.memory_budget = 5 * bytes / 2});
          const auto a = session.solve(case_json, "a")["job"];

@@ -45,7 +45,7 @@ reaches it at the same address. Stop the app with Ctrl+C.
   the address bar and sends it with every request. Anyone with the
   address can drive the app, so do this only on a network you trust.
 - `--memory-budget 2G` bounds what the kept runs of all tabs may hold
-  (default 1G; K, M and G are powers of 1024). A solve that would not fit
+  (default: no bound; K, M and G are powers of 1024). A solve that would not fit
   even after dropping other tabs' finished runs is refused with advice
   (fewer snapshots, a coarser mesh).
 - `--web DIR` serves the page from another directory. By default the page
@@ -73,8 +73,8 @@ whatever the browser's language. A number field whose text is not a
 number (`-`, `1e`, `0,05`) changes nothing: it says what the case still
 has, every step's head names it with a link to it, and Solve, Mesh,
 Assemble and Run all wait until it is fixed (Save warns that the file
-gets the previous value). A warning chip at the top of a result shows how
-many warnings its reports hold and the first one; click it to open the
+gets the previous value). A chip at the top of a result shows how
+many messages its reports hold (notes and warnings alike) and the first one; click it to open the
 reports. Each report (a row with ▸) opens to its warnings, notes such as
 the mesher's plan (which components ran where; not a warning), where its
 time went (the run's integrator: assembly, the linear solver's prepares
@@ -286,7 +286,7 @@ signs: blue–red or blue–orange), and the picture quality (lower is faster to
 not here: they belong to the case (the Solve step's Threads card).
 
 In the picture, drag to pan, use the wheel or pinch with two fingers to
-zoom, and double-click (or **Reset view** in the toolbar, or the **⌂** button) to fit; **+** and **−** at
+zoom, and double-click (or the **⌂** button) to fit; **+** and **−** at
 the picture's corner zoom too. With the picture focused (Tab), the arrow
 keys pan (Shift for bigger steps), + and - zoom, 0 fits and Enter pins a
 probe at the centre. The toolbar turns layers on and off (boundary, mesh
@@ -310,8 +310,13 @@ the region, the triangle and the value there (for Dirichlet values and
 b, the value of the nearest dot). **Save picture** saves the picture with
 its legend as a PNG named after the case and the shown time.
 
-**Probes.** Click or tap the picture to pin a probe (up to four). The list under
-the picture gives each probe's x, y and value; for a run in time a chart
+**Probes.** Click or tap the picture to pin a probe (up to four). The panel under
+the picture gives each probe's x and y (type new ones and press Enter to
+move it) and its value; the line profile's ends A and B can be typed the
+same way. Drag the panel's header to size it; dragged low it hides to its
+header (**Show** brings it back). **◧** at the top left hides the steps
+panel and **☰** beside the zoom buttons hides the view options, so the
+picture takes the room (all remembered in this browser); for a run in time a chart
 shows u(t) at every probe (computed on the server over all snapshots),
 with the shown time marked; click the chart to show that time. The value
 of u in the list is the server's, in double. **✕** removes a probe. Every

@@ -98,15 +98,15 @@ export default async ({ w, d, q, qa, tab, click, example, select, type, until, i
   await until(() => q("#problem-summary .summary-chips.stale"), "the facts of the last readable equation, muted");
   check("an unreadable equation keeps the last facts", /Time order 0/.test(text(q("#problem-summary"))), text(q("#problem-summary")));
   check("no inline styles", qa(".panels [style], .legend [style], .timebar [style]").length === 0);
-  // Reset view fits the picture again after a zoom.
+  // Fit (⌂) fits the picture again after a zoom.
   tab("solve");
-  q("#reset-view").click();
+  q("#fit-view").click();
   await idle();
   const fitted = pixels().hash;
   click(q("#zoom-in"));
   click(q("#zoom-in"));
   await until(() => pixels().hash !== fitted, "the zoom");
-  q("#reset-view").click();
-  await until(() => pixels().hash === fitted, "Reset view to fit the picture again");
-  check("Reset view fits the picture again", true);
+  q("#fit-view").click();
+  await until(() => pixels().hash === fitted, "⌂ to fit the picture again");
+  check("⌂ fits the picture again", true);
 };
