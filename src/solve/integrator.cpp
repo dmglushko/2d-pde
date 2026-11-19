@@ -186,8 +186,12 @@ Solution make_solution(const fem::MeshedProblem &meshed, const TimeState &state,
 // values do not depend on it).
 class SolveLog {
 public:
-  void add(const LinearSolveResult &result) {
+  // A solve's result and the time it took, under one lock (a snapshot
+  // never sees one without the other).
+  void add(const LinearSolveResult &result,
+           std::chrono::duration<double> time) {
     const std::scoped_lock lock(mutex_);
+    solve_seconds_ += time.count();
     for (const std::string &message : result.messages)
       if (std::ranges::find(messages_, message) == messages_.end())
         messages_.push_back(message);
@@ -197,6 +201,12 @@ public:
       max_backward_error_ = result.backward_error;
     if (result.pivot_ratio > 0.0)
       min_pivot_ratio_ = std::min(min_pivot_ratio_, result.pivot_ratio);
+  }
+  // The time a prepare took (summed, like the solves' times: solves from
+  // several threads at once add up to more than the time that passed).
+  void add_prepare_time(std::chrono::duration<double> time) {
+    const std::scoped_lock lock(mutex_);
+    prepare_seconds_ += time.count();
   }
   // What the report shows, read under one lock so that its three parts
   // agree (a prepared solver kept beyond integrate() may finish a solve
@@ -208,13 +218,17 @@ public:
     // 0 when no solve measured its pivot ratio (an iterative solver,
     // SparseLu, an empty system, no solve).
     double min_pivot_ratio = 0.0;
+    double prepare_seconds = 0.0;
+    double solve_seconds = 0.0;
   };
   Snapshot snapshot() const {
     const std::scoped_lock lock(mutex_);
     return {.messages = messages_,
             .max_backward_error = max_backward_error_,
             .min_pivot_ratio =
-                std::isinf(min_pivot_ratio_) ? 0.0 : min_pivot_ratio_};
+                std::isinf(min_pivot_ratio_) ? 0.0 : min_pivot_ratio_,
+            .prepare_seconds = prepare_seconds_,
+            .solve_seconds = solve_seconds_};
   }
 
 private:
@@ -222,6 +236,8 @@ private:
   std::vector<std::string> messages_;
   double max_backward_error_ = 0.0;
   double min_pivot_ratio_ = std::numeric_limits<double>::infinity();
+  double prepare_seconds_ = 0.0;
+  double solve_seconds_ = 0.0;
 };
 
 // A prepared solver that passes every solve on and logs its result. It
@@ -236,8 +252,9 @@ public:
       : solver_(std::move(solver)), log_(std::move(log)) {}
   LinearSolveResult
   solve(std::span<const double> right_hand_side) const override {
+    const auto start = Clock::now();
     LinearSolveResult result = solver_->solve(right_hand_side);
-    log_->add(result);
+    log_->add(result, Clock::now() - start);
     return result;
   }
 
@@ -263,8 +280,11 @@ public:
   }
   std::unique_ptr<const PreparedLinearSolver>
   prepare(std::shared_ptr<const fem::CsrMatrix> matrix) const override {
-    return std::make_unique<const LoggingPreparedSolver>(
-        solver_->prepare(std::move(matrix)), log_);
+    const auto start = Clock::now();
+    auto prepared = solver_->prepare(std::move(matrix));
+    log_->add_prepare_time(Clock::now() - start);
+    return std::make_unique<const LoggingPreparedSolver>(std::move(prepared),
+                                                         log_);
   }
 
 private:
@@ -447,12 +467,15 @@ IntegrationResult Integrator::integrate(
       keeps_acceleration && initial && !initial->accelerations.empty();
   std::optional<fem::AssembledProblem> current;
   std::size_t assemblies = 0;
+  std::chrono::duration<double> assembly_time{};
   const StartNeeds needs = acceleration_given
                                ? StartNeeds::nothing
                                : method_->start_needs(time_order);
   if (needs != StartNeeds::nothing) {
     const int max_time_order = needs == StartNeeds::static_part ? 0 : 2;
+    const auto assembly_start = Clock::now();
     current = assembler.assemble(meshed_problem, t0, nullptr, max_time_order);
+    assembly_time += Clock::now() - assembly_start;
     ++assemblies;
     method_->start(*current, linear_solver, state);
   }
@@ -538,8 +561,10 @@ IntegrationResult Integrator::integrate(
     const double t_eval = (1.0 - fraction) * t + fraction * t_new;
     // (Reuse gives the same values as a fresh assembly, so a first step
     // without an assembly at t0 gets the same result.)
+    const auto assembly_start = Clock::now();
     current = assembler.assemble(meshed_problem, t_eval,
                                  current ? &*current : nullptr);
+    assembly_time += Clock::now() - assembly_start;
     ++assemblies;
 
     const StepMatrixWeights weights = method_->step_matrix_weights(h);
@@ -700,6 +725,11 @@ IntegrationResult Integrator::integrate(
   SolveLog::Snapshot solves = log->snapshot();
   m["max_backward_error"] = solves.max_backward_error;
   m["min_pivot_ratio"] = solves.min_pivot_ratio;
+  // Where the time went (the rest: step matrices, the method's own
+  // vector work, snapshots).
+  m["assembly_seconds"] = assembly_time.count();
+  m["prepare_seconds"] = solves.prepare_seconds;
+  m["solve_seconds"] = solves.solve_seconds;
   report.messages = std::move(solves.messages);
   if (result.stopped)
     report.messages.push_back(std::format(

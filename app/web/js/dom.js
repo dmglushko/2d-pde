@@ -359,23 +359,49 @@ export function exportButton(label, action, { fresh, staleReason, about = null }
   return button;
 }
 
-// The reports of a run, one collapsible block per stage.
+// The reports of a run, one collapsible block per stage: its messages
+// ("worked, but…"), its notes (information such as the remesher's plan,
+// views.cpp), where its time went (the metrics named *_seconds, with the
+// rest as "other") and its other metrics.
 function reportSummary(report) {
   const count = report.messages.length;
   return h(
     "summary",
     {},
+    h("span", { class: "caret", "aria-hidden": "true" }, "▸"),
     h("strong", {}, report.stage),
     count ? h("span", { class: "chip" }, `${count} message${count > 1 ? "s" : ""}`) : null,
     h("span", { class: "time" }, `${formatNumber(report.time_ms, 3)} ms`),
   );
 }
 
+const TIME_SUFFIX = "_seconds";
+
 function metricsTable(metrics) {
-  const rows = Object.entries(metrics).map(([name, value]) =>
-    h("tr", {}, h("td", {}, name.replaceAll("_", " ")), h("td", { class: "num" }, formatNumber(value, 6))),
-  );
+  const rows = Object.entries(metrics)
+    .filter(([name]) => !name.endsWith(TIME_SUFFIX))
+    .map(([name, value]) => h("tr", {}, h("td", {}, name.replaceAll("_", " ")), h("td", { class: "num" }, formatNumber(value, 6))));
   return rows.length ? h("table", { class: "data" }, h("tbody", {}, rows)) : null;
+}
+
+function timeTable(report) {
+  const parts = Object.entries(report.metrics).filter(([name, value]) => name.endsWith(TIME_SUFFIX) && Number.isFinite(value));
+  if (parts.length === 0) return null;
+  const total = report.time_ms;
+  const row = (label, ms) =>
+    h(
+      "tr",
+      {},
+      h("td", {}, label),
+      h("td", { class: "num" }, `${formatNumber(ms, 3)} ms`),
+      h("td", { class: "num share" }, total > 0 ? `${formatNumber((100 * ms) / total, 2)} %` : ""),
+    );
+  const rows = parts.map(([name, seconds]) => row(name.slice(0, -TIME_SUFFIX.length).replaceAll("_", " "), seconds * 1000));
+  // Parts measured on several threads at once may add up to more than the
+  // report's time; then there is no "other".
+  const rest = total - parts.reduce((sum, [, seconds]) => sum + seconds * 1000, 0);
+  if (rest >= 0) rows.push(row("other", rest));
+  return h("table", { class: "data time-breakdown" }, h("caption", {}, "Where the time went"), h("tbody", {}, rows));
 }
 
 export function reportsView(reports) {
@@ -388,6 +414,8 @@ export function reportsView(reports) {
         "div",
         { class: "body" },
         report.messages.length ? h("ul", {}, report.messages.map((m) => h("li", {}, m))) : null,
+        (report.notes ?? []).map((n) => h("p", { class: "note report-note" }, n)),
+        timeTable(report),
         metricsTable(report.metrics),
       ),
     ),

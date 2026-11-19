@@ -1439,3 +1439,37 @@ steps). The owner asked the app to offer everything new.
   its separator always has finite values; the docs' Process rule and the
   app's Shape section name the delegation.
 
+## 2026-11-19: reports, the page that scrolled, no "means" line
+
+- **The remesher's plan is a note, not a warning.** The library writes
+  "plan: refiner ruppert; local: none; final: none" as the first message
+  of the "pipeline" report (decisions.md, Meshing), so the warning chip
+  said "1 warning" for every mesh. `report_json` sends it as `notes`
+  (`is_plan_message`, views.cpp) and `gather_messages` leaves it out of
+  the earlier adaptive cycles' warnings; the page shows notes muted in
+  the report. *Why:* the chip is for "worked, but…"; a plan on every
+  mesh trained the user to ignore it. The library keeps the plan as a
+  message (the owner's decision); the app separates it.
+- **Reports say where their time went.** The integrator reports
+  `assembly_seconds`, `prepare_seconds` and `solve_seconds` (a library
+  change for the app, decisions.md, Solvers); the chunks of a run add
+  them up; any report's metrics named `*_seconds` are shown as "Where the
+  time went" in ms and as a share of its time, with the rest as "other"
+  (none when overlapping parts exceed the total). Report rows get a
+  caret: a flex `summary` loses its marker, and a row of a stage name
+  and a time did not look as if it opened.
+- **The page never scrolls on a wide screen.** The layout's one grid row
+  is `minmax(0, 1fr)` (an auto row grew to the sidebar's content), the
+  picture column scrolls itself when the window is shorter than the
+  picture's least height and its bars, and the scrolling columns are
+  `position: relative`, so hidden radios and visually hidden text are
+  placed inside them, not against the page (they stretched it below the
+  interface). The picture with its bars is never shorter than its least
+  height (`.viewer-main` `min-height: min-content`), so in a short window
+  a probe's chart follows below it in the column's scroll instead of
+  covering the time bar (a review finding). The `reports` browser
+  scenario checks every step at 1280×560, and Play with a probe.
+- **No "means" line under the equation and the conditions.** It doubled
+  the field's height for what the coefficient form already shows; a
+  line's error still shows under it. The check still sends `forms`
+  (the switch between the forms uses them).

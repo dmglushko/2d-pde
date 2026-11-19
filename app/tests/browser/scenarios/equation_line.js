@@ -1,12 +1,13 @@
-// The equation and the conditions as one line: what a line means shows
-// under it at once, its error after a pause in typing, the field never
+// The equation and the conditions as one line: no "means" line under
+// it, its error after a pause in typing, the field never
 // moves while typing, the symbol buttons insert at the caret, and a form
 // switches between its line and its coefficients.
 export default async ({ q, qa, tab, type, click, until, sleep, text, check, button }) => {
   tab("problem");
   const line = () => q('[data-path="problem.equation.text"] input');
-  const meaning = () => text(q('[data-derived-of="problem.equation"]'));
-  await until(() => /a_xx = -1/.test(meaning()), "what the default line means");
+  const checked = () => /No errors/.test(text(q("#panel-problem .step-status")));
+  await until(checked, "the default line checked");
+  check("no line of what the line means", !/means/.test(text(q('[data-path="problem.equation.text"]'))), text(q('[data-path="problem.equation.text"]')));
   check("a new case writes the equation as a line", line().value === "-lap(u) = 1", line().value);
 
   // Typing key by key: the field stays where it is.
@@ -19,8 +20,7 @@ export default async ({ q, qa, tab, type, click, until, sleep, text, check, butt
     moved = Math.max(moved, Math.abs(line().getBoundingClientRect().top - top));
   }
   check("the field does not move while typing", moved < 0.5, String(moved));
-  await until(() => /b_x = -2\*x/.test(meaning()), "the divergence form expanded");
-  check("the line means its coefficients", /a_xx = -\(1 \+ x\^2\)/.test(meaning()) && /m1 = 1/.test(meaning()), meaning());
+  await until(() => /first order/.test(text(q("#problem-summary"))), "the typed line checked");
   check("the time order follows", /first order/.test(text(q("#problem-summary"))), text(q("#problem-summary")));
 
   // A symbol at the caret.
@@ -43,7 +43,7 @@ export default async ({ q, qa, tab, type, click, until, sleep, text, check, butt
   const name = q('input[aria-label="Parameter name"]');
   name.value = "k";
   name.dispatchEvent(new name.ownerDocument.defaultView.Event("change", { bubbles: true }));
-  await until(() => /a_xx = -k/.test(meaning()), "k is a parameter");
+  await until(() => checked() && q('input[aria-label="Parameter name"]').value === "k", "k is a parameter");
   click(button("Coefficients", q("#panel-problem")));
   await until(() => q('[data-path="problem.equation.a_xx"] input'), "the coefficients");
   check("the coefficients are the line's", q('[data-path="problem.equation.a_xx"] input').value === "-k" && q('[data-path="problem.equation.c"] input').value === "1");
@@ -57,6 +57,5 @@ export default async ({ q, qa, tab, type, click, until, sleep, text, check, butt
   const bottom = q('[data-path="problem.boundary_conditions.bottom.text"] input');
   type(bottom, "u_n + 2*u = 0");
   await until(() => /natural/.test(text(q('[data-kind-of="bottom"]'))), "the condition's kind");
-  check("a condition line is classified", /beta_n = 1/.test(text(q('[data-derived-of="problem.boundary_conditions.bottom"]'))));
   check("no field shows an error", qa("#panel-problem .error-text").length === 0, qa("#panel-problem .error-text").map((e) => e.textContent).join(" | "));
 };

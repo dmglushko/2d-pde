@@ -12,11 +12,22 @@
 
 namespace pde2d::app {
 
+bool is_plan_message(const mesh::StageReport &report, std::size_t index) {
+  return report.stage == "pipeline" && index == 0 &&
+         index < report.messages.size() &&
+         report.messages[index].starts_with("plan: ");
+}
+
 Json report_json(const mesh::StageReport &report) {
   Json out = Json::object();
   out["stage"] = report.stage;
   out["time_ms"] = report.time.count() * 1000.0;
-  out["messages"] = report.messages;
+  Json messages = Json::array(), notes = Json::array();
+  for (std::size_t i = 0; i < report.messages.size(); ++i)
+    (is_plan_message(report, i) ? notes : messages)
+        .push_back(report.messages[i]);
+  out["messages"] = std::move(messages);
+  out["notes"] = std::move(notes);
   Json metrics = Json::object();
   for (const auto &[name, value] : report.metrics)
     metrics[name] = std::isfinite(value) ? Json(value) : Json(nullptr);

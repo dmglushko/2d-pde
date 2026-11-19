@@ -166,7 +166,13 @@ struct IntegrationResult {
   // max_backward_error (the largest LinearSolveResult::backward_error)
   // and min_pivot_ratio (the smallest measured pivot_ratio, above 0; 0
   // when no solve measured one, as with an iterative solver), both over
-  // every solve of the call, start()'s included.
+  // every solve of the call, start()'s included; and where the time went:
+  // assembly_seconds (every assembly of the call), prepare_seconds and
+  // solve_seconds (the linear solver's prepares and solves, start()'s
+  // included; summed per call, so solves a method runs on several threads
+  // at once add up to more than the time that passed). The rest of the
+  // report's time is the step matrices, the method's own work and the
+  // snapshots.
   // Its messages are the linear solver's warnings
   // (LinearSolveResult::messages) of every solve of the call, the steps'
   // and those a method's start() does: each distinct message once, in the

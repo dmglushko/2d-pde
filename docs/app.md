@@ -849,7 +849,8 @@ call bit for bit, also with `adaptive_step`.
   30 prepares (51.9 s) before, 4 chunks and 4 prepares (8.0 s) now.
 - The combined `integrator` report combines each metric by its declared
   rule (`integrator_metric_rules`): `steps`, `rejected_steps`,
-  `linear_iterations`, `assemblies`, `prepares`, `snapshots` add up;
+  `linear_iterations`, `assemblies`, `prepares`, `snapshots`,
+  `assembly_seconds`, `prepare_seconds`, `solve_seconds` add up;
   `max_linear_iterations`, `max_residual`, `linear_threads`,
   `max_backward_error` take the largest (a NaN of any chunk stays, as in
   the integrator's own maximum); `min_pivot_ratio` the smallest
@@ -1049,11 +1050,9 @@ the problem only when a field is left.
 
 **The Problem step** (`panels/problem.js`). The equation and each
 condition show their line (a text field with buttons that insert ∇ · ² Δ
-at the caret, keeping the focus) and under it, in a row of its own
-height, what the line means: the coefficients from the check's `forms`
-("means a_xx = -k · b_x = …", powers as ^), kept greyed while the line
-is being typed or wrong. A line's error waits until typing in it pauses
-for 0.7 s and then takes the place of the meaning (a line is wrong after
+at the caret, keeping the focus); no line under it says what it was read
+as (that is the coefficient form). A line's error waits until typing in
+it pauses for 0.7 s and then shows under it (a line is wrong after
 almost every key). "Coefficients" (beside the equation's heading and in
 each condition card's head) switches to the coefficient form and "As a
 line" back, both from the fresh check's `forms` (the library reads and
@@ -1346,7 +1345,13 @@ pinch and pan, the wheel zooms, +/−/fit buttons on the picture; at phone
 width a handle under the picture sets its height and ▴ folds the picture
 away (both kept in this browser). Edges are drawn fainter over a field's
 colours. Results whose reports hold messages show a warning chip with the
-count and the first message; it opens the reports. Solution exports are
+count and the first message; it opens the reports. A report (a row with a
+caret) opens to its messages, its notes (the remesher's plan, sent as
+`notes`, not as a message: `is_plan_message` in `views.cpp`, so it is
+never counted as a warning, also not from earlier adaptive cycles),
+"Where the time went" (the metrics named `*_seconds` in ms and as a share
+of the report's time, the rest as "other") and its other metrics. The
+equation and condition lines show only their errors under them. Solution exports are
 CSV, VTK, the VTK series (zip) and provenance; a 409 or 429 answer is
 said in plain words (`exportErrorText`). Toasts sit at the foot of the
 sidebar (at the bottom at phone width): never over the picture, its time

@@ -13,7 +13,14 @@
 // Library results as the JSON the page draws.
 namespace pde2d::app {
 
-// {"stage", "time_ms", "messages", "metrics"}.
+// Whether message `index` of `report` is the remesher's plan ("plan:
+// refiner ruppert; local: none; final: none", the first message of the
+// "pipeline" report): information the library writes as a message, not a
+// "worked, but…", so the page shows it as a note and counts no warning.
+bool is_plan_message(const mesh::StageReport &report, std::size_t index);
+
+// {"stage", "time_ms", "messages", "notes", "metrics"}: "notes" the plan
+// (is_plan_message), "messages" the rest.
 Json report_json(const mesh::StageReport &report);
 Json reports_json(std::span<const mesh::StageReport> reports);
 

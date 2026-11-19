@@ -913,6 +913,16 @@ Discussed in a side chat on 2026-11-12; the first slice was built on
   formula facts cannot promise it (one pass over the matrix per prepare);
   Newmark's start does nothing when there are no free unknowns (an empty
   M₂ is not "zero at t0").
+- **The integrator's report says where its time went** (2026-11-19, for
+  the app, by an agent): metrics `assembly_seconds` (every assembly of
+  the call), `prepare_seconds` and `solve_seconds` (every prepare and
+  solve of the linear solver, `start()`'s included, timed by the logging
+  wrapper and summed in its log). The rest of the report's time is the
+  step matrices, the method's vector work and the snapshots. Solves a
+  method runs on several threads at once add up to more than the time
+  that passed. *Why:* a run of 30 s showed only its total; the app shows
+  the parts so a user sees whether assembly or the factorization costs
+  the time.
 
 ## Adaptivity: marking and refinement
 

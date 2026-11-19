@@ -177,3 +177,10 @@ library's junction. A library function that splits a region at a point
 of a curve (loop, curve, parameter), or that gives the fraction of such
 a point, would keep those rules in one place; so would one that gives
 the nearest boundary point (curve and parameter) of a point.
+
+## 12. Where a run's time goes
+
+**Done** (2026-11-19, decisions.md, Solvers): the integrator's report
+has `assembly_seconds`, `prepare_seconds` and `solve_seconds`, which the
+Solve step shows as "Where the time went" (a 30 s run showed only its
+total).

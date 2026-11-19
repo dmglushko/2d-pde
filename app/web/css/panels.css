@@ -701,6 +701,41 @@ details.report summary {
   display: flex;
   gap: 8px;
   align-items: center;
+  list-style: none;
+}
+
+details.report summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A flex summary loses its marker: the caret says the row opens. */
+details.report summary .caret {
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 0.12s;
+}
+
+details.report[open] summary .caret {
+  transform: rotate(90deg);
+}
+
+details.report .report-note {
+  margin: 4px 0;
+}
+
+details.report .time-breakdown {
+  margin-bottom: 6px;
+}
+
+details.report .time-breakdown caption {
+  text-align: left;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+details.report .time-breakdown .share {
+  color: var(--muted);
 }
 
 details.report summary .time {
@@ -923,7 +958,8 @@ canvas.spy {
   .toast {
     transition: none;
   }
-  .fold-toggle .chevron {
+  .fold-toggle .chevron,
+  details.report summary .caret {
     transition: none;
   }
 }
@@ -1111,8 +1147,7 @@ dialog.settings h3 {
 }
 
 /* An equation or a condition written as one line: the text with the
-   symbols a keyboard lacks beside it, and under it the coefficients the
-   library read from it (or its error), in a row of its own height. */
+   symbols a keyboard lacks beside it, and under it its error. */
 .line-field {
   display: grid;
   gap: 4px;
@@ -1147,37 +1182,16 @@ button.symbol {
   line-height: 1.4;
 }
 
-.derived {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-  min-height: 22px;
-}
-
-.derived-label {
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .summary-chips .chip[data-on="false"] {
   color: var(--muted);
 }
 
-.chip.coefficient {
-  font-family: var(--mono);
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.derived.stale,
 .chips.stale,
-.checking .derived,
 .result.stale {
   opacity: 0.55;
 }
 
-/* A line's error takes the place of what it means. */
+/* A line's error under it. */
 .line-field > .error-text {
   min-height: 22px;
 }

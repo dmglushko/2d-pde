@@ -8,13 +8,21 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* A window too short for the picture's least height and its bars:
+     the column scrolls, not the page (and holds what is placed
+     absolutely inside it, as .panels does). */
+  overflow-y: auto;
+  position: relative;
 }
 
 .viewer-main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  /* Never shorter than the picture's least height and its bars: in a
+     short window the probes follow below it in the column's scroll,
+     rather than covering the time bar. */
+  min-height: min-content;
 }
 
 .viewer-toolbar {
@@ -399,6 +407,7 @@
 /* --- probes and charts ------------------------------------------------- */
 
 .viewer-extra {
+  position: relative;
   border-top: 1px solid var(--hairline);
   background: var(--surface);
   padding: 8px 12px 10px;
