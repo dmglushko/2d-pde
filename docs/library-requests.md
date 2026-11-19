@@ -66,7 +66,10 @@ cannot be stopped.
   (chunking it like a time run would restart its schedule, its relative
   tolerance and its budgets at every chunk); a callback after each step
   or each piece would give the time bar its snapshots as they come and
-  Stop.
+  Stop. Its result also keeps every adaptation point's estimate with all
+  indicators (one array per triangle per adaptation time, also when the
+  tolerance was met); an option to keep only the totals would bound a
+  long run's memory (2026-11-19, review).
 - **What chunks cost** (2026-11-16): each `integrate` call prepares the
   linear solver and assembles at its start again, so the app sizes chunks
   by their measured cost to keep that fixed cost a small share

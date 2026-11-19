@@ -221,7 +221,8 @@ function hover(v, event) {
       if (field && colorBy === "gradient" && v.gradients) rows.push([gradientName(field.name), formatNumber(v.gradients[found.triangle], digits + 2)]);
       if (field && colorBy === "indicator" && v.indicatorLogs && field.indicators) rows.push(["η (error indicator)", formatNumber(field.indicators[found.triangle], digits + 2)]);
     }
-    if (field && colorBy === "field" && !v.fieldComplete) {
+    // Values of another mesh (a length that does not fit) are never read.
+    if (field && colorBy === "field" && !v.fieldComplete && field.values.length * 2 === mesh.nodes.length) {
       const node = nearestValuedNode(mesh.nodes, field.values, x, y, DOT_PICK_PX / v.scale);
       if (node >= 0) rows.push([`${field.label} at node ${node}`, formatNumber(field.values[node], digits + 2)]);
     }

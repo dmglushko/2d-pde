@@ -40,9 +40,16 @@ export async function runStudy(levels) {
   const original = structuredClone(store.caseData.mesh?.spec?.max_edge_length ?? null);
   const plan = studyLevels(original, levels);
   Object.assign(study, emptyStudy(), { levels, expression, caseId: store.caseId });
-  if (!expression || !plan) {
+  // An adaptive solve refines its mesh itself: halving its starting mesh
+  // measures little, and its nodes are not the starting mesh's.
+  const adaptive = ["adaptive", "adaptive_time"].includes(store.caseData.solve?.mode);
+  if (!expression || !plan || adaptive) {
     study.failed = true;
-    study.message = !expression ? "Write an exact solution first: the study compares each level with it." : "The study halves the mesh's max edge length: set it (absolute or relative) in the Mesh step.";
+    study.message = adaptive
+      ? "The refinement study is for static and time runs: an adaptive solve refines its mesh itself."
+      : !expression
+        ? "Write an exact solution first: the study compares each level with it."
+        : "The study halves the mesh's max edge length: set it (absolute or relative) in the Mesh step.";
     notify("study");
     return;
   }

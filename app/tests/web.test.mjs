@@ -879,12 +879,12 @@ test("chart data as CSV, sizes in bytes", () => {
   assert.deepEqual(serverRunBytes({ mode: "time", time: { snapshots: 9 } }, { snapshot_bytes: 100, budget: 2000 }), { bytes: 1000, budget: 2000, share: 0.5 });
   assert.equal(serverRunBytes({ mode: "static" }, { snapshot_bytes: 100, budget: 1000 }).bytes, 100);
   // An adaptive run reserves max_cycles meshes of max_nodes (runs.cpp).
-  assert.equal(serverRunBytes({ mode: "adaptive", adaptive: { max_nodes: 1000, max_cycles: 3 } }, { snapshot_bytes: 100, budget: 1e9 }).bytes, 3 * (1000 * 64 + 512));
+  assert.equal(serverRunBytes({ mode: "adaptive", adaptive: { max_nodes: 1000, max_cycles: 3 } }, { snapshot_bytes: 100, budget: 1e9 }).bytes, 3 * (1000 * 96 + 512));
   assert.equal(serverRunBytes({ mode: "adaptive", adaptive: { max_nodes: 0, max_cycles: 3 } }, { snapshot_bytes: 100, budget: 1e9 }), null);
   // Adaptive in time: max_refinements + 1 meshes and the snapshots, each of
   // at most max_nodes nodes (runs.cpp, adaptive_time_run_bytes).
   const inTime = { mode: "adaptive_time", time: { snapshots: 4 }, adaptive_time: { max_nodes: 1000, max_refinements: 2 } };
-  assert.equal(serverRunBytes(inTime, { snapshot_bytes: 100, budget: 1e9 }).bytes, 3 * (1000 * 56 + 512) + 5 * (1000 * 8 + 128) + 1000 * 8);
+  assert.equal(serverRunBytes(inTime, { snapshot_bytes: 100, budget: 1e9 }).bytes, 3 * (1000 * 88 + 512) + 5 * (1000 * 8 + 128) + 1000 * 8);
   assert.equal(serverRunBytes({ ...inTime, adaptive_time: { max_nodes: 1000 } }, { snapshot_bytes: 100, budget: 1e9 }), null);
   assert.equal(serverRunBytes({ mode: "time", time: {} }, { snapshot_bytes: 1, budget: 1 }), null);
   assert.equal(serverRunBytes({ mode: "static" }, null), null);

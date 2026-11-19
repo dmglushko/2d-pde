@@ -17,6 +17,7 @@
 #include <format>
 #include <limits>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -45,6 +46,27 @@ std::vector<double> snapshot_times(const SolveSetup &setup) {
 // Keeps a snapshot (without its velocities: only the state a chunk ends
 // with needs them) with its smallest and largest finite value. The run
 // lock held.
+// Empties a vector and gives its memory back (assigning {} keeps the
+// capacity).
+void release(std::vector<double> &values) {
+  std::vector<double>().swap(values);
+}
+
+// The warnings of reports that are not published themselves (earlier
+// cycles, earlier pieces), each once, prefixed with where they came from,
+// added to `into`'s messages.
+void gather_messages(mesh::StageReport &into,
+                     std::span<const mesh::StageReport> reports,
+                     const std::string &where) {
+  for (const mesh::StageReport &report : reports)
+    for (const std::string &message : report.messages) {
+      std::string line =
+          std::format("{}, {}: {}", where, report.stage, message);
+      if (std::ranges::find(into.messages, line) == into.messages.end())
+        into.messages.push_back(std::move(line));
+    }
+}
+
 void publish_snapshot(Run::Published &out, solve::Solution solution) {
   double low = nan, high = nan;
   for (const double value : solution.values)
@@ -54,8 +76,8 @@ void publish_snapshot(Run::Published &out, solve::Solution solution) {
     }
   // A snapshot keeps only u: the velocities and Newmark's accelerations
   // are the next chunk's state (Run::last), not something a reader needs.
-  solution.velocities = {};
-  solution.accelerations = {};
+  release(solution.velocities);
+  release(solution.accelerations);
   out.minima.push_back(low);
   out.maxima.push_back(high);
   out.snapshots.push_back(
@@ -271,14 +293,20 @@ void publish_adaptive(Run &run, adapt::AdaptiveStaticResult result,
   summary["cycles"] = std::move(cycles);
   summary["mesh_stats"] = mesh_stats_json(*result.problem->mesh());
 
+  // The last cycle's reports are published; the earlier cycles' warnings
+  // (a refinement that made small angles, a tiny pivot) go with the loop's.
+  mesh::StageReport loop = result.report;
+  for (std::size_t k = 0; k + 1 < result.cycles.size(); ++k)
+    gather_messages(loop, result.cycles[k].reports,
+                    std::format("cycle {}", k + 1));
   Json reports = Json::array();
-  reports.push_back(report_json(result.report));
+  reports.push_back(report_json(loop));
   for (const Json &report : reports_json(result.cycles.back().reports))
     reports.push_back(report);
 
   std::vector<Snapshot> kept;
   for (adapt::AdaptiveCycle &cycle : result.cycles) {
-    cycle.solution.velocities = {};
+    release(cycle.solution.velocities);
     kept.push_back(
         std::make_shared<const solve::Solution>(std::move(cycle.solution)));
   }
@@ -375,8 +403,22 @@ void publish_adaptive_time(Run &run, adapt::AdaptiveIntegrationResult result,
   const auto &last = result.pieces.back().problem;
   summary["mesh_stats"] = mesh_stats_json(*last->mesh());
 
+  // The last piece's report is published; the warnings of the earlier
+  // pieces and of every adaptation go with the loop's.
+  mesh::StageReport loop = result.report;
+  for (std::size_t k = 0; k < result.pieces.size(); ++k) {
+    const adapt::IntegrationPiece &piece = result.pieces[k];
+    const std::string where =
+        std::format("t = {} to {}", piece.t_start, piece.t_end);
+    if (k + 1 < result.pieces.size())
+      gather_messages(loop, std::span(&piece.report, 1), where);
+    if (piece.adaptation)
+      gather_messages(
+          loop, piece.adaptation->reports,
+          std::format("adaptation at t = {}", piece.adaptation->time));
+  }
   Json reports = Json::array();
-  reports.push_back(report_json(result.report));
+  reports.push_back(report_json(loop));
   reports.push_back(report_json(result.pieces.back().report));
 
   const std::scoped_lock lock(run_lock);
@@ -389,7 +431,7 @@ void publish_adaptive_time(Run &run, adapt::AdaptiveIntegrationResult result,
   out.static_reports = std::move(reports);
   out.adaptive = std::move(summary);
   for (solve::Solution &snapshot : result.snapshots) {
-    snapshot.accelerations = {};
+    release(snapshot.accelerations);
     publish_snapshot(out, std::move(snapshot));
   }
   out.t = run.setup.t1;
@@ -555,9 +597,10 @@ std::size_t run_bytes(std::size_t nodes, std::size_t snapshots,
 }
 
 std::size_t adaptive_run_bytes(std::size_t max_nodes, std::size_t max_cycles) {
-  // Per node: its value (8), its point (16), about two triangles (24),
-  // two indicators (8) and some boundary edges; 64 is generous.
-  constexpr std::size_t per_node = 64;
+  // Per node: its value (8), its point (16), about two triangles (2 x 24
+  // with size_t indices), two indicators (16) and the boundary edges and
+  // the solver's copies around them.
+  constexpr std::size_t per_node = 96;
   constexpr std::size_t per_cycle = 512;
   return max_cycles * (max_nodes * per_node + per_cycle);
 }
@@ -566,11 +609,14 @@ std::size_t adaptive_time_run_bytes(std::size_t max_nodes,
                                     std::size_t snapshots, std::size_t meshes,
                                     int time_order) {
   // A mesh as in adaptive_run_bytes (less the values), the snapshots and
-  // the state as in run_bytes.
-  constexpr std::size_t per_mesh_node = 56;
+  // the state as in run_bytes; for time order 2 the library holds each
+  // snapshot's u_t and u_tt too until it returns.
+  constexpr std::size_t per_mesh_node = 88;
   constexpr std::size_t per_mesh = 512;
+  const std::size_t derivatives =
+      time_order == 2 ? snapshots * max_nodes * 16 : 0;
   return meshes * (max_nodes * per_mesh_node + per_mesh) +
-         run_bytes(max_nodes, snapshots, time_order);
+         run_bytes(max_nodes, snapshots, time_order) + derivatives;
 }
 
 void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {

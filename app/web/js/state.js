@@ -301,6 +301,9 @@ export function openStep(step) {
 export function setColorBy(colorBy) {
   if (store.view.colorBy === colorBy) return;
   store.view.colorBy = colorBy;
+  // The indicators are of the solution, not of u − other: one colouring
+  // owns the picture.
+  if (colorBy === "indicator") store.view.difference = null;
   keepView();
   notify("view");
 }
@@ -309,6 +312,8 @@ export function setColorBy(colorBy) {
 export function setViewOption(name, value) {
   if (store.view[name] === value) return;
   store.view[name] = value;
+  // u − other is coloured as a field, never by the solution's indicators.
+  if (name === "difference" && value && store.view.colorBy === "indicator") store.view.colorBy = "field";
   keepView();
   notify("view");
 }

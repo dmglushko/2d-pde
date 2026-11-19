@@ -886,7 +886,7 @@ reimplemented: the app passes the catalog's components and the target
 and reads the result.
 
 - **Memory**: an adaptive run reserves `adaptive_run_bytes(max(nodes,
-  max_nodes), max_cycles)` = cycles × (nodes × 64 + 512): every cycle's
+  max_nodes), max_cycles)` = cycles × (nodes × 96 + 512): every cycle's
   values, mesh and indicators at the node budget (the real use is
   smaller: the meshes grow geometrically).
 - Probes, values, comparisons and exports read the run's `RunSnapshots`,
@@ -915,9 +915,11 @@ under the run lock (`publish_adaptive_time`):
   adaptation time and the mesh of each snapshot; the page fetches every
   mesh with the result and draws each snapshot on its own.
 - **Memory**: `adaptive_time_run_bytes(max(nodes, max_nodes), snapshots,
-  max_refinements + 1, time order)` = meshes × (max_nodes × 56 + 512) +
-  `run_bytes(max_nodes, snapshots, time order)`: the meshes and the
-  snapshots at the node budget.
+  max_refinements + 1, time order)` = meshes × (max_nodes × 88 + 512) +
+  `run_bytes(max_nodes, snapshots, time order)`, plus 16 bytes a node per
+  snapshot for time order 2 (the library holds each snapshot's u_t and
+  u_tt until it returns): the meshes and the snapshots at the node
+  budget.
 
 ## Locks
 

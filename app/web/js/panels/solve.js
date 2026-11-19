@@ -199,7 +199,7 @@ const STOP_REASONS = {
   tolerance_met: "tolerance met",
   max_cycles: "maximum cycles",
   node_budget: "node budget",
-  nothing_changed: "nothing marked",
+  nothing_changed: "mesh unchanged",
 };
 
 // The cycles of an adaptive solve: a table (nodes, the estimate, the
@@ -211,7 +211,7 @@ const STOP_REASONS = {
 const OUTCOMES = {
   refined: "refined",
   tolerance_met: "tolerance met",
-  nothing_changed: "nothing marked",
+  nothing_changed: "mesh unchanged",
   node_budget: "node budget: stopped",
 };
 
@@ -369,7 +369,7 @@ function updateCycles(container) {
     );
   }
   const info = infoToggle(
-    "Each cycle solves on a mesh, estimates the error of every triangle, marks some and refines them. The estimate bounds the error in the energy norm (up to a constant): on a well-adapted mesh of P1 elements it falls like N^(−1/2), and an L2 error like N^(−1), also for a solution with a corner singularity, where uniform refinement is slower. Compare with an exact solution (below) to add each cycle's error. Colour the picture by the error indicator (Colour menu) to see where the last estimate puts the error.",
+    "Each cycle solves on a mesh, estimates the error of every triangle, marks some and refines them. The residual estimator's total bounds the error in the energy norm up to a constant; the Kelly and recovery estimators only indicate it (the tolerance applies to the chosen estimator's total). On a well-adapted mesh of P1 elements the estimate falls like N^(−1/2), and an L2 error like N^(−1), also for a solution with a corner singularity, where uniform refinement is slower. Compare with an exact solution (below) to add each cycle's error. Colour the picture by the error indicator (Colour menu) to see where the last estimate puts the error.",
     "the adaptive cycles",
   );
   fill(
@@ -634,7 +634,9 @@ function updateStudy(container) {
   const expression = (store.caseData.view?.exact_solution ?? "").trim();
   // Not for an adaptive solve, which refines its mesh itself.
   const adaptive = ["adaptive", "adaptive_time"].includes(store.caseData.solve?.mode);
-  const offered = study.running || study.rows.length > 0 || study.message || (expression && !adaptive && freshResult("solve")?.state === "done");
+  // Old rows or a message stay shown, but not in an adaptive mode, where
+  // a study cannot be started (refinement.js).
+  const offered = study.running || (!adaptive && (study.rows.length > 0 || study.message || (expression && freshResult("solve")?.state === "done")));
   const key = JSON.stringify([offered, study.running, study.stopping, study.rows.length, study.message, expression !== ""]);
   if (slot.shown === key) return;
   slot.shown = key;

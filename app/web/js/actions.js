@@ -13,6 +13,7 @@ import {
   currentKey,
   editCase,
   freshResult,
+  lastResult,
   notify,
   openStep,
   requestTicket,
@@ -122,6 +123,42 @@ const calls = {
   solve: async (caseData) => solveData(await api.solve(caseData)),
 };
 
+// One request, tried again while the server is busy or away for a moment
+// (a 429 when other tabs queue work).
+async function patiently(call) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isTransient(error) || attempt >= 5) throw error;
+      await new Promise((resolve) => setTimeout(resolve, backoffDelay(attempt)));
+    }
+  }
+}
+
+// What an adaptive result carries besides its values, once it is done
+// (nothing before): an adaptive run's own (last) mesh and its error
+// indicators; an adaptive run in time's every mesh (`meshes`, indexed by
+// adaptive_time.snapshot_mesh; `mesh` the last). Fetched one at a time; a
+// mesh the Mesh step has (the starting one) is not fetched again.
+async function ownMeshes(progress) {
+  const out = {};
+  const known = lastResult("mesh")?.mesh;
+  const arrays = (summary) => (known && summary.id === known.id ? known : patiently(() => api.meshArrays(summary)));
+  const adapted = progress.adaptive?.mesh;
+  if (adapted) {
+    out.mesh = await arrays(adapted);
+    if (progress.adaptive.indicators) out.indicators = await patiently(() => api.indicators(progress.job, progress.adaptive.indicators));
+  }
+  const meshes = progress.adaptive_time?.meshes;
+  if (progress.state === "done" && meshes?.length > 0) {
+    out.meshes = [];
+    for (const summary of meshes) out.meshes.push(await arrays(summary));
+    out.mesh = out.meshes[out.meshes.length - 1];
+  }
+  return out;
+}
+
 // A run's progress made into the page's solve result: its values are
 // loaded on demand (snapshots.js), first the ones shown first: the start
 // of a run that is still computed (it plays from there), else the newest.
@@ -129,20 +166,7 @@ async function solveData(summary) {
   summary.layout = summary.values;
   summary.values = [];
   growSnapshots(summary, summary.layout.snapshots);
-  // An adaptive run's solution is on its own (last) mesh, with an error
-  // indicator per triangle: both come with the result.
-  const adapted = summary.adaptive?.mesh;
-  if (adapted) {
-    summary.mesh = await api.meshArrays(adapted);
-    if (summary.adaptive.indicators) summary.indicators = await api.indicators(summary.job, summary.adaptive.indicators);
-  }
-  // An adaptive run in time: every mesh its snapshots are on
-  // (adaptive_time.snapshot_mesh indexes them); `mesh` is the last.
-  const meshes = summary.adaptive_time?.meshes;
-  if (meshes?.length > 0) {
-    summary.meshes = await Promise.all(meshes.map((m) => api.meshArrays(m)));
-    summary.mesh = summary.meshes[summary.meshes.length - 1];
-  }
+  Object.assign(summary, await ownMeshes(summary));
   if (summary.values.length > 0) await loadAround(summary, summary.state === "running" ? 0 : summary.values.length - 1);
   return summary;
 }
@@ -249,8 +273,12 @@ async function followRun(run, data) {
     await wait(attempt === 0 ? POLL_MS : backoffDelay(attempt - 1));
     if (!live()) return null;
     let progress;
+    // An adaptive run found running (after a reload) is done in one piece:
+    // its meshes come with its end, before its values are shown on them.
+    let extra = {};
     try {
       progress = await api.solveProgress(run.job);
+      if (progress.state === "done" && !data.mesh && live()) extra = await ownMeshes(progress);
     } catch (error) {
       if (!live()) return null;
       if (isTransient(error)) {
@@ -278,7 +306,7 @@ async function followRun(run, data) {
     }
     const values = data.values;
     const layout = progress.values;
-    Object.assign(data, progress, { values, layout });
+    Object.assign(data, progress, { values, layout }, extra);
     growSnapshots(data, layout.snapshots);
     data.times = progress.times.slice(0, values.length);
     solveScale(data);

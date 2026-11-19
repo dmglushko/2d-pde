@@ -150,11 +150,15 @@ export function differenceState(kind, k) {
   const c = currentComparison(kind);
   const values = comparisonValues(kind, k);
   if (!c) return { values: null, nearest: null, failure: null };
+  // A run on several meshes (adaptive in time): only a difference on k's
+  // mesh can stand in for it.
+  const meshOf = c.result?.adaptive_time?.snapshot_mesh;
+  const sameMesh = (i) => !meshOf || meshOf[i] === meshOf[k];
   let near = -1;
   if (!values)
     for (let d = 1; d < c.errors.length && near < 0; d++) {
-      if (c.errors[k - d]) near = k - d;
-      else if (c.errors[k + d]) near = k + d;
+      if (c.errors[k - d] && sameMesh(k - d)) near = k - d;
+      else if (c.errors[k + d] && sameMesh(k + d)) near = k + d;
     }
   return { values, nearest: near >= 0 ? { index: near, values: c.errors[near] } : null, failure: c.failures[k] ?? null };
 }

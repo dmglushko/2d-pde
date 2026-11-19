@@ -1282,3 +1282,52 @@ steps). The owner asked the app to offer everything new.
   only to drop it from the kept snapshots (like the velocities) and to
   count it in the state a chunk starts from (`run_bytes`). This replaces
   "a recomputed acceleration at each chunk start" of 2026-11-15.
+
+### After the review (GPT-6.2 Sol, 2026-11-19)
+
+- **Correction to 2026-11-17:** an adapted mesh saved as
+  `solution-mesh.pde2d` does not continue newest vertex bisection's
+  sequence when it is opened again. The file keeps the vertex order, but
+  a mesh file goes through `Remesher::run`, which gives every triangle
+  its longest edge as refinement edge (the library's rule), and `.pde2d`
+  has no curve links, so later boundary splits are at chord midpoints.
+  The mesh is still the same mesh; only the next refinements differ. An
+  import that keeps the order would be a library change (not asked).
+- **An adaptive run found running after a reload** (the page reattached
+  while the one library call was under way) fetches its meshes and
+  indicators when the poll sees it done, before its values are shown;
+  before, its values could be drawn on the starting mesh. Meshes are
+  fetched one at a time, retried while the server is busy (429), and the
+  Mesh step's mesh is not fetched again.
+- **u − other has a stand-in only on the same mesh**, as the solution's
+  snapshots do; the readout never reads values whose length does not
+  fit the drawn mesh.
+- **The indicator colouring and u − other are exclusive**: choosing one
+  turns the other off (the indicators are of the solution).
+- **No refinement study in an adaptive mode**, also when old rows or a
+  message of an earlier study remain.
+- **Warnings of earlier cycles and pieces are kept**: they are added to
+  the loop's report (`cycle 3, mesh_refinement: ...`, `t = 0.2 to 0.3,
+  integrator: ...`, `adaptation at t = 0.3, ...`), each once, since only
+  the last cycle's or piece's reports are published whole.
+- **The stop reason `nothing_changed` reads "mesh unchanged"**: triangles
+  may have been marked while no boundary edge could be split.
+- **The cycle help names the estimator**: only the residual estimator's
+  total bounds the energy error; Kelly and recovery indicate it.
+- **Memory**: a node of an adapted mesh is counted as 96 bytes (88 for a
+  mesh of a run in time) instead of 64 (56), with size_t triangle
+  indices; a run in time of order 2 also counts each snapshot's u_t and
+  u_tt, which the library holds until it returns. Velocities and
+  accelerations dropped from kept snapshots now give their memory back
+  (assigning `{}` kept the capacity).
+- **Sweeps of an adaptive case** give the last mesh's nodes, no longest
+  edge (so no rate against h: a graded mesh has no one h) and the loop's
+  time once.
+- **A probe** of a run in time is `inside` when any snapshot's mesh holds
+  the point; each snapshot is interpolated on its own mesh or `null`.
+- Not changed: the indicators the library keeps for every adaptation
+  time (a run that checks often with its tolerance met keeps one array
+  per check until it returns; a library matter, recorded in
+  library-requests.md, item 2), the app's own point location for probes
+  (library-requests.md, item 8), and `mesh_stats_json`, which measures a
+  mesh the library returned without `MeshProperties`.

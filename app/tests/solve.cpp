@@ -19,6 +19,7 @@
 #include "pde2d/adapt/residual_estimator.hpp"
 #include "pde2d/solve/bicgstab.hpp"
 #include "pde2d/solve/conjugate_gradient.hpp"
+#include "sweep.hpp"
 #include "pde2d/solve/multifrontal_lu.hpp"
 #include "pde2d/solve/supernodal_cholesky.hpp"
 #include "pde2d/fem/assembler.hpp"
@@ -684,6 +685,22 @@ int main() {
          case_json["solve"]["adaptive_time"]["damping_method"] = {
              {"type", "newmark"}, {"options", Json::object()}};
          refused("solve.adaptive_time.damping_method");
+       }},
+      {"a sweep of an adaptive case gives the last mesh's nodes and no h",
+       [] {
+         const Json case_json = load_example("l_shape_adaptive.json");
+         app::Session session;
+         const std::vector<app::SweepAxis> axes = {
+             app::parse_sweep_argument("solve.adaptive.max_cycles=2,4")};
+         const Json sweep = app::run_sweep(session, case_json, axes);
+         const Json &rows = sweep["rows"];
+         check(rows.size() == 2 && rows[0]["ok"] == true, "two runs");
+         check(rows[0]["nodes"].get<std::size_t>() <
+                   rows[1]["nodes"].get<std::size_t>(),
+               "more cycles, more nodes: " + rows.dump());
+         check(rows[0]["longest_edge"].is_null() &&
+                   rows[1]["rate_l2"].is_null(),
+               "no h, no rate against it");
        }},
       {"the parallel direct solvers and the threads solve a linear solution",
        [] {

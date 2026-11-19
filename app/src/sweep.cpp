@@ -11,12 +11,25 @@ namespace pde2d::app {
 
 namespace {
 
-// The seconds of the solve stage: its reports' times.
+// The adaptive part of a solve summary (either adaptive mode), or null.
+const Json &adaptive_part(const Json &summary) {
+  const Json &solve = member(summary, "solve");
+  const Json &adaptive = member(solve, "adaptive");
+  return adaptive.is_null() ? member(solve, "adaptive_time") : adaptive;
+}
+
+// The seconds of the solve stage: its reports' times. An adaptive run's
+// first report (the loop's) already holds the last cycle's or piece's,
+// which follow it.
 double solve_seconds(const Json &summary) {
   double total = 0.0;
-  for (const Json &report : member(member(summary, "solve"), "reports"))
+  const bool adaptive = !adaptive_part(summary).is_null();
+  for (const Json &report : member(member(summary, "solve"), "reports")) {
     if (member(report, "time_ms").is_number())
       total += report["time_ms"].get<double>() / 1000.0;
+    if (adaptive)
+      break;
+  }
   return total;
 }
 
@@ -27,6 +40,12 @@ Json row_of(const Json &values, const Json &summary) {
   const Json &mesh = member(summary, "mesh");
   row["nodes"] = member(member(mesh, "stats"), "nodes");
   row["longest_edge"] = member(mesh, "longest_edge");
+  // An adaptive run ends on its own mesh: its nodes, and no h (a rate
+  // against the longest edge of a graded mesh means nothing).
+  if (const Json &adaptive = adaptive_part(summary); !adaptive.is_null()) {
+    row["nodes"] = member(member(adaptive, "mesh_stats"), "nodes");
+    row["longest_edge"] = nullptr;
+  }
   row["solve_seconds"] =
       summary.contains("solve") ? Json(solve_seconds(summary)) : Json(nullptr);
   const Json &comparison = member(summary, "comparison");

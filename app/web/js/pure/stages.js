@@ -118,7 +118,7 @@ export function serverRunBytes(solveSection, memory) {
   if (solveSection.mode === "adaptive") {
     const { max_nodes: nodes, max_cycles: cycles } = solveSection.adaptive ?? {};
     if (!Number.isInteger(nodes) || !Number.isInteger(cycles) || nodes < 1 || cycles < 1) return null;
-    const bytes = cycles * (nodes * 64 + 512);
+    const bytes = cycles * (nodes * 96 + 512);
     return { bytes, budget, share: bytes / budget };
   }
   // An adaptive run in time reserves room for max_refinements + 1 meshes
@@ -128,7 +128,7 @@ export function serverRunBytes(solveSection, memory) {
     const { max_nodes: nodes, max_refinements: refinements } = solveSection.adaptive_time ?? {};
     const snapshots = solveSection.time?.snapshots;
     if (!Number.isInteger(nodes) || nodes < 1 || !Number.isInteger(refinements) || refinements < 0 || !Number.isInteger(snapshots) || snapshots < 1) return null;
-    const bytes = (refinements + 1) * (nodes * 56 + 512) + (snapshots + 1) * (nodes * 8 + 128) + nodes * 8;
+    const bytes = (refinements + 1) * (nodes * 88 + 512) + (snapshots + 1) * (nodes * 8 + 128) + nodes * 8;
     return { bytes, budget, share: bytes / budget };
   }
   let count = 1;

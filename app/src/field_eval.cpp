@@ -367,13 +367,16 @@ Json probe_series(const RunSnapshots &run, const Json &points) {
     std::vector<std::optional<PointLocator::Found>> found;
     for (const PointLocator &locator : locators)
       found.push_back(locator.locate(p));
-    // `inside` and `triangle` are the last mesh's; a snapshot whose mesh
-    // misses the point (a refined curved boundary moves a little) is null.
+    // `triangle` is the last mesh's; `inside` says whether any snapshot's
+    // mesh holds the point, and a snapshot whose mesh misses it (a refined
+    // curved boundary moves a little) is null.
     const auto &last = found[mesh_of.empty() ? 0 : mesh_of.back()];
-    item["inside"] = last.has_value();
+    const bool inside = std::ranges::any_of(
+        found, [](const auto &at) { return at.has_value(); });
+    item["inside"] = inside;
     item["triangle"] = last ? Json(last->triangle) : Json(nullptr);
     Json values = Json::array();
-    if (last)
+    if (inside)
       for (std::size_t s = 0; s < run.snapshots.size(); ++s) {
         const auto &at = found[mesh_of[s]];
         if (!at) {
