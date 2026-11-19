@@ -8,7 +8,7 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   check("the Laplace preset is offered in the case menu", Boolean(laplace));
   check("the Problem step has no preset select of its own", !q('#panel-problem select[aria-label="Problem preset"]'));
   click(laplace);
-  await until(() => text(q("#toast")).includes("filled in"), "the preset");
+  await until(() => /lap\(u\)\s*=\s*0/.test(q('[data-path="problem.equation.text"] input')?.value ?? ""), "the preset");
   await until(() => /No errors/.test(text(q("#panel-problem .step-status"))), "its check");
   check("the problem is checked without errors", true);
   tab("solve");

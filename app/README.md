@@ -156,7 +156,7 @@ field, Ctrl+Z undoes the whole edit of the field.
    **Problems on this geometry**, next to the examples): Poisson, Laplace with u = x,
    heat (a bump, a heated boundary, cooling), the wave equation with and
    without damping, steady convection-diffusion and reaction-diffusion;
-   the message that follows has **Undo**. A preset is not applied when the
+   **Undo** (Ctrl+Z) takes one back. A preset is not applied when the
    case changed while it was prepared (choose it again). The **Start from…** and
    **Type…** menus fill in common equations and conditions. Every edit is
    checked at once (see Settings): errors appear under their field, and

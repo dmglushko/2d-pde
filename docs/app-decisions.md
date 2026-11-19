@@ -1544,3 +1544,7 @@ steps). The owner asked the app to offer everything new.
   the picture shows (once it has arrived), choosing one shows the
   solution, and a superseded cycle request says nothing; a chart with
   every line hidden keeps its CSV.
+- **No toast when a preset is applied.** "Reaction-diffusion: the problem
+  and the solve settings are filled in. Undo" annoyed the owner like the
+  one on opening a case: the forms show what changed, and Undo (Ctrl+Z,
+  the case menu) takes a preset back like any edit. Failures still toast.

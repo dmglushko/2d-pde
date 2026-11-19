@@ -522,11 +522,9 @@ export function scheduleProblemCheck({ now = false } = {}) {
 // Fills the problem and the solve settings from a preset of the server's
 // catalog, for the case's geometry. The answer is applied only when the
 // geometry, problem and solve sections are still the ones it was made for
-// (an edit made meanwhile is never overwritten). The toast offers to take
-// it back.
+// (an edit made meanwhile is never overwritten). Undo takes it back.
 export async function applyPreset(preset) {
   const ticket = requestTicket("preset", () => sectionRevision("geometry", "problem", "solve"));
-  const before = { problem: structuredClone(store.caseData.problem), solve: structuredClone(store.caseData.solve) };
   let next;
   try {
     const { format, version, geometry, problem, solve } = store.caseData;
@@ -540,29 +538,17 @@ export async function applyPreset(preset) {
     toast(`${preset.label} was not applied: the case changed while it was prepared. Choose it again to apply it.`);
     return false;
   }
-  const caseId = store.caseId;
-  const replace = (values) =>
-    editCase(
-      (c) => {
-        c.problem = structuredClone(values.problem);
-        c.solve = structuredClone(values.solve);
-      },
-      "structure",
-      { sections: ["problem", "solve"] },
-    );
-  replace(next);
-  scheduleProblemCheck({ now: true });
-  toast(`${preset.label}: the problem and the solve settings are filled in.`, {
-    action: {
-      label: "Undo",
-      run: () => {
-        if (caseId !== store.caseId) return;
-        replace(before);
-        scheduleProblemCheck({ now: true });
-        toast("The previous problem is back.");
-      },
+  editCase(
+    (c) => {
+      c.problem = structuredClone(next.problem);
+      c.solve = structuredClone(next.solve);
     },
-  });
+    "structure",
+    { sections: ["problem", "solve"] },
+  );
+  scheduleProblemCheck({ now: true });
+  // No toast: the forms show what was filled in, and Undo (Ctrl+Z) takes
+  // it back like any edit.
   return true;
 }
 

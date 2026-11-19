@@ -6,7 +6,7 @@ export default async ({ q, tab, panel, button, click, select, type, until, text,
   tab("problem");
   click(q('#problem-presets [data-preset="laplace"]'));
   // The status says "No errors" before the preset arrives: wait for it.
-  await until(() => text(q("#toast")).includes("filled in"), "the preset");
+  await until(() => /lap\(u\)\s*=\s*0/.test(q('[data-path="problem.equation.text"] input')?.value ?? ""), "the preset");
   await until(() => /No errors/.test(text(q("#panel-problem .step-status"))), "the check");
   tab("solve");
   click(button("Solve", panel("solve")));
