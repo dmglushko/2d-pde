@@ -329,6 +329,14 @@
   visibility: hidden;
 }
 
+.colorbar .range-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
 .colorbar select.range-choice {
   min-height: 28px;
   font-size: 12.5px;
@@ -728,9 +736,22 @@
   .time-range {
     display: none;
   }
-  /* ... and the legend keeps two rows: the range choice is for wider
-     screens (Lock range still fixes one). */
-  .colorbar select.range-choice {
+  /* ... the colour bar's parts are the legend's own items, the regions
+     after them, so Lock range shares the regions' row ... */
+  .legend .colorbar {
+    display: contents;
+  }
+  .legend .item,
+  .legend .legend-note {
+    order: 1;
+  }
+  /* ... and the range choice is compact (its word is its label). */
+  .colorbar .range-word {
     display: none;
+  }
+  .colorbar select.range-choice {
+    min-height: 26px;
+    font-size: 12px;
+    padding: 0 2px;
   }
 }

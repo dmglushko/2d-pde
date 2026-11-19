@@ -784,7 +784,7 @@ test("the display: u, its snapshot, the nearest stand-in while loading", () => {
   assert.match(shown.precision, /float32/);
   const loading = resolveDisplay({ colorBy: "field", source: "solve", solve: { data: solveData(), fresh: true, frame: 2, snapshot: { values: null, nearest: { index: 0, values: u0 }, failure: null } } });
   assert.equal(loading.values, u0, "the nearest loaded snapshot stands in");
-  assert.equal(loading.label, "u at t = 0 (loading t = 1)");
+  assert.equal(loading.label, "u at t = 0", "the stand-in's own time; the loading is said over the picture");
   assert.match(loading.loading, /Loading u at t = 1/);
   const none = resolveDisplay({ colorBy: "field", source: "solve", solve: { data: solveData(), fresh: true, frame: 1, snapshot: { values: null, nearest: null, failure: null } } });
   assert.equal(none.values, null);
@@ -839,7 +839,7 @@ test("the display: a difference only while its comparison is current", () => {
   // A difference being fetched shows its nearest fetched one, said so; a
   // failed one is a failure (never plain u in its place).
   const near = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "current", scale, values: { values: null, nearest: { index: 0, values: d2 }, failure: null } } });
-  assert.equal(near.label, "u − exact at t = 0 (loading t = 1)");
+  assert.equal(near.label, "u − exact at t = 0");
   const failed = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "current", scale, values: { values: null, nearest: null, failure: { kind: "busy" } } } });
   assert.equal(failed.kind, "difference");
   assert.equal(failed.values, null);

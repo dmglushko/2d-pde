@@ -12,7 +12,10 @@ Started 2026-11-11.
 - **The owner decides the architecture.** Agents present the options with
   their trade-offs and a recommendation, then wait for an answer. *Why:* the
   project exists so the owner learns. Choices an agent makes silently are
-  choices the owner never understood.
+  choices the owner never understood. *Exception* (2026-11-19): the app,
+  and library changes the app needs, are decided by the agent working on
+  the app, recorded here marked "for the app, by an agent" (see "The
+  graphical interface is delegated" below).
 - **Design is done in discussion and implementation by subagents**, one
   agreed slice at a time.
 

@@ -36,6 +36,9 @@ let typedAt = 0;
 let typedPath = null;
 let pauseTimer = null;
 let panelElement = null;
+// The check of the last equation that could be read in this case:
+// {caseId, check}, or null.
+let lastReadable = null;
 function typed(path) {
   typedAt = performance.now();
   typedPath = path;
@@ -509,8 +512,10 @@ export const problemPanel = {
       // An equation that cannot be read has no facts: those of the last
       // one that could stay, muted, rather than "time order 0".
       const unreadable = check.errors.some((e) => e.path === "problem.equation" || e.path.startsWith("problem.equation."));
-      if (!unreadable) summary.lastReadable = check;
-      const facts = unreadable ? summary.lastReadable : check;
+      // Kept per case, not on the summary: a rebuild of the panel (a
+      // setting, undo of a structure edit) keeps them.
+      if (!unreadable) lastReadable = { caseId: store.caseId, check };
+      const facts = unreadable ? (lastReadable?.caseId === store.caseId ? lastReadable.check : null) : check;
       if (facts) {
         const chips = summaryChips(facts);
         if (facts !== check) {

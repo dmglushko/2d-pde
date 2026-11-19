@@ -140,8 +140,15 @@ int main() {
          const Json run = post(client, "/api/solve", timed, 200);
          check(run["mode"] == "time" && run["values"]["snapshots"] >= 1,
                "a time run's first chunk");
-         const Json stopped =
+         Json stopped =
              post(client, "/api/solve/stop", {{"job", run["job"]}}, 200);
+         // A chunk being computed stops at its next step: running until
+         // it has published what it made.
+         for (int k = 0; k < 2000 && stopped["state"] == "running"; ++k) {
+           std::this_thread::sleep_for(std::chrono::milliseconds(5));
+           stopped =
+               post(client, "/api/solve/progress", {{"job", run["job"]}}, 200);
+         }
          check(stopped["state"] == "stopped" || stopped["state"] == "done",
                "stopped");
          const Json preset =

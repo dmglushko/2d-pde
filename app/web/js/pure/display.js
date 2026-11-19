@@ -136,12 +136,13 @@ function solution(base, solve, difference, comparison, format, snapshotScale) {
 }
 
 // The values of the shown snapshot, or the nearest loaded one standing in
-// while it loads (its own time in the label), or none.
+// while it loads (its own time in the label; that it loads is said over
+// the picture, `loading`, not in the label, whose width the legend keeps),
+// or none.
 function pickValues({ values = null, nearest = null, failure = null }, frame, times, format) {
   if (values) return { values, index: frame, when: null, loading: false };
   if (nearest?.values) {
-    const loading = failure ? "" : ` (loading t = ${format(times[frame])})`;
-    return { values: nearest.values, index: nearest.index, when: `at t = ${format(times[nearest.index])}${loading}`, loading: !failure };
+    return { values: nearest.values, index: nearest.index, when: `at t = ${format(times[nearest.index])}`, loading: !failure };
   }
   return { values: null, index: null, when: null, loading: !failure };
 }

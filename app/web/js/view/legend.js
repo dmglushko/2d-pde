@@ -156,8 +156,8 @@ function rangeSelect(bar, onRange) {
       title: "Whole run: one range for every snapshot, so a colour means the same value at every time. This snapshot: each snapshot's own smallest and largest value, so small values late in a run are seen.",
       onchange: (event) => onRange(event.target.value),
     },
-    h("option", { value: "run", selected: bar.range === "run" }, "range: whole run"),
-    h("option", { value: "snapshot", selected: bar.range === "snapshot" }, "range: this snapshot"),
+    h("option", { value: "run", selected: bar.range === "run" }, "whole run"),
+    h("option", { value: "snapshot", selected: bar.range === "snapshot" }, "this snapshot"),
   );
 }
 
@@ -181,7 +181,8 @@ function colorbar(bar, onLock, onRange) {
     },
     "Lock range",
   );
-  return h("span", { class: "colorbar" }, label, canvas, rangeSelect(bar, onRange), lock);
+  const range = rangeSelect(bar, onRange);
+  return h("span", { class: "colorbar" }, label, canvas, range ? h("span", { class: "range-pick" }, h("span", { class: "range-word", "aria-hidden": "true" }, "range"), range) : null, lock);
 }
 
 // The legend's items. A region is a button: it selects the region (as a

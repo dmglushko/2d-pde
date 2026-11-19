@@ -3,7 +3,7 @@
 // stay put while snapshots change; the problem's summary keeps its four
 // chips (and its height) when an edit changes a fact; the colour range
 // can follow each snapshot; the Threads card is always there.
-export default async ({ w, d, q, qa, tab, click, example, select, type, until, idle, text, check }) => {
+export default async ({ w, d, q, qa, tab, click, example, select, type, until, idle, text, check, pixels }) => {
   example("wave_square.json");
   await until(() => text(q("#toast")).includes("wave_square"), "the case");
   click(q("#run-all"));
@@ -14,6 +14,8 @@ export default async ({ w, d, q, qa, tab, click, example, select, type, until, i
   const handle = q("#sidebar-handle");
   const sidebar = q("#sidebar");
   const before = sidebar.getBoundingClientRect().width;
+  const finite = (name) => Number.isFinite(Number(handle.getAttribute(name)));
+  check("the separator has its values", finite("aria-valuenow") && finite("aria-valuemin") && finite("aria-valuemax"), handle.outerHTML.slice(0, 200));
   const at = (x) => ({ clientX: x, clientY: 300, button: 0, pointerId: 7, bubbles: true });
   const right = sidebar.getBoundingClientRect().right;
   handle.dispatchEvent(new w.PointerEvent("pointerdown", at(right)));
@@ -26,17 +28,29 @@ export default async ({ w, d, q, qa, tab, click, example, select, type, until, i
   handle.dispatchEvent(new w.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
   await until(() => sidebar.getBoundingClientRect().width < before + 120 - 10, "ArrowLeft to narrow it");
   check("ArrowLeft narrows it", true);
+  check("its values stay numbers", finite("aria-valuenow") && finite("aria-valuemax"), handle.getAttribute("aria-valuemax"));
+  // A narrower window clamps the width; a wide one gives the chosen one back.
+  const chosen = sidebar.getBoundingClientRect().width;
+  const frame = w.frameElement;
+  const wide = frame.style.width;
+  frame.style.width = `${Math.round(chosen + 360 - 80)}px`;
+  await until(() => sidebar.getBoundingClientRect().width < chosen - 40, "the narrow window to clamp it");
+  frame.style.width = wide;
+  await until(() => Math.abs(sidebar.getBoundingClientRect().width - chosen) < 1, "the chosen width again");
+  check("a window made wide again gives the chosen width back", true);
   handle.dispatchEvent(new w.MouseEvent("dblclick", { bubbles: true }));
   await until(() => Math.abs(sidebar.getBoundingClientRect().width - before) < 1, "the default width");
-  check("a double click gives the default width back", w.localStorage.getItem("pde2d-app-sidebar-width") === null);
+  check("a double click gives the default width back", w.localStorage.getItem("pde2d-app-sidebar-width") === null && finite("aria-valuenow"));
 
   // Snapshots with times of different widths: nothing moves.
   const slider = q("#time-slider");
   const show = async (i) => {
     slider.value = String(i);
     slider.dispatchEvent(new w.Event("input", { bubbles: true }));
-    await until(() => text(q(".time-now .steady-text")) === text(q(".time-now .steady-text")) && /at t = /.test(text(q("#legend"))), "the snapshot");
     await idle();
+    // The legend names the snapshot shown (its values loaded: no stand-in).
+    const time = text(q(".time-now .steady-text")).replace("t = ", "");
+    await until(() => text(q("#legend .bar-when .steady-text")) === `at t = ${time}` && q("#view-overlay").hidden, `the legend at t = ${time}`);
     return { bar: q("#legend .bar-scale").getBoundingClientRect().left, slider: slider.getBoundingClientRect().width, legend: text(q("#legend .bar-when .steady-text")) };
   };
   const one = await show(1);
@@ -55,6 +69,11 @@ export default async ({ w, d, q, qa, tab, click, example, select, type, until, i
   check("this snapshot's range is its own", ends() !== whole, `${whole} / ${ends()}`);
   select(q("#legend select.range-choice"), "run");
   await until(() => ends() === whole, "the whole run's range again");
+  // The focused range choice stays focused while snapshots change.
+  q("#legend select.range-choice").focus();
+  await show(3);
+  await show(Number(slider.max) - 1);
+  check("the range choice keeps the focus while the picture changes", d.activeElement === q("#legend select.range-choice"), d.activeElement?.outerHTML.slice(0, 60));
 
   // The Threads card: the assembly's count, and a note on the solver.
   tab("solve");
@@ -79,6 +98,15 @@ export default async ({ w, d, q, qa, tab, click, example, select, type, until, i
   await until(() => q("#problem-summary .summary-chips.stale"), "the facts of the last readable equation, muted");
   check("an unreadable equation keeps the last facts", /Time order 0/.test(text(q("#problem-summary"))), text(q("#problem-summary")));
   check("no inline styles", qa(".panels [style], .legend [style], .timebar [style]").length === 0);
-  d.querySelector("#reset-view").click();
-  check("Reset view is there", true);
+  // Reset view fits the picture again after a zoom.
+  tab("solve");
+  q("#reset-view").click();
+  await idle();
+  const fitted = pixels().hash;
+  click(q("#zoom-in"));
+  click(q("#zoom-in"));
+  await until(() => pixels().hash !== fitted, "the zoom");
+  q("#reset-view").click();
+  await until(() => pixels().hash === fitted, "Reset view to fit the picture again");
+  check("Reset view fits the picture again", true);
 };

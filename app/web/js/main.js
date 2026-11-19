@@ -288,8 +288,27 @@ function updateViewer() {
   });
 }
 
+// The legend again, every frame of a run that plays. A control in it that
+// has the focus (the range choice, a locked range's ends) is kept where
+// it is, with what is around it patched (patchChildren), so it keeps the
+// focus and what is typed in it.
 function showLegend() {
-  element("legend").replaceChildren(...viewer.legend());
+  patchChildren(element("legend"), viewer.legend());
+}
+
+function patchChildren(parent, next) {
+  const active = document.activeElement;
+  const old = [...parent.childNodes];
+  if (!active || active === document.body || !parent.contains(active) || old.length !== next.length) return parent.replaceChildren(...next);
+  next.forEach((node, i) => {
+    const kept = old[i];
+    if (kept === active) {
+      if (kept instanceof HTMLSelectElement) kept.value = node.value;
+      return;
+    }
+    if (kept.contains?.(active) && kept.nodeName === node.nodeName && kept.className === node.className) return patchChildren(kept, [...node.childNodes]);
+    kept.replaceWith(node);
+  });
 }
 
 // A click on the picture (or Enter) pins a probe there.
@@ -364,13 +383,24 @@ function wireSidebarHandle() {
   const handle = element("sidebar-handle");
   const sidebar = element("sidebar");
   const root = document.documentElement;
-  const apply = (width, keep = true) => {
+  // The width chosen (null: the default), apart from the width shown,
+  // which a narrower window clamps: a window made wide again gets the
+  // chosen width back.
+  let preferred = null;
+  const show = () => {
+    const width = preferred === null ? null : clampSidebarWidth(preferred, window.innerWidth);
+    if (width === null) root.style.removeProperty("--sidebar-width");
+    else root.style.setProperty("--sidebar-width", `${width}px`);
+    // The separator's values: the width shown and its finite limits.
+    handle.setAttribute("aria-valuemin", "300");
+    handle.setAttribute("aria-valuemax", String(Math.max(300, Math.round(window.innerWidth - 360))));
+    handle.setAttribute("aria-valuenow", String(Math.round(sidebar.getBoundingClientRect().width)));
+  };
+  const choose = (width) => {
     const clamped = clampSidebarWidth(width, window.innerWidth);
     if (clamped === null) return;
-    root.style.setProperty("--sidebar-width", `${clamped}px`);
-    handle.setAttribute("aria-valuenow", String(clamped));
-    handle.setAttribute("aria-valuemax", String(clampSidebarWidth(Infinity, window.innerWidth)));
-    if (!keep) return;
+    preferred = clamped;
+    show();
     try {
       localStorage.setItem(SIDEBAR_KEY, String(clamped));
     } catch {
@@ -379,10 +409,11 @@ function wireSidebarHandle() {
   };
   try {
     const stored = Number(localStorage.getItem(SIDEBAR_KEY));
-    if (stored > 0) apply(stored, false);
+    if (stored > 0) preferred = stored;
   } catch {
     // The default width.
   }
+  show();
   let start = null;
   let pending = null;
   handle.addEventListener("pointerdown", (event) => {
@@ -400,7 +431,7 @@ function wireSidebarHandle() {
   handle.addEventListener("pointermove", (event) => {
     if (!start) return;
     const width = start.width + event.clientX - start.x;
-    if (pending === null) requestAnimationFrame(() => (apply(pending), (pending = null)));
+    if (pending === null) requestAnimationFrame(() => (choose(pending), (pending = null)));
     pending = width;
   });
   const end = () => {
@@ -411,25 +442,21 @@ function wireSidebarHandle() {
   handle.addEventListener("pointerup", end);
   handle.addEventListener("pointercancel", end);
   handle.addEventListener("dblclick", () => {
-    root.style.removeProperty("--sidebar-width");
-    handle.removeAttribute("aria-valuenow");
+    preferred = null;
     try {
       localStorage.removeItem(SIDEBAR_KEY);
     } catch {
       // Nothing kept.
     }
+    show();
   });
   handle.addEventListener("keydown", (event) => {
     const delta = { ArrowLeft: -24, ArrowRight: 24 }[event.key];
     if (!delta) return;
     event.preventDefault();
-    apply(sidebar.getBoundingClientRect().width + delta);
+    choose(sidebar.getBoundingClientRect().width + delta);
   });
-  // A smaller window keeps the picture its room.
-  window.addEventListener("resize", () => {
-    const set = parseFloat(root.style.getPropertyValue("--sidebar-width"));
-    if (Number.isFinite(set)) apply(set, false);
-  });
+  window.addEventListener("resize", show);
 }
 
 // --- the case bar -------------------------------------------------------------

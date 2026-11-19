@@ -91,8 +91,11 @@ flowchart LR
   component and its options (`GET /api/catalog`); the forms are built from
   that, so a new library component needs one catalog entry in C++ and no
   change to the page.
-- **The library stays as it is.** The app uses only public headers,
+- **Only public headers.** The app uses the library's public headers,
   through the umbrella target `pde2d::pde2d`, which links every module.
+  What it needs that the library lacks is added to the library (by the
+  agent working on the app, following the library's conventions), never
+  reimplemented in the app.
 
 ## Files
 
@@ -1294,7 +1297,10 @@ New, Open, example or file replaced, until the next replacement.
 **The layout**: the sidebar's width follows the handle on its right
 edge (drag, the arrow keys, a double click for the default 400 px;
 between 300 px and what leaves the picture 360 px, `clampSidebarWidth`),
-kept in this browser; at phone width there is no handle. The toolbar has
+kept in this browser as the chosen width (a narrower window clamps
+what is shown, a wide one gives it back); the separator carries its
+current, smallest and largest width; at phone width there is no
+handle. The toolbar has
 **Reset view** (fit the domain; also a double click, 0, and ⌂ on the
 picture). The step switches, the solve mode and the other segmented
 choices are rows of equal cells, the chosen one filled with the accent.
@@ -1321,7 +1327,13 @@ diverging blue–red (default) or blue–orange with a grey middle
 snapshot** (the drawn snapshot's own min and max from `snapshot_min` and
 `snapshot_max`, in double; `store.view.range`, kept in the tab; the
 scale is kept per result and snapshot so it keeps its identity), so
-small values late in a run are seen; at phone width it is hidden.
+small values late in a run are seen; at phone width it is compact and
+the colour bar's parts share the regions' rows (two legend rows). The
+legend is patched, not rebuilt, around a control that has the focus
+(`patchChildren`), so the range choice and a locked range's ends keep
+the focus and what is typed while a run plays. A snapshot standing in
+for one that loads is named by its own time; that the shown one loads
+is said over the picture.
 **Lock range** fixes the colour range per quantity (field
 or |∇|) in `store.view.locked` (`lockedScale`), kept until **Unlock** and
 editable at its ends. **|∇|** colours each triangle by the gradient of the

@@ -1427,4 +1427,15 @@ steps). The owner asked the app to offer everything new.
   where it stopped and its exports say to solve again. The snapshot an
   observer gets during damping steps at order 2 has no acceleration (the
   result's copy does): documented, a run continues from the result.
+- **After the review of the page changes** (GPT-6.2 Sol): the legend is
+  patched around a focused control (it was rebuilt every frame and the
+  range choice lost the focus during playback); the range choice stays
+  at phone width, compact, with the colour bar's parts sharing the
+  regions' row (hiding it left "this snapshot" active with no way back);
+  the last readable equation's facts are kept per case, not on the
+  summary element (a panel rebuild dropped them); the stand-in snapshot's
+  label has no "(loading …)" (it moved the colour bar; the overlay says
+  it); the sidebar keeps the chosen width apart from the clamped one, and
+  its separator always has finite values; the docs' Process rule and the
+  app's Shape section name the delegation.
 
