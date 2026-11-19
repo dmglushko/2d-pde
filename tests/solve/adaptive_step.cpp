@@ -276,8 +276,16 @@ void controller_decisions() {
                               .max_dt = 0.2});
   near(judge(bounded, 1e-6, 0.1, 0.1).next_dt, 0.2, 1e-15, "at most max_dt");
   near(judge(bounded, 0.9, 0.2, 0.2).next_dt, 0.2, 1e-15, "kept at max_dt");
+  // A rejection whose proposal (0.02) is below min_dt tries min_dt; one
+  // of a step not longer than min_dt (also a short landing) throws.
+  d = judge(bounded, 100.0, 0.1, 0.1);
+  check(!d.accept && d.next_dt == 0.05, "a rejection tries min_dt");
   expect_throws<std::runtime_error>(
-      [&] { (void)judge(bounded, 100.0, 0.1, 0.1); }, "below min_dt");
+      [&] { (void)judge(bounded, 100.0, 0.05, 0.05); },
+      "not longer than min_dt = 0.05");
+  expect_throws<std::runtime_error>(
+      [&] { (void)judge(bounded, 1.5, 0.1, 0.04); },
+      "not longer than min_dt = 0.05");
 }
 
 // --- the methods' estimates -----------------------------------------------
@@ -295,15 +303,15 @@ void method_declarations() {
         "Euler at order 2: p = 1, no earlier step");
   check(midpoint.error_estimate(1)->order == 2 &&
             midpoint.error_estimate(1)->previous_steps == 2 &&
-            midpoint.error_estimate(2)->previous_steps == 2,
-        "midpoint: p = 2, two earlier steps");
+            midpoint.error_estimate(2)->order == 2 &&
+            midpoint.error_estimate(2)->previous_steps == 1,
+        "midpoint: p = 2, two earlier steps at order 1, one at order 2");
   check(newmark.error_estimate(2)->order == 2 &&
             newmark.error_estimate(2)->previous_steps == 0,
         "Newmark: p = 2, no earlier step");
 
-  // The formulas on a scalar u = t^3 sampled at unequal times: the
-  // estimates are the textbook terms dt^2/2 u'' and dt^3/12 u''', with the
-  // derivatives from divided differences (exact for a cubic).
+  // The formulas on a scalar u = t^3 sampled at unequal times (the
+  // estimates against the actual errors of steps: further below).
   const auto u = [](double t) { return t * t * t; };
   // Euler at order 1: the times 1, 1.2 (previous), 1.5 (this step).
   {
@@ -311,11 +319,7 @@ void method_declarations() {
     const std::vector<PreviousStep> previous{{.values = {u(1.0)}, .dt = 0.2}};
     const double d1 = (u(1.5) - u(1.2)) / 0.3, d0 = (u(1.2) - u(1.0)) / 0.2;
     near(euler.local_error(before, after, 0.3, previous)[0],
-         0.3 * 0.3 * (d1 - d0) / 0.5, 1e-14,
-         "Euler: dt^2 (d1 - d0) / (dt + dt_-1)");
-    // u'' of the cubic at 1.25 (the divided difference's point) is 7.5.
-    near((d1 - d0) / 0.25, 6.0 * (1.0 + 1.2 + 1.5) / 3.0, 1e-12,
-         "the second divided difference of a cubic");
+         0.5 * 0.3 * (d1 - d0), 1e-14, "Euler: dt (d1 - d0) / 2");
   }
   // Midpoint: the times 1, 1.1, 1.3, 1.6; U[...] of t^3 is 1.
   {
@@ -563,7 +567,8 @@ void continues_with_the_anchor() {
   }
 }
 
-// min_dt: a front too steep for it stops the run with a clear message.
+// min_dt: a front too steep for it stops the run with a clear message
+// (a rejected step at min_dt).
 void stops_below_min_dt() {
   const auto problem = meshed(heat(front()));
   expect_throws<std::runtime_error>(
@@ -573,7 +578,7 @@ void stops_below_min_dt() {
             {.initial_dt = 0.01, .atol = 1e-8, .rtol = 1e-6, .min_dt = 0.005})
             .integrate(problem, 0.0, 1.0);
       },
-      "would be below min_dt = 0.005");
+      "not longer than min_dt = 0.005");
 }
 
 // --- estimates against the actual error of a step --------------------------
@@ -696,7 +701,7 @@ void midpoint_second_order_on_unequal_steps() {
   };
   const Solution *starts[] = {&r.snapshots.at(0), &r.snapshots.at(1)};
   const Solution *ends[] = {&r.snapshots.at(1), &r.final};
-  for (std::size_t k = 1; k < 2; ++k) {
+  for (std::size_t k = 0; k < 2; ++k) {
     const auto &record = r.history[k + 1];
     check(record.error_norm.has_value(),
           std::format("step {} is estimated", k + 2));

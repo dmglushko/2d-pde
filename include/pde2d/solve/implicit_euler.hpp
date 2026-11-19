@@ -56,8 +56,10 @@ public:
   // Incompressible Flow and the FEM, 3.16.4). Time order 2:
   // e = dt / 2 (V1 - V0), no earlier step. Time order 1: u_t is not in the
   // state, so the quotients over this step and the previous one are used,
-  // d1 = (U1 - U0) / dt, d0 = (U0 - U_-1) / dt_-1, and
-  // e = dt^2 (d1 - d0) / (dt + dt_-1) (one earlier step).
+  // d1 = (U1 - U0) / dt, d0 = (U0 - U_-1) / dt_-1: Euler's quotients are
+  // the rates at the steps' ends, dt apart whatever dt_-1 is, so
+  // u'' = (d1 - d0) / dt and e = dt (d1 - d0) / 2 (one earlier step). No
+  // free unknowns: an empty error.
   std::optional<ErrorEstimateDeclaration>
   error_estimate(int time_order) const override;
   std::vector<double>

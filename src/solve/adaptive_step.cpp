@@ -89,17 +89,19 @@ StepDecision AdaptiveStep::judge(const TakenStep &step) const {
   if (!(err <= 1.0)) {
     // Rejected (also for an error that is not a number): the same step
     // again, shorter than the rejected one by at least the safety factor
-    // and at most min_factor.
+    // and at most min_factor, but not below min_dt. A rejected step that
+    // was not longer than min_dt leaves no shorter try.
+    if (step.length <= o.min_dt)
+      throw std::runtime_error(std::format(
+          "{}: the step from t = {} of length {} was rejected (error norm "
+          "{}), and it is not longer than min_dt = {}, so no shorter step "
+          "may be tried",
+          prefix, step.t, step.length, err, o.min_dt));
     const double factor =
         std::isfinite(err)
             ? std::max(o.min_factor, o.safety * std::pow(1.0 / err, exponent))
             : o.min_factor;
-    const double next = step.length * factor;
-    if (next < o.min_dt)
-      throw std::runtime_error(std::format(
-          "{}: the step from t = {} of length {} was rejected (error norm "
-          "{}), and the next try, {}, would be below min_dt = {}",
-          prefix, step.t, step.length, err, next, o.min_dt));
+    const double next = std::max(step.length * factor, o.min_dt);
     return {.accept = false, .next_dt = next, .error_norm = err};
   }
   // Accepted. The proposal from the step's own length and error, limited

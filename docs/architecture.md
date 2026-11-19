@@ -1691,12 +1691,15 @@ unknown) from states it already has, with no solve:
 
 | Method | Orders | p | Earlier steps | Estimate of the step's local error in U |
 | --- | --- | --- | --- | --- |
-| `ImplicitEuler` | 1 | 1 | 1 | dt²/2 u″, u″ = 2(d₁ − d₀)/(dt + dt₋₁), dᵢ the quotients of this step and the one before: dt²(d₁ − d₀)/(dt + dt₋₁) |
+| `ImplicitEuler` | 1 | 1 | 1 | dt²/2 u″, u″ = (d₁ − d₀)/dt, dᵢ the quotients of this step and the one before (Euler's quotients are the rates at the steps' ends, dt apart whatever dt₋₁ is): dt (d₁ − d₀)/2 |
 | `ImplicitEuler` | 2 | 1 | 0 | dt/2 (V₁ − V₀) |
-| `ImplicitMidpoint` | 1, 2 | 2 | 2 | dt³/12 u‴ (the trapezoidal rule's term), u‴ = 6 U[t₋₂, t₋₁, t₀, t₁], the third divided difference of the values at the ends of the last three steps: dt³/2 U[…] |
+| `ImplicitMidpoint` | 1 | 2 | 2 | dt³/12 u‴ (the trapezoidal rule's term), u‴ = 6 U[t₋₂, t₋₁, t₀, t₁], the third divided difference of the values at the ends of the last three steps: dt³/2 U[…] |
+| `ImplicitMidpoint` | 2 | 2 | 1 | dt³/12 u‴ (U is the trapezoidal rule of V), u‴ = V″ from the endpoint velocities: a₁ = (V₁ − V₀)/dt, a₀ = (V₀ − V₋₁)/dt₋₁ (u″ at the two steps' middles), V₋₁ = 2(U₀ − U₋₁)/dt₋₁ − V₀ (that step's update): dt³(a₁ − a₀)/(6(dt + dt₋₁)) |
 | `Newmark` | 2 | 2 | 0 | Zienkiewicz–Xie (1991): dt²(β − 1/6)(W₁ − W₀) = dt²/12 (W₁ − W₀) |
 
-`ImplicitEuler` declares none at time order 0 (no time error). A step with
+`ImplicitEuler` declares none at time order 0 (no time error). Without
+free unknowns (every node a Dirichlet node) every estimate is empty
+(norm 0). A step with
 fewer earlier steps than declared (the first steps of a run, of a piece
 after a transfer) has no estimate. An estimate is made from values the
 method computed: a step long enough to jump over a fast change of the
@@ -1739,7 +1742,8 @@ kinds, told apart only by `controls_error()`:
   judges every step: the error norm is the root mean square of eᵢ /
   (atol + rtol·max(|uᵢ before|, |uᵢ after|)) (`error_norm`); above 1 the
   step is rejected and taken again with length·max(min_factor,
-  safety·err^(−1/(p+1))) (below `min_dt`: `std::runtime_error`), else
+  safety·err^(−1/(p+1))), at least `min_dt` (a rejected step not longer
+  than `min_dt` leaves no shorter try: `std::runtime_error`), else
   accepted with the proposal length·safety·err^(−1/(p+1)), limited to
   [min_factor·dt, max_factor·dt] (dt the controller's step, not the
   shorter length of a landing step, so a landing does not shrink the next
@@ -1757,7 +1761,7 @@ largest fixed step t1/(4m) at least as accurate):
 | Problem, method | Adaptive: error, steps (rejected), prepares | Fixed: dt, error, steps, prepares |
 | --- | --- | --- |
 | heat, front g = tanh(40(t − ½)), midpoint, rtol 1e-4 | 0.0025, 93 (19), 40 | 1/264, 0.0023, 264, 1 |
-| heat, the same front, implicit Euler, rtol 1e-3 | 0.049, 138 (18), 39 | 1/860, 0.047, 860, 1 |
+| heat, the same front, implicit Euler, rtol 1e-3 | 0.049, 135 (20), 40 | 1/860, 0.047, 860, 1 |
 | wave, g = cos 2πt + ½ tanh(20(t − 1)), Newmark, rtol 1e-4 | 0.021, 187 (45), 71 | 1/84, 0.019, 168, 1 |
 | wave, the same with tanh(400(t − 1)), Newmark, rtol 1e-4 | 0.013, 219 (60), 96 | 1/518, 0.0066, 1036, 1 |
 

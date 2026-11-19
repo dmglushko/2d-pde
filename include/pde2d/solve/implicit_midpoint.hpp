@@ -50,10 +50,16 @@ public:
   // The local error estimate, order p = 2, at time orders 1 and 2: the
   // error of a step is dt^3 / 12 u''' (that of the trapezoidal rule, equal
   // to the midpoint rule's for a linear problem with constant matrices),
-  // with u''' = 6 U[t_-2, t_-1, t0, t1], the third divided difference of
-  // the values at the ends of this step and the two before it (Gresho and
-  // Sani, 3.16.4, estimate the same term with a predictor):
-  // e = dt^3 / 2 U[t_-2, t_-1, t0, t1] (two earlier steps).
+  // (Gresho and Sani, 3.16.4, estimate the same term with a predictor).
+  // Time order 1: u''' = 6 U[t_-2, t_-1, t0, t1], the third divided
+  // difference of the values at the ends of this step and the two before
+  // it: e = dt^3 / 2 U[t_-2, t_-1, t0, t1] (two earlier steps). Time order
+  // 2: the values are the trapezoidal rule of the velocities, so u''' =
+  // V'' comes from the endpoint velocities: a1 = (V1 - V0) / dt and
+  // a0 = (V0 - V_-1) / dt_-1 are u'' at the middles of this step and the
+  // one before, and e = dt^3 (a1 - a0) / (6 (dt + dt_-1)) (one earlier
+  // step; V_-1 = 2 (U0 - U_-1) / dt_-1 - V0, from that step's update).
+  // No free unknowns: an empty error.
   std::optional<ErrorEstimateDeclaration>
   error_estimate(int time_order) const override;
   std::vector<double>

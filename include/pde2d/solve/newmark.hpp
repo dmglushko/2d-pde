@@ -45,6 +45,7 @@ public:
   // estimator and adaptive time stepping procedure for dynamic analysis",
   // Earthquake Eng. Struct. Dyn. 20 (1991) 871-887):
   // e = dt^2 (beta - 1/6) (W1 - W0) = dt^2 / 12 (W1 - W0), no earlier step.
+  // No free unknowns: an empty error.
   std::optional<ErrorEstimateDeclaration>
   error_estimate(int time_order) const override;
   std::vector<double>
