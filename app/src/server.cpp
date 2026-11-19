@@ -416,6 +416,20 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
         return session.indicators_float32(job, client);
       },
       false);
+  // One cycle's solution of an adaptive run as float32, one per node of
+  // that cycle's mesh (Session::cycle_values_float32): {"job": n,
+  // "cycle": k} with k from 1.
+  binary(
+      "/api/solve/cycle",
+      [&session](const Json &body, const std::string &client) {
+        static constexpr std::string_view known[] = {"job", "cycle"};
+        const auto [job, cycle] = staged("solve", [&] {
+          return std::tuple(request_job(body, known),
+                            request_count(body, "cycle"));
+        });
+        return session.cycle_values_float32(job, cycle, client);
+      },
+      false);
   route("/api/solve/reference",
         [&session](const Json &body, const std::string &client) {
           return session.keep_reference(body, client);

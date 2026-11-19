@@ -297,7 +297,7 @@ RunState final_state(bool stopped) {
 }
 
 void publish_adaptive(Run &run, adapt::AdaptiveStaticResult result,
-                      std::mutex &run_lock) {
+                      std::mutex &run_lock, StageCache &cache) {
   Json cycles = Json::array();
   for (std::size_t k = 0; k < result.cycles.size(); ++k)
     cycles.push_back(cycle_row(k, result.cycles[k]));
@@ -319,6 +319,23 @@ void publish_adaptive(Run &run, adapt::AdaptiveStaticResult result,
   for (const Json &report : reports_json(result.cycles.back().reports))
     reports.push_back(report);
 
+  // Each cycle's mesh with an id, so the page can draw every cycle's
+  // solution: the starting mesh keeps its own, a cycle on the mesh of the
+  // cycle before (none today: a cycle follows a refinement) shares its id.
+  std::vector<std::pair<std::uint64_t, std::shared_ptr<const mesh::Mesh>>>
+      meshes;
+  for (const adapt::AdaptiveCycle &cycle : result.cycles) {
+    const std::shared_ptr<const mesh::Mesh> &mesh = cycle.solution.mesh;
+    std::uint64_t id = 0;
+    if (mesh == run.mesh)
+      id = run.mesh_id;
+    else if (!meshes.empty() && meshes.back().second == mesh)
+      id = meshes.back().first;
+    else
+      id = cache.new_mesh_id();
+    meshes.emplace_back(id, mesh);
+  }
+
   std::vector<Snapshot> kept;
   for (adapt::AdaptiveCycle &cycle : result.cycles) {
     release(cycle.solution.velocities);
@@ -333,9 +350,10 @@ void publish_adaptive(Run &run, adapt::AdaptiveStaticResult result,
   const std::scoped_lock lock(run_lock);
   run.meshed = result.problem;
   run.mesh = result.problem->mesh();
-  run.mesh_id = run.adapted_mesh_id;
+  run.mesh_id = meshes.back().first;
   run.base["free_unknowns"] = result.problem->free_nodes().size();
   Run::Published &out = run.published;
+  out.meshes = std::move(meshes);
   out.static_reports = std::move(reports);
   out.adaptive = std::move(summary);
   out.indicators = std::move(indicators);
@@ -656,7 +674,7 @@ bool goes_on(const Run &run) {
 // An adaptive run: the library's whole loop (one call, under the session
 // mutex), its cycles (or its time) published as they come, Stop checked
 // after every cycle (or step).
-void run_adaptive(Run &run, std::mutex &run_lock) {
+void run_adaptive(Run &run, std::mutex &run_lock, StageCache &cache) {
   try {
     if (run.setup.mode == SolveMode::adaptive_time) {
       adapt::AdaptiveIntegrationResult result = staged("solve", [&] {
@@ -683,7 +701,7 @@ void run_adaptive(Run &run, std::mutex &run_lock) {
             return goes_on(run);
           });
     });
-    publish_adaptive(run, std::move(result), run_lock);
+    publish_adaptive(run, std::move(result), run_lock, cache);
   } catch (const StageError &error) {
     const std::scoped_lock lock(run_lock);
     run.published.state = RunState::failed;
@@ -693,7 +711,8 @@ void run_adaptive(Run &run, std::mutex &run_lock) {
 
 } // namespace
 
-void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
+void advance(Run &run, const SessionOptions &options, std::mutex &run_lock,
+             StageCache &cache) {
   {
     const std::scoped_lock lock(run_lock);
     if (run.published.state != RunState::running)
@@ -716,7 +735,7 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
   } settle{run, run_lock};
   if (run.setup.mode == SolveMode::adaptive ||
       run.setup.mode == SolveMode::adaptive_time)
-    return run_adaptive(run, run_lock);
+    return run_adaptive(run, run_lock, cache);
   // Written only here (under the session mutex), so read without the
   // run lock.
   const std::size_t ready = run.published.snapshots.size();
@@ -811,7 +830,6 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
     made->base["mode"] = "adaptive";
     made->times = {made->setup.t};
     made->published.t = made->setup.t;
-    made->adapted_mesh_id = cache.new_mesh_id();
     // The Mesh step's mesh it starts from (mesh_id becomes its last one).
     made->base["start_mesh_id"] = made->mesh_id;
   } else {
@@ -863,7 +881,8 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
   return made;
 }
 
-void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock) {
+void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock,
+               StageCache &cache) {
   // An adaptive run is one library call: the worker (advance) runs it, so
   // the page follows its cycles and can stop it.
   if (run.setup.mode == SolveMode::adaptive ||
@@ -888,7 +907,7 @@ void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock) {
     return;
   }
   run.chunk = plan_chunk({}, options);
-  advance(run, options, run_lock);
+  advance(run, options, run_lock, cache);
   const std::scoped_lock lock(run_lock);
   if (run.published.state == RunState::failed)
     throw *run.published.error;
@@ -953,8 +972,15 @@ Json progress_json(const Run &run, std::size_t memory_budget) {
         p.indicators ? Json(p.indicators->size()) : Json(nullptr);
     // The last mesh, whose arrays POST /api/mesh/arrays sends, once the
     // result is published (done, or stopped after a cycle).
-    if (!p.cycles.empty())
+    if (!p.cycles.empty()) {
       adaptive["mesh"] = mesh_summary_json(*run.mesh, run.mesh_id);
+      // Each cycle's mesh (its arrays from /api/mesh/arrays); its values
+      // from POST {"job", "cycle"} to /api/solve/cycle.
+      Json meshes = Json::array();
+      for (const auto &[mesh_id, mesh] : p.meshes)
+        meshes.push_back(mesh_summary_json(*mesh, mesh_id));
+      adaptive["cycle_meshes"] = std::move(meshes);
+    }
     out["adaptive"] = std::move(adaptive);
   }
   // Where the values are: POST {"job", "first", "count"} to

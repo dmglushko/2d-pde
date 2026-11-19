@@ -173,6 +173,8 @@ input.expr {
   display: inline-grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
+  /* Every cell the row's full height (.row would centre them). */
+  align-items: stretch;
   gap: 0;
   border: 1px solid var(--control-border);
   border-radius: var(--radius);

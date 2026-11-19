@@ -142,9 +142,9 @@ struct Run {
   std::shared_ptr<const fem::MeshedProblem> meshed; // session mutex only
   std::shared_ptr<const mesh::Mesh> mesh;           // meshed's mesh
   std::uint64_t mesh_id = 0; // the StageCache's id of its mesh
-  // An adaptive run's id for its last mesh (StageCache::new_mesh_id); for
-  // an adaptive run in time the first of max_refinements ids reserved for
-  // its new meshes.
+  // An adaptive run in time: the first of max_refinements ids reserved for
+  // its new meshes (an adaptive run takes its cycles' ids when it is
+  // published).
   std::uint64_t adapted_mesh_id = 0;
   fem::Parameters parameters; // the problem's, for comparisons
   Json settings;              // the sections it was made from
@@ -188,7 +188,9 @@ struct Run {
     std::shared_ptr<const std::vector<double>> indicators;
     Json adaptive; // also an adaptive run in time's summary
     // An adaptive run in time: every mesh its snapshots are on, with its
-    // id, in the order of use (the first is the starting mesh).
+    // id, in the order of use (the first is the starting mesh). An
+    // adaptive run: each cycle's mesh, with its id, one per cycle (the
+    // first is the starting mesh, the last the run's mesh).
     std::vector<std::pair<std::uint64_t, std::shared_ptr<const mesh::Mesh>>>
         meshes;
     // RunManager's clock at its last use (a lookup marks it).
@@ -230,13 +232,17 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
 // Solves a static or adaptive run, or runs a time run's first chunk. Throws the
 // StageError of either (a failed first chunk is also recorded in the
 // run). Under the session mutex; takes `run_lock` to publish.
-void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock);
+// An adaptive run takes ids for its cycles' meshes from `cache`.
+void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock,
+               StageCache &cache);
 
 // Runs the next chunk of a running time run, or the whole loop of an
 // adaptive run (whose cycles, or time, are published as they come). A
 // failure ends the run with its error. Under the session mutex; takes
-// `run_lock` to publish.
-void advance(Run &run, const SessionOptions &options, std::mutex &run_lock);
+// `run_lock` to publish; an adaptive run takes ids for its cycles' meshes
+// from `cache`.
+void advance(Run &run, const SessionOptions &options, std::mutex &run_lock,
+             StageCache &cache);
 
 // Asks a running run to stop: at once when it is not being computed, else
 // once its chunk (at its next step) or its adaptive loop (after its

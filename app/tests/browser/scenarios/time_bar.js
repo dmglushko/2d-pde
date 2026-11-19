@@ -3,7 +3,7 @@
 export default async ({ example, w, q, qa, click, select, until, sleep, text, check }) => {
   // sleep only where the check is that nothing happens (Pause).
   example("heat_annulus.json");
-  await until(() => text(q("#toast")).includes("heat_annulus"), "the heat case");
+  await until(() => text(q("#case-name")).includes("heat_annulus"), "the heat case");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   click(q("#run-all"));
   await until(() => text(q("#toast")).includes("up to date"), "Run all", 90000);

@@ -16,7 +16,7 @@ export default async ({ example, d, w, q, until, sleep, text, check }) => {
   };
   drop("slow.svg", svg);
   example("poisson_rectangle.json");
-  await until(() => text(q("#toast")).includes("poisson_rectangle"), "the example");
+  await until(() => text(q("#case-name")).includes("poisson_rectangle"), "the example");
   await sleep(2500);
   const kept = JSON.parse(w.localStorage.getItem("pde2d-app-case") ?? "null");
   check("the late file does not replace the example", kept?.geometry?.source === "shape", kept?.geometry?.source);

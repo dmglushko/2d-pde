@@ -122,6 +122,11 @@ public:
   // run lock only.
   std::string indicators_float32(std::uint64_t job,
                                  const std::string &client = {});
+  // The solution of an adaptive run's cycle `cycle` (from 1) as float32,
+  // one per node of that cycle's mesh (what POST /api/solve/cycle sends).
+  // The run lock only.
+  std::string cycle_values_float32(std::uint64_t job, std::size_t cycle,
+                                   const std::string &client = {});
   // Solves the case to the end and returns every kept solution's values,
   // one vector per time (one value per mesh node), as computed.
   std::vector<std::vector<double>>

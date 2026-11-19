@@ -257,7 +257,7 @@ void Session::background_loop() {
       wake_.wait(lock);
       continue;
     }
-    advance(*run, options_, run_lock_);
+    advance(*run, options_, run_lock_, state_->cache);
     {
       std::vector<std::shared_ptr<const Run>> dropped;
       {
@@ -595,7 +595,7 @@ Json Session::solve(const Json &input, const std::string &client) {
         }
         state.runs.set_run(state.runs.client(who), made);
       }
-      start_run(*made, options_, run_lock_);
+      start_run(*made, options_, run_lock_, state_->cache);
       wake_.notify_all();
       const std::scoped_lock book(run_lock_);
       if (made->published.state != RunState::running ||
@@ -625,7 +625,7 @@ bool Session::advance_solve(std::uint64_t job, const std::string &client) {
     current = &state_->runs.run_of(client_name(client), job);
   }
   // Not removed meanwhile: only a holder of the session mutex drops runs.
-  advance(*current, options_, run_lock_);
+  advance(*current, options_, run_lock_, state_->cache);
   const std::scoped_lock book(run_lock_);
   return current->published.state == RunState::running;
 }
@@ -703,6 +703,22 @@ std::string Session::indicators_float32(std::uint64_t job,
   std::string out;
   out.reserve(run.indicators->size() * 4);
   for (const double value : *run.indicators)
+    append_float32(out, value);
+  return out;
+}
+
+std::string Session::cycle_values_float32(std::uint64_t job, std::size_t cycle,
+                                          const std::string &client) {
+  const RunSnapshots run = snapshots_of(job, client);
+  if (cycle < 1 || cycle > run.cycles.size())
+    throw StageError("solve", "not_ready",
+                     std::format("the run {} has no cycle {} ({} are kept; "
+                                 "only a finished adaptive run has them)",
+                                 job, cycle, run.cycles.size()));
+  const std::vector<double> &values = run.cycles[cycle - 1]->values;
+  std::string out;
+  out.reserve(values.size() * 4);
+  for (const double value : values)
     append_float32(out, value);
   return out;
 }

@@ -1473,3 +1473,41 @@ steps). The owner asked the app to offer everything new.
   the field's height for what the coefficient form already shows; a
   line's error still shows under it. The check still sends `forms`
   (the switch between the forms uses them).
+- **No toast when a case is opened.** "Opened X. The previous case can
+  be restored from the top bar. Restore it" came with every example and
+  file, and the owner found it annoying: the top bar already names the
+  case and offers Restore. New case and Restore show none either.
+  Failures still toast.
+- **What was just used stays where it was.** Choosing another solve
+  mode outdated the result, whose comparison sections then left the
+  panel, so the settings (and the choice under the pointer) jumped up;
+  the picture's "outdated: run again" note wrapped the toolbar onto a
+  second row and pushed the picture down. Now every refresh keeps the
+  focused control's place on the screen (the sidebar scrolls by what
+  changed above it), the note never takes a row of its own (the stamp on
+  the picture says the same), and the segmented choice stretches its
+  cells (`.row` centred them, so a one-line cell sat inside a two-line
+  row). Keeping the place is general rather than keeping the sections:
+  any change above a control (an error box, a warning chip) moved it.
+- **A chart's key hides and shows its lines.** The owner wanted to turn
+  off the errors or the reference slopes; the key's names are toggles,
+  the axes fit what is shown (so hiding the estimate zooms onto the
+  errors) and the CSV keeps every series.
+- **An exact solution can be removed.** It stayed in the case and was
+  compared again after every solve, also after the problem changed so
+  that it no longer fitted; "Remove" clears the expression and the
+  comparison (emptying the field and pressing Compare did too, which
+  nobody would find).
+- **Each adaptive cycle can be looked at.** The run already kept every
+  cycle's solution (for the comparisons); its meshes now get ids when the
+  run is published (from the stage cache, so `/api/mesh/arrays` serves
+  them like an adaptive run in time's), the progress lists them
+  (`adaptive.cycle_meshes`) and `/api/solve/cycle` sends one cycle's
+  values. Ids at publication rather than reserved at the start: an
+  adaptive run's number of cycles has no bound when `max_cycles` is not
+  set. The page shows the chosen cycle as a view of the result (its
+  mesh and values) rather than turning the cycles into snapshots: the
+  time bar, the exports and the comparisons are about the result's one
+  solution, and all of them stay as they were. The run's colour range is
+  kept so the cycles compare at a glance; the indicators and the
+  comparisons are the last cycle's and are not drawn on an earlier one.

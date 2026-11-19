@@ -4,7 +4,7 @@
 // several meshes has, and the exact comparison of every snapshot.
 export default async ({ w, example, q, qa, tab, click, until, idle, text, check, pixels, panel, button, sleep }) => {
   example("l_shape_heat_adaptive.json");
-  await until(() => text(q("#toast")).includes("l_shape_heat_adaptive"), "the example");
+  await until(() => text(q("#case-name")).includes("l_shape_heat_adaptive"), "the example");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   click(q("#run-all"));
   await until(() => text(q("#toast")).includes("up to date"), "Run all", 90000);

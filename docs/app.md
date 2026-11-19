@@ -315,7 +315,7 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 | `POST /api/geometry/locate` | `{"case", "point": [x, y], "snap"}` | the boundary point nearest to `point` and how to split its region there (see "The geometry editor"): curves `{"kind": "curves", "region", "loop", "curve", "t", "point", "corner", "fraction", "splittable", "reason", "distance"}`; a mesh file `{"kind": "mesh_file", "region", "node", "point", "corner", "splittable", "reason", "distance"}` |
 | `POST /api/geometry/drawing` | case | `{"geometry": drawing}`: the case's curves after its region edits as a drawing section, curve for curve (refused for a mesh file) |
 | `POST /api/mesh` | case | `mesh`: the mesh's summary (`id`, counts `nodes`, `triangles`, `boundary_edges`, `region_names`, `has_links`, and `arrays`: where its arrays are, see "Binary answers"); `stats`, `target_met`, `longest_edge`, `max_edge_length`, `domain_size`, every stage's `reports`, `memory` (`snapshot_bytes`: what a run on this mesh keeps per snapshot, about `snapshot_bytes` × (snapshots + 1) in all; `budget`) |
-| `POST /api/mesh/arrays` | `{"mesh": id}` | the mesh's arrays in binary. The session keeps the last 16 meshes it built and the meshes of every kept run (all of an adaptive run in time's) |
+| `POST /api/mesh/arrays` | `{"mesh": id}` | the mesh's arrays in binary. The session keeps the last 16 meshes it built and the meshes of every kept run (all of an adaptive run in time's, and every cycle's of an adaptive run) |
 | `POST /api/problem` | case | the check: `ok`, `errors` (`path`, `message`), `facts` per coefficient path (also for a line; none for a text that did not parse), each condition's kind, `forms` (per equation and condition that was read without an error in any of its fields: `line` whether it was given as a line, `text` the line as written or printed from the coefficients by `fem::equation_text`/`condition_text` (null, with `reason`, when the library cannot print it), `coefficients` the non-zero ones as written or read from the line), time order, needed initial conditions |
 | `POST /api/assemble` | case | the `MeshedProblem` report and Dirichlet nodes; the assembled operators' facts and sizes, a sparsity picture, the assembly report |
 | `POST /api/field` | `{"case", "field"}` | values at the nodes (`null` where there is none) of `{"kind": "expression", "text"}`, `initial_u`, `initial_u_t`, `dirichlet` or `right_hand_side`, at `t` (default: `assembly.t`) |
@@ -325,6 +325,7 @@ the sections the stage reads: `requestCase`); run calls take `{"job",
 | `POST /api/solve/stop` | `{"job"}` | stops the run after the chunk that is running (at once: it does not wait for it); its progress. A solve of the same inputs continues it |
 | `POST /api/solve/values` | `{"job", "first", "count"}` | snapshots `first` to `first + count` (ready ones only) in binary (never waits for a chunk); a run on several meshes sends each with its own node count (`values.snapshot_nodes`) |
 | `POST /api/solve/indicators` | `{"job"}` | a done adaptive run's error indicators of its last cycle, float32, one per triangle of its mesh (the run lock only); another run: 409 `not_ready` |
+| `POST /api/solve/cycle` | `{"job", "cycle"}` | a published adaptive run's solution of cycle `cycle` (from 1), float32, one per node of that cycle's mesh (`adaptive.cycle_meshes`; the run lock only); a cycle it does not have: 409 `not_ready` |
 | `POST /api/solve/reference` | `{"job"}` | keeps the client's run (it must be done) as its reference run: `{"reference": {"job", "mode", "times", "mesh_id"}}`. It stays when the run is replaced |
 | `POST /api/solve/reference/clear` | `{}` | forgets the reference: `{"reference": null}` |
 | `POST /api/solve/compare` | `{"job", "exact": text}` or `{"job", "reference": true}` | the comparison in double (see "Comparisons") |
@@ -353,8 +354,10 @@ last mesh) and `adaptive`: `stop_reason` (`tolerance_met`, `max_cycles`,
 `cycles` (`{"cycle", "nodes", "triangles", "estimate", "max_indicator",
 "marked"` (`null` on the last), `"residual", "seconds"}`), `mesh_stats`
 of the last mesh, `mesh` (its summary, as `/api/mesh` gives it: the
-arrays come from `/api/mesh/arrays`) and `indicators` (their count, or
-`null`). Its `reports` are the `adaptive_static_solver` report, then the
+arrays come from `/api/mesh/arrays`), `cycle_meshes` (each cycle's mesh
+summary with its id, one per cycle: the first is the starting mesh, the
+last is `mesh`; ids are taken when the run is published) and
+`indicators` (their count, or `null`). Its `reports` are the `adaptive_static_solver` report, then the
 last cycle's. An adaptive run in time is also `done` at once (one library
 call) and has the time run's `t0`, `t1`, `t` and `snapshots_total`,
 `start_mesh_id`, and `adaptive_time`: `adaptations` (`{"time", "steps",
@@ -1153,11 +1156,18 @@ round ticks, a crosshair readout under the pointer; a click picks the
 snapshot. The plot takes the focus: the arrows (Shift: a tenth of the
 points), Home and End move the readout, which a live region announces;
 Enter picks the snapshot. "Download data (CSV)" saves the numbers drawn
-(full precision, empty cells for gaps).
+(full precision, empty cells for gaps). A chart of several lines
+(`key`: the adaptive cycles, the refinement study, the error per
+snapshot) has a key above it whose names are toggles: a click hides or
+shows that line, the axes fit the lines shown, the CSV keeps every
+series, and what is hidden is remembered per chart while the page is
+open.
 
 **Comparisons** (`compare.js`, the Solve result). *With an exact
 solution*: an expression (kept in the case as `view.exact_solution`) is
-sent to `/api/solve/compare`; the section shows max |u − exact|, the RMS
+sent to `/api/solve/compare` (**Remove** beside Compare takes the
+expression out of the case and forgets the comparison, so no error is
+shown or compared again); the section shows max |u − exact|, the RMS
 over the nodes and the lumped L2 error at the shown snapshot, the largest
 max over all, and for a run in time a chart of the three per snapshot.
 Next to the figures it says that this is the nodal error computed in
@@ -1191,7 +1201,16 @@ estimate, N^(−1) through the first L2 error). The Colour menu's **error
 indicator η** (enabled for an adaptive solution) colours each triangle
 by log₁₀ η_T of the last cycle (a zero indicator takes the lowest
 colour), with the range lock as for |∇| (`locked.indicator`) and η_T in
-the readout. **Export adapted mesh** (`solution-mesh.pde2d`). The
+the readout. **Each cycle in the picture** (`cycles.js`): a cycle's
+number in the table (or a point of the chart) shows that cycle's
+solution on its own mesh (`store.shownCycle`; `drawnSolve` puts a view
+of the result with that cycle's mesh and values in its place, fetched
+once per result: the mesh from `adaptive.cycle_meshes` and
+`/api/mesh/arrays`, the values from `/api/solve/cycle`), on the run's
+colour range so cycles compare at a glance; the legend says "u in cycle
+k of n" and the row is marked. The comparisons and the indicators are
+the last cycle's, so they are not drawn on an earlier one; "Show the
+last" (or the last row) goes back. **Export adapted mesh** (`solution-mesh.pde2d`). The
 reference section and the refinement study are not offered for an
 adaptive solve (another mesh each time; it refines itself). When it met
 its tolerance, the stop message is not counted as a warning.
@@ -1292,6 +1311,17 @@ undo steps and leave the case saved or not as it was; reading a case
 (normalization) does not mark it unsaved either. **Restore previous
 case** (case menu, `store.previousCase`) brings back the case the last
 New, Open, example or file replaced, until the next replacement.
+Opening a case shows no toast: its name is in the top bar, and so is
+Restore.
+
+**Steady places**: the control just used keeps its place on the screen
+while the panels change around it (`keepingPlace` in `main.js`, around
+every refresh: a result that goes outdated drops sections above the
+settings, so the sidebar scrolls by what they took; a rebuilt panel's
+control is found again by its id, its name or its field's case path).
+The picture's toolbar note takes the room left on the toolbar's row and
+never a row of its own, so an outdated result does not push the picture
+down. A segmented choice's cells fill its row's height.
 
 **The layout**: the sidebar's width follows the handle on its right
 edge (drag, the arrow keys, a double click for the default 400 px;

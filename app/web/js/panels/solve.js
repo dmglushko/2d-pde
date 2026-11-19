@@ -10,6 +10,7 @@ import { exportFile, followedRun, runWithPrerequisites, stopping, stopRun, toast
 import { lineChart } from "../charts.js";
 import { LABELS, clearComparison, compare, compareWith, comparisonState, comparisons, currentComparison, forgetReference, keepReference } from "../compare.js";
 import { comparisonControls, currentDisplay } from "../display.js";
+import { chooseCycle, chosenCycle, cycleCount, cycleLoading } from "../cycles.js";
 import { runStudy, stopStudy, study, studyOrders } from "../refinement.js";
 import { bytesText, formatNumber } from "../pure/format.js";
 import { isTransient, plainError } from "../pure/requests.js";
@@ -319,7 +320,7 @@ function updateCycles(container) {
   const errors = compared && comparisonState("exact") === "current" ? (compared.summary?.cycles ?? null) : null;
   // A running adaptive run's result grows in place: its cycles' count is
   // part of the key.
-  const key = [result, errors, result?.adaptive?.cycles?.length ?? 0, result?.state];
+  const key = [result, errors, result?.adaptive?.cycles?.length ?? 0, result?.state, chosenCycle(result), cycleLoading(result)];
   if (slot.shown && key.every((part, i) => slot.shown[i] === part)) return;
   slot.shown = key;
   if (result?.mode === "adaptive_time") return fill(slot, adaptationsSection(result));
@@ -327,6 +328,38 @@ function updateCycles(container) {
   const rows = adaptiveRows(result.adaptive.cycles, errors);
   const number = (v, digits = 3) => (v === null || v === undefined ? "–" : formatNumber(v, digits));
   const withErrors = Boolean(errors);
+  // Each cycle's solution in the picture (cycles.js): once the run is
+  // published, a cycle's number shows it; the last is the result itself.
+  const count = cycleCount(result);
+  const chosen = chosenCycle(result) ?? count;
+  const pick = (cycle) => chooseCycle(result, cycle === count ? null : cycle);
+  const cycleCell = (r) =>
+    count > 0
+      ? h(
+          "button",
+          {
+            type: "button",
+            class: "link cycle-pick",
+            "aria-pressed": String(r.cycle === chosen),
+            title: r.cycle === chosen ? `The picture shows cycle ${r.cycle}` : `Show cycle ${r.cycle}'s solution on its mesh in the picture`,
+            onclick: () => pick(r.cycle),
+          },
+          String(r.cycle),
+        )
+      : String(r.cycle);
+  const shownLine =
+    count > 0
+      ? h(
+          "p",
+          { class: "note cycle-shown", role: "status" },
+          chosen === count
+            ? "The picture shows the last cycle. Click a cycle's number (or a point of the chart) to see its solution on its mesh."
+            : [
+                `The picture shows cycle ${chosen} of ${count}${cycleLoading(result) ? " (loading…)" : ""}: its mesh and its solution, on the run's colour range. `,
+                h("button", { type: "button", class: "link", onclick: () => pick(count) }, "Show the last"),
+              ],
+        )
+      : null;
   const table = h(
     "table",
     { class: "data study-table cycles-table" },
@@ -349,8 +382,8 @@ function updateCycles(container) {
       rows.map((r) =>
         h(
           "tr",
-          {},
-          h("td", { class: "num", title: r.marked === null ? "The last cycle: nothing marked" : `${formatNumber(r.marked)} of ${formatNumber(r.triangles)} triangles marked` }, String(r.cycle)),
+          { class: count > 0 && r.cycle === chosen ? "shown-cycle" : null },
+          h("td", { class: "num", title: r.marked === null ? "The last cycle: nothing marked" : `${formatNumber(r.marked)} of ${formatNumber(r.triangles)} triangles marked` }, cycleCell(r)),
           h("td", { class: "num" }, formatNumber(r.nodes)),
           h("td", { class: "num" }, number(r.estimate)),
           h("td", { class: "num cycle-rate", dataset: { of: "estimate" } }, number(r.estimateRate, 2)),
@@ -375,15 +408,12 @@ function updateCycles(container) {
       "div",
       { class: "study-chart" },
       h("div", { class: "chart-title" }, "Against the number of nodes N (log–log)"),
-      h(
-        "div",
-        { class: "chart-key" },
-        series.map((s) => h("span", { class: "item" }, h("span", { class: `key-line ${s.cls}`, "aria-hidden": "true" }), s.name)),
-      ),
       lineChart({
+        key: true,
         times: nodes,
         series,
-        current: null,
+        current: count > 0 && plotted.some((r) => r.cycle === chosen) ? plotted.findIndex((r) => r.cycle === chosen) : null,
+        onPick: count > 0 ? (index) => pick(plotted[index].cycle) : null,
         log: true,
         xName: "N",
         width: Math.max(220, slot.clientWidth || 340),
@@ -402,6 +432,7 @@ function updateCycles(container) {
     slot,
     foldable(
       { id: "solve.cycles", title: "Adaptive cycles", kind: "section", extras: [info.button], info: info.panel, attributes: { class: "cycles" } },
+      shownLine,
       table,
       chart,
       withErrors ? null : h("p", { class: "note" }, "Compare with an exact solution to add each cycle's error."),
@@ -439,6 +470,19 @@ function differenceBox(kind) {
   );
 }
 
+// The case's exact solution (view.exact_solution; blank removes it).
+function setExact(value) {
+  editCase(
+    (c) => {
+      if (value.trim() === "") {
+        if (c.view) delete c.view.exact_solution;
+      } else (c.view ??= {}).exact_solution = value;
+    },
+    "edit",
+    { sections: ["view"] },
+  );
+}
+
 function compareSection(result) {
   const text = h("input", {
     type: "text",
@@ -448,17 +492,10 @@ function compareSection(result) {
     value: store.caseData.view?.exact_solution ?? "",
     placeholder: "for example exp(-t)*sin(pi*x)",
     "aria-label": "Exact solution",
-    oninput: (event) =>
-      editCase(
-        (c) => {
-          const value = event.target.value;
-          if (value.trim() === "") {
-            if (c.view) delete c.view.exact_solution;
-          } else (c.view ??= {}).exact_solution = value;
-        },
-        "edit",
-        { sections: ["view"] },
-      ),
+    oninput: (event) => {
+      setExact(event.target.value);
+      remove.hidden = event.target.value.trim() === "" && !currentComparison("exact");
+    },
     onkeydown: (event) => {
       if (event.key === "Enter") run();
     },
@@ -468,13 +505,31 @@ function compareSection(result) {
     if (value === "") return clearComparison("exact");
     return compareWith(value);
   };
+  // Forgets the exact solution: the expression leaves the case, and the
+  // errors leave the figures, the cycles' table and chart and the picture.
+  const remove = h(
+    "button",
+    {
+      type: "button",
+      class: "small",
+      title: "Remove the exact solution and its errors",
+      hidden: text.value.trim() === "" && !currentComparison("exact"),
+      onclick: () => {
+        text.value = "";
+        setExact("");
+        clearComparison("exact");
+        remove.hidden = true;
+      },
+    },
+    "Remove",
+  );
   const info = infoToggle(
     "The server evaluates the expression (in x, y, t and the parameters) with the library at every snapshot and compares it with u in double precision: the largest nodal error, its root mean square over the nodes, and the lumped L2 norm sqrt(Σ w_i d_i²) with w_i a third of the area of the triangles around node i.",
     "the comparison",
   );
   return foldable(
     { id: "solve.compare", title: "Compare with an exact solution", kind: "section", extras: [info.button], info: info.panel, attributes: { class: "comparison", dataset: { kind: "exact" } } },
-    h("div", { class: "field", dataset: { path: "exact" } }, h("div", { class: "row compare-line" }, text, actionButton("Compare", run, { small: true }))),
+    h("div", { class: "field", dataset: { path: "exact" } }, h("div", { class: "row compare-line" }, text, actionButton("Compare", run, { small: true }), remove)),
     h("div", { class: "compare-result" }),
     differenceBox("exact"),
     isTimeRun(result) ? h("div", { class: "compare-chart" }) : null,
@@ -602,6 +657,7 @@ function updateComparison(section, kind, result, frame, display) {
           ]
         : [{ name: `max ${label}`, cls: "s1", values: Array.from(c.linf) }];
     const chart = lineChart({
+      key: series.length > 1,
       times: result.times.slice(0, c.linf.length),
       series,
       current: frame,
@@ -611,15 +667,7 @@ function updateComparison(section, kind, result, frame, display) {
       csvName: kind === "exact" ? "error-per-snapshot.csv" : "reference-difference.csv",
     });
     chartSlot.chart = { comparison: c, done: c.done, chart };
-    const key =
-      series.length > 1
-        ? h(
-            "div",
-            { class: "chart-key" },
-            series.map((s) => h("span", { class: "item" }, h("span", { class: `key-line ${s.cls}`, "aria-hidden": "true" }), s.name)),
-          )
-        : null;
-    fill(chartSlot, h("div", { class: "chart-title" }, kind === "exact" ? "Error per snapshot" : `max ${label} per snapshot`), key, chart);
+    fill(chartSlot, h("div", { class: "chart-title" }, kind === "exact" ? "Error per snapshot" : `max ${label} per snapshot`), chart);
   } else chartSlot.chart.chart.setCurrent(frame);
 }
 
@@ -725,12 +773,8 @@ function updateStudy(container) {
       "div",
       { class: "study-chart" },
       h("div", { class: "chart-title" }, "Error against h (log–log)"),
-      h(
-        "div",
-        { class: "chart-key" },
-        series.map((s) => h("span", { class: "item" }, h("span", { class: `key-line ${s.cls}`, "aria-hidden": "true" }), s.name)),
-      ),
       lineChart({
+        key: true,
         times: hs,
         series,
         current: null,

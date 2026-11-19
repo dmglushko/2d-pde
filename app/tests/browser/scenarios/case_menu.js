@@ -19,12 +19,10 @@ export default async ({ d, w, q, qa, key, until, text, check }) => {
   item.focus();
   item.click();
   check("choosing an item closes the menu", menu.hidden);
-  await until(() => text(q("#toast")).includes("wave_square"), "the example");
+  await until(() => text(q("#case-name")).includes("wave_square"), "the example");
   // At phone width the name gives way (the bar is one row).
   if (q("#case-name").offsetParent) check("the case's name is on the menu button", /wave_square/.test(text(button)), text(button));
-  const toast = q("#toast").getBoundingClientRect();
-  const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-  const covered = [".viewer-main", ".viewer-extra", ".step-head"].filter((s) => q(s)?.offsetParent && overlaps(toast, q(s).getBoundingClientRect()));
-  check("the toast covers neither the picture nor the step's head", covered.length === 0, covered.join(", "));
+  // Opening a case shows no toast (it would only repeat the case's name).
+  check("opening an example shows no toast", !q("#toast").classList.contains("show"), text(q("#toast")));
   void w;
 };

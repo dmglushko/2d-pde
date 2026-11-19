@@ -846,6 +846,16 @@ test("the display: a difference only while its comparison is current", () => {
   assert.equal(failed.failure.retry, "difference");
 });
 
+test("the display: an earlier adaptive cycle names itself and draws no comparison", () => {
+  const solve = { data: solveData({ times: [0], when: "in cycle 2 of 5" }), fresh: true, frame: 0, snapshot: { values: u0, nearest: null, failure: null } };
+  const shown = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "cycle" } });
+  assert.equal(shown.kind, "solution", "u, never the last cycle's difference");
+  assert.equal(shown.label, "u in cycle 2 of 5");
+  assert.equal(shown.values, u0);
+  assert.equal(shown.difference.state, "cycle");
+  assert.match(shown.difference.note, /last cycle's/);
+});
+
 test("the display: an outdated result is marked, and draws no comparison", () => {
   const solve = { data: solveData(), fresh: false, frame: 0, snapshot: { values: u0, nearest: null, failure: null } };
   const shown = resolveDisplay({ colorBy: "field", source: "solve", difference: "exact", solve, comparison: { kind: "exact", state: "current", values: {} } });

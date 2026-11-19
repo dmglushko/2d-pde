@@ -3,7 +3,7 @@
 // and the case's mesh setting put back.
 export default async ({ example, q, qa, tab, type, click, button, panel, until, text, check }) => {
   example("l_shape_corner.json");
-  await until(() => text(q("#toast")).includes("l_shape_corner"), "the L-shape");
+  await until(() => text(q("#case-name")).includes("l_shape_corner"), "the L-shape");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   tab("mesh");
   type(q('input[data-path="mesh.spec.max_edge_length.relative"]'), "0.08");

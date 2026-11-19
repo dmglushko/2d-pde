@@ -40,5 +40,5 @@ export default async ({ d, q, tab, type, key, click, until, text, check }) => {
   check("a new case has nothing to undo", q("#undo").disabled);
   click(q("#restore-case"));
   await until(() => field()?.value === "-lap(u) = 123", "the previous case back");
-  check("Restore previous case brings the edited case back", text(q("#toast")).includes("Restored"), text(q("#toast")));
+  check("Restore previous case brings the edited case back", field()?.value === "-lap(u) = 123");
 };

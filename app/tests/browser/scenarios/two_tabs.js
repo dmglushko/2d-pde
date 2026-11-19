@@ -1,14 +1,14 @@
 // Two tabs are two clients: each keeps its own run on the server.
 export default async ({ example, q, select, click, until, text, check, openPage, pointer }) => {
   example("heat_annulus.json");
-  await until(() => text(q("#toast")).includes("heat_annulus"), "the heat case");
+  await until(() => text(q("#case-name")).includes("heat_annulus"), "the heat case");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   click(q("#run-all"));
   await until(() => text(q("#toast")).includes("up to date"), "Run all", 90000);
   const other = await openPage();
   const item = await until(() => other.q('[data-example="poisson_rectangle.json"]'), "the second page");
   item.dispatchEvent(new other.w.MouseEvent("click", { bubbles: true }));
-  await until(() => (other.q("#toast")?.textContent ?? "").includes("poisson_rectangle"), "the Poisson case in the second page");
+  await until(() => (other.q("#case-name")?.textContent ?? "").includes("poisson_rectangle"), "the Poisson case in the second page");
   await until(() => other.q("#geometry-summary .stats"), "its geometry");
   other.q("#run-all").dispatchEvent(new other.w.MouseEvent("click", { bubbles: true }));
   await until(() => (other.q("#toast")?.textContent ?? "").includes("up to date"), "Run all in the second page", 90000);

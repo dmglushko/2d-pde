@@ -5,7 +5,7 @@
 // can follow each snapshot; the Threads card is always there.
 export default async ({ w, d, q, qa, tab, click, example, select, type, until, idle, text, check, pixels }) => {
   example("wave_square.json");
-  await until(() => text(q("#toast")).includes("wave_square"), "the case");
+  await until(() => text(q("#case-name")).includes("wave_square"), "the case");
   click(q("#run-all"));
   await until(() => text(q("#toast")).includes("up to date"), "Run all", 90000);
   await idle();

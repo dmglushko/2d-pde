@@ -37,6 +37,9 @@ export const store = {
   fieldSource: "field",
   // The snapshot of the solution shown (an index into its times).
   solveFrame: 0,
+  // The adaptive cycle the picture shows ({data: the result, cycle: from
+  // 1}) instead of the result's last one, or null (cycles.js).
+  shownCycle: null,
   // True once the user moved the slider during the current run.
   solveFrameChosen: false,
   // True while a run being computed should play from its start as it

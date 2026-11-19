@@ -512,6 +512,35 @@ int main() {
                "one indicator per triangle");
          check(adaptive["mesh_stats"]["min_angle_degrees"].get<double>() > 20,
                "NVB keeps the angles");
+         // Every cycle's mesh under an id, its arrays served, and each
+         // cycle's values on its own mesh (/api/solve/cycle).
+         const Json &cycle_meshes = adaptive["cycle_meshes"];
+         check(cycle_meshes.size() == cycles.size(), "a mesh per cycle");
+         check(cycle_meshes[0]["id"] == mesh["mesh"]["id"] &&
+                   cycle_meshes.back()["id"] == last["id"],
+               "the first is the Mesh step's, the last the run's");
+         for (std::size_t k = 0; k < cycles.size(); ++k) {
+           const Json &summary = cycle_meshes[k];
+           check(summary["nodes"] == cycles[k]["nodes"],
+                 "cycle mesh " + std::to_string(k + 1));
+           check(k == 0 || summary["id"] != cycle_meshes[k - 1]["id"],
+                 "an id of its own");
+           Json arrays = Json::object();
+           arrays["mesh"] = summary["id"];
+           check(session.mesh_arrays(arrays).size() ==
+                     summary["arrays"]["bytes"].get<std::size_t>(),
+                 "cycle mesh arrays served");
+           check(session.cycle_values_float32(job, k + 1).size() ==
+                     4 * summary["nodes"].get<std::size_t>(),
+                 "a value per node of the cycle's mesh");
+         }
+         expect_stage_error(
+             [&] {
+               (void)session.cycle_values_float32(job, cycles.size() + 1);
+             },
+             "solve", "has no cycle");
+         expect_stage_error([&] { (void)session.cycle_values_float32(job, 0); },
+                            "solve", "has no cycle");
          // Against the exact solution: an error per cycle, falling about
          // like N^-1 in L2 (the rate of a smooth solution on uniform
          // meshes; uniform refinement gives N^(-2/3) here).

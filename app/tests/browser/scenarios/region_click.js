@@ -3,7 +3,7 @@
 // legend's region buttons do the same from the keyboard.
 export default async ({ example, w, q, tab, click, until, text, check, pointer }) => {
   example("poisson_rectangle.json");
-  await until(() => text(q("#toast")).includes("poisson_rectangle"), "the example");
+  await until(() => text(q("#case-name")).includes("poisson_rectangle"), "the example");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   tab("mesh");
   // The rectangle (2 × 1) is fitted at 0.88 of the picture: its left edge.

@@ -296,6 +296,33 @@
   gap: 6px;
 }
 
+/* A key whose names hide and show their lines (charts.js, key). */
+.chart-key .key-toggle {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 2px 4px;
+  margin: 0 -4px;
+  min-height: 0;
+  cursor: pointer;
+}
+
+.chart-key .key-toggle:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.chart-key .key-toggle[aria-pressed="false"] {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.chart-key .key-toggle[aria-pressed="false"] .key-line {
+  opacity: 0.3;
+}
+
 .chart-head {
   display: flex;
   align-items: center;
@@ -402,6 +429,18 @@
   color: var(--muted);
   font-size: 12.5px;
   margin-left: auto;
+}
+
+/* The picture's note takes the room left on the toolbar's row and never
+   a row of its own: a note that comes and goes (an outdated result) must
+   not move the picture. */
+.viewer-toolbar .status {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* --- probes and charts ------------------------------------------------- */
@@ -763,4 +802,21 @@
     font-size: 12px;
     padding: 0 2px;
   }
+}
+
+/* The adaptive cycle the picture shows (cycles.js): its row marked, each
+   cycle's number a button that shows it. */
+.cycles-table tr.shown-cycle td {
+  background: var(--surface-2);
+}
+
+.cycles-table .cycle-pick {
+  font-variant-numeric: tabular-nums;
+  min-width: 2.2em;
+  text-align: right;
+}
+
+.cycles-table .cycle-pick[aria-pressed="true"] {
+  color: var(--ink);
+  font-weight: 650;
 }

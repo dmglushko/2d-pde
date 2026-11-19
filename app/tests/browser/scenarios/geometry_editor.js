@@ -160,7 +160,7 @@ export default async ({ d, w, q, qa, tab, click, until, text, check, idle, key, 
   // A corner splits exactly there: the right side and the bottom merged
   // in a shape, split at their corner through the server.
   click(q("#new-case"));
-  await until(() => text(q("#toast")).includes("new case"), "a new case");
+  await until(() => text(q("#case-name")) === "" && q("#undo").disabled, "a new case");
   await idle();
   tab("geometry");
   await until(() => regions().length === 4, "the rectangle");

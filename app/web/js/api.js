@@ -192,6 +192,9 @@ export const api = {
   // An adaptive run's error indicators: a Float32Array, one per triangle
   // of its last mesh.
   indicators: async (job, count) => splitSnapshots(await requestBinary("/api/solve/indicators", { job }), 1, count)[0],
+  // An adaptive run's solution of cycle `cycle` (from 1): a Float32Array,
+  // one per node of that cycle's mesh.
+  cycleValues: async (job, cycle, nodes) => splitSnapshots(await requestBinary("/api/solve/cycle", { job, cycle }), 1, nodes)[0],
   problem: (caseData) => request("/api/problem", caseData),
   assemble: (caseData) => request("/api/assemble", caseData),
   field: (caseData, field) => request("/api/field", { case: caseData, field }),

@@ -3,7 +3,7 @@
 // solve, |∇u| and the line profile, zoom buttons.
 export default async ({ example, q, qa, tab, click, select, type, until, idle, text, check, pixels, pointer, panel, button }) => {
   example("poisson_rectangle.json");
-  await until(() => text(q("#toast")).includes("Opened"), "the example");
+  await until(() => text(q("#case-name")).includes("poisson_rectangle"), "the example");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   click(q("#run-all"));
   await until(() => text(q("#toast")).includes("up to date"), "Run all", 60000);

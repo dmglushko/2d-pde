@@ -5,6 +5,7 @@
 // comparison or a snapshot the others do not.
 
 import { comparisonState, comparisons, currentComparison, differenceState } from "./compare.js";
+import { cycleView } from "./cycles.js";
 import { fieldScale } from "./pure/color.js";
 import { formatNumber } from "./pure/format.js";
 import { resolveDisplay } from "./pure/display.js";
@@ -22,7 +23,8 @@ export function drawnSolve() {
   // the Mesh step still has the mesh it started from.
   const from = data.mesh ? data.start_mesh_id : data.mesh_id;
   if (!fresh && (!mesh || mesh.id !== from)) return null;
-  return { data, fresh: Boolean(fresh) };
+  // An earlier adaptive cycle chosen (cycles.js): its mesh and values.
+  return { data: cycleView(data) ?? data, fresh: Boolean(fresh) };
 }
 
 // The mesh the picture draws: an adaptive solution's own mesh (in time:
@@ -84,7 +86,8 @@ export function currentDisplay() {
   let comparison = null;
   if (drawn && store.fieldSource === "solve") {
     const frame = Math.max(0, Math.min(store.solveFrame, drawn.data.values.length - 1));
-    const state = kind && drawn.fresh ? comparisonState(kind) : "none";
+    // A comparison is the last cycle's: not drawn on an earlier one.
+    const state = kind && drawn.data.cycle ? "cycle" : kind && drawn.fresh ? comparisonState(kind) : "none";
     if (state === "current") {
       const c = currentComparison(kind);
       comparison = { kind, state, scale: c.scale, values: differenceState(kind, frame) };

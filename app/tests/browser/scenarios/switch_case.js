@@ -2,13 +2,13 @@
 // results.
 export default async ({ example, q, tab, panel, button, click, select, until, idle, text, check }) => {
   example("wave_square.json");
-  await until(() => text(q("#toast")).includes("wave_square"), "the wave case");
+  await until(() => text(q("#case-name")).includes("wave_square"), "the wave case");
   await until(() => q("#geometry-summary .stats"), "its geometry");
   tab("solve");
   click(button("Solve", panel("solve")));
   await until(() => /Solving|Running|Meshing/.test(text(q("#panel-solve .step-status"))) || q(".steps .dot.busy"), "the solve to start");
   example("poisson_rectangle.json");
-  await until(() => text(q("#toast")).includes("poisson_rectangle"), "the Poisson case");
+  await until(() => text(q("#case-name")).includes("poisson_rectangle"), "the Poisson case");
   // The server answers in order: once the new case's geometry is here
   // and nothing is in flight, the wave case's answers have come and gone.
   await until(() => q("#geometry-summary .stats") && !q(".steps .dot.busy"), "the Poisson geometry");

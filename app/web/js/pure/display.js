@@ -21,6 +21,7 @@ const NOT_SHOWN = {
   failed: (name) => `${name} could not be computed (see the Solve step).`,
   outdated: (name) => `${name} is for the previous expression: press Compare to update it.`,
   stale: (name) => `${name} is not shown on an outdated solution.`,
+  cycle: (name) => `${name} is the last cycle's: it is not shown on an earlier one.`,
 };
 
 // The time label of a snapshot.
@@ -30,10 +31,11 @@ const at = (t, format) => (Number.isFinite(t) ? `at t = ${format(t)}` : "");
 //   colorBy: "none" | "quality" | "field" | "gradient" | "indicator"
 //   source: "solve" | "field" (store.fieldSource)
 //   difference: null | "exact" | "reference" (what the user asked for)
-//   solve: null | {data, fresh, frame, snapshot: {values, nearest:
+//   solve: null | {data (its `when`, if any, replaces the time in the
+//     label: an earlier adaptive cycle's), fresh, frame, snapshot: {values, nearest:
 //     {index, values} | null, failure}} (failure: an error or null)
 //   comparison: null | {kind, state: "none" | "busy" | "failed" |
-//     "outdated" | "current", scale, values: {values, nearest: {index,
+//     "outdated" | "cycle" | "current", scale, values: {values, nearest: {index,
 //     values} | null, failure}}
 //   field: null | {data, fresh}
 //   format(t): the time as text
@@ -117,7 +119,7 @@ function solution(base, solve, difference, comparison, format, snapshotScale) {
     };
   }
   const pick = pickValues(solve.snapshot ?? {}, frame, data.times, format);
-  const when = pick.when ?? at(t, format);
+  const when = pick.when ?? data.when ?? at(t, format);
   // "This snapshot": the range of the snapshot whose values are drawn
   // (the nearest loaded one while the shown one loads).
   const own = snapshotScale && pick.values ? snapshotScale(pick.index) : null;

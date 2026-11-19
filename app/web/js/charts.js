@@ -31,9 +31,60 @@ function svg(tag, attributes = {}, ...children) {
 // positive); `csvName`: the file name of the data download (null: none);
 // `endLabels`: name the lines at their ends (several series; off where a
 // key beside the chart names them and the ends would collide).
+// `key`: a key above the chart naming every series, each name a toggle
+// that hides or shows its line (the axes then fit the lines shown; the CSV
+// keeps every series); what is hidden is remembered per `keyId` (default
+// `csvName`) while the page is open.
 // Returns the element; .setCurrent(index) moves the marker without
 // drawing the chart again.
-export function lineChart({
+export function lineChart(options) {
+  if (!options.key) return plainChart(options);
+  const id = options.keyId ?? options.csvName ?? options.label;
+  const hidden = hiddenSeries.get(id) ?? new Set();
+  hiddenSeries.set(id, hidden);
+  const outer = h("div", { class: "keyed-chart" });
+  const keyRow = h("div", { class: "chart-key", role: "group", "aria-label": "Lines shown" });
+  let inner = null;
+  let current = options.current;
+  const draw = () => {
+    const shown = options.series.filter((s) => !hidden.has(s.name));
+    keyRow.replaceChildren(
+      ...options.series.map((s) =>
+        h(
+          "button",
+          {
+            type: "button",
+            class: "item key-toggle",
+            "aria-pressed": String(!hidden.has(s.name)),
+            title: hidden.has(s.name) ? `Show ${s.name}` : `Hide ${s.name}`,
+            onclick: () => {
+              if (hidden.has(s.name)) hidden.delete(s.name);
+              else hidden.add(s.name);
+              draw();
+            },
+          },
+          h("span", { class: `key-line ${s.cls}`, "aria-hidden": "true" }),
+          s.name,
+        ),
+      ),
+    );
+    const next = plainChart({ ...options, current, series: shown, csvSeries: options.series, emptyText: "Every line is hidden: click a name above to show it." });
+    if (inner) inner.replaceWith(next);
+    else outer.append(keyRow, next);
+    inner = next;
+  };
+  draw();
+  outer.setCurrent = (index) => {
+    current = index;
+    inner.setCurrent(index);
+  };
+  return outer;
+}
+
+// The series hidden by a chart's key, per keyId.
+const hiddenSeries = new Map();
+
+function plainChart({
   times,
   series,
   current = 0,
@@ -46,6 +97,8 @@ export function lineChart({
   log = false,
   csvName = "chart.csv",
   endLabels = true,
+  csvSeries = series,
+  emptyText = "No values here.",
 }) {
   const margin = { left: 52, right: series.length > 1 ? 28 : 12, top: 8, bottom: 22 };
   const plotW = Math.max(40, width - margin.left - margin.right);
@@ -61,7 +114,7 @@ export function lineChart({
       }
   const wrap = h("div", { class: "chart" });
   if (low === Infinity || times.length === 0) {
-    wrap.append(h("p", { class: "note" }, "No values here."));
+    wrap.append(h("p", { class: "note" }, emptyText));
     wrap.setCurrent = () => {};
     return wrap;
   }
@@ -221,7 +274,7 @@ export function lineChart({
         type: "button",
         class: "link chart-download",
         title: "The numbers drawn in this chart, one row per point, in full precision",
-        onclick: () => saveBlob(new Blob([seriesCsv(xName, xs, series)], { type: "text/csv" }), csvName),
+        onclick: () => saveBlob(new Blob([seriesCsv(xName, xs, csvSeries)], { type: "text/csv" }), csvName),
       },
       "Download data (CSV)",
     );

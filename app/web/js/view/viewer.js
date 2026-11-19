@@ -274,7 +274,7 @@ export class Viewer {
       if ((colorBy === "gradient" || colorBy === "indicator") && this.gradientBuckets) layers.fillBuckets(this, mesh, this.gradientBuckets, tableOf(this.shownScale));
       ctx.globalAlpha = 1;
       if (colorBy === "gradient" && !this.gradients) note = "|∇| needs a value at every node";
-      if (colorBy === "indicator" && !this.indicatorLogs) note = "error indicators come from an adaptive solve";
+      if (colorBy === "indicator" && !this.indicatorLogs) note = "error indicators: only the last cycle of an adaptive solve has them";
     }
     if (hasMesh && shown.mesh) {
       const alpha = meshStale ? 0.35 : this.colouredByField() ? EDGES_OVER_FIELD : 1;

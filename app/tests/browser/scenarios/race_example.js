@@ -5,7 +5,7 @@ export default async ({ example, q, tab, select, click, type, until, idle, text,
   click(q("#new-case"));
   await idle();
   await until(() => q("#geometry-summary .stats"), "the geometry");
-  check("the new case stays", text(q("#toast")).includes("Started a new case"), text(q("#toast")));
+  check("the new case stays", text(q("#case-name")) === "", text(q("#case-name")));
   check("the example did not replace it", q("#save-case").title === "Save as case.json", q("#save-case").title);
   check("the previous case can be restored", !q("#restore-case").hidden);
 

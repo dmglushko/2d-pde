@@ -505,7 +505,46 @@ function updateInvalid() {
   runAllButton.title = reason ? `Blocked: ${reason}` : "Geometry, mesh, assembly and solve, each only when it is not up to date";
 }
 
+// The control the user just used keeps its place on the screen while the
+// panels change around it: a result that goes outdated drops sections
+// above the settings, and a choice must not jump away under the pointer.
+// The panel may be rebuilt, so the control is found again by its id, its
+// name (a radio group, by position) or its field's case path.
+function placeOf(element) {
+  if (element.id) return { element, find: (root) => root.querySelector(`#${CSS.escape(element.id)}`) };
+  if (element.name) {
+    const selector = `[name="${CSS.escape(element.name)}"]`;
+    const index = [...document.querySelectorAll(selector)].indexOf(element);
+    return { element, find: (root) => root.querySelectorAll(selector)[index] ?? null };
+  }
+  const field = element.closest("[data-path]");
+  if (!field) return null;
+  const selector = `[data-path="${CSS.escape(field.dataset.path)}"]`;
+  return { element: field, find: (root) => root.querySelector(selector) };
+}
+
+function keepingPlace(update) {
+  const scroller = document.querySelector(".panels");
+  const active = document.activeElement;
+  const place = scroller && active && active !== document.body && scroller.contains(active) ? placeOf(active) : null;
+  if (!place) return update();
+  const before = place.element.getBoundingClientRect().top;
+  try {
+    return update();
+  } finally {
+    const now = place.element.isConnected ? place.element : place.find(scroller);
+    if (now?.offsetParent) {
+      const moved = now.getBoundingClientRect().top - before;
+      if (Math.abs(moved) >= 1) scroller.scrollTop += moved;
+    }
+  }
+}
+
 function refresh(reason) {
+  keepingPlace(() => refreshNow(reason));
+}
+
+function refreshNow(reason) {
   if (reason === "history") return updateHistoryButtons();
   if (reason === "invalid") return updateInvalid();
   if (reason === "frame" || reason === "probes") {
@@ -557,7 +596,7 @@ function refresh(reason) {
 // A case read from a file or an example replaces the current one; every
 // result is dropped. `name` is the file name it is saved under. The case
 // it replaced can be restored until the next replacement.
-function loadCase(input, { name = "case.json", dirty = false, offerRestore = true, message = null } = {}) {
+function loadCase(input, { name = "case.json", dirty = false, offerRestore = true } = {}) {
   let normalized;
   try {
     normalized = normalizeCase(input, store.catalog.default_case);
@@ -573,9 +612,7 @@ function loadCase(input, { name = "case.json", dirty = false, offerRestore = tru
   // and the case stays as saved (or not) as it was.
   setCase(normalized.caseData, { name, dirty });
   runStage("geometry");
-  const text = message ?? `Opened ${name}.`;
-  if (offerRestore && replaced) toast(`${text} The previous case can be restored from the top bar.`, { action: { label: "Restore it", run: restorePrevious } });
-  else if (message) toast(message);
+  // No toast: the case's name is in the top bar, and so is Restore.
   return true;
 }
 
@@ -585,14 +622,14 @@ function restorePrevious() {
   const back = store.previousCase;
   if (!back) return;
   requestTicket("open");
-  loadCase(back.caseData, { name: back.name, dirty: back.dirty, message: `Restored ${back.name}.` });
+  loadCase(back.caseData, { name: back.name, dirty: back.dirty });
 }
 
 // Every way to replace the case takes an "open" ticket: an example or a
 // file still loading never replaces a case opened or started meanwhile.
 function newCase() {
   requestTicket("open");
-  loadCase(structuredClone(store.catalog.default_case), { message: "Started a new case." });
+  loadCase(structuredClone(store.catalog.default_case));
 }
 
 function saveCase() {
