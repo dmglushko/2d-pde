@@ -778,6 +778,17 @@ int main() {
          case_json["mesh"]["spec"]["max_edge_length"]["relative"] = 0.02;
          const Json result = session.mesh(case_json);
          check(result["target_met"].get<bool>(), "refined to the target");
+         // The remesher's plan is a note, not a warning.
+         const Json &pipeline = result["reports"][0];
+         check(pipeline["stage"] == "pipeline", pipeline.dump());
+         check(
+             pipeline["notes"].size() == 1 &&
+                 pipeline["notes"][0].get<std::string>().starts_with("plan: "),
+             "the plan is a note: " + pipeline.dump());
+         for (const Json &report : result["reports"])
+           for (const Json &message : report["messages"])
+             check(!message.get<std::string>().starts_with("plan: "),
+                   "no plan among the warnings: " + report.dump());
          expect_stage_error(
              [&] { (void)session.export_file(case_json, "geometry.svg"); },
              "export", "no curve geometry");

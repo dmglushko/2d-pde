@@ -2,8 +2,8 @@
 // condition per region and the initial conditions. The equation and each
 // condition are one line ("u_t - div(k*grad(u)) = 0", read by the
 // library) or, switched, their coefficients. Every edit is checked by the
-// server at once; errors, the coefficients a line means and what each
-// coefficient depends on are shown under the fields.
+// server at once; errors and what each coefficient depends on are shown
+// under the fields.
 
 import { applyPreset, scheduleProblemCheck, toast } from "../actions.js";
 import { isLine, renameParameter, visibleCoefficients } from "../pure/case_model.js";
@@ -167,7 +167,6 @@ function lineField(object, path, { label, placeholder }) {
     "div",
     { class: "line-field field", dataset: { path: `${path}.text`, line: path } },
     h("div", { class: "line-row" }, input, symbolBar(input)),
-    h("div", { class: "derived", dataset: { derivedOf: path }, "aria-live": "polite" }),
   );
 }
 
@@ -418,17 +417,6 @@ function summaryChips(check) {
   );
 }
 
-// The coefficients a line means, as "a_xx = -k" chips in the catalog's
-// order (powers as ^, as typed; the library prints **).
-function derivedChips(fields, coefficients) {
-  const named = fields.filter((f) => coefficients?.[f.name] !== undefined);
-  if (named.length === 0) return [h("span", { class: "note" }, "no coefficient")];
-  return [
-    h("span", { class: "derived-label" }, "means"),
-    named.map((f) => h("span", { class: "chip coefficient", title: f.term ? `× ${f.term}` : "right side" }, `${f.name} = ${coefficients[f.name].replaceAll("**", "^")}`)),
-  ];
-}
-
 export const problemPanel = {
   build(container) {
     panelElement = container;
@@ -455,7 +443,6 @@ export const problemPanel = {
   update(container, force = false) {
     const summary = container.querySelector("#problem-summary");
     if (!summary) return;
-    const catalog = store.catalog.problem;
     const fresh = freshResult("problem");
     const check = fresh ?? lastResult("problem");
     const error = currentError("problem");
@@ -488,16 +475,6 @@ export const problemPanel = {
       }
       const facts = cell.querySelector(":scope > .facts");
       if (facts) fill(facts, ...(errors.has(path) ? [] : factChips(check?.facts?.[path])));
-      // A line: what it means, from the last check that read it (kept,
-      // muted, while it has an error or is being typed).
-      const derived = cell.querySelector(":scope > .derived");
-      if (derived) {
-        const form = check?.forms?.[cell.dataset.line];
-        const fields = cell.dataset.line === "problem.equation" ? catalog.equation_fields : catalog.condition_fields;
-        if (form) fill(derived, ...derivedChips(fields, form.coefficients));
-        derived.hidden = shownError || derived.childElementCount === 0;
-        derived.classList.toggle("stale", !form);
-      }
     }
     for (const chip of container.querySelectorAll("[data-kind-of]")) {
       const conditions = check?.conditions ?? {};

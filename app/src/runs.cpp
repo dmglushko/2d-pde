@@ -53,15 +53,17 @@ void release(std::vector<double> &values) {
 }
 
 // The warnings of reports that are not published themselves (earlier
-// cycles, earlier pieces), each once, prefixed with where they came from,
-// added to `into`'s messages.
+// cycles, earlier pieces; not the remesher's plan), each once, prefixed with
+// where they came from, added to `into`'s messages.
 void gather_messages(mesh::StageReport &into,
                      std::span<const mesh::StageReport> reports,
                      const std::string &where) {
   for (const mesh::StageReport &report : reports)
-    for (const std::string &message : report.messages) {
+    for (std::size_t i = 0; i < report.messages.size(); ++i) {
+      if (is_plan_message(report, i))
+        continue;
       std::string line =
-          std::format("{}, {}: {}", where, report.stage, message);
+          std::format("{}, {}: {}", where, report.stage, report.messages[i]);
       if (std::ranges::find(into.messages, line) == into.messages.end())
         into.messages.push_back(std::move(line));
     }
@@ -84,7 +86,7 @@ void publish_snapshot(Run::Published &out, solve::Solution solution) {
       std::make_shared<const solve::Solution>(std::move(solution)));
 }
 
-constexpr std::array<MetricRule, 18> metric_rules{{
+constexpr std::array<MetricRule, 21> metric_rules{{
     {"t0", Combine::first},
     {"t1", Combine::last},
     {"t_end", Combine::last},
@@ -103,6 +105,9 @@ constexpr std::array<MetricRule, 18> metric_rules{{
     {"linear_threads", Combine::max},
     {"max_backward_error", Combine::max},
     {"min_pivot_ratio", Combine::min_measured},
+    {"assembly_seconds", Combine::sum},
+    {"prepare_seconds", Combine::sum},
+    {"solve_seconds", Combine::sum},
 }};
 
 // The run's sections, for provenance.

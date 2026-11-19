@@ -36,10 +36,14 @@
 
 /* --- layout ------------------------------------------------------------- */
 
+/* One row as tall as the window below the top bar: each column scrolls
+   on its own and the page itself never does (an auto row would grow to
+   the sidebar's content and let the page scroll below the interface). */
 .layout {
   flex: 1;
   display: grid;
   grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -147,9 +151,13 @@
   }
 }
 
+/* A scrolling column holds what is placed absolutely inside it (hidden
+   radios, visually hidden text): otherwise such an element is placed
+   against the page and stretches it below the interface. */
 .panels {
   flex: 1;
   overflow-y: auto;
+  position: relative;
 }
 
 .panel {

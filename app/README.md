@@ -74,8 +74,11 @@ number (`-`, `1e`, `0,05`) changes nothing: it says what the case still
 has, every step's head names it with a link to it, and Solve, Mesh,
 Assemble and Run all wait until it is fixed (Save warns that the file
 gets the previous value). A warning chip at the top of a result shows how
-many messages its reports hold and the first one; click it to open the
-reports.
+many warnings its reports hold and the first one; click it to open the
+reports. Each report (a row with ▸) opens to its warnings, notes such as
+the mesher's plan (which components ran where; not a warning), where its
+time went (the run's integrator: assembly, the linear solver's prepares
+and solves, and the rest) and its figures.
 
 **Undo and redo** (in the **Case** menu of the top bar, or Ctrl+Z and
 Ctrl+Shift+Z or Ctrl+Y) take back and redo edits of the case, up to 100;
@@ -142,12 +145,11 @@ field, Ctrl+Z undoes the whole edit of the field.
    caret); u and its derivatives u_x, u_y, u_xx, u_xy, u_yy, u_t, u_tt,
    grad, div, lap and dot, vectors `(a, b)` and matrices
    `[[a, b], [c, d]]`, with coefficients in x, y, t and named parameters.
-   Under the line, "means" shows the coefficients the library read from
-   it (`a_xx = -k`, `b_x = …`); an error shows there once you pause
-   typing. Each boundary condition is a line too (`u = 0`, `u_n = 0`,
-   `k*u_n + h*u = h*u_out`, `(k ∇u)·n = q`: n is the outward normal, tau
+   An error shows under the line once you pause typing. Each boundary
+   condition is a line too (`u = 0`, `u_n = 0`, `k*u_n + h*u = h*u_out`, `(k ∇u)·n = q`: n is the outward normal, tau
    the tangent). **Coefficients** switches a line to the coefficient form
-   (a_xx u_xx + … = f) and **As a line** back; there each form shows the
+   (a_xx u_xx + … = f, what the library read from the line) and **As a
+   line** back; there each form shows the
    coefficients in use and the right side, and **Show all coefficients**
    reveals the others. **Preset…** fills in a whole problem for the current
    geometry with matching solve settings (**Use a preset…** in the step's head): Poisson, Laplace with u = x,

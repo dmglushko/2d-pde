@@ -275,6 +275,17 @@ void counts_prepares() {
   check(wave_solver->count() == 2, "and one mass matrix");
   check(wave.report.metrics.at("assemblies") == 11,
         "Newmark's start reads the whole problem at t0: 11 assemblies");
+  // Where the time went: three parts of the report's time (these methods
+  // solve on one thread, so the parts do not overlap).
+  for (const auto *r : {&result.report, &wave.report}) {
+    const double assembly = r->metrics.at("assembly_seconds");
+    const double prepare = r->metrics.at("prepare_seconds");
+    const double solve = r->metrics.at("solve_seconds");
+    check(assembly > 0.0 && prepare > 0.0 && solve > 0.0,
+          "every part took some time");
+    check(assembly + prepare + solve <= r->time.count(),
+          "the parts fit in the report's time");
+  }
 }
 
 void refuses_time_orders() {

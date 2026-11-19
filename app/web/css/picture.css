@@ -8,6 +8,11 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* A window too short for the picture's least height and its bars:
+     the column scrolls, not the page (and holds what is placed
+     absolutely inside it, as .panels does). */
+  overflow-y: auto;
+  position: relative;
 }
 
 .viewer-main {
@@ -366,6 +371,7 @@
 /* --- probes and charts ------------------------------------------------- */
 
 .viewer-extra {
+  position: relative;
   border-top: 1px solid var(--hairline);
   background: var(--surface);
   padding: 8px 12px 10px;

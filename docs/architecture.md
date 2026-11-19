@@ -1848,7 +1848,9 @@ its declarations.
   prepares, snapshots, assembly_threads, linear_threads,
   max_backward_error, min_pivot_ratio: the worst of every solve of the
   call, `start()`'s included, from the logging wrapper, not from
-  `StepSolveInfo`; min_pivot_ratio is 0 when nothing measured it), whose
+  `StepSolveInfo`; min_pivot_ratio is 0 when nothing measured it;
+  assembly_seconds, prepare_seconds, solve_seconds: where the time went,
+  the last two timed by the logging wrapper), whose
   messages
   are the linear solver's warnings of every solve of the call (also of
   `start()`), each distinct one once, in the order they were added
