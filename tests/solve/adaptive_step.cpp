@@ -301,11 +301,10 @@ void method_declarations() {
   check(euler.error_estimate(2)->order == 1 &&
             euler.error_estimate(2)->previous_steps == 0,
         "Euler at order 2: p = 1, no earlier step");
-  check(midpoint.error_estimate(1)->order == 2 &&
-            midpoint.error_estimate(1)->previous_steps == 2 &&
-            midpoint.error_estimate(2)->order == 2 &&
+  check(!midpoint.error_estimate(1), "midpoint: none at time order 1");
+  check(midpoint.error_estimate(2)->order == 2 &&
             midpoint.error_estimate(2)->previous_steps == 1,
-        "midpoint: p = 2, two earlier steps at order 1, one at order 2");
+        "midpoint at order 2: p = 2, one earlier step");
   check(newmark.error_estimate(2)->order == 2 &&
             newmark.error_estimate(2)->previous_steps == 0,
         "Newmark: p = 2, no earlier step");
@@ -320,20 +319,6 @@ void method_declarations() {
     const double d1 = (u(1.5) - u(1.2)) / 0.3, d0 = (u(1.2) - u(1.0)) / 0.2;
     near(euler.local_error(before, after, 0.3, previous)[0],
          0.5 * 0.3 * (d1 - d0), 1e-14, "Euler: dt (d1 - d0) / 2");
-  }
-  // Midpoint: the times 1, 1.1, 1.3, 1.6; U[...] of t^3 is 1.
-  {
-    const TimeState before{.values = {u(1.3)}}, after{.values = {u(1.6)}};
-    const std::vector<PreviousStep> previous{{.values = {u(1.0)}, .dt = 0.1},
-                                             {.values = {u(1.1)}, .dt = 0.2}};
-    near(midpoint.local_error(before, after, 0.3, previous)[0],
-         0.3 * 0.3 * 0.3 / 2.0, 1e-12, "midpoint: dt^3 / 12 * 6 U[...]");
-    expect_throws<std::invalid_argument>(
-        [&] {
-          (void)midpoint.local_error(before, after, 0.3,
-                                     std::span(previous).subspan(1));
-        },
-        "earlier steps");
   }
   // Euler at order 2 and Newmark from the velocities and accelerations.
   {
@@ -389,6 +374,15 @@ void refuses_methods_without_an_estimate() {
             .integrate(meshed(steady), 0.0, 1.0);
       },
       "implicit_euler declares no local error estimate at time order 0");
+  // The midpoint method at time order 1 (review finding: its estimate
+  // from the states missed the error of averaging the state).
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)adaptive(std::make_shared<ImplicitMidpoint>(),
+                       {.initial_dt = 0.01})
+            .integrate(problem, 0.0, 1.0);
+      },
+      "implicit_midpoint declares no local error estimate at time order 1");
   // A fixed step needs none.
   check(fixed(std::make_shared<NoEstimate>(), 0.1)
                 .integrate(problem, 0.0, 1.0)
@@ -401,15 +395,14 @@ void refuses_methods_without_an_estimate() {
 // The achieved error follows the tolerance. The controller bounds the
 // error per step (not per unit step), so the global error behaves like
 // tol^(p / (p + 1)) (Hairer, Norsett and Wanner, II.4): about 10^(1/2) =
-// 3.2 times smaller per tenfold tolerance for implicit Euler, 10^(2/3) =
-// 4.6 for the midpoint method; checked with 70 % of that.
+// 3.2 times smaller per tenfold tolerance for implicit Euler (the only
+// method with an estimate at time order 1); checked with 70 % of that.
 void error_follows_the_tolerance() {
   const Profile profile = front();
   const auto problem = meshed(heat(profile));
   const std::vector<double> samples = sample_times(1.0, 40);
   for (const auto &method : std::vector<std::shared_ptr<const TimeMethod>>{
-           std::make_shared<ImplicitEuler>(),
-           std::make_shared<ImplicitMidpoint>()}) {
+           std::make_shared<ImplicitEuler>()}) {
     std::vector<double> errors, steps;
     const double order = method->error_estimate(1)->order;
     const double ratio = 0.7 * std::pow(10.0, order / (order + 1.0));
@@ -440,8 +433,7 @@ void rejects_at_the_front_and_grows_after() {
   const auto problem = meshed(heat(profile));
   const std::vector<double> snapshots{0.25, 0.5, 0.75};
   for (const auto &method : std::vector<std::shared_ptr<const TimeMethod>>{
-           std::make_shared<ImplicitEuler>(),
-           std::make_shared<ImplicitMidpoint>()}) {
+           std::make_shared<ImplicitEuler>()}) {
     const auto r =
         adaptive(method, {.initial_dt = 0.01, .atol = 1e-6, .rtol = 1e-3})
             .integrate(
@@ -498,7 +490,7 @@ void rejects_at_the_front_and_grows_after() {
 void grows_when_smooth() {
   const Profile profile = decay();
   const auto problem = meshed(heat(profile));
-  const auto r = adaptive(std::make_shared<ImplicitMidpoint>(),
+  const auto r = adaptive(std::make_shared<ImplicitEuler>(),
                           {.initial_dt = 1e-3, .atol = 1e-6, .rtol = 1e-4})
                      .integrate(problem, 0.0, 3.0, {.keep_step_history = true});
   const auto &h = r.history;
@@ -521,8 +513,7 @@ void continues_with_the_anchor() {
   const Profile profile = front();
   const auto problem = meshed(heat(profile));
   for (const auto &method : std::vector<std::shared_ptr<const TimeMethod>>{
-           std::make_shared<ImplicitEuler>(),
-           std::make_shared<ImplicitMidpoint>()}) {
+           std::make_shared<ImplicitEuler>()}) {
     const Integrator integrator =
         adaptive(method, {.initial_dt = 0.01, .atol = 1e-6, .rtol = 1e-3});
     const IntegrationOutput history{.keep_step_history = true};
@@ -828,7 +819,6 @@ void estimates_without_free_unknowns() {
   const std::vector<Case> cases{
       {std::make_shared<ImplicitEuler>(), heat(decay())},
       {std::make_shared<ImplicitEuler>(), wave_equation(wave())},
-      {std::make_shared<ImplicitMidpoint>(), heat(decay())},
       {std::make_shared<ImplicitMidpoint>(), wave_equation(wave())},
       {std::make_shared<Newmark>(), wave_equation(wave())}};
   for (const Case &c : cases) {
@@ -900,10 +890,10 @@ void wave_with_newmark() {
 // The fixed step is the largest of t1 / (4 m) whose error is at most the
 // adaptive run's. The adaptive runs have max_dt = t1 / 20: an
 // estimate is made from the values a method computed, so a step long
-// enough to jump over the onset of the front (the midpoint rule samples
-// the load only at the middle of the step) is not seen as wrong (without
-// the bound, the midpoint run at rtol 1e-4 steps from 0.25 to 0.46 with
-// an error norm of 0.23 and ends 0.17 wrong at t = 0.5). Where the solution has
+// enough to jump over the onset of the front is not seen as wrong (a
+// midpoint run, when it had an estimate at time order 1, stepped from
+// 0.25 to 0.46 with an error norm of 0.23 and ended 0.17 wrong at
+// t = 0.5). Where the solution has
 // a fast phase (a front, a steep step in a wave) the adaptive run needs fewer
 // steps; on a smooth oscillation it does not, and it prepares the linear solver
 // far more often than a fixed step (once).
@@ -917,8 +907,6 @@ void cost_against_a_fixed_step() {
     bool adaptive_wins;
   };
   const std::vector<Case> cases{
-      {"heat (front), midpoint", meshed(heat(front())), front(),
-       std::make_shared<ImplicitMidpoint>(), 1.0, 1e-4, true},
       {"heat (front), Euler", meshed(heat(front())), front(),
        std::make_shared<ImplicitEuler>(), 1.0, 1e-3, true},
       {"wave (oscillation, mild step), Newmark",

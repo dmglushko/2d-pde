@@ -1470,10 +1470,10 @@ adaptive_steps(std::shared_ptr<const solve::TimeMethod> method,
 void adaptive_steps_across_pieces() {
   const auto problem = std::make_shared<const fem::MeshedProblem>(
       unit_square_mesh(0.2), bump_problem());
+  // Implicit Euler: the only method with an estimate at time order 1.
   for (const auto &method :
        std::vector<std::shared_ptr<const solve::TimeMethod>>{
-           std::make_shared<solve::ImplicitEuler>(),
-           std::make_shared<solve::ImplicitMidpoint>()}) {
+           std::make_shared<solve::ImplicitEuler>()}) {
     const auto stepper = adaptive_steps(
         method, {.initial_dt = 1e-3, .atol = 1e-6, .rtol = 1e-3});
     const auto whole =
@@ -1573,7 +1573,7 @@ void damping_method_needs_an_estimate() {
   expect_throws<std::invalid_argument>(
       [&] {
         (void)AdaptiveIntegrator(
-            adaptive_steps(std::make_shared<solve::ImplicitMidpoint>(),
+            adaptive_steps(std::make_shared<solve::ImplicitEuler>(),
                            {.initial_dt = 0.01}),
             {recorder},
             {.damping_steps = 2,

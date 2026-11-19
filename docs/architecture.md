@@ -1693,11 +1693,16 @@ unknown) from states it already has, with no solve:
 | --- | --- | --- | --- | --- |
 | `ImplicitEuler` | 1 | 1 | 1 | dt²/2 u″, u″ = (d₁ − d₀)/dt, dᵢ the quotients of this step and the one before (Euler's quotients are the rates at the steps' ends, dt apart whatever dt₋₁ is): dt (d₁ − d₀)/2 |
 | `ImplicitEuler` | 2 | 1 | 0 | dt/2 (V₁ − V₀) |
-| `ImplicitMidpoint` | 1 | 2 | 2 | dt³/12 u‴ (the trapezoidal rule's term), u‴ = 6 U[t₋₂, t₋₁, t₀, t₁], the third divided difference of the values at the ends of the last three steps: dt³/2 U[…] |
 | `ImplicitMidpoint` | 2 | 2 | 1 | dt³/12 u‴ (U is the trapezoidal rule of V), u‴ = V″ = 2 V[t₋₁, t₀, t₁] from the velocities at the three step ends, V₋₁ the one stored with the earlier step (`PreviousStep::velocities`, whichever method took it): with a₁ = (V₁ − V₀)/dt, a₀ = (V₀ − V₋₁)/dt₋₁, dt³(a₁ − a₀)/(6(dt + dt₋₁)) |
 | `Newmark` | 2 | 2 | 0 | Zienkiewicz–Xie (1991): dt²(β − 1/6)(W₁ − W₀) = dt²/12 (W₁ − W₀) |
 
-`ImplicitEuler` declares none at time order 0 (no time error). Without
+`ImplicitEuler` declares none at time order 0 (no time error), and
+`ImplicitMidpoint` none at time order 1: besides dt³/12 u‴ its step has the
+error of averaging the state, dt³/8 times the problem's rate times u″, which
+no estimate from the computed states can see (with u′ = −20u + 2t + 20t²
+and dt = 0.1 the states are exactly those of u′ = 2t, whose steps have no
+error); an estimate from the step's residual, at one more solve a step, is
+issue #44. Without
 free unknowns (every node a Dirichlet node) every estimate is empty
 (norm 0). A step with
 fewer earlier steps than declared (the first steps of a run, of a piece
@@ -1760,7 +1765,6 @@ largest fixed step t1/(4m) at least as accurate):
 
 | Problem, method | Adaptive: error, steps (rejected), prepares | Fixed: dt, error, steps, prepares |
 | --- | --- | --- |
-| heat, front g = tanh(40(t − ½)), midpoint, rtol 1e-4 | 0.0025, 93 (19), 40 | 1/264, 0.0023, 264, 1 |
 | heat, the same front, implicit Euler, rtol 1e-3 | 0.049, 135 (20), 40 | 1/860, 0.047, 860, 1 |
 | wave, g = cos 2πt + ½ tanh(20(t − 1)), Newmark, rtol 1e-4 | 0.021, 187 (45), 71 | 1/84, 0.019, 168, 1 |
 | wave, the same with tanh(400(t − 1)), Newmark, rtol 1e-4 | 0.013, 219 (60), 96 | 1/518, 0.0066, 1036, 1 |
@@ -2319,8 +2323,9 @@ flowchart LR
   "every n steps" counts accepted steps. After a transfer the next piece
   gets an anchor at t with only `next_dt` (the dt the controller proposed
   on the old mesh; a new stretch, no earlier steps, which are on the old
-  mesh), so its first steps (one for implicit Euler at time order 1, two
-  for the midpoint method) have no estimate and keep that dt. The damping
+  mesh), so its first steps (one for implicit Euler at time order 1 and
+  for the midpoint method at time order 2) have no estimate and keep that
+  dt. The damping
   method must declare an error estimate too (`std::invalid_argument`
   before the first step). The report adds `rejected_steps`.
 - **State**: the piece's `final` and its `IntegrationResult::anchor`,

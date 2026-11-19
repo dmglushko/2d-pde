@@ -205,21 +205,21 @@ int main() {
       {"error-controlled steps: chunks continue the step anchor, so the "
        "snapshots are the same bit for bit",
        [] {
-         for (const std::string method :
-              {"implicit_euler", "implicit_midpoint"}) {
-           Json case_json = heat_case(method);
+         // The midpoint method has an estimate at time order 2 only.
+         Json heat = heat_case("implicit_euler");
+         heat["solve"]["time"]["step"] = {
+             {"type", "adaptive_step"},
+             {"options", {{"initial_dt", 0.01}, {"rtol", 1e-3}}}};
+         check_identical(chunked(heat), single(heat),
+                         "implicit_euler with adaptive steps");
+         for (const std::string method : {"newmark", "implicit_midpoint"}) {
+           Json case_json = wave_case(method);
            case_json["solve"]["time"]["step"] = {
                {"type", "adaptive_step"},
-               {"options", {{"initial_dt", 0.01}, {"rtol", 1e-3}}}};
+               {"options", {{"initial_dt", 0.01}, {"max_dt", 0.05}}}};
            check_identical(chunked(case_json), single(case_json),
                            method + " with adaptive steps");
          }
-         Json case_json = wave_case("newmark");
-         case_json["solve"]["time"]["step"] = {
-             {"type", "adaptive_step"},
-             {"options", {{"initial_dt", 0.01}, {"max_dt", 0.05}}}};
-         check_identical(chunked(case_json), single(case_json),
-                         "newmark with adaptive steps");
        }},
       {"Newmark: chunks continue from the carried acceleration, so the "
        "snapshots are the same bit for bit",

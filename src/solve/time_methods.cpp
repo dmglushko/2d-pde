@@ -65,17 +65,6 @@ void check_previous(const std::string &method,
   }
 }
 
-// Entry by entry, Newton's divided difference U[s0, ..., sk] of the values
-// at the increasing points s (one vector per point).
-std::vector<double> divided_difference(std::vector<std::vector<double>> table,
-                                       const std::vector<double> &s) {
-  for (std::size_t level = 1; level < s.size(); ++level)
-    for (std::size_t j = 0; j + level < s.size(); ++j)
-      for (std::size_t i = 0; i < table[j].size(); ++i)
-        table[j][i] = (table[j + 1][i] - table[j][i]) / (s[j + level] - s[j]);
-  return std::move(table[0]);
-}
-
 StepSolveInfo info(const LinearSolveResult &solved) {
   return {.linear_iterations = solved.iterations,
           .residual = solved.residual,
@@ -220,10 +209,12 @@ StepSolveInfo ImplicitMidpoint::advance(const fem::AssembledProblem &problem,
 
 std::optional<ErrorEstimateDeclaration>
 ImplicitMidpoint::error_estimate(int time_order) const {
-  // Time order 1 from the values of the last three steps, time order 2
-  // from the velocities, which need one earlier step.
-  if (time_order == 1)
-    return ErrorEstimateDeclaration{.order = 2, .previous_steps = 2};
+  // Time order 2 from the velocities, which need one earlier step. Time
+  // order 1 has none: an estimate from the computed states cannot see the
+  // error of averaging the state (h^3 / 8 times the problem's rate times
+  // u''), since two problems can give the same states, one with that error
+  // and one without (decided 2026-11-19; an estimate from the step's
+  // residual is issue #44).
   if (time_order == 2)
     return ErrorEstimateDeclaration{.order = 2, .previous_steps = 1};
   return std::nullopt;
@@ -262,19 +253,8 @@ ImplicitMidpoint::local_error(const TimeState &before, const TimeState &after,
     }
     return error;
   }
-  // Time order 1: dt^3 / 12 u''' with u''' = 6 U[s0, s1, s2, s3], the
-  // points the ends of the two earlier steps and of this one, placed by
-  // the steps' lengths.
-  check_previous(name(), previous, 2, n);
-  const double s1 = previous[0].dt;
-  const double s2 = s1 + previous[1].dt;
-  const double s3 = s2 + dt;
-  std::vector<double> error = divided_difference(
-      {previous[0].values, previous[1].values, before.values, after.values},
-      {0.0, s1, s2, s3});
-  for (double &e : error)
-    e *= 0.5 * dt * dt * dt;
-  return error;
+  throw std::logic_error(
+      "implicit_midpoint: no local error estimate at time order 1");
 }
 
 // --- Newmark ----------------------------------------------------------------

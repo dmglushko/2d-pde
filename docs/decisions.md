@@ -1192,15 +1192,18 @@ coarsening, moving nodes or enrichment for now.
   from the change of (V₁ − V₀)/h; Newmark dt²/12·(W₁ − W₀).
   `PreviousStep` stores the velocities too (decided 2026-11-19), so no
   estimate infers them from which method took a step.
-- **The midpoint estimate at time order 1 compares with a prediction**
-  (decided 2026-11-19, after a review finding: the u‴ estimate missed the
-  error of averaging the state, h³/8 times the problem's rate times u″,
-  and accepted a step 8 times over the tolerance): before the step an
-  explicit extrapolation from earlier states predicts u₁ (no solve); the
-  error is proportional to the computed u₁ minus the prediction (Milne's
-  device, as in Gresho and Sani's adaptive trapezoidal rule). The
-  prediction's own error depends only on u‴, so the difference sees both
-  parts.
+- **The midpoint method has no error estimate at time order 1** (decided
+  2026-11-19, replacing "compare with a prediction" the same day): its u‴
+  estimate missed the error of averaging the state (h³/8 times the
+  problem's rate times u″) and accepted a step 8 times over the
+  tolerance, and no estimate from the computed states can see that error
+  (with u′ = −20u + 2t + 20t² and dt = 0.1 the states are exactly those of
+  u′ = 2t, whose steps have no error; a predictor from earlier states is
+  the same u‴ estimate). So the error-controlled controller refuses the
+  midpoint method at time order 1; its time order 2 estimate stays. An
+  estimate from the step's residual (one more solve a step): GitHub issue
+  #44. A hand-made anchor must carry exactly one velocity per free unknown
+  at time order 2 and none below (accepted 2026-11-19).
 - **Follow-ups of the adaptive steps, as GitHub issues #41 to #43**
   (2026-11-19): an
   error-per-unit-step option (error proportional to the tolerance), a PI

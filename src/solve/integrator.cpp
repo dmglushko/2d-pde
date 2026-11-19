@@ -387,7 +387,7 @@ IntegrationResult Integrator::integrate(
           "{}: the time method {} declares no local error estimate at time "
           "order {}, which this step controller needs to judge each step; "
           "use a method that declares one (implicit_euler at time orders 1 "
-          "and 2, implicit_midpoint at 1 and 2, newmark at 2) or a fixed "
+          "and 2, implicit_midpoint at 2, newmark at 2) or a fixed "
           "step",
           step_controller_->name(), method_->name(), time_order));
     if (estimate->order < 1)
