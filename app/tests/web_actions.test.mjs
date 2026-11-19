@@ -264,7 +264,7 @@ test("a time run streams its snapshots and plays from its start", async () => {
   assert.equal(followedRun(), null);
 });
 
-test("Stop stops the run and keeps what arrived", async () => {
+test("Stop stops the run, follows it until it stopped and keeps what it made", async () => {
   start();
   const run = runStage("solve");
   (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
@@ -273,12 +273,34 @@ test("Stop stops the run and keeps what arrived", async () => {
   const stopping = stopRun();
   const stop = await next("/api/solve/stop");
   assert.deepEqual(stop.body, { job: 3 });
-  stop.answer(timeRun("stopped", 2, 0.25));
+  // The chunk being computed stops at its next step: still running.
+  stop.answer(timeRun("running", 2, 0.3));
   await stopping;
+  assert.ok(followedRun(), "followed until it stopped");
+  // It published the snapshot its chunk kept, then stopped.
+  (await next("/api/solve/progress")).answer(timeRun("stopped", 3, 0.5));
   assert.equal(await run, null);
-  assert.equal(store.results.solve.data.values.length, 2);
+  assert.equal(store.results.solve.data.values.length, 3, "what the stopped chunk kept is shown");
+  assert.equal(store.results.solve.data.t, 0.5, "and where it stopped");
   assert.equal(stageStatus("solve"), "stopped");
   assert.equal(store.busy.has("solve"), false);
+});
+
+test("a Stop that does not arrive can be asked again", async () => {
+  start();
+  const run = runStage("solve");
+  (await next("/api/solve")).answer(timeRun("running", 2, 0.25));
+  (await next("/api/solve/values")).answer(float32([0, 0, 1, 1]));
+  await flush();
+  const stopping = stopRun();
+  (await next("/api/solve/stop")).fail({ stage: "solve", kind: "input", message: "no such run" });
+  await stopping;
+  assert.equal(followedRun()?.stopping, false, "not stopping: Stop can be pressed again");
+  const again = stopRun();
+  (await next("/api/solve/stop")).answer(timeRun("running", 2, 0.3));
+  await again;
+  (await next("/api/solve/progress")).answer(timeRun("stopped", 2, 0.3));
+  assert.equal(await run, null);
 });
 
 test("a change of the solve's inputs stops its run", async () => {

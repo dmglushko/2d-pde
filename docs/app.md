@@ -876,9 +876,13 @@ last's;
   reserves two more states of the nodes for the method's earlier steps
   in the anchor, which a done run drops.
 - **Inside a chunk** (`IntegrationOutput::on_step`): every step moves
-  the published `t` (the progress bar), and Stop (`request_stop`: a time
-  run is stopped at once) ends the chunk at its next step; what it kept
-  is published, and Continue goes on from where it stood
+  the published `t` (the progress bar), and Stop (`request_stop`) ends
+  the chunk at its next step. A run being computed (`Published::computing`)
+  reads "running" until its chunk or adaptive loop has stopped and
+  published what it has (`stop_requested`, settled when `advance` ends),
+  so a page that sees "stopped" sees all of it (the page follows the run
+  until then, and a Stop that failed can be asked again); one not being
+  computed stops at once. Continue goes on from where it stood
   (`last->time`, with its anchor), so the snapshots are still those of
   one call (`tests/runs.cpp`, "Stop inside a chunk"). A stopped chunk's
   cost is not recorded.

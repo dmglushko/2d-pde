@@ -256,7 +256,10 @@ int main() {
          const auto job = progress["job"].get<std::uint64_t>();
          check(progress["values"]["snapshots"].get<std::size_t>() >= 2,
                "the first chunk is ready at once");
-         progress = session.stop_solve(job);
+         (void)session.stop_solve(job);
+         // Stopped once the chunk being computed has published what it
+         // has (at once when none is).
+         progress = wait(session, job);
          const std::size_t ready =
              progress["values"]["snapshots"].get<std::size_t>();
          check(progress["state"] == "stopped" || progress["state"] == "done",
@@ -305,12 +308,11 @@ int main() {
                 std::chrono::steady_clock::now() < until)
            std::this_thread::sleep_for(std::chrono::milliseconds(2));
          progress = session.stop_solve(job);
+         check(progress["state"] == "running",
+               "running until the chunk has stopped and published");
+         // The chunk stops at its next step and publishes what it has.
+         progress = wait(session, job);
          check(progress["state"] == "stopped", progress["state"].dump());
-         // The chunk stops at its next step and gives the session back.
-         while (!session.status()["busy"].is_null() &&
-                std::chrono::steady_clock::now() < until)
-           std::this_thread::sleep_for(std::chrono::milliseconds(2));
-         progress = session.solve_progress(job);
          const double stood = progress["t"].get<double>();
          check(stood > first && stood < 2.0,
                "stopped inside the interval, at t = " + std::to_string(stood));

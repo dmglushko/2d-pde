@@ -341,7 +341,16 @@ export async function reattachRun() {
   const progress = answer?.run;
   if (!progress || progress.state === "failed" || !ticket.holds()) return false;
   if (!isFresh("mesh")) {
-    for (const id of stagesToRun("mesh", isFresh)) if ((await run(id)) !== true) return false;
+    const meshStages = async () => {
+      for (const id of stagesToRun("mesh", isFresh)) if ((await run(id)) !== true) return false;
+      return true;
+    };
+    // A running adaptive run holds the server until its loop ends: the
+    // mesh's answer waits for it, so the run is followed (and can be
+    // stopped) meanwhile; it shows its values on its own meshes.
+    const adaptiveRunning = progress.state === "running" && (progress.mode === "adaptive" || progress.mode === "adaptive_time");
+    if (adaptiveRunning) meshStages();
+    else if (!(await meshStages())) return false;
   }
   // A solve started meanwhile wins.
   if (!ticket.holds() || !ticket.newest()) return false;
@@ -355,51 +364,31 @@ function stopFollowing() {
   api.solveStop(job).catch(() => {});
 }
 
-// Stops the time run being followed; what arrived stays.
 // Whether the run `result` belongs to was asked to stop and goes on until
-// it can (an adaptive run stops after its current cycle or step).
+// it has: a time run's chunk stops at its next step, an adaptive run
+// after its current cycle or step; then it publishes what it has.
 export function stopping(result) {
   return Boolean(following?.stopping) && result?.job === following.job;
 }
 
+// Stops the run being followed; what it made stays. The run is followed
+// until the server says it stopped (or ended meanwhile), so the snapshots
+// and the time it stopped at are shown (followRun; an adaptive run's
+// meshes come then too). A stop that does not arrive can be asked again.
 export async function stopRun() {
   const run = following;
-  if (!run) return;
-  const data = store.results.solve?.data;
-  // An adaptive run is one library call on the server: it stops after its
-  // current cycle (or step), publishes what it has and is followed until
-  // then (followRun fetches its meshes).
-  if (data && data.job === run.job && (data.mode === "adaptive" || data.mode === "adaptive_time")) {
-    run.stopping = true;
-    notify("result");
-    try {
-      await api.solveStop(run.job);
-    } catch (error) {
-      toast(error.message);
-    }
-    return;
-  }
-  following = null;
-  if (data && data.job === run.job) data.state = "stopped";
-  store.busy.delete("solve");
-  delete store.busySince.solve;
+  if (!run || run.stopping) return;
+  run.stopping = true;
   notify("result");
   try {
-    const progress = await api.solveStop(run.job);
-    // It may have ended before the stop arrived.
-    if (data && data.job === run.job && progress.state === "done") {
-      const values = data.values;
-      // An adaptive run's meshes come before its values are shown on them.
-      const extra = data.mesh ? {} : await ownMeshes(progress);
-      Object.assign(data, progress, { values, layout: progress.values }, extra);
-      growSnapshots(data, progress.values.snapshots);
-      data.times = progress.times.slice(0, values.length);
-      solveScale(data);
-    }
+    await api.solveStop(run.job);
   } catch (error) {
-    toast(error.message);
+    if (following === run) {
+      run.stopping = false;
+      notify("result");
+    }
+    toast(`The run could not be stopped: ${error.message}`);
   }
-  notify("result");
 }
 
 // The run being followed, or null.

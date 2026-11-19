@@ -633,8 +633,7 @@ void request_stop(Run &run) {
   Run::Published &p = run.published;
   if (p.state != RunState::running)
     return;
-  if (run.setup.mode == SolveMode::adaptive ||
-      run.setup.mode == SolveMode::adaptive_time)
+  if (p.computing)
     p.stop_requested = true;
   else
     p.state = RunState::stopped;
@@ -694,7 +693,22 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
     const std::scoped_lock lock(run_lock);
     if (run.published.state != RunState::running)
       return;
+    run.published.computing = true;
   }
+  // However the computation ends: a stop asked meanwhile takes effect now
+  // that what it made is published.
+  struct Settle {
+    Run &run;
+    std::mutex &lock;
+    ~Settle() {
+      const std::scoped_lock held(lock);
+      Run::Published &p = run.published;
+      p.computing = false;
+      if (p.stop_requested && p.state == RunState::running)
+        p.state = RunState::stopped;
+      p.stop_requested = false;
+    }
+  } settle{run, run_lock};
   if (run.setup.mode == SolveMode::adaptive ||
       run.setup.mode == SolveMode::adaptive_time)
     return run_adaptive(run, run_lock);
@@ -717,7 +731,7 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
       output.on_step = [&](const solve::StepProgress &step) {
         const std::scoped_lock lock(run_lock);
         run.published.t = step.time;
-        return run.published.state == RunState::running;
+        return goes_on(run);
       };
       // A run stopped inside an interval goes on from where it stood.
       const double start = run.last ? run.last->time : run.times[from];
