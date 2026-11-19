@@ -60,6 +60,8 @@ std::string_view to_string(StopReason reason) {
     return "node_budget";
   case StopReason::nothing_changed:
     return "nothing_changed";
+  case StopReason::stopped:
+    return "stopped";
   }
   return "unknown";
 }
@@ -89,7 +91,8 @@ AdaptiveStaticSolver::AdaptiveStaticSolver(
 
 AdaptiveStaticResult
 AdaptiveStaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> problem,
-                            const AdaptiveTarget &target, double t) const {
+                            const AdaptiveTarget &target, double t,
+                            const CycleObserver &on_cycle) const {
   if (!problem)
     throw std::invalid_argument(std::format("{}: the problem is null", stage));
   if (!std::isfinite(t))
@@ -140,6 +143,7 @@ AdaptiveStaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> problem,
     if (has_tolerance && !tolerance)
       tolerance = resolve(target.tolerance, current.estimate->total);
 
+    const bool go_on = !on_cycle || on_cycle(current, *problem);
     std::optional<StopReason> stop;
     if (tolerance && current.estimate->total <= *tolerance) {
       stop = StopReason::tolerance_met;
@@ -148,6 +152,9 @@ AdaptiveStaticSolver::solve(std::shared_ptr<const fem::MeshedProblem> problem,
     } else if (target.max_cycles && cycle >= *target.max_cycles) {
       stop = StopReason::max_cycles;
       why = std::format("cycle {} of at most {}", cycle, *target.max_cycles);
+    } else if (!go_on) {
+      stop = StopReason::stopped;
+      why = std::format("the caller stopped the loop after cycle {}", cycle);
     }
     if (!stop) {
       std::shared_ptr<const mesh::Mesh> next;

@@ -70,6 +70,15 @@ cannot be stopped.
   indicators (one array per triangle per adaptation time, also when the
   tolerance was met); an option to keep only the totals would bound a
   long run's memory (2026-11-19, review).
+- **Done** (2026-11-19, for the app, by an agent): `IntegrationOutput::on_step`
+  (after every accepted step; false stops the run, which continues
+  exactly with its anchor), forwarded by the `AdaptiveIntegrator`, and
+  `AdaptiveStaticSolver::solve`'s `CycleObserver` (`StopReason::stopped`).
+  The app moves a time run's progress at every step and stops a chunk at
+  its next step; its adaptive runs run in the background worker, publish
+  their cycles (or time) as they come and stop after the current cycle
+  or step (docs/app.md, "Runs"). Still open: a time run is still chunked,
+  since one call would hold the session mutex for the whole run (item 3).
 - **What chunks cost** (2026-11-16): each `integrate` call prepares the
   linear solver and assembles at its start again, so the app sizes chunks
   by their measured cost to keep that fixed cost a small share

@@ -193,6 +193,10 @@ struct Run {
         meshes;
     // RunManager's clock at its last use (a lookup marks it).
     mutable std::uint64_t used = 0;
+    // An adaptive run asked to stop (request_stop): it stays running
+    // until the loop has stopped after its current cycle or step and its
+    // result is published, then it is stopped.
+    bool stop_requested = false;
   } published;
 
   // The run lock held.
@@ -225,9 +229,17 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
 // run). Under the session mutex; takes `run_lock` to publish.
 void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock);
 
-// Runs the next chunk of a running time run. A failure ends the run with
-// its error. Under the session mutex; takes `run_lock` to publish.
+// Runs the next chunk of a running time run, or the whole loop of an
+// adaptive run (whose cycles, or time, are published as they come). A
+// failure ends the run with its error. Under the session mutex; takes
+// `run_lock` to publish.
 void advance(Run &run, const SessionOptions &options, std::mutex &run_lock);
+
+// Asks a running run to stop. A time run is stopped at once (its chunk
+// stops at its next step and publishes what it has); an adaptive run
+// stops after its current cycle or step and is stopped once its result is
+// published. The run lock held.
+void request_stop(Run &run);
 
 // The run's summary so far (docs/app.md, "The API": POST /api/solve). The
 // run lock held.

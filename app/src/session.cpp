@@ -534,8 +534,14 @@ Json Session::solve(const Json &input, const std::string &client) {
     {
       const std::scoped_lock book(run_lock_);
       RunManager::Client &owner = state.runs.client(who);
+      // A stopped adaptive run is not continued (its loop starts again
+      // from the case): a new run is made.
+      const bool adaptive_stopped =
+          owner.run && owner.run->published.state == RunState::stopped &&
+          (owner.run->setup.mode == SolveMode::adaptive ||
+           owner.run->setup.mode == SolveMode::adaptive_time);
       if (owner.run && owner.run->key == key &&
-          owner.run->published.state != RunState::failed) {
+          owner.run->published.state != RunState::failed && !adaptive_stopped) {
         Run &current = *owner.run;
         if (current.published.state == RunState::stopped) {
           current.published.state = RunState::running;
@@ -645,8 +651,7 @@ Json Session::current_run(const Json &input, const std::string &client) {
 Json Session::stop_solve(std::uint64_t job, const std::string &client) {
   const std::scoped_lock book(run_lock_);
   Run &current = state_->runs.run_of(client_name(client), job);
-  if (current.published.state == RunState::running)
-    current.published.state = RunState::stopped;
+  request_stop(current);
   return progress_json(current, options_.memory_budget);
 }
 

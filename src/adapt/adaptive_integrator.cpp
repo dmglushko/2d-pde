@@ -250,6 +250,7 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
   std::size_t max_nodes_used = 0;
   bool adapting = true;
   std::string stop_message;
+  std::string caller_stop;
   // The state the next piece starts from: the caller's for the first.
   std::optional<solve::Solution> carried;
   const solve::Solution *state_in = initial;
@@ -325,6 +326,14 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     for (std::size_t s = next_snapshot; s < times.size() && times[s] <= end;
          ++s)
       piece_output.snapshot_times.push_back(times[s]);
+    // The caller's observer sees the steps of the whole run.
+    if (output.on_step)
+      piece_output.on_step =
+          [&output, before = steps](const solve::StepProgress &progress) {
+            solve::StepProgress whole = progress;
+            whole.steps += before;
+            return output.on_step(whole);
+          };
     const solve::Integrator &stepper = damping ? *damping_ : integrator_;
     solve::IntegrationResult run =
         stepper.integrate(problem, t, end, piece_output, state_in, piece_steps,
@@ -368,7 +377,11 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
                            .adaptation = {},
                            .damping = damping};
     t = run.final.time;
-    if (!(t < t1)) {
+    if (!(t < t1) || run.stopped) {
+      result.stopped = run.stopped;
+      if (run.stopped)
+        caller_stop = std::format(
+            "stopped by the caller at t = {} after {} steps", t, steps);
       result.final = std::move(run.final);
       result.pieces.push_back(std::move(piece));
       break;
@@ -494,6 +507,8 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     m["tolerance"] = *tolerance;
   if (!stop_message.empty())
     report.messages.push_back(std::move(stop_message));
+  if (!caller_stop.empty())
+    report.messages.push_back(std::move(caller_stop));
   report.time = std::chrono::steady_clock::now() - start;
   return result;
 }

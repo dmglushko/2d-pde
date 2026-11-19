@@ -1029,6 +1029,48 @@ void boundary_rate_not_finite_at_t0() {
 
 // --- the node budget and invalid input -------------------------------------
 
+// The caller's observer sees the steps of the whole run, through the
+// pieces, with the snapshots on their meshes, and stops it.
+void observer_stops_the_run() {
+  const auto start = std::make_shared<const fem::MeshedProblem>(
+      unit_square_mesh(0.1), bump_problem());
+  const AdaptiveIntegrator adaptive(
+      integrator(std::make_shared<solve::ImplicitEuler>(), 1.0 / 32),
+      {refinement()});
+  const AdaptiveTimeTarget target{.every = {.steps = 2}, .max_refinements = 3};
+  const auto whole = adaptive.integrate(start, 0.0, 0.5, target);
+  std::size_t last_steps = 0;
+  std::size_t snapshots = 0;
+  solve::IntegrationOutput watched{.snapshot_times = {0.25, 0.5}};
+  watched.on_step = [&](const solve::StepProgress &p) {
+    check(p.steps == last_steps + 1, "the steps of the whole run, in order");
+    last_steps = p.steps;
+    if (p.snapshot) {
+      ++snapshots;
+      check(p.snapshot->mesh == p.problem->mesh(), "on its piece's mesh");
+    }
+    return true;
+  };
+  const auto observed = adaptive.integrate(start, 0.0, 0.5, target, watched);
+  check(!observed.stopped && last_steps == 16 && snapshots == 2,
+        "every step and snapshot seen");
+  check(observed.final.values == whole.final.values,
+        "observing does not change the run");
+
+  solve::IntegrationOutput stopping{.snapshot_times = {0.25, 0.5}};
+  stopping.on_step = [](const solve::StepProgress &p) { return p.steps < 5; };
+  const auto part = adaptive.integrate(start, 0.0, 0.5, target, stopping);
+  check(part.stopped, "stopped");
+  check(part.final.time == 5.0 / 32, "after the 5th step");
+  check(part.report.metrics.at("steps") == 5.0, "5 steps");
+  check(!part.pieces.back().adaptation, "no adaptation after the stop");
+  check(part.snapshots.empty(), "no snapshot time reached");
+  check(!part.report.messages.empty() &&
+            part.report.messages.back().find("stopped by the caller") !=
+                std::string::npos,
+        "the report says so");
+}
+
 void node_budget() {
   const auto start = std::make_shared<const fem::MeshedProblem>(
       unit_square_mesh(0.1), bump_problem());
@@ -1597,6 +1639,8 @@ void damping_method_needs_an_estimate() {
 
 int main() {
   return test::run({
+      {"the caller's observer sees the whole run and can stop it",
+       observer_stops_the_run},
       {"a moving bump: refined where it is, better than uniform", moving_bump},
       {"after a transfer, implicit Euler (and damping steps) forget it",
        transfer_error_and_damping},

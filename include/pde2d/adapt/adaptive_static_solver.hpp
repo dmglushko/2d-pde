@@ -8,6 +8,7 @@
 #include "pde2d/solve/static_solver.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -38,9 +39,11 @@ enum class StopReason {
   max_cycles,      // the last allowed cycle was solved
   node_budget,     // the adapted mesh would exceed max_nodes (not solved)
   nothing_changed, // no adaptation changed the mesh (nothing was marked)
+  stopped,         // the caller's observer asked to stop (CycleObserver)
 };
 
-// "tolerance_met", "max_cycles", "node_budget", "nothing_changed".
+// "tolerance_met", "max_cycles", "node_budget", "nothing_changed",
+// "stopped".
 std::string_view to_string(StopReason reason);
 
 // One cycle: a solve on one mesh, its estimate, and the adaptations that
@@ -69,6 +72,15 @@ struct AdaptiveStaticResult {
   // stopped.
   mesh::StageReport report{};
 };
+
+// Called after each cycle's solve and estimate, before the stopping rules
+// and the adaptations, with the cycle (its solution, estimate and the
+// reports so far) and its problem (on its mesh); both valid only during
+// the call. Returning false stops the loop there (StopReason::stopped,
+// unless the cycle met the tolerance or was the last allowed): progress
+// and Stop for a caller (decided 2026-11-19, for the app, by an agent).
+using CycleObserver =
+    std::function<bool(const AdaptiveCycle &, const fem::MeshedProblem &)>;
 
 // The adaptive loop for static problems: a driver above the StaticSolver.
 //
@@ -114,9 +126,12 @@ public:
   // estimate, returns a mesh without declaring changes_mesh); passes on
   // the exceptions of the solver, the adaptations and the MeshedProblem
   // constructor.
+  // `on_cycle`, when not empty, is called after every cycle (see
+  // CycleObserver); its exceptions are passed on.
   [[nodiscard]] AdaptiveStaticResult
   solve(std::shared_ptr<const fem::MeshedProblem> problem,
-        const AdaptiveTarget &target, double t = 0.0) const;
+        const AdaptiveTarget &target, double t = 0.0,
+        const CycleObserver &on_cycle = {}) const;
 
 private:
   solve::StaticSolver solver_;

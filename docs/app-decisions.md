@@ -1402,4 +1402,17 @@ steps). The owner asked the app to offer everything new.
 - **Segmented choices** (solve mode, geometry source) are equal cells
   with a filled selection: the mode row wrapped "Adaptive in time" onto
   a second line inside its border and the selection was a faint tint.
+- **Progress and Stop inside runs** (library-requests.md item 2, made in
+  the library by this agent: `IntegrationOutput::on_step`,
+  `AdaptiveStaticSolver::solve`'s `CycleObserver`). A time run's progress
+  moves at every step and Stop takes effect at the next step instead of
+  the chunk's end; Continue goes on from that step with the anchor (bit
+  for bit, tested). Adaptive runs left the `/api/solve` request for the
+  background worker, so the page follows them like a time run: the cycle
+  table fills as cycles come, the head says "Running: cycle k" (or t for
+  adaptive in time) and Stop ends the loop after the current cycle or
+  step, keeping what was solved; Solve on a stopped adaptive run starts
+  it again (its loop is one call). Time runs stay chunked: one call
+  would hold the session mutex, which the problem check needs, for the
+  whole run.
 

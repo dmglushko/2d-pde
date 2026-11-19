@@ -379,7 +379,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   output, &previous.final)`) matches one long run that lands on t1 (bit
   for bit for the first-order methods; `tests/solve/time_integration.cpp`).
   A run stopped by `max_steps` continues the same stretch only when given
-  its `IntegrationResult::anchor` (`StepAnchor`). A quotient of the last
+  its `IntegrationResult::anchor` (`StepAnchor`); a run stopped by its
+  observer (`IntegrationOutput::on_step` returning false) ends exactly as
+  `max_steps` would, after an accepted step, never during a solve, and
+  `AdaptiveStaticSolver`'s `CycleObserver` stops only between cycles. A quotient of the last
   step divides by the step's own length (`FreeState::dt`), never by a
   difference of times (a landing keeps the nominal dt).
 - **A triangle's refinement edge is the edge opposite its vertex 0**

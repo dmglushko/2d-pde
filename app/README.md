@@ -218,7 +218,8 @@ field, Ctrl+Z undoes the whole edit of the field.
    snapshots while it goes on: the status shows t reached, steps and
    snapshots with a progress bar, and the picture the newest snapshot,
    unless you moved the time bar. **Stop** (in place of Solve while it
-   runs) keeps what arrived; **Continue** goes on from there.
+   runs) stops at the next time step and keeps what arrived; **Continue**
+   goes on from there, as if it had not stopped.
    **Adaptive** solves statically at t, estimates the error of every
    triangle (residual, Kelly or gradient-recovery estimator), marks some
    (Dörfler, maximum, fixed fraction, equidistribution), refines them
@@ -231,8 +232,9 @@ field, Ctrl+Z undoes the whole edit of the field.
    observed rate (e ~ N^−rate), with a log–log chart and an N^(−1/2)
    slope; comparing with an exact solution adds each cycle's L2 error
    (and an N^(−1) slope). **Export adapted mesh** saves the last mesh as
-   `.pde2d`, which opens as a mesh file. An adaptive solve runs in one
-   piece: it has no progress and no Stop.
+   `.pde2d`, which opens as a mesh file. While it runs, the cycles appear
+   as they are solved; **Stop** ends it after the current cycle and keeps
+   what was solved (**Solve** then starts it again).
    **Adaptive in time** integrates like **In time** (its settings are
    shown first) and, every so much time or so many steps (**Adapt
    every**), estimates the error, refines the marked triangles and moves
@@ -244,8 +246,10 @@ field, Ctrl+Z undoes the whole edit of the field.
    Each snapshot is drawn on its own mesh as the time bar moves;
    **Adaptation times** lists each time with its nodes, estimate and what
    happened, with a chart of the nodes against t
-   (`app/examples/l_shape_heat_adaptive.json`). It runs in one piece too,
-   and exports as the VTK series (a file per snapshot) and the last mesh,
+   (`app/examples/l_shape_heat_adaptive.json`). While it runs, the status
+   shows the time reached; its snapshots and meshes come at its end
+   (**Stop** ends it after the current step and keeps them up to there).
+   It exports as the VTK series (a file per snapshot) and the last mesh,
    not as one CSV or VTK file.
    **Linear solver** offers the direct solvers sparse LU, simplicial LDLᵀ,
    supernodal Cholesky and multifrontal LU (the last two parallel, for

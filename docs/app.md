@@ -860,7 +860,8 @@ last's;
   exactly the integrator's metrics). `prepares` counts one per chunk at
   least.
 - A solve of the same inputs reuses the client's run: a running or done
-  one is answered as it is, a stopped one continues, a failed one starts
+  one is answered as it is, a stopped one continues (a stopped adaptive
+  run starts again: its loop is one call), a failed one starts
   again. Other inputs replace it (the old one is dropped under the
   session mutex: it holds expressions); asking for the old one then
   answers `replaced`. The reference run is a second pointer that keeps a
@@ -874,14 +875,25 @@ last's;
   for error-controlled steps (`tests/runs.cpp`). An error-controlled run
   reserves two more states of the nodes for the method's earlier steps
   in the anchor, which a done run drops.
-- What a chunk cannot do: show progress or stop inside one snapshot
-  interval (library-requests.md, item 2).
+- **Inside a chunk** (`IntegrationOutput::on_step`): every step moves
+  the published `t` (the progress bar), and Stop (`request_stop`: a time
+  run is stopped at once) ends the chunk at its next step; what it kept
+  is published, and Continue goes on from where it stood
+  (`last->time`, with its anchor), so the snapshots are still those of
+  one call (`tests/runs.cpp`, "Stop inside a chunk"). A stopped chunk's
+  cost is not recorded.
 
 ### Adaptive runs
 
-`start_run` of an adaptive run calls `AdaptiveStaticSolver::solve` once,
-under the session mutex (the library has no progress or cancellation
-for the loop: library-requests.md, item 2), and publishes under the run
+An adaptive run is not solved by `start_run`: `solve` answers it as
+running, and the worker (`advance`, `run_adaptive`; without background
+runs `solve` calls it before it returns) calls
+`AdaptiveStaticSolver::solve` once, under the session mutex, with a
+`CycleObserver` that publishes each cycle's row (`adaptive.cycles`) as it
+comes and returns whether to go on. Stop (`request_stop`) sets
+`Published::stop_requested`: the run stays running until the loop has
+stopped after its current cycle (`StopReason::stopped`) and its result
+is published, then it is stopped. It then publishes under the run
 lock: the last cycle's solution as the run's one snapshot, the run's
 `meshed`, `mesh` and `mesh_id` replaced by the last problem, its mesh and
 `adapted_mesh_id` (an id the stage cache reserved when the run was made,
@@ -901,8 +913,9 @@ and reads the result.
 
 **An adaptive run in time** (`adaptive_time`) calls
 `AdaptiveIntegrator::integrate` once over the run's snapshot times
-(`solve_adaptive_time`; one call: no progress or Stop either, the same
-library request), with an `Integrator` of the time part's method, step
+(`solve_adaptive_time`, in the worker like an adaptive run; its
+`on_step` moves the published `t` at every step and Stop ends it after
+the current step: `stopped`, its snapshots and meshes up to there), with an `Integrator` of the time part's method, step
 controller and linear solver and one `MeshRefinement`, and publishes
 under the run lock (`publish_adaptive_time`):
 

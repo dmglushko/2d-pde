@@ -554,9 +554,11 @@ IntegrationResult Integrator::integrate(
       ++prepares;
     }
     // The last step of the run, if accepted: it lands on t1, or it is the
-    // max_steps-th.
-    const bool last =
-        t_new == t1 || (max_steps && summary.steps + 1 == *max_steps);
+    // max_steps-th, or (with an observer, which may stop the run after any
+    // step) it may be.
+    const bool last = t_new == t1 ||
+                      (max_steps && summary.steps + 1 == *max_steps) ||
+                      static_cast<bool>(output.on_step);
     // An error-controlled step may be rejected: its start is kept.
     std::optional<TimeState> before;
     if (controls_error)
@@ -646,6 +648,19 @@ IntegrationResult Integrator::integrate(
     if (take_snapshot)
       result.snapshots.push_back(
           make_solution(meshed, state, time_order, keeps_acceleration, t));
+    if (output.on_step) {
+      const bool go_on = output.on_step(StepProgress{
+          .time = t,
+          .steps = summary.steps,
+          .dt = h,
+          .snapshot = take_snapshot ? &result.snapshots.back() : nullptr,
+          .problem = &meshed});
+      // At t1 the run ends anyway: it was not stopped.
+      if (!go_on && t < t1) {
+        result.stopped = true;
+        break;
+      }
+    }
   }
 
   // t is t1 unless max_steps ended the run first (the last step landed on
@@ -686,6 +701,9 @@ IntegrationResult Integrator::integrate(
   m["max_backward_error"] = solves.max_backward_error;
   m["min_pivot_ratio"] = solves.min_pivot_ratio;
   report.messages = std::move(solves.messages);
+  if (result.stopped)
+    report.messages.push_back(std::format(
+        "stopped by the caller at t = {} after {} steps", t, summary.steps));
   report.time = Clock::now() - start;
   return result;
 }

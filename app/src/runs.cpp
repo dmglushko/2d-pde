@@ -193,14 +193,15 @@ ChunkCostModel fit_over(std::span<const ChunkCost> recent) {
 // is marked at that setting.
 adapt::AdaptiveStaticResult
 solve_adaptive(const SolveSetup &setup,
-               std::shared_ptr<const fem::MeshedProblem> problem) {
+               std::shared_ptr<const fem::MeshedProblem> problem,
+               const adapt::CycleObserver &on_cycle) {
   const auto refinement = std::make_shared<const adapt::MeshRefinement>(
       setup.estimator, setup.marking,
       std::make_shared<const mesh::Remesher>(setup.refiner));
   const adapt::AdaptiveStaticSolver solver(
       solve::StaticSolver(setup.linear_solver, setup.assembler), {refinement});
   try {
-    return solver.solve(std::move(problem), setup.target, setup.t);
+    return solver.solve(std::move(problem), setup.target, setup.t, on_cycle);
   } catch (const std::invalid_argument &error) {
     const std::string_view message = error.what();
     if (message.starts_with("adaptive_static_solver:"))
@@ -214,7 +215,8 @@ solve_adaptive(const SolveSetup &setup,
 
 // The library's adaptive loop in time with one MeshRefinement, over the
 // run's snapshot times. Its refusal of a setting is marked at that setting.
-adapt::AdaptiveIntegrationResult solve_adaptive_time(const Run &run) {
+adapt::AdaptiveIntegrationResult
+solve_adaptive_time(const Run &run, const solve::StepObserver &on_step) {
   const SolveSetup &setup = run.setup;
   const auto refinement = std::make_shared<const adapt::MeshRefinement>(
       setup.estimator, setup.marking,
@@ -225,6 +227,7 @@ adapt::AdaptiveIntegrationResult solve_adaptive_time(const Run &run) {
       {refinement}, setup.time_options);
   solve::IntegrationOutput output;
   output.snapshot_times = run.times;
+  output.on_step = on_step;
   try {
     return integrator.integrate(run.meshed, setup.t0, setup.t1,
                                 setup.time_target, output);
@@ -260,32 +263,39 @@ Json metric_of(std::span<const mesh::StageReport> reports,
 // Keeps an adaptive run's result: the last cycle's solution as its one
 // snapshot on the last mesh (under its own id), every cycle's solution,
 // the last estimate's indicators, and the summary.
+// The row of cycle `k` (from 0) of an adaptive run, as the summary has it.
+Json cycle_row(std::size_t k, const adapt::AdaptiveCycle &cycle) {
+  const mesh::Mesh &mesh = *cycle.solution.mesh;
+  double seconds = 0.0;
+  for (const mesh::StageReport &report : cycle.reports)
+    seconds += report.time.count();
+  Json row = Json::object();
+  row["cycle"] = k + 1;
+  row["nodes"] = mesh.nodes.size();
+  row["triangles"] = mesh.triangles.size();
+  row["estimate"] =
+      cycle.estimate ? number_or_null(cycle.estimate->total) : Json(nullptr);
+  row["max_indicator"] =
+      cycle.estimate ? metric_of(std::span(&cycle.estimate->report, 1),
+                                 cycle.estimate->report.stage, "max_indicator")
+                     : Json(nullptr);
+  // Not on the last cycle: the loop stopped before marking.
+  row["marked"] = metric_of(cycle.reports, "mesh_refinement", "marked");
+  row["residual"] = metric_of(cycle.reports, "static_solver", "residual");
+  row["seconds"] = seconds;
+  return row;
+}
+
+// Done, or stopped when the caller stopped it.
+RunState final_state(bool stopped) {
+  return stopped ? RunState::stopped : RunState::done;
+}
+
 void publish_adaptive(Run &run, adapt::AdaptiveStaticResult result,
                       std::mutex &run_lock) {
   Json cycles = Json::array();
-  for (std::size_t k = 0; k < result.cycles.size(); ++k) {
-    const adapt::AdaptiveCycle &cycle = result.cycles[k];
-    const mesh::Mesh &mesh = *cycle.solution.mesh;
-    double seconds = 0.0;
-    for (const mesh::StageReport &report : cycle.reports)
-      seconds += report.time.count();
-    Json row = Json::object();
-    row["cycle"] = k + 1;
-    row["nodes"] = mesh.nodes.size();
-    row["triangles"] = mesh.triangles.size();
-    row["estimate"] =
-        cycle.estimate ? number_or_null(cycle.estimate->total) : Json(nullptr);
-    row["max_indicator"] =
-        cycle.estimate
-            ? metric_of(std::span(&cycle.estimate->report, 1),
-                        cycle.estimate->report.stage, "max_indicator")
-            : Json(nullptr);
-    // Not on the last cycle: the loop stopped before marking.
-    row["marked"] = metric_of(cycle.reports, "mesh_refinement", "marked");
-    row["residual"] = metric_of(cycle.reports, "static_solver", "residual");
-    row["seconds"] = seconds;
-    cycles.push_back(std::move(row));
-  }
+  for (std::size_t k = 0; k < result.cycles.size(); ++k)
+    cycles.push_back(cycle_row(k, result.cycles[k]));
   Json summary = Json::object();
   summary["stop_reason"] = adapt::to_string(result.stop_reason);
   summary["tolerance"] =
@@ -326,7 +336,7 @@ void publish_adaptive(Run &run, adapt::AdaptiveStaticResult result,
   out.indicators = std::move(indicators);
   publish_snapshot(out, *kept.back());
   out.cycles = std::move(kept);
-  out.state = RunState::done;
+  out.state = final_state(result.stop_reason == adapt::StopReason::stopped);
 }
 // Keeps an adaptive run in time's result: its snapshots, each on its
 // piece's mesh; every mesh with an id (the starting mesh keeps its own, a
@@ -434,9 +444,9 @@ void publish_adaptive_time(Run &run, adapt::AdaptiveIntegrationResult result,
     release(snapshot.accelerations);
     publish_snapshot(out, std::move(snapshot));
   }
-  out.t = run.setup.t1;
+  out.t = result.final.time;
   out.chunks = 1;
-  out.state = RunState::done;
+  out.state = final_state(result.stopped);
 }
 } // namespace
 
@@ -619,12 +629,75 @@ std::size_t adaptive_time_run_bytes(std::size_t max_nodes,
          run_bytes(max_nodes, snapshots, time_order) + derivatives;
 }
 
+void request_stop(Run &run) {
+  Run::Published &p = run.published;
+  if (p.state != RunState::running)
+    return;
+  if (run.setup.mode == SolveMode::adaptive ||
+      run.setup.mode == SolveMode::adaptive_time)
+    p.stop_requested = true;
+  else
+    p.state = RunState::stopped;
+}
+
+namespace {
+
+// Whether a run goes on: running, and not asked to stop. The run lock
+// held.
+bool goes_on(const Run &run) {
+  return run.published.state == RunState::running &&
+         !run.published.stop_requested;
+}
+
+// An adaptive run: the library's whole loop (one call, under the session
+// mutex), its cycles (or its time) published as they come, Stop checked
+// after every cycle (or step).
+void run_adaptive(Run &run, std::mutex &run_lock) {
+  try {
+    if (run.setup.mode == SolveMode::adaptive_time) {
+      adapt::AdaptiveIntegrationResult result = staged("solve", [&] {
+        return solve_adaptive_time(run, [&](const solve::StepProgress &step) {
+          const std::scoped_lock lock(run_lock);
+          run.published.t = step.time;
+          return goes_on(run);
+        });
+      });
+      publish_adaptive_time(run, std::move(result), run_lock);
+      return;
+    }
+    std::size_t cycles = 0;
+    adapt::AdaptiveStaticResult result = staged("solve", [&] {
+      return solve_adaptive(
+          run.setup, run.meshed,
+          [&](const adapt::AdaptiveCycle &cycle, const fem::MeshedProblem &) {
+            Json row = cycle_row(cycles++, cycle);
+            const std::scoped_lock lock(run_lock);
+            Json &summary = run.published.adaptive;
+            if (summary.is_null())
+              summary = Json::object();
+            summary["cycles"].push_back(std::move(row));
+            return goes_on(run);
+          });
+    });
+    publish_adaptive(run, std::move(result), run_lock);
+  } catch (const StageError &error) {
+    const std::scoped_lock lock(run_lock);
+    run.published.state = RunState::failed;
+    run.published.error = error;
+  }
+}
+
+} // namespace
+
 void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
   {
     const std::scoped_lock lock(run_lock);
     if (run.published.state != RunState::running)
       return;
   }
+  if (run.setup.mode == SolveMode::adaptive ||
+      run.setup.mode == SolveMode::adaptive_time)
+    return run_adaptive(run, run_lock);
   // Written only here (under the session mutex), so read without the
   // run lock.
   const std::size_t ready = run.published.snapshots.size();
@@ -638,22 +711,35 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
       output.snapshot_times.assign(
           run.times.begin() + static_cast<std::ptrdiff_t>(ready),
           run.times.begin() + static_cast<std::ptrdiff_t>(to) + 1);
+      // Every step moves the progress, and Stop ends the chunk at the
+      // next step (what it has is published; Continue goes on from there
+      // with the anchor, as if it had not stopped).
+      output.on_step = [&](const solve::StepProgress &step) {
+        const std::scoped_lock lock(run_lock);
+        run.published.t = step.time;
+        return run.published.state == RunState::running;
+      };
+      // A run stopped inside an interval goes on from where it stood.
+      const double start = run.last ? run.last->time : run.times[from];
       return solve::Integrator(run.setup.method, run.setup.step_controller,
                                run.setup.linear_solver, run.setup.assembler)
-          .integrate(run.meshed, run.times[from], run.times[to], output,
+          .integrate(run.meshed, start, run.times[to], output,
                      run.last ? &*run.last : nullptr, std::nullopt,
                      run.anchor ? &*run.anchor : nullptr);
     });
-    if (ready + result.snapshots.size() != to + 1)
+    if (!result.stopped && ready + result.snapshots.size() != to + 1)
       throw StageError("solve", "internal",
                        "a chunk did not keep its snapshots");
-    const auto steps = result.report.metrics.find("steps");
-    run.costs.push_back(
-        {.intervals = to - from,
-         .steps = steps == result.report.metrics.end() ? 0.0 : steps->second,
-         .seconds = std::chrono::duration<double>(
-                        std::chrono::steady_clock::now() - started)
-                        .count()});
+    // A stopped chunk's cost says nothing about a whole one.
+    if (!result.stopped) {
+      const auto steps = result.report.metrics.find("steps");
+      run.costs.push_back(
+          {.intervals = to - from,
+           .steps = steps == result.report.metrics.end() ? 0.0 : steps->second,
+           .seconds = std::chrono::duration<double>(
+                          std::chrono::steady_clock::now() - started)
+                          .count()});
+    }
     run.last = std::move(result.final);
     run.anchor = std::move(result.anchor);
     const std::scoped_lock lock(run_lock);
@@ -663,7 +749,7 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
       publish_snapshot(out, std::move(solution));
     out.t = run.last->time;
     ++out.chunks;
-    if (to == last_index) {
+    if (!result.stopped && to == last_index) {
       out.state = RunState::done;
       // A done run is never continued: its steps' history goes.
       run.anchor.reset();
@@ -759,32 +845,11 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
 }
 
 void start_run(Run &run, const SessionOptions &options, std::mutex &run_lock) {
-  if (run.setup.mode == SolveMode::adaptive_time) {
-    try {
-      adapt::AdaptiveIntegrationResult result =
-          staged("solve", [&] { return solve_adaptive_time(run); });
-      publish_adaptive_time(run, std::move(result), run_lock);
-    } catch (const StageError &error) {
-      const std::scoped_lock lock(run_lock);
-      run.published.state = RunState::failed;
-      run.published.error = error;
-      throw;
-    }
+  // An adaptive run is one library call: the worker (advance) runs it, so
+  // the page follows its cycles and can stop it.
+  if (run.setup.mode == SolveMode::adaptive ||
+      run.setup.mode == SolveMode::adaptive_time)
     return;
-  }
-  if (run.setup.mode == SolveMode::adaptive) {
-    try {
-      adapt::AdaptiveStaticResult result = staged(
-          "solve", [&] { return solve_adaptive(run.setup, run.meshed); });
-      publish_adaptive(run, std::move(result), run_lock);
-    } catch (const StageError &error) {
-      const std::scoped_lock lock(run_lock);
-      run.published.state = RunState::failed;
-      run.published.error = error;
-      throw;
-    }
-    return;
-  }
   if (run.setup.mode == SolveMode::static_solve) {
     try {
       solve::StaticResult result = staged("solve", [&] {
@@ -867,8 +932,9 @@ Json progress_json(const Run &run, std::size_t memory_budget) {
     // Where the indicators are: POST {"job"} to /api/solve/indicators.
     adaptive["indicators"] =
         p.indicators ? Json(p.indicators->size()) : Json(nullptr);
-    // The last mesh, whose arrays POST /api/mesh/arrays sends.
-    if (p.state == RunState::done)
+    // The last mesh, whose arrays POST /api/mesh/arrays sends, once the
+    // result is published (done, or stopped after a cycle).
+    if (!p.cycles.empty())
       adaptive["mesh"] = mesh_summary_json(*run.mesh, run.mesh_id);
     out["adaptive"] = std::move(adaptive);
   }

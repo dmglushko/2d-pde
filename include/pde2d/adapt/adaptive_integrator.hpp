@@ -114,8 +114,14 @@ struct AdaptiveIntegrationResult {
   // last mesh), max_nodes_used (the most nodes any piece integrated on,
   // the last mesh's since meshes only grow) and tolerance (resolved, when
   // set); a message when the node budget or max_refinements stopped
-  // adapting.
+  // adapting, or when the caller stopped the run.
   mesh::StageReport report{};
+  // Whether IntegrationOutput::on_step stopped the run before t1: `final`
+  // is then where it stood, the last piece has no adaptation, and the
+  // snapshots are those up to there. (After the members above, so that
+  // positional initializations keep their meaning: new members go at the
+  // end.)
+  bool stopped = false;
 };
 
 // The settings of the adaptive loop in time that are the same for every
