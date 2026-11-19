@@ -1382,8 +1382,11 @@ steps). The owner asked the app to offer everything new.
   picture's least height and its bars, and the scrolling columns are
   `position: relative`, so hidden radios and visually hidden text are
   placed inside them, not against the page (they stretched it below the
-  interface). The `reports` browser scenario checks every step at
-  1280×560.
+  interface). The picture with its bars is never shorter than its least
+  height (`.viewer-main` `min-height: min-content`), so in a short window
+  a probe's chart follows below it in the column's scroll instead of
+  covering the time bar (a review finding). The `reports` browser
+  scenario checks every step at 1280×560, and Play with a probe.
 - **No "means" line under the equation and the conditions.** It doubled
   the field's height for what the coefficient form already shows; a
   line's error still shows under it. The check still sends `forms`

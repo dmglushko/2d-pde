@@ -186,8 +186,12 @@ Solution make_solution(const fem::MeshedProblem &meshed, const TimeState &state,
 // values do not depend on it).
 class SolveLog {
 public:
-  void add(const LinearSolveResult &result) {
+  // A solve's result and the time it took, under one lock (a snapshot
+  // never sees one without the other).
+  void add(const LinearSolveResult &result,
+           std::chrono::duration<double> time) {
     const std::scoped_lock lock(mutex_);
+    solve_seconds_ += time.count();
     for (const std::string &message : result.messages)
       if (std::ranges::find(messages_, message) == messages_.end())
         messages_.push_back(message);
@@ -198,15 +202,11 @@ public:
     if (result.pivot_ratio > 0.0)
       min_pivot_ratio_ = std::min(min_pivot_ratio_, result.pivot_ratio);
   }
-  // The time a prepare or a solve took (summed: solves from several
-  // threads at once add up to more than the time that passed).
+  // The time a prepare took (summed, like the solves' times: solves from
+  // several threads at once add up to more than the time that passed).
   void add_prepare_time(std::chrono::duration<double> time) {
     const std::scoped_lock lock(mutex_);
     prepare_seconds_ += time.count();
-  }
-  void add_solve_time(std::chrono::duration<double> time) {
-    const std::scoped_lock lock(mutex_);
-    solve_seconds_ += time.count();
   }
   // What the report shows, read under one lock so that its three parts
   // agree (a prepared solver kept beyond integrate() may finish a solve
@@ -254,8 +254,7 @@ public:
   solve(std::span<const double> right_hand_side) const override {
     const auto start = Clock::now();
     LinearSolveResult result = solver_->solve(right_hand_side);
-    log_->add_solve_time(Clock::now() - start);
-    log_->add(result);
+    log_->add(result, Clock::now() - start);
     return result;
   }
 

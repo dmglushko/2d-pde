@@ -1,6 +1,7 @@
 // A short window: the page never scrolls below its interface (each column
-// scrolls on its own). The reports: a caret says a row opens; the time
-// run's integrator report says where its time went; the remesher's plan
+// scrolls on its own; a probe's chart follows the picture). The reports:
+// a caret says a row opens; the time run's integrator report says where
+// its time went; the remesher's plan
 // is a note, never a warning.
 export default async ({ example, d, w, q, qa, tab, click, until, text, check }) => {
   example("heat_annulus.json");
@@ -11,6 +12,21 @@ export default async ({ example, d, w, q, qa, tab, click, until, text, check }) 
 
   const page = d.scrollingElement;
   check("the page does not scroll", page.scrollHeight <= w.innerHeight + 1, `${page.scrollHeight} > ${w.innerHeight}`);
+
+  // A probe on the ring (100 px right of the hole's centre); its chart follows the picture in the column's scroll: it never
+  // covers the time bar.
+  const canvas = q("#view");
+  const rect = canvas.getBoundingClientRect();
+  const at = { clientX: rect.left + rect.width / 2 + 100, clientY: rect.top + rect.height / 2, button: 0, pointerId: 1, bubbles: true };
+  canvas.dispatchEvent(new w.PointerEvent("pointerdown", at));
+  canvas.dispatchEvent(new w.PointerEvent("pointerup", at));
+  await until(() => qa(".probes-table tbody tr").length === 1, "a probe");
+  await until(() => qa(".probe-chart path.line").length >= 1, "the u(t) chart");
+  const play = q("#time-play");
+  play.scrollIntoView({ block: "nearest" });
+  const box = play.getBoundingClientRect();
+  check("the probes do not cover Play", d.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.closest("#time-play") === play);
+  check("the page does not scroll with a probe", page.scrollHeight <= w.innerHeight + 1, `${page.scrollHeight} > ${w.innerHeight}`);
 
   // The mesh: the plan is a note; no warning counts it.
   tab("mesh");
