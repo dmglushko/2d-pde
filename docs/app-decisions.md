@@ -1356,3 +1356,50 @@ steps). The owner asked the app to offer everything new.
   solve; an adaptive run (one library call) shows no Stop, and a Stop
   that meets a done run still fetches its meshes; an error-controlled
   time run reserves the anchor's earlier steps, which a done run drops.
+
+## 2026-11-19: speed and a steady page (owner's feedback)
+
+- **Library changes the app needs are the app agent's** (the owner): the
+  instructions (root and app AGENTS.md, decisions.md, app.md,
+  library-requests.md) no longer forbid them; such changes follow the
+  library's conventions and are recorded in decisions.md, marked "for
+  the app, by an agent".
+- **The mesh edges are a cached layer.** Measured in Chrome on a 26k
+  triangle annulus: a step switch, a new snapshot and the first key typed
+  each took about 1.05 s, almost all of it one `stroke()` of a path
+  holding every triangle's three edges; without edges, 20 ms. Each edge
+  is now kept once (`meshEdges`) and drawn in paths of 2048 into an
+  offscreen layer redrawn only when the mesh, the view, the size or the
+  edge colour changes; it is copied at the opacity needed (now 20 to
+  30 ms with edges). The boundary is one path per region. Why a layer and
+  not WebGL: the raster of the field already costs ~20 ms at this size,
+  and a layer keeps one drawing code path for the picture and the saved
+  PNG.
+- **The sidebar is resizable** by a handle on its edge (300 px to what
+  leaves the picture 360 px; double click resets; remembered).
+- **Nothing moves while a run plays or a fact changes**: the time, the
+  range of u and the legend's time are sized for the run's widest text by
+  a hidden copy in the same grid cell (no inline styles, which the page
+  avoids); the problem's summary has always the same four chips (each
+  says yes or no) instead of 1 to 4, and an unreadable equation keeps the
+  last readable one's facts greyed (it said "time order 0").
+- **The colour range of a run in time can follow the snapshot** (legend:
+  whole run, the default, keeps colours comparable across times; this
+  snapshot shows a solution that decays from large initial values). From
+  the server's double `snapshot_min`/`snapshot_max`, so no values are
+  scanned in the page. Hidden at phone width (the legend keeps two rows).
+- **Threads in one open card** for every mode: the default linear
+  solver (sparse LU) has no threads, so the only thread field was the
+  folded Assembly card and the owner could not find the solver's. The
+  card shows both counts, or says the solver runs in one thread and names
+  the ones that do (from the catalog: no component named by the page).
+- **The presets moved to the case menu** ("Problems on this geometry"),
+  next to the examples: ready-made starts were in three places (case
+  menu, Problem step head, equation). The equation's and conditions'
+  templates stay at their fields (the owner likes them there).
+- **Reset view** in the toolbar (the ⌂ button on the picture, a double
+  click and 0 did the same but were not found).
+- **Segmented choices** (solve mode, geometry source) are equal cells
+  with a filled selection: the mode row wrapped "Adaptive in time" onto
+  a second line inside its border and the selection was a faint tint.
+

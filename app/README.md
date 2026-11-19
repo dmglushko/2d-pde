@@ -149,8 +149,9 @@ field, Ctrl+Z undoes the whole edit of the field.
    the tangent). **Coefficients** switches a line to the coefficient form
    (a_xx u_xx + … = f) and **As a line** back; there each form shows the
    coefficients in use and the right side, and **Show all coefficients**
-   reveals the others. **Preset…** fills in a whole problem for the current
-   geometry with matching solve settings (**Use a preset…** in the step's head): Poisson, Laplace with u = x,
+   reveals the others. A preset fills in a whole problem for the current
+   geometry with matching solve settings (the **Case** menu, under
+   **Problems on this geometry**, next to the examples): Poisson, Laplace with u = x,
    heat (a bump, a heated boundary, cooling), the wave equation with and
    without damping, steady convection-diffusion and reaction-diffusion;
    the message that follows has **Undo**. A preset is not applied when the
@@ -249,9 +250,10 @@ field, Ctrl+Z undoes the whole edit of the field.
    **Linear solver** offers the direct solvers sparse LU, simplicial LDLᵀ,
    supernodal Cholesky and multifrontal LU (the last two parallel, for
    large problems) and the iterative conjugate gradient and BiCGSTAB;
-   **Threads** (1: one thread, 0: every processor) is an option of each
-   solver that has one and of **Assembly** (folded under the linear
-   solver). Assembly and the iterative solvers give the same numbers for
+   The **Threads** card (1: one thread, 0: every processor) holds the
+   assembly's threads and the linear solver's when it has them; with a
+   solver that runs in one thread (sparse LU, simplicial LDLᵀ) it says so
+   and names the solvers that take threads. Assembly and the iterative solvers give the same numbers for
    every thread count; the parallel direct solvers may differ in the last
    digits.
    Changing the case stops a run. If the server is busy or does not
@@ -275,11 +277,10 @@ whether a run plays as it is computed (the playback speed is chosen on
 the time bar and kept too), the significant digits shown, the number of isolines, the
 colour maps (for values of one sign: blue, orange or green; for both
 signs: blue–red or blue–orange), and the picture quality (lower is faster to pan and draw, higher is sharper). Threads are
-not here: they belong to the case (the Solve step's linear solver and
-Assembly).
+not here: they belong to the case (the Solve step's Threads card).
 
 In the picture, drag to pan, use the wheel or pinch with two fingers to
-zoom, and double-click (or the **⤢** button) to fit; **+** and **−** at
+zoom, and double-click (or **Reset view** in the toolbar, or the **⌂** button) to fit; **+** and **−** at
 the picture's corner zoom too. With the picture focused (Tab), the arrow
 keys pan (Shift for bigger steps), + and - zoom, 0 fits and Enter pins a
 probe at the centre. The toolbar turns layers on and off (boundary, mesh
@@ -293,7 +294,10 @@ stamp. Click a boundary (or a region in the legend) to select it: its
 boundary condition opens in the Problem step (in the Geometry step, its
 row and its actions at the click). **Lock range** keeps the colour range for
 every snapshot and run until **Unlock** (its ends can be edited), so two
-runs can be compared by eye. **Line profile**: drag a line across the
+runs can be compared by eye. For a run in time the legend's
+**range** menu colours by the **whole run** (one range for every
+snapshot) or by **this snapshot** (its own min and max: small values late
+in a run stay visible). **Line profile**: drag a line across the
 picture to plot the shown field along it (it follows the time bar);
 **Remove line** drops it. Point at the picture to read the coordinates,
 the region, the triangle and the value there (for Dirichlet values and
@@ -320,7 +324,9 @@ step), the top bar says what it is busy with.
 The page has one, dark, theme. On a phone, the steps stay at the top and
 the picture with its time bar stays under them while the panel scrolls;
 drag the bar under the picture to make it taller or shorter, or fold the
-picture away with **▴** (the browser remembers both).
+picture away with **▴** (the browser remembers both). On a wider screen,
+drag the sidebar's right edge to make it wider or narrower (double-click
+it for the default; remembered too).
 
 ## Cases
 

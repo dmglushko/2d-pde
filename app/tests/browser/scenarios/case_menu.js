@@ -10,7 +10,7 @@ export default async ({ d, w, q, qa, key, until, text, check }) => {
   key(menu, "ArrowDown");
   check("ArrowDown moves on", d.activeElement === q("#open-case-button"), d.activeElement?.id);
   key(menu, "End");
-  check("End goes to the last item", d.activeElement === qa("#examples [role=menuitem]").at(-1), d.activeElement?.textContent);
+  check("End goes to the last item (the last problem preset)", d.activeElement === qa("#problem-presets [role=menuitem]").at(-1), d.activeElement?.textContent);
   key(menu, "Escape");
   check("Escape closes it and gives the focus back", menu.hidden && d.activeElement === button);
   // An example from the keyboard: open, move to it, Enter (a click).

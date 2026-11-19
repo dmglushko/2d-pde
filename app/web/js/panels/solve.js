@@ -796,21 +796,46 @@ function settingsPart(section, solveCase, mode) {
     h("div", { id: "solve-size" }),
     others.map((other) => modePart(other, solveCase)),
     modePart(mode, solveCase),
-    // Its options are rarely changed: folded for a new viewer.
-    choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear, { folded: true }),
-    assemblerPart(section, solveCase),
+    threadsPart(section, solveCase),
+    // Its options are rarely changed: folded for a new viewer. Its
+    // threads are in the Threads card.
+    choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear, { folded: true, hidden: [THREADS] }),
   );
 }
 
-// The assembly's options (threads), for every mode; folded like the
-// linear solver.
-function assemblerPart(section, solveCase) {
-  if (!section.assembler) return null;
-  const values = (solveCase.assembler ??= {});
-  return foldable(
-    { id: "solve.assembler", title: section.assembler.label, folded: true, attributes: { dataset: { path: "solve.assembler" } } },
-    optionsForm(section.assembler.options, values, "solve.assembler", () => editCase(() => {}, "edit", { sections: ["solve"] })),
-  );
+// The option every parallel component names its thread count with.
+const THREADS = "threads";
+
+// Threads, in one place for every mode: the assembly's (the assembler's
+// options) and the linear solver's when it has the option; when it has
+// not, which solvers do (from the catalog).
+function threadsPart(section, solveCase) {
+  const changed = () => editCase(() => {}, "edit", { sections: ["solve"] });
+  const rows = [];
+  if (section.assembler) {
+    const values = (solveCase.assembler ??= {});
+    const specs = section.assembler.options.map((o) => (o.name === THREADS ? { ...o, label: "Assembly" } : o));
+    rows.push(h("div", { dataset: { path: "solve.assembler" } }, optionsForm(specs, values, "solve.assembler", changed)));
+  }
+  const choice = solveCase.linear_solver;
+  const solvers = section.linear_solver.components;
+  const solver = solvers.find((c) => c.type === choice?.type);
+  const spec = solver?.options.find((o) => o.name === THREADS);
+  if (spec) {
+    choice.options ??= {};
+    rows.push(h("div", { dataset: { path: "solve.linear_solver.options" } }, optionsForm([{ ...spec, label: `Linear solver (${solver.label})` }], choice.options, "solve.linear_solver.options", changed)));
+  } else if (solver) {
+    const parallel = solvers.filter((c) => c.options.some((o) => o.name === THREADS)).map((c) => c.label);
+    rows.push(
+      h(
+        "div",
+        { class: "note threads-note" },
+        `The linear solver, ${solver.label}, runs in one thread.`,
+        parallel.length ? ` Solvers with threads (Linear solver card below): ${parallel.join("; ")}.` : "",
+      ),
+    );
+  }
+  return foldable({ id: "solve.threads", title: "Threads" }, rows);
 }
 
 export const solvePanel = {

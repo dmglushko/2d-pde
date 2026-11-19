@@ -73,6 +73,14 @@ export function freeProbeSlot(probes, max = MAX_PROBES) {
   return -1;
 }
 
+// The sidebar's width, as the viewer dragged it: at least 300 px, and at
+// most what leaves the picture 360 px of the window (never below 300);
+// null for a stored value that is not a number (the default width then).
+export function clampSidebarWidth(width, windowWidth) {
+  if (!Number.isFinite(width)) return null;
+  return Math.round(Math.max(300, Math.min(width, windowWidth - 360)));
+}
+
 // The picture's height at phone width, as the viewer dragged it: at least
 // 160 px and at most 70 % of the window's height; null for a stored value
 // that is not a number (the default height then).

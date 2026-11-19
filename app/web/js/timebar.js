@@ -12,16 +12,35 @@
 
 import { followedRun } from "./actions.js";
 import { drawnSolve } from "./display.js";
-import { formatNumber } from "./pure/format.js";
+import { formatNumber, widestText } from "./pure/format.js";
 import { isTimeRun } from "./pure/stages.js";
 import { addPaceSample, frameAt, measuredPace, PLAYBACK_SPEEDS, playbackStep, speedLabel } from "./pure/playback.js";
-import { h } from "./dom.js";
+import { h, steadyText } from "./dom.js";
 import { prefetchSnapshots } from "./snapshots.js";
 import { setSetting, settings } from "./settings.js";
 import { notify, store } from "./state.js";
 
 let elements = null;
 let shownResult = null;
+
+// The texts the time and the range of u are sized for (the widest of the
+// run, pure/format.js widestText), so the slider and the legend's colour
+// bar do not move while a run plays: {time ("t = …"), when ("at t = …"),
+// range ("u: min … · max …")}, kept per result while it does not grow.
+const sizers = new WeakMap();
+export function timeSizers(result) {
+  if (!result?.times?.length) return { time: "", when: "", range: "" };
+  const kept = sizers.get(result);
+  const count = result.times.length;
+  const ranges = result.snapshot_min?.length ?? 0;
+  if (kept && kept.count === count && kept.ranges === ranges) return kept;
+  const t = widestText(result.times.map((x) => formatNumber(x, 5)));
+  const low = widestText((result.snapshot_min ?? []).map((x) => formatNumber(x)));
+  const high = widestText((result.snapshot_max ?? []).map((x) => formatNumber(x)));
+  const next = { count, ranges, time: `t = ${t}`, when: `at t = ${t}`, range: ranges ? `u: min ${low} · max ${high}` : "" };
+  sizers.set(result, next);
+  return next;
+}
 // The playback going on: {result, t (simulated), last (ms), frame,
 // waiting, speed, timer}, or null.
 let playing = null;
@@ -217,15 +236,17 @@ export function updateTimebar() {
   elements.slider.max = String(last);
   elements.slider.value = String(i);
   elements.slider.setAttribute("aria-valuetext", `t = ${formatNumber(result.times[i], 5)}`);
-  elements.time.textContent = `t = ${formatNumber(result.times[i], 5)}`;
+  const sizer = timeSizers(result);
+  elements.time.replaceChildren(steadyText(`t = ${formatNumber(result.times[i], 5)}`, sizer.time));
   // The server's range of u at this snapshot, in double (null where a
   // snapshot has no finite value).
   const min = result.snapshot_min?.[i];
   const max = result.snapshot_max?.[i];
   const known = i < (result.snapshot_min?.length ?? 0);
-  elements.range.textContent = !known ? "" : Number.isFinite(min) && Number.isFinite(max) ? `u: min ${formatNumber(min)} · max ${formatNumber(max)}` : "u: no finite value";
+  const range = !known ? "" : Number.isFinite(min) && Number.isFinite(max) ? `u: min ${formatNumber(min)} · max ${formatNumber(max)}` : "u: no finite value";
+  elements.range.replaceChildren(range ? steadyText(range, sizer.range) : "");
   // At phone width the range is hidden (picture.css): the time says it.
-  elements.time.title = elements.range.textContent;
+  elements.time.title = range;
   elements.run.hidden = !running;
   if (running) {
     const span = result.t1 - result.t0;

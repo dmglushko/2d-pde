@@ -33,7 +33,7 @@ import {
   triangleAngles,
   viewTransform,
 } from "../web/js/pure/mesh_math.js";
-import { SETTINGS_DEFAULTS, clampPictureHeight, freeProbeSlot, normalizeSettings, parseFolds } from "../web/js/pure/prefs.js";
+import { SETTINGS_DEFAULTS, clampPictureHeight, clampSidebarWidth, freeProbeSlot, normalizeSettings, parseFolds } from "../web/js/pure/prefs.js";
 import { addPaceSample, frameAt, measuredPace, PACE_SHARE, playbackStep, speedLabel, START_SNAPSHOTS } from "../web/js/pure/playback.js";
 import { isLine } from "../web/js/pure/case_model.js";
 import { keptSnapshots, nearestLoaded, snapshotNodes, snapshotPlan, splitCounted, splitSnapshots, valueRange } from "../web/js/pure/run_values.js";
@@ -42,7 +42,7 @@ import { Tickets } from "../web/js/pure/tickets.js";
 import { displayKey, resolveDisplay } from "../web/js/pure/display.js";
 import { backoffDelay, isTransient, plainError, serverBusyText } from "../web/js/pure/requests.js";
 import { adaptiveRows, observedOrders, referenceSlope, studyLevels } from "../web/js/pure/study.js";
-import { bytesText, colorbarTicks, csvText, logTicks, seriesCsv } from "../web/js/pure/format.js";
+import { bytesText, colorbarTicks, csvText, logTicks, seriesCsv, widestText } from "../web/js/pure/format.js";
 import { COLOR_MAPS, colorMapOf } from "../web/js/pure/color.js";
 import { isTimeRun, serverRunBytes } from "../web/js/pure/stages.js";
 
@@ -56,6 +56,19 @@ test("mesh edges: each edge once, two triangles share one", () => {
   const keys = new Set();
   for (let i = 0; i < edges.length; i += 2) keys.add(`${Math.min(edges[i], edges[i + 1])}-${Math.max(edges[i], edges[i + 1])}`);
   assert.deepEqual([...keys].sort(), ["0-1", "0-2", "0-3", "1-2", "2-3"]);
+});
+
+test("the sidebar's width stays between 300 px and the picture's 360 px", () => {
+  assert.equal(clampSidebarWidth(500, 1600), 500);
+  assert.equal(clampSidebarWidth(100, 1600), 300);
+  assert.equal(clampSidebarWidth(1500, 1600), 1240);
+  assert.equal(clampSidebarWidth(400, 500), 300);
+  assert.equal(clampSidebarWidth(Number.NaN, 1600), null);
+});
+
+test("the widest text: the longest, the first of equal ones", () => {
+  assert.equal(widestText(["t = 1", "t = 14.65", "t = 9.5", "t = 10.25"]), "t = 14.65");
+  assert.equal(widestText([]), "");
 });
 
 test("OKLab round trip", () => {
@@ -776,6 +789,19 @@ test("the display: u, its snapshot, the nearest stand-in while loading", () => {
   const none = resolveDisplay({ colorBy: "field", source: "solve", solve: { data: solveData(), fresh: true, frame: 1, snapshot: { values: null, nearest: null, failure: null } } });
   assert.equal(none.values, null);
   assert.ok(none.loading, "never a silent empty picture");
+});
+
+test("the display: the \"this snapshot\" range is the drawn snapshot's own", () => {
+  const scales = [{ kind: "s0" }, { kind: "s1" }, { kind: "s2" }];
+  const snapshotScale = (index) => scales[index];
+  const whole = resolveDisplay({ colorBy: "field", source: "solve", solve: { data: solveData(), fresh: true, frame: 2, snapshot: { values: u2, nearest: null, failure: null } } });
+  assert.equal(whole.scale.kind, "sequential", "the whole run's scale without the choice");
+  const own = resolveDisplay({ colorBy: "field", source: "solve", snapshotScale, solve: { data: solveData(), fresh: true, frame: 2, snapshot: { values: u2, nearest: null, failure: null } } });
+  assert.equal(own.scale, scales[2]);
+  const standIn = resolveDisplay({ colorBy: "field", source: "solve", snapshotScale, solve: { data: solveData(), fresh: true, frame: 2, snapshot: { values: null, nearest: { index: 0, values: u0 }, failure: null } } });
+  assert.equal(standIn.scale, scales[0], "the scale of the snapshot drawn, while the shown one loads");
+  const none = resolveDisplay({ colorBy: "field", source: "solve", snapshotScale: () => null, solve: { data: solveData(), fresh: true, frame: 2, snapshot: { values: u2, nearest: null, failure: null } } });
+  assert.equal(none.scale.kind, "sequential", "a snapshot without a range keeps the run's");
 });
 
 test("the display: a failed snapshot is a failure with retry, never loading forever", () => {

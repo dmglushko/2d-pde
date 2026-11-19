@@ -38,17 +38,20 @@ function traitChips(traits) {
 
 // The chosen component's traits and options. Its description is behind
 // the info toggle of its card (componentInfo).
-export function componentBody(slot, choice, path) {
+// `hidden`: option names shown elsewhere (the Solve step's Threads card),
+// left out of the form here.
+export function componentBody(slot, choice, path, hidden = []) {
   if (!choice) return [];
   const component = slot.components.find((c) => c.type === choice.type);
   if (!component) return [h("div", { class: "error-text" }, `Unknown component ${choice.type}`)];
   choice.options ??= {};
   const section = path.split(".")[0];
-  const options = component.options.length
+  const specs = component.options.filter((o) => !hidden.includes(o.name));
+  const options = specs.length
     ? h(
         "div",
         { dataset: { path: `${path}.options` } },
-        optionsForm(component.options, choice.options, `${path}.options`, () => editCase(() => {}, "edit", { sections: [section] })),
+        optionsForm(specs, choice.options, `${path}.options`, () => editCase(() => {}, "edit", { sections: [section] })),
       )
     : null;
   return [traitChips(component.traits), options];
@@ -65,7 +68,7 @@ export function componentInfo(slot, choice) {
 // A card for a slot that holds one component (or none, when optional).
 // pick(next) stores the new choice in the case. It folds (the select
 // stays in its header); `folded`: how it starts for a new viewer.
-export function choiceCard(slot, choice, path, pick, { folded = false } = {}) {
+export function choiceCard(slot, choice, path, pick, { folded = false, hidden = [] } = {}) {
   const info = componentInfo(slot, choice);
   return foldable(
     {
@@ -76,6 +79,6 @@ export function choiceCard(slot, choice, path, pick, { folded = false } = {}) {
       info: info.panel,
       attributes: { class: "field", dataset: { path } },
     },
-    componentBody(slot, choice, path),
+    componentBody(slot, choice, path, hidden),
   );
 }

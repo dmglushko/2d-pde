@@ -29,7 +29,8 @@ export class Viewer {
   // callbacks: onPin(x, y) for a click (or Enter) at a point;
   // onProfile({from, to}) for a line drawn with the profile tool;
   // onLock(quantity, {low, high} or null) from the legend's range lock;
-  // onRegion(name) for a click on a boundary region (or its legend entry).
+  // onRegion(name) for a click on a boundary region (or its legend entry);
+  // onRange("run" or "snapshot") from the legend's range choice.
   constructor(canvas, tooltip, status, callbacks = {}) {
     this.canvas = canvas;
     this.callbacks = callbacks;
@@ -67,12 +68,14 @@ export class Viewer {
   // locked ({field, gradient}: {low, high} or null), tool, layers
   // ({geometry, mesh, dirichlet, isolines, isolineCount}), probes,
   // profile, selectedRegion (a region name or null), legendNote (why a
-  // comparison the user asked for is not drawn, or null)}. A field with
+  // comparison the user asked for is not drawn, or null), rangeChoice
+  // ("run" or "snapshot" for a run in time, else null), whenSizer (the
+  // widest time label of the run, the room the legend keeps for it)}. A field with
   // `outdated` is drawn greyed. Draws only when something shown changed; returns whether it
   // did (the legend changes only then).
   set(data) {
     const previous = this.data;
-    const keys = ["geometry", "mesh", "meshStale", "dirichlet", "colorBy", "probes", "profile", "locked", "tool", "selectedRegion", "legendNote"];
+    const keys = ["geometry", "mesh", "meshStale", "dirichlet", "colorBy", "probes", "profile", "locked", "tool", "selectedRegion", "legendNote", "rangeChoice", "whenSizer"];
     const changed = keys.some((k) => previous[k] !== data[k]) || !sameLayers(previous.layers, data.layers) || !sameField(previous.field, data.field);
     if (!changed) return false;
     const meshChanged = data.mesh !== previous.mesh;
@@ -381,7 +384,7 @@ export class Viewer {
   // The legend's elements (regions, the colour bar with its range lock,
   // the Dirichlet nodes).
   legend() {
-    return legendNodes(this.legendData(), this.callbacks.onLock, this.callbacks.onRegion);
+    return legendNodes(this.legendData(), this.callbacks.onLock, this.callbacks.onRegion, this.callbacks.onRange);
   }
 
   // The picture as it is shown, with its legend underneath, as a PNG blob.
