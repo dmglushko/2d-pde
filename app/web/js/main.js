@@ -608,6 +608,7 @@ function loadCase(input, { name = "case.json", dirty = false, offerRestore = tru
   const replaced = store.caseData ? { caseData: store.caseData, name: store.caseName, dirty: store.dirty } : null;
   store.notice = normalized.replaced.length ? { text: `Replaced by defaults when the case was read: ${normalized.replaced.join(", ")}.` } : null;
   store.previousCase = offerRestore ? replaced : null;
+  store.shownCycle = null;
   for (const stage of Object.keys(store.results)) store.results[stage] = null;
   // Normalizing is the page's own work: the notice says what it replaced,
   // and the case stays as saved (or not) as it was.

@@ -9,7 +9,7 @@
 
 import { toast } from "./actions.js";
 import { api } from "./api.js";
-import { lastResult, notify, requestTicket, store } from "./state.js";
+import { freshResult, lastResult, notify, requestTicket, store } from "./state.js";
 
 // Per result: cycle -> {view, loading}.
 const kept = new WeakMap();
@@ -25,13 +25,25 @@ export function chosenCycle(data) {
   return chosen && chosen.data === data ? chosen.cycle : null;
 }
 
-// Shows cycle `cycle` of `data` (null or the last: the result itself).
+// Shows cycle `cycle` of `data` (null or the last: the result itself);
+// the picture switches to the solution if a field of the Assemble step
+// was shown.
 export function chooseCycle(data, cycle) {
   const count = cycleCount(data);
   store.shownCycle = cycle !== null && cycle >= 1 && cycle < count ? { data, cycle } : null;
+  store.fieldSource = "solve";
   if (store.shownCycle) load(data, cycle);
   notify("frame");
 }
+
+// The cycle the picture shows now (from 1): the chosen one once it is
+// loaded, else the last.
+export function displayedCycle(data) {
+  return cycleView(data)?.cycle ?? cycleCount(data);
+}
+
+// The solve result the page shows (current or outdated).
+const shownResult = () => freshResult("solve") ?? lastResult("solve");
 
 // What the picture draws for `data`: the chosen cycle's view once it is
 // loaded, else null (the result itself).
@@ -62,12 +74,14 @@ async function load(data, cycle) {
     };
   } catch (error) {
     cycles.delete(cycle);
-    if (ticket.live() && chosenCycle(data) === cycle) {
+    // Said only while that result is still the one shown and the cycle
+    // still chosen (a newer solve or case replaces both).
+    if (ticket.live() && shownResult() === data && chosenCycle(data) === cycle) {
       store.shownCycle = null;
       toast(`Cycle ${cycle} could not be shown: ${error.message}`);
     }
   } finally {
     item.loading = false;
   }
-  notify("frame");
+  if (shownResult() === data) notify("frame");
 }

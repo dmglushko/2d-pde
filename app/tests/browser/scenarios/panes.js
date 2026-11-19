@@ -39,6 +39,15 @@ export default async ({ w, q, qa, tab, click, example, type, until, idle, text, 
   await until(() => q('input[aria-label="x of P1"]')?.value === "0.25", "x typed");
   check("the typed x moves the probe", true);
   check("the field keeps the focus after Enter", w.document.activeElement === q('input[aria-label="x of P1"]'));
+  // Unfinished text ("1e": the 1 was a number a moment before) moves nothing.
+  const x = q('input[aria-label="x of P1"]');
+  x.focus();
+  type(x, "1");
+  type(x, "1e");
+  x.dispatchEvent(new w.Event("change", { bubbles: true }));
+  x.blur();
+  await idle();
+  check("invalid text does not move the probe", q('input[aria-label="x of P1"]').value === "0.25", q('input[aria-label="x of P1"]').value);
 
   // The panel's height follows its header; low enough, it hides.
   const handle = q("#extra-handle");

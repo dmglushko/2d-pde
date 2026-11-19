@@ -14,7 +14,8 @@
 import { api } from "./api.js";
 import { plainError } from "./pure/requests.js";
 import { lineChart } from "./charts.js";
-import { formatNumber } from "./pure/format.js";
+import { formatNumber, parseNumberText } from "./pure/format.js";
+import { drawnSolve } from "./display.js";
 import { interpolateAt, locatePoint, meshGrid, sampleLine } from "./pure/mesh_math.js";
 import { fill, h, numberInput } from "./dom.js";
 import { freshResult, lastResult, notify, requestTicket, setProbes, setProfile, setViewOption, store } from "./state.js";
@@ -53,15 +54,17 @@ function probeValue(i, found, field, server, frame) {
 // drawn again under it.
 function coordinate(value, label, apply) {
   const shown = Number(value.toPrecision(6));
-  let next = shown;
   const input = numberInput({
     value: shown,
     label,
     className: "coordinate",
-    onNumber: (v) => (next = v),
+    onNumber: () => {},
     onCommit: () => {
+      // The whole text as it stands: an unfinished one ("1e") moves nothing.
+      const parsed = parseNumberText(input.value);
+      if (parsed.kind !== "number") return;
       delete input.dataset.editing;
-      if (next !== shown) apply(next);
+      if (parsed.value !== shown) apply(parsed.value);
     },
   });
   input.addEventListener("input", () => (input.dataset.editing = ""));
@@ -120,7 +123,10 @@ export function updateProbes(root, { mesh, field, display, solution, frame, digi
   const refocus = keptFocus(list);
   const located = mesh ? probes.map((p) => locatePoint(mesh, gridOf(mesh), p.x, p.y)) : probes.map(() => null);
   // u of a solution (fresh or outdated): the server's values in double.
-  const run = mesh && display?.kind === "solution" && field ? (freshResult("solve") ?? lastResult("solve")) : null;
+  // An earlier adaptive cycle (cycles.js) is not the run's snapshot: its
+  // values are interpolated from what the picture draws.
+  const cycle = display?.kind === "solution" ? (drawnSolve()?.data.cycle ?? null) : null;
+  const run = mesh && display?.kind === "solution" && field && !cycle ? (freshResult("solve") ?? lastResult("solve")) : null;
   const server = run && probes.length ? serverSeries(run, probes) : null;
   if (probes.length === 0) {
     fill(list);
@@ -130,7 +136,7 @@ export function updateProbes(root, { mesh, field, display, solution, frame, digi
       ? null
       : server
         ? `${field.name} in double from the server, at the shown snapshot.`
-        : display?.kind === "difference"
+        : display?.kind === "difference" || cycle
           ? `${field.name} interpolated in the page from the float32 values drawn (display precision).`
           : `${field.name} interpolated in the page from the field's values.`;
     const header = h(
@@ -284,50 +290,61 @@ function updateProfile(slot, { mesh, field }) {
   const width = Math.max(200, Math.round(slot.clientWidth || slot.parentElement?.clientWidth || 480));
   const values = field?.values ?? null;
   if (profileState && profileState.line === line && profileState.mesh === mesh && profileState.values === values && profileState.width === width) return;
+  // The head (title, Remove, the ends' fields) is made once per line, so
+  // a field being typed in stays while the chart follows the snapshots.
+  const fresh = !profileState || profileState.line !== line || !slot.querySelector(".line-ends");
   profileState = { line, mesh, values, width };
-  const remove = h("button", { type: "button", class: "link", onclick: () => setProfile(null) }, "Remove line");
   const length = Math.hypot(line.to[0] - line.from[0], line.to[1] - line.from[1]);
-  // The line's ends, typed by hand.
-  const end = (name, key) =>
-    h(
-      "span",
-      { class: "line-end" },
-      h("span", { class: "line-end-name" }, name),
-      ["x", "y"].map((axis, k) =>
-        coordinate(line[key][k], `${axis} of ${name}`, (v) => {
-          const point = [...line[key]];
-          point[k] = v;
-          setProfile({ ...line, [key]: point });
-        }),
+  const titleText = field ? `${field.label} along A → B (length ${formatNumber(length)})` : "Line profile";
+  if (fresh) {
+    const refocus = keptFocus(slot);
+    const remove = h("button", { type: "button", class: "link", onclick: () => setProfile(null) }, "Remove line");
+    // The line's ends, typed by hand.
+    const end = (name, key) =>
+      h(
+        "span",
+        { class: "line-end" },
+        h("span", { class: "line-end-name" }, name),
+        ["x", "y"].map((axis, k) =>
+          coordinate(line[key][k], `${axis} of ${name}`, (v) => {
+            const point = [...line[key]];
+            point[k] = v;
+            setProfile({ ...line, [key]: point });
+          }),
+        ),
+      );
+    fill(
+      slot,
+      h(
+        "div",
+        { class: "chart-head" },
+        h("span", { class: "chart-title", title: "Distance from A along the line; gaps are outside the mesh" }, titleText),
+        h("span", { class: "spacer" }),
+        remove,
       ),
+      h("div", { class: "line-ends" }, end("A", "from"), end("B", "to")),
+      h("div", { class: "profile-plot" }),
     );
-  const refocus = keptFocus(slot);
-  const title = h(
-    "div",
-    { class: "chart-head" },
-    h("span", { class: "chart-title", title: "Distance from A along the line; gaps are outside the mesh" }, field ? `${field.label} along A → B (length ${formatNumber(length)})` : "Line profile"),
-    h("span", { class: "spacer" }),
-    remove,
-  );
-  const ends = h("div", { class: "line-ends" }, end("A", "from"), end("B", "to"));
-
-  if (!values) {
-    fill(slot, title, ends, h("p", { class: "note" }, "Colour the picture by a field to see it along the line."));
     refocus();
+  } else slot.querySelector(".chart-head .chart-title").textContent = titleText;
+  const plot = slot.querySelector(".profile-plot");
+  if (!values) {
+    fill(plot, h("p", { class: "note" }, "Colour the picture by a field to see it along the line."));
     return;
   }
   const sampled = sampleLine(mesh, gridOf(mesh), values, line.from, line.to, PROFILE_SAMPLES);
-  const chart = lineChart({
-    times: Array.from(sampled.distance),
-    series: [{ name: field.name ?? "value", cls: "ink", values: sampled.values }],
-    current: null,
-    width,
-    xName: "distance from A",
-    label: `${field.label} along the profile line`,
-    csvName: "line-profile.csv",
-  });
-  fill(slot, title, ends, chart);
-  refocus();
+  fill(
+    plot,
+    lineChart({
+      times: Array.from(sampled.distance),
+      series: [{ name: field.name ?? "value", cls: "ink", values: sampled.values }],
+      current: null,
+      width,
+      xName: "distance from A",
+      label: `${field.label} along the profile line`,
+      csvName: "line-profile.csv",
+    }),
+  );
 }
 
 // Drawing a line ends the profile tool (the picture pans again).

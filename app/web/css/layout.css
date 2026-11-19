@@ -257,7 +257,8 @@ body.resizing-sidebar {
     cursor: default;
   }
   .extra-head::before,
-  #toggle-sidebar {
+  #toggle-sidebar,
+  #toggle-toolbar {
     display: none;
   }
   .panels {

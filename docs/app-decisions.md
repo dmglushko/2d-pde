@@ -1534,3 +1534,13 @@ steps). The owner asked the app to offer everything new.
 - **No memory budget by default.** The owner works in one tab; the 1 GiB
   budget only refused runs and dropped other tabs' results.
   `--memory-budget` still sets one for a shared server.
+- **Fixes from the review of the panes and cycles (GPT-6.2 Sol).** Probes
+  on an earlier adaptive cycle read the values drawn (the server's are
+  the last cycle's); the line's ends stay mounted while a run plays (only
+  its chart is drawn again); a typed coordinate is applied only when its
+  whole text is a number; on a phone ☰ is not offered (▴ in the toolbar
+  folds the picture, and the two must not hide each other); a chart's
+  click is read in the SVG's own units; the cycles table marks the cycle
+  the picture shows (once it has arrived), choosing one shows the
+  solution, and a superseded cycle request says nothing; a chart with
+  every line hidden keeps its CSV.

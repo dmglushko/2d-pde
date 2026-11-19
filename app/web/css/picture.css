@@ -547,9 +547,13 @@ input.coordinate {
   color: var(--ink-2);
 }
 
-/* The view options folded away (☰ beside the zoom buttons). */
-.viewer-toolbar.folded {
-  display: none;
+/* The view options folded away (☰ beside the zoom buttons; wide screens
+   only: on a phone ▴ in the toolbar folds the picture, and the two must
+   never hide each other's control). */
+@media (min-width: 861px) {
+  .viewer-toolbar.folded {
+    display: none;
+  }
 }
 
 #toggle-toolbar[aria-pressed="false"] {

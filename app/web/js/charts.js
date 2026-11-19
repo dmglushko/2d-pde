@@ -113,8 +113,28 @@ function plainChart({
         high = Math.max(high, v);
       }
   const wrap = h("div", { class: "chart" });
+  // The numbers of every series, also when none is drawn.
+  const downloadRow = () =>
+    csvName
+      ? h(
+          "div",
+          { class: "chart-actions" },
+          h(
+            "button",
+            {
+              type: "button",
+              class: "link chart-download",
+              title: "The numbers drawn in this chart, one row per point, in full precision",
+              onclick: () => saveBlob(new Blob([seriesCsv(xName, Array.from(times), csvSeries)], { type: "text/csv" }), csvName),
+            },
+            "Download data (CSV)",
+          ),
+        )
+      : null;
   if (low === Infinity || times.length === 0) {
     wrap.append(h("p", { class: "note" }, emptyText));
+    const row = times.length > 0 ? downloadRow() : null;
+    if (row) wrap.append(row);
     wrap.setCurrent = () => {};
     return wrap;
   }
@@ -241,8 +261,9 @@ function plainChart({
 
   // The point nearest to the pointer.
   const nearest = (event) => {
+    // In the SVG's own units: CSS may draw it narrower than `width`.
     const rect = chart.getBoundingClientRect();
-    const px = event.clientX - rect.left;
+    const px = ((event.clientX - rect.left) * width) / (rect.width || width);
     let best = 0;
     for (let k = 1; k < xs.length; k++) if (Math.abs(x(xs[k]) - px) < Math.abs(x(xs[best]) - px)) best = k;
     return best;
@@ -267,18 +288,7 @@ function plainChart({
     }
   });
 
-  if (csvName) {
-    const download = h(
-      "button",
-      {
-        type: "button",
-        class: "link chart-download",
-        title: "The numbers drawn in this chart, one row per point, in full precision",
-        onclick: () => saveBlob(new Blob([seriesCsv(xName, xs, csvSeries)], { type: "text/csv" }), csvName),
-      },
-      "Download data (CSV)",
-    );
-    wrap.append(h("div", { class: "chart-actions" }, download));
-  }
+  const row = downloadRow();
+  if (row) wrap.append(row);
   return wrap;
 }
