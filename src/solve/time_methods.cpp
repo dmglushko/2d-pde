@@ -146,6 +146,10 @@ ImplicitEuler::local_error(const TimeState &before, const TimeState &after,
                            double dt,
                            std::span<const PreviousStep> previous) const {
   const std::size_t n = before.values.size();
+  // No free unknowns (every node a Dirichlet node): nothing to estimate,
+  // and at time order 2 no velocities to tell the order by.
+  if (n == 0)
+    return {};
   std::vector<double> error(n);
   if (!before.velocities.empty()) {
     // Time order 2: dt^2 / 2 u'' with u'' = (V1 - V0) / dt.
@@ -154,14 +158,20 @@ ImplicitEuler::local_error(const TimeState &before, const TimeState &after,
       error[i] = 0.5 * dt * (after.velocities[i] - before.velocities[i]);
     return error;
   }
-  // Time order 1: dt^2 / 2 u'' with u'' = 2 (d1 - d0) / (dt + dt_-1), the
-  // divided difference of the quotients at the middles of the two steps.
+  // Time order 1. The step's error is dt^2 / 2 u'': Euler takes
+  // U1 = U0 + dt u'(t1) = U0 + dt u' + dt^2 u'' + ..., the exact solution
+  // through U0 is U0 + dt u' + dt^2 / 2 u'' + ... (u' and u'' at t0). The
+  // step solves B d1 + A U1 = b(t1) with d1 = (U1 - U0) / dt, so d1 is the
+  // rate at the step's end t1, and the earlier step's quotient
+  // d0 = (U0 - U_-1) / dt_-1 is the rate at t0, whatever that step's
+  // length: the two are dt apart, so u'' = (d1 - d0) / dt and
+  // e = dt (d1 - d0) / 2 (one earlier step).
   check_previous(name(), previous, 1, n);
   const PreviousStep &last = previous[0];
   for (std::size_t i = 0; i < n; ++i) {
     const double d1 = (after.values[i] - before.values[i]) / dt;
     const double d0 = (before.values[i] - last.values[i]) / last.dt;
-    error[i] = dt * dt * (d1 - d0) / (dt + last.dt);
+    error[i] = 0.5 * dt * (d1 - d0);
   }
   return error;
 }
@@ -204,8 +214,12 @@ StepSolveInfo ImplicitMidpoint::advance(const fem::AssembledProblem &problem,
 
 std::optional<ErrorEstimateDeclaration>
 ImplicitMidpoint::error_estimate(int time_order) const {
-  if (time_order == 1 || time_order == 2)
+  // Time order 1 from the values of the last three steps, time order 2
+  // from the velocities, which need one earlier step.
+  if (time_order == 1)
     return ErrorEstimateDeclaration{.order = 2, .previous_steps = 2};
+  if (time_order == 2)
+    return ErrorEstimateDeclaration{.order = 2, .previous_steps = 1};
   return std::nullopt;
 }
 
@@ -213,9 +227,41 @@ std::vector<double>
 ImplicitMidpoint::local_error(const TimeState &before, const TimeState &after,
                               double dt,
                               std::span<const PreviousStep> previous) const {
-  // dt^3 / 12 u''' with u''' = 6 U[s0, s1, s2, s3], the points the ends of
-  // the two earlier steps and of this one, placed by the steps' lengths.
   const std::size_t n = before.values.size();
+  // No free unknowns (every node a Dirichlet node): nothing to estimate,
+  // and at time order 2 no velocities to tell the order by.
+  if (n == 0)
+    return {};
+  if (!before.velocities.empty()) {
+    // Time order 2. The displacement update (U1 - U0) / dt = (V0 + V1) / 2
+    // is the trapezoidal rule for U' = V, whose error is dt^3 / 12 V'' =
+    // dt^3 / 12 u''' (an error of V1 enters U1 only times dt / 2, at
+    // O(dt^4)). u''' = V'' is estimated from the endpoint velocities, not
+    // from the values, which carry the errors of earlier (possibly much
+    // longer) steps: a1 = (V1 - V0) / dt and a0 = (V0 - V_-1) / dt_-1 are
+    // u'' at the middles of this step and the one before, (dt + dt_-1) / 2
+    // apart, so u''' = 2 (a1 - a0) / (dt + dt_-1) and
+    // e = dt^3 (a1 - a0) / (6 (dt + dt_-1)). The velocity V_-1 at the start
+    // of the earlier step is not kept; that step was one of this method's
+    // (no other method keeps earlier steps at time order 2, so none comes
+    // with an anchor), so its own update gives it back:
+    // V_-1 = 2 (U0 - U_-1) / dt_-1 - V0.
+    check_previous(name(), previous, 1, n);
+    const PreviousStep &last = previous[0];
+    std::vector<double> error(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      const double v0 = before.velocities[i];
+      const double v_last =
+          2.0 * (before.values[i] - last.values[i]) / last.dt - v0;
+      const double a1 = (after.velocities[i] - v0) / dt;
+      const double a0 = (v0 - v_last) / last.dt;
+      error[i] = dt * dt * dt * (a1 - a0) / (6.0 * (dt + last.dt));
+    }
+    return error;
+  }
+  // Time order 1: dt^3 / 12 u''' with u''' = 6 U[s0, s1, s2, s3], the
+  // points the ends of the two earlier steps and of this one, placed by
+  // the steps' lengths.
   check_previous(name(), previous, 2, n);
   const double s1 = previous[0].dt;
   const double s2 = s1 + previous[1].dt;
@@ -332,6 +378,9 @@ Newmark::local_error(const TimeState &before, const TimeState &after, double dt,
                      std::span<const PreviousStep> previous) const {
   // Zienkiewicz and Xie (1991): dt^2 (beta - 1/6) (W1 - W0).
   const std::size_t n = before.values.size();
+  // No free unknowns (every node a Dirichlet node): nothing to estimate.
+  if (n == 0)
+    return {};
   check_previous(name(), previous, 0, n);
   std::vector<double> error(n);
   for (std::size_t i = 0; i < n; ++i)

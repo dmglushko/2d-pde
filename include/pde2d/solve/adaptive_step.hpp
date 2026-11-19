@@ -37,8 +37,10 @@ struct AdaptiveStepOptions {
   // [min_factor, 1], max_keep_factor in [1, max_factor].
   double min_keep_factor = 0.9;
   double max_keep_factor = 1.5;
-  // The bounds of dt. A proposal is clamped to them; a rejected step whose
-  // smaller dt would be below min_dt throws std::runtime_error. min_dt
+  // The bounds of dt. A proposal is clamped to them, also the shorter try
+  // after a rejection (at least min_dt); a rejected step that was not
+  // longer than min_dt leaves no shorter try and throws
+  // std::runtime_error. min_dt
   // finite and at least 0 (0: only the Integrator's own limit, a step too
   // small to change t), max_dt positive (infinity: no bound).
   double min_dt = 0.0;
@@ -54,8 +56,10 @@ struct AdaptiveStepOptions {
 //
 // - rejects the step when the norm is above 1: the Integrator takes it
 //   again from the same state with dt safety (1 / err)^(1 / (p + 1)), at
-//   least min_factor dt (always smaller than the rejected step); below
-//   min_dt it throws std::runtime_error;
+//   least min_factor times its length (always shorter than the rejected
+//   step) and at least min_dt; when the rejected step was not longer
+//   than min_dt, no shorter try is left and it throws
+//   std::runtime_error;
 // - accepts it otherwise and proposes dt safety (1 / err)^(1 / (p + 1))
 //   for the next step (p the method's order), limited to [min_factor dt,
 //   max_factor dt] and to [min_dt, max_dt]; a proposal within

@@ -8,6 +8,7 @@
 
 #include "solve_support.hpp"
 
+#include "pde2d/fem/assembler.hpp"
 #include "pde2d/solve/adaptive_step.hpp"
 #include "pde2d/solve/fixed_step.hpp"
 #include "pde2d/solve/implicit_euler.hpp"
@@ -275,8 +276,16 @@ void controller_decisions() {
                               .max_dt = 0.2});
   near(judge(bounded, 1e-6, 0.1, 0.1).next_dt, 0.2, 1e-15, "at most max_dt");
   near(judge(bounded, 0.9, 0.2, 0.2).next_dt, 0.2, 1e-15, "kept at max_dt");
+  // A rejection whose proposal (0.02) is below min_dt tries min_dt; one
+  // of a step not longer than min_dt (also a short landing) throws.
+  d = judge(bounded, 100.0, 0.1, 0.1);
+  check(!d.accept && d.next_dt == 0.05, "a rejection tries min_dt");
   expect_throws<std::runtime_error>(
-      [&] { (void)judge(bounded, 100.0, 0.1, 0.1); }, "below min_dt");
+      [&] { (void)judge(bounded, 100.0, 0.05, 0.05); },
+      "not longer than min_dt = 0.05");
+  expect_throws<std::runtime_error>(
+      [&] { (void)judge(bounded, 1.5, 0.1, 0.04); },
+      "not longer than min_dt = 0.05");
 }
 
 // --- the methods' estimates -----------------------------------------------
@@ -294,15 +303,15 @@ void method_declarations() {
         "Euler at order 2: p = 1, no earlier step");
   check(midpoint.error_estimate(1)->order == 2 &&
             midpoint.error_estimate(1)->previous_steps == 2 &&
-            midpoint.error_estimate(2)->previous_steps == 2,
-        "midpoint: p = 2, two earlier steps");
+            midpoint.error_estimate(2)->order == 2 &&
+            midpoint.error_estimate(2)->previous_steps == 1,
+        "midpoint: p = 2, two earlier steps at order 1, one at order 2");
   check(newmark.error_estimate(2)->order == 2 &&
             newmark.error_estimate(2)->previous_steps == 0,
         "Newmark: p = 2, no earlier step");
 
-  // The formulas on a scalar u = t^3 sampled at unequal times: the
-  // estimates are the textbook terms dt^2/2 u'' and dt^3/12 u''', with the
-  // derivatives from divided differences (exact for a cubic).
+  // The formulas on a scalar u = t^3 sampled at unequal times (the
+  // estimates against the actual errors of steps: further below).
   const auto u = [](double t) { return t * t * t; };
   // Euler at order 1: the times 1, 1.2 (previous), 1.5 (this step).
   {
@@ -310,11 +319,7 @@ void method_declarations() {
     const std::vector<PreviousStep> previous{{.values = {u(1.0)}, .dt = 0.2}};
     const double d1 = (u(1.5) - u(1.2)) / 0.3, d0 = (u(1.2) - u(1.0)) / 0.2;
     near(euler.local_error(before, after, 0.3, previous)[0],
-         0.3 * 0.3 * (d1 - d0) / 0.5, 1e-14,
-         "Euler: dt^2 (d1 - d0) / (dt + dt_-1)");
-    // u'' of the cubic at 1.25 (the divided difference's point) is 7.5.
-    near((d1 - d0) / 0.25, 6.0 * (1.0 + 1.2 + 1.5) / 3.0, 1e-12,
-         "the second divided difference of a cubic");
+         0.5 * 0.3 * (d1 - d0), 1e-14, "Euler: dt (d1 - d0) / 2");
   }
   // Midpoint: the times 1, 1.1, 1.3, 1.6; U[...] of t^3 is 1.
   {
@@ -562,7 +567,8 @@ void continues_with_the_anchor() {
   }
 }
 
-// min_dt: a front too steep for it stops the run with a clear message.
+// min_dt: a front too steep for it stops the run with a clear message
+// (a rejected step at min_dt).
 void stops_below_min_dt() {
   const auto problem = meshed(heat(front()));
   expect_throws<std::runtime_error>(
@@ -572,7 +578,239 @@ void stops_below_min_dt() {
             {.initial_dt = 0.01, .atol = 1e-8, .rtol = 1e-6, .min_dt = 0.005})
             .integrate(problem, 0.0, 1.0);
       },
-      "would be below min_dt = 0.005");
+      "not longer than min_dt = 0.005");
+}
+
+// --- estimates against the actual error of a step --------------------------
+//
+// Problems with A = 0, so every free unknown follows its own ODE in time
+// (the load and the Dirichlet lifting are M times the data): the exact
+// evolution from any state a step starts from is known in closed form,
+// and the actual local error of a step is its end state minus that
+// evolution from its start state. The estimates are compared with it in
+// the controller's norm.
+
+// The values (and velocities) of a solution at the free unknowns.
+std::vector<double> free_part(const MeshedProblem &problem,
+                              const std::vector<double> &all) {
+  std::vector<double> part;
+  for (const std::size_t node : problem.free_nodes())
+    part.push_back(all[node]);
+  return part;
+}
+
+// The controller's norm of the actual local error of the step from
+// `start` to `end`, given the exact evolution of one value (and velocity)
+// over [t0, t1].
+double actual_norm(const AdaptiveStep &controller, const MeshedProblem &problem,
+                   const Solution &start, const Solution &end,
+                   const std::function<double(double u0, double v0, double t0,
+                                              double t1)> &evolve) {
+  const std::vector<double> before = free_part(problem, start.values),
+                            after = free_part(problem, end.values);
+  const std::vector<double> v0 = start.velocities.empty()
+                                     ? std::vector<double>(before.size(), 0.0)
+                                     : free_part(problem, start.velocities);
+  std::vector<double> actual(before.size());
+  for (std::size_t i = 0; i < before.size(); ++i)
+    actual[i] = after[i] - evolve(before[i], v0[i], start.time, end.time);
+  return controller.error_norm(before, after, actual);
+}
+
+// u_t = 2t (u = t^2 on the boundary and at t = 0): every free unknown
+// follows U' = 2t, U(t1) = U(t0) + t1^2 - t0^2.
+Problem rate_2t() {
+  const BoundaryCondition dirichlet{.alpha = e("1"), .g = e("t^2")};
+  return {.equation = {.m1 = e("1"), .f = e("2*t")},
+          .boundary_conditions = {{"bottom", dirichlet},
+                                  {"right", dirichlet},
+                                  {"top", dirichlet},
+                                  {"left", dirichlet}},
+          .initial = {.u = e("t^2")}};
+}
+
+// u_tt = c (u = c t^2 / 2): U(t1) = U0 + V0 h + c h^2 / 2, h = t1 - t0.
+// u_tt = t (u = t^3 / 6): U(t1) = U0 + V0 h + t0 h^2 / 2 + h^3 / 6.
+Problem acceleration(const std::string &u, const std::string &u_t,
+                     const std::string &u_tt) {
+  const BoundaryCondition dirichlet{.alpha = e("1"), .g = e(u)};
+  return {.equation = {.m2 = e("1"), .f = e(u_tt)},
+          .boundary_conditions = {{"bottom", dirichlet},
+                                  {"right", dirichlet},
+                                  {"top", dirichlet},
+                                  {"left", dirichlet}},
+          .initial = {.u = e(u), .u_t = e(u_t)}};
+}
+
+// Implicit Euler at time order 1, a step of another length than the one
+// before: the quotients d = (U1 - U0) / h are the rates at the steps'
+// ends, a step's length apart, whatever the length of the step before
+// (review finding: the estimate was off by 2h / (h + k)). Here the actual
+// local error is h^2, and the estimate h (d1 - d0) / 2 is exact.
+void euler_after_a_step_of_another_length() {
+  const auto problem = meshed(rate_2t());
+  struct Case {
+    double first, t1, atol;
+  };
+  // A landing of 0.02 after a step of 0.1; a step of 0.1 after a landing
+  // of 0.01. atol so that the step is accepted (norms 0.4 and 0.5).
+  for (const Case &c : {Case{0.1, 0.12, 1e-3}, Case{0.01, 0.11, 2e-2}}) {
+    const AdaptiveStepOptions options{
+        .initial_dt = 0.1, .atol = c.atol, .rtol = 0.0};
+    const auto r = adaptive(std::make_shared<ImplicitEuler>(), options)
+                       .integrate(problem, 0.0, c.t1,
+                                  {.keep_step_history = true,
+                                   .snapshot_times = {c.first}});
+    check(r.history.size() == 2 && r.history[1].accepted &&
+              r.history[1].error_norm.has_value(),
+          "two steps, the second estimated and accepted");
+    const double actual =
+        actual_norm(AdaptiveStep(options), *problem, r.snapshots.at(0), r.final,
+                    [](double u0, double, double t0, double t1) {
+                      return u0 + t1 * t1 - t0 * t0;
+                    });
+    near(*r.history[1].error_norm, actual, 1e-9 * actual,
+         std::format("Euler, {} after {}: the estimate is the actual error",
+                     c.t1 - c.first, c.first));
+  }
+}
+
+// The midpoint method at time order 2 on u_tt = t with steps of 0.01, 0.1
+// and 0.01: V is exact (the midpoint rule integrates the linear u_tt
+// exactly) and U takes the trapezoidal rule of V, so the actual local
+// error is h^3 / 12 u''' = h^3 / 12. The estimate from the velocities is
+// exact; the one from the third divided difference of U was suppressed by
+// the errors U carries from the long step (review finding: 0.521 reported
+// against an actual 2.08).
+void midpoint_second_order_on_unequal_steps() {
+  const auto problem = meshed(acceleration("t^3/6", "t^2/2", "t"));
+  const AdaptiveStepOptions options{
+      .initial_dt = 0.1, .atol = 1e-4, .rtol = 0.0};
+  const auto r = adaptive(std::make_shared<ImplicitMidpoint>(), options)
+                     .integrate(problem, 0.0, 0.12,
+                                {.keep_step_history = true,
+                                 .snapshot_times = {0.01, 0.11}});
+  check(r.history.size() == 3 &&
+            std::ranges::all_of(r.history,
+                                [](const auto &s) { return s.accepted; }),
+        "three accepted steps");
+  near(r.history[1].dt, 0.1, 1e-12, "the long step");
+  const auto evolve = [](double u0, double v0, double t0, double t1) {
+    const double h = t1 - t0;
+    return u0 + v0 * h + t0 * h * h / 2.0 + h * h * h / 6.0;
+  };
+  const Solution *starts[] = {&r.snapshots.at(0), &r.snapshots.at(1)};
+  const Solution *ends[] = {&r.snapshots.at(1), &r.final};
+  for (std::size_t k = 0; k < 2; ++k) {
+    const auto &record = r.history[k + 1];
+    check(record.error_norm.has_value(),
+          std::format("step {} is estimated", k + 2));
+    const double actual = actual_norm(AdaptiveStep(options), *problem,
+                                      *starts[k], *ends[k], evolve);
+    near(*record.error_norm, actual, 1e-8 * actual,
+         std::format("midpoint, step {} of length {}: the estimate is the "
+                     "actual error",
+                     k + 2, record.dt));
+  }
+}
+
+// min_dt: a rejected step longer than min_dt is taken again at min_dt when
+// the proposal is below it (review finding: the run stopped although the
+// step at min_dt passes). Implicit Euler at time order 2 on u_tt = 2: the
+// actual local error of a step of length h from any state is h^2.
+void retries_at_min_dt() {
+  const auto problem = meshed(acceleration("t^2", "2*t", "2"));
+  // The step of 0.1 has the norm 1.1; the proposal 0.1 * 0.9 / sqrt(1.1)
+  // = 0.0858 is below min_dt = 0.09, where the norm is 0.891.
+  const AdaptiveStepOptions options{
+      .initial_dt = 0.1, .atol = 0.01 / 1.1, .rtol = 0.0, .min_dt = 0.09};
+  const AdaptiveStep controller(options);
+  const auto evolve = [](double u0, double v0, double t0, double t1) {
+    const double h = t1 - t0;
+    return u0 + v0 * h + h * h;
+  };
+  // The rejected step, as a fixed step of 0.1: its actual norm is above 1.
+  const Solution initial =
+      fixed(std::make_shared<ImplicitEuler>(), 0.1)
+          .integrate(problem, 0.0, 0.1, {.snapshot_times = {0.0}})
+          .snapshots.at(0);
+  const double rejected =
+      actual_norm(controller, *problem, initial,
+                  fixed(std::make_shared<ImplicitEuler>(), 0.1)
+                      .integrate(problem, 0.0, 0.1)
+                      .final,
+                  evolve);
+  near(rejected, 1.1, 1e-9, "the step of 0.1 fails the tolerance");
+  IntegrationResult r;
+  try {
+    r = adaptive(std::make_shared<ImplicitEuler>(), options)
+            .integrate(problem, 0.0, 0.3,
+                       {.keep_step_history = true, .snapshot_every = 1});
+  } catch (const std::runtime_error &error) {
+    check(false, std::string("the run stopped: ") + error.what());
+    return;
+  }
+  check(r.history.size() >= 2 && !r.history[0].accepted &&
+            r.history[1].accepted && r.history[1].dt == 0.09,
+        "rejected at 0.1, taken again at min_dt");
+  near(*r.history[0].error_norm, rejected, 1e-9, "the rejected step's norm");
+  const double actual =
+      actual_norm(controller, *problem, initial, r.snapshots.at(0), evolve);
+  check(actual <= 1.0, "the step at min_dt passes");
+  near(*r.history[1].error_norm, actual, 1e-9, "its estimate is its error");
+  check(r.final.time == 0.3, "the run reaches t1");
+  for (const auto &record : r.history)
+    check(!record.accepted || record.dt >= 0.09 || record.t == 0.3,
+          "no step below min_dt but the landing");
+}
+
+// A mesh whose every node is a Dirichlet node: no free unknowns, so every
+// step's local error is empty (norm 0) for every method and time order
+// with an estimate (review finding: implicit Euler at time order 2 threw).
+void estimates_without_free_unknowns() {
+  const auto square = pde2d::test::unit_square(1);
+  struct Case {
+    std::shared_ptr<const TimeMethod> method;
+    Problem problem;
+  };
+  const std::vector<Case> cases{
+      {std::make_shared<ImplicitEuler>(), heat(decay())},
+      {std::make_shared<ImplicitEuler>(), wave_equation(wave())},
+      {std::make_shared<ImplicitMidpoint>(), heat(decay())},
+      {std::make_shared<ImplicitMidpoint>(), wave_equation(wave())},
+      {std::make_shared<Newmark>(), wave_equation(wave())}};
+  for (const Case &c : cases) {
+    const auto problem =
+        std::make_shared<const MeshedProblem>(square, c.problem);
+    check(problem->free_nodes().empty(), "no free unknowns");
+    const int order = Assembler().time_order(*problem);
+    const std::string what =
+        std::format("{} at order {}", c.method->name(), order);
+    IntegrationResult r;
+    try {
+      r = adaptive(c.method, {.initial_dt = 0.1})
+              .integrate(problem, 0.0, 1.0, {.keep_step_history = true});
+    } catch (const std::exception &error) {
+      check(false, what + ": " + error.what());
+      continue;
+    }
+    check(r.final.time == 1.0, what + ": reaches t1");
+    const auto estimated = std::ranges::count_if(
+        r.history, [](const auto &s) { return s.error_norm.has_value(); });
+    check(estimated > 0 && std::ranges::all_of(r.history,
+                                               [](const auto &s) {
+                                                 return s.accepted &&
+                                                        (!s.error_norm ||
+                                                         *s.error_norm == 0.0);
+                                               }),
+          what + ": every estimate 0, every step accepted");
+    // The method alone: an empty error, whatever earlier steps it reads.
+    const std::vector<PreviousStep> previous(
+        c.method->error_estimate(order)->previous_steps,
+        PreviousStep{.values = {}, .dt = 0.1});
+    check(c.method->local_error({}, {}, 0.1, previous).empty(),
+          what + ": local_error is empty");
+  }
 }
 
 // Time order 2: Newmark (and implicit Euler and the midpoint method) on a
@@ -690,6 +928,12 @@ int main() {
       {"a run continued with its anchor equals one run",
        continues_with_the_anchor},
       {"below min_dt the run stops", stops_below_min_dt},
+      {"implicit Euler (order 1) after a step of another length",
+       euler_after_a_step_of_another_length},
+      {"the midpoint method (order 2) on unequal steps",
+       midpoint_second_order_on_unequal_steps},
+      {"a rejected step is taken again at min_dt", retries_at_min_dt},
+      {"no free unknowns: empty estimates", estimates_without_free_unknowns},
       {"time order 2: Newmark on a wave", wave_with_newmark},
       {"the cost against a fixed step (measured)", cost_against_a_fixed_step},
   });
