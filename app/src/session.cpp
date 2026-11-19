@@ -545,6 +545,7 @@ Json Session::solve(const Json &input, const std::string &client) {
         Run &current = *owner.run;
         if (current.published.state == RunState::stopped) {
           current.published.state = RunState::running;
+          current.published.stop_requested = false;
           wake_.notify_all();
         }
         if (current.published.state != RunState::running ||

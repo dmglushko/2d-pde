@@ -28,7 +28,10 @@ struct StepProgress {
   // The step's length, as the method used it (StepRecord::dt).
   double dt = 0.0;
   // The snapshot this step kept (IntegrationOutput), or null; valid only
-  // during the call.
+  // during the call. It is the integrator's: the adaptive integrator's
+  // damping steps at time order 2 give it no acceleration, which the
+  // snapshot in the result gets afterwards (from the last step's velocity
+  // quotient), so a run is continued from the result's snapshots.
   const Solution *snapshot = nullptr;
   // The problem integrated (its mesh is the snapshot's); valid only
   // during the call.

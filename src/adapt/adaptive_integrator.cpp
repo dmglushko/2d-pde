@@ -326,14 +326,19 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
     for (std::size_t s = next_snapshot; s < times.size() && times[s] <= end;
          ++s)
       piece_output.snapshot_times.push_back(times[s]);
-    // The caller's observer sees the steps of the whole run.
+    // The caller's observer sees the steps of the whole run. Its answer
+    // is kept: a stop asked on the step that ends the piece (an
+    // adaptation time before t1) is not a stop of the piece, but it is
+    // one of the run.
+    bool asked_to_stop = false;
     if (output.on_step)
-      piece_output.on_step =
-          [&output, before = steps](const solve::StepProgress &progress) {
-            solve::StepProgress whole = progress;
-            whole.steps += before;
-            return output.on_step(whole);
-          };
+      piece_output.on_step = [&output, &asked_to_stop, before = steps](
+                                 const solve::StepProgress &progress) {
+        solve::StepProgress whole = progress;
+        whole.steps += before;
+        asked_to_stop = !output.on_step(whole);
+        return !asked_to_stop;
+      };
     const solve::Integrator &stepper = damping ? *damping_ : integrator_;
     solve::IntegrationResult run =
         stepper.integrate(problem, t, end, piece_output, state_in, piece_steps,
@@ -377,9 +382,9 @@ AdaptiveIntegrationResult AdaptiveIntegrator::integrate(
                            .adaptation = {},
                            .damping = damping};
     t = run.final.time;
-    if (!(t < t1) || run.stopped) {
-      result.stopped = run.stopped;
-      if (run.stopped)
+    if (!(t < t1) || run.stopped || asked_to_stop) {
+      result.stopped = t < t1;
+      if (result.stopped)
         caller_stop = std::format(
             "stopped by the caller at t = {} after {} steps", t, steps);
       result.final = std::move(run.final);

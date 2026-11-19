@@ -1069,6 +1069,20 @@ void observer_stops_the_run() {
             part.report.messages.back().find("stopped by the caller") !=
                 std::string::npos,
         "the report says so");
+
+  // A stop asked on the step that lands on an adaptation time (every 2
+  // steps: the 4th step ends a piece) stops the run there, before it
+  // adapts.
+  solve::IntegrationOutput at_boundary{};
+  at_boundary.on_step = [](const solve::StepProgress &p) {
+    return p.steps != 4;
+  };
+  const auto boundary =
+      adaptive.integrate(start, 0.0, 0.5, target, at_boundary);
+  check(boundary.stopped && boundary.final.time == 4.0 / 32,
+        "stopped at the adaptation time");
+  check(boundary.report.metrics.at("steps") == 4.0, "no step after it");
+  check(!boundary.pieces.back().adaptation, "and no adaptation there");
 }
 
 void node_budget() {

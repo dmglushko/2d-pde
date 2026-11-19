@@ -1415,6 +1415,18 @@ steps). The owner asked the app to offer everything new.
   it again (its loop is one call). Time runs stay chunked: one call
   would hold the session mutex, which the problem check needs, for the
   whole run.
+- **After the review of the observers** (GPT-6.2 Sol): a stop asked on
+  the step that lands on an adaptation time was lost (the integrator had
+  reached that piece's end); the adaptive integrator now keeps the
+  observer's answer and stops there before adapting. Stop reads
+  "stopped" only once the run has published what it made (the page
+  follows it until then; before, a stopped chunk's last snapshots stayed
+  unseen until Continue); a Stop request that fails clears "stopping";
+  a reload that finds a running adaptive run follows it before the mesh
+  (whose answer waits for the loop); a stopped adaptive run's chart ends
+  where it stopped and its exports say to solve again. The snapshot an
+  observer gets during damping steps at order 2 has no acceleration (the
+  result's copy does): documented, a run continues from the result.
 
 ## 2026-11-19: reports, the page that scrolled, no "means" line
 

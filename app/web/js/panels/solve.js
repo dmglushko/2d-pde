@@ -187,7 +187,13 @@ function exportKinds(result) {
 
 function exportsRow(result, fresh) {
   const done = fresh && result.state === "done";
-  const stale = result.state === "done" ? "The solution shown is outdated: solve again to export it." : "The run did not reach t1: continue it to export.";
+  const adaptive = result.mode === "adaptive" || result.mode === "adaptive_time";
+  const stale =
+    result.state === "done"
+      ? "The solution shown is outdated: solve again to export it."
+      : adaptive
+        ? "The run was stopped before its end: solve again to export it."
+        : "The run did not reach t1: continue it to export.";
   const kinds = exportKinds(result);
   return h(
     "div",
@@ -272,7 +278,9 @@ function adaptationsSection(result) {
       ),
     ),
   );
-  const times = [result.t0, ...rows.map((r) => r.time), result.t1];
+  // To where the run got (t1, or where it was stopped).
+  const end = result.state === "stopped" && Number.isFinite(result.t) ? result.t : result.t1;
+  const times = [result.t0, ...rows.map((r) => r.time), end];
   const nodes = [rows[0].nodes, ...rows.map((r) => r.nodes_after), rows.at(-1).nodes_after];
   const chart = h(
     "div",
