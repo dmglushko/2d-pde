@@ -249,6 +249,47 @@ void stops_on_max_cycles() {
         "one cycle");
 }
 
+// The cycle observer sees every cycle with its estimate and problem, and
+// stops the loop; the tolerance and max_cycles come first.
+void observer_sees_and_stops_cycles() {
+  std::vector<double> estimates;
+  std::vector<std::size_t> nodes;
+  const AdaptiveStaticResult watched = dorfler_loop().solve(
+      start(), {.max_cycles = 3}, 0.0,
+      [&](const AdaptiveCycle &cycle, const fem::MeshedProblem &problem) {
+        estimates.push_back(cycle.estimate->total);
+        nodes.push_back(problem.mesh()->nodes.size());
+        check(cycle.solution.mesh == problem.mesh(), "the cycle's problem");
+        return true;
+      });
+  check(watched.stop_reason == StopReason::max_cycles && estimates.size() == 3,
+        "every cycle seen");
+  for (std::size_t i = 0; i < 3; ++i)
+    check(estimates[i] == watched.cycles[i].estimate->total &&
+              nodes[i] == watched.cycles[i].solution.mesh->nodes.size(),
+          "as the result has it");
+  const AdaptiveStaticResult stopped = dorfler_loop().solve(
+      start(), {.max_cycles = 5}, 0.0,
+      [](const AdaptiveCycle &, const fem::MeshedProblem &) { return false; });
+  check(stopped.stop_reason == StopReason::stopped &&
+            stopped.cycles.size() == 1,
+        "stopped after the first cycle");
+  check(stopped.problem->mesh() == stopped.cycles.back().solution.mesh,
+        "the problem of the last cycle");
+  check(stopped.report.messages.back().starts_with("stopped: stopped"),
+        "the report says why");
+  bool adapted = false;
+  for (const auto &report : stopped.cycles[0].reports)
+    adapted = adapted || report.stage == "mesh_refinement";
+  check(!adapted, "no adaptation after a stop");
+  check(to_string(StopReason::stopped) == "stopped", "its name");
+  const AdaptiveStaticResult last = dorfler_loop().solve(
+      start(), {.max_cycles = 1}, 0.0,
+      [](const AdaptiveCycle &, const fem::MeshedProblem &) { return false; });
+  check(last.stop_reason == StopReason::max_cycles,
+        "the last allowed cycle stops for max_cycles");
+}
+
 void stops_on_node_budget() {
   const std::size_t budget = 300;
   const AdaptiveStaticResult r =
@@ -456,6 +497,8 @@ void invalid_configurations() {
 
 int main() {
   return test::run({
+      {"the cycle observer sees every cycle and can stop the loop",
+       observer_sees_and_stops_cycles},
       {"L-shape: adaptive N^(-1/2), uniform N^(-1/3)", l_shape_rates},
       {"L-shape with the Kelly and recovery estimators",
        l_shape_other_estimators},

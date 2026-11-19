@@ -33,6 +33,13 @@ export function nodes(children) {
 }
 
 // Replaces the children of `container` (with the rules of nodes()).
+// Text that changes on every frame (a time, a range) at a steady width:
+// a hidden copy of the widest text it will show (`sizer`) holds the room
+// (css/picture.css, .steady), so what follows it does not move.
+export function steadyText(text, sizer, className = "") {
+  return h("span", { class: `steady ${className}`.trim() }, h("span", { class: "steady-text" }, text), h("span", { class: "steady-sizer", "aria-hidden": "true" }, sizer));
+}
+
 export function fill(container, ...children) {
   container.replaceChildren(...nodes(children));
 }

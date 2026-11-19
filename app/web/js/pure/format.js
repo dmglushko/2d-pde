@@ -145,3 +145,12 @@ export function bytesText(bytes) {
   const text = unit === 0 ? String(Math.round(value)) : String(Number(value.toPrecision(value >= 100 ? 3 : 2)));
   return `${text} ${units[unit]}`;
 }
+
+// The longest of `texts` (the first of equal lengths), or "": what a
+// label that changes on every frame (a time, a range) is sized for, so
+// that what follows it does not move.
+export function widestText(texts) {
+  let widest = "";
+  for (const text of texts) if (text.length > widest.length) widest = text;
+  return widest;
+}

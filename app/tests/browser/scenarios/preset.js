@@ -3,10 +3,11 @@
 // its input.
 export default async ({ q, tab, panel, button, click, select, type, until, text, check }) => {
   tab("problem");
-  const presets = q('#panel-problem select[aria-label="Problem preset"]');
-  const laplace = [...presets.options].find((o) => /Laplace/.test(o.textContent));
-  check("the Laplace preset is offered", Boolean(laplace));
-  select(presets, laplace.value);
+  // The presets are in the case menu, next to the examples.
+  const laplace = [...q("#problem-presets").querySelectorAll("button")].find((b) => /Laplace/.test(b.textContent));
+  check("the Laplace preset is offered in the case menu", Boolean(laplace));
+  check("the Problem step has no preset select of its own", !q('#panel-problem select[aria-label="Problem preset"]'));
+  click(laplace);
   await until(() => text(q("#toast")).includes("filled in"), "the preset");
   await until(() => /No errors/.test(text(q("#panel-problem .step-status"))), "its check");
   check("the problem is checked without errors", true);

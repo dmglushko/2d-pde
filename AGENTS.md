@@ -19,8 +19,18 @@ library, and **its design is delegated to agents**: inside `app/` you
 decide yourself and record the decision in
 [docs/app-decisions.md](docs/app-decisions.md) (the design as it is:
 [docs/app.md](docs/app.md)).
-Read [app/AGENTS.md](app/AGENTS.md) before working there. Everything
-below about the owner deciding applies to the library.
+Read [app/AGENTS.md](app/AGENTS.md) before working there.
+
+**Library changes the app needs are delegated too** (the owner,
+2026-11-19). An agent working on the app may change the library for what
+the app needs (a new option, a callback, a function the app would
+otherwise reimplement) and decides that design itself: keep this file's
+conventions and invariants, add tests, update
+[docs/architecture.md](docs/architecture.md), and record the decision
+with its reason in [docs/decisions.md](docs/decisions.md), marked "(for
+the app, by an agent)", and in
+[docs/library-requests.md](docs/library-requests.md). Everything below
+about the owner deciding applies to the rest of the library's work.
 
 ## Architecture decisions belong to the owner
 
@@ -369,7 +379,10 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   output, &previous.final)`) matches one long run that lands on t1 (bit
   for bit for the first-order methods; `tests/solve/time_integration.cpp`).
   A run stopped by `max_steps` continues the same stretch only when given
-  its `IntegrationResult::anchor` (`StepAnchor`). A quotient of the last
+  its `IntegrationResult::anchor` (`StepAnchor`); a run stopped by its
+  observer (`IntegrationOutput::on_step` returning false) ends exactly as
+  `max_steps` would, after an accepted step, never during a solve, and
+  `AdaptiveStaticSolver`'s `CycleObserver` stops only between cycles. A quotient of the last
   step divides by the step's own length (`FreeState::dt`), never by a
   difference of times (a landing keeps the nominal dt).
 - **A triangle's refinement edge is the edge opposite its vertex 0**

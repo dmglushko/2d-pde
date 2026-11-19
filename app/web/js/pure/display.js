@@ -37,12 +37,15 @@ const at = (t, format) => (Number.isFinite(t) ? `at t = ${format(t)}` : "");
 //     values} | null, failure}}
 //   field: null | {data, fresh}
 //   format(t): the time as text
+//   snapshotScale: null (one colour scale for the whole run, the result's
+//     own) or snapshotScale(index): the colour scale of snapshot `index`
+//     alone (null when it has none), for the "this snapshot" range
 // Returns {kind ("none", "solution", "difference", "field"), source, name,
 // when, label, values, scale, frame, t, outdated, loading (text or null),
 // failure ({error, retry: "snapshot" | "difference"} or null), difference
 // ({requested, state, shown, note}), precision, indicators (an adaptive
 // solution's error indicators, one per triangle of its mesh, or null)}.
-export function resolveDisplay({ colorBy, source, difference = null, solve = null, comparison = null, field = null, format = String }) {
+export function resolveDisplay({ colorBy, source, difference = null, solve = null, comparison = null, field = null, format = String, snapshotScale = null }) {
   const none = {
     kind: "none",
     source: null,
@@ -61,7 +64,7 @@ export function resolveDisplay({ colorBy, source, difference = null, solve = nul
     indicators: null,
   };
   const colouring = colorBy === "field" || colorBy === "gradient" || colorBy === "indicator";
-  if (source === "solve" && solve?.data) return solution({ ...none, colouring }, solve, difference, comparison, format);
+  if (source === "solve" && solve?.data) return solution({ ...none, colouring }, solve, difference, comparison, format, snapshotScale);
   if (field?.data) {
     const data = field.data;
     const timeless = data.kind === "initial_u" || data.kind === "initial_u_t";
@@ -82,7 +85,7 @@ export function resolveDisplay({ colorBy, source, difference = null, solve = nul
   return none;
 }
 
-function solution(base, solve, difference, comparison, format) {
+function solution(base, solve, difference, comparison, format, snapshotScale) {
   const data = solve.data;
   const last = Math.max(0, data.times.length - 1);
   const frame = Math.max(0, Math.min(solve.frame, last));
@@ -115,8 +118,12 @@ function solution(base, solve, difference, comparison, format) {
   }
   const pick = pickValues(solve.snapshot ?? {}, frame, data.times, format);
   const when = pick.when ?? at(t, format);
+  // "This snapshot": the range of the snapshot whose values are drawn
+  // (the nearest loaded one while the shown one loads).
+  const own = snapshotScale && pick.values ? snapshotScale(pick.index) : null;
   return {
     ...out,
+    scale: own ?? out.scale,
     name: "u",
     when,
     label: `u ${when}`,
@@ -131,12 +138,12 @@ function solution(base, solve, difference, comparison, format) {
 // The values of the shown snapshot, or the nearest loaded one standing in
 // while it loads (its own time in the label), or none.
 function pickValues({ values = null, nearest = null, failure = null }, frame, times, format) {
-  if (values) return { values, when: null, loading: false };
+  if (values) return { values, index: frame, when: null, loading: false };
   if (nearest?.values) {
     const loading = failure ? "" : ` (loading t = ${format(times[frame])})`;
-    return { values: nearest.values, when: `at t = ${format(times[nearest.index])}${loading}`, loading: !failure };
+    return { values: nearest.values, index: nearest.index, when: `at t = ${format(times[nearest.index])}${loading}`, loading: !failure };
   }
-  return { values: null, when: null, loading: !failure };
+  return { values: null, index: null, when: null, loading: !failure };
 }
 
 // The parts of a resolved display that change what is drawn: equal keys

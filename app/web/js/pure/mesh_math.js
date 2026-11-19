@@ -26,6 +26,26 @@ export function triangleAngles(mesh) {
   return out;
 }
 
+// Every edge of a mesh once (a shared edge is drawn once, not twice): a
+// flat Uint32Array of node pairs, in the order the triangles first name
+// them.
+export function meshEdges(triangles, nodeCount) {
+  const seen = new Map();
+  const out = [];
+  for (let i = 0; i < triangles.length; i += 3)
+    for (let k = 0; k < 3; k++) {
+      const a = triangles[i + k];
+      const b = triangles[i + ((k + 1) % 3)];
+      const low = Math.min(a, b);
+      const high = Math.max(a, b);
+      const id = low * nodeCount + high;
+      if (seen.has(id)) continue;
+      seen.set(id, true);
+      out.push(a, b);
+    }
+  return Uint32Array.from(out);
+}
+
 // Barycentric coordinates of (x, y) in triangle (a, b, c), or null for a
 // degenerate triangle.
 export function barycentric(x, y, ax, ay, bx, by, cx, cy) {

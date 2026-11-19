@@ -4,7 +4,7 @@
 
 import { regionToken } from "../pure/color.js";
 import { colorbarTicks, formatNumber, getDefaultDigits, numberText, parseNumberText } from "../pure/format.js";
-import { h, regionSwatch } from "../dom.js";
+import { h, regionSwatch, steadyText } from "../dom.js";
 import { QUALITY_MAX_DEGREES } from "./layers.js";
 import { colorTables, tableOf, token } from "./tokens.js";
 
@@ -15,10 +15,14 @@ export function gradientName(name) {
 
 // What the legend shows, as data: the region names, the colour bar
 // ({quantity, label, table, low, high, lowValue, highValue, locked,
-// reversed} or, for a field that has one value, {label, constant}) and
-// whether the Dirichlet nodes are drawn.
+// reversed, name, when, range} or, for a field that has one value,
+// {label, constant}) and whether the Dirichlet nodes are drawn. `name`
+// and `when` are the label's quantity and time (shown apart, so the bar
+// does not move with the time's width); `range` is the range choice of a
+// run in time ("run" or "snapshot"), or null where it is not offered;
+// `whenSizer` the widest time of the run (the room the time keeps).
 export function legendData(v) {
-  const { geometry, mesh, meshStale, colorBy, field, layers = {}, selectedRegion = null, legendNote = null } = v.data;
+  const { geometry, mesh, meshStale, colorBy, field, layers = {}, selectedRegion = null, legendNote = null, rangeChoice = null, whenSizer = "" } = v.data;
   const current = mesh && !meshStale;
   const regions = current ? mesh.region_names : (geometry?.regions ?? []).map((r) => r.name);
   let bar = null;
@@ -26,12 +30,20 @@ export function legendData(v) {
   const scale = v.shownScale;
   const fieldShown = mesh && field && (current || field.outdated);
   if (fieldShown && scale && (colorBy === "field" || colorBy === "gradient" || (colorBy === "indicator" && v.indicatorLogs))) {
-    const label = colorBy === "gradient" ? [gradientName(field.name), field.when].filter(Boolean).join(" ") : colorBy === "indicator" ? `log₁₀ η (error indicator)${field.outdated ? " (outdated)" : ""}` : field.label;
-    if (scale.kind === "constant") bar = { label, constant: formatNumber(scale.min, getDefaultDigits() + 2) };
+    const outdated = field.outdated ? " (outdated)" : "";
+    const name = colorBy === "gradient" ? gradientName(field.name) : colorBy === "indicator" ? "log₁₀ η (error indicator)" : field.name;
+    const when = colorBy === "indicator" ? outdated.trim() : [field.when, outdated.trim()].filter(Boolean).join(" ");
+    const label = [name, when].filter(Boolean).join(" ");
+    const range = colorBy === "field" && !scale.locked ? rangeChoice : null;
+    if (scale.kind === "constant") bar = { label, name, when, range, constant: formatNumber(scale.min, getDefaultDigits() + 2) };
     else if (scale.kind !== "empty")
       bar = {
         quantity: colorBy,
         label,
+        name,
+        when,
+        whenSizer: colorBy === "indicator" ? "" : whenSizer,
+        range,
         table: tableOf(scale),
         low: formatNumber(scale.low),
         high: formatNumber(scale.high),
@@ -126,9 +138,32 @@ function scaleBar(bar) {
   ];
 }
 
-function colorbar(bar, onLock) {
-  const label = h("span", { class: "bar-label" }, bar.label);
-  if (bar.constant !== undefined) return h("span", { class: "colorbar" }, label, h("span", { class: "num" }, `constant: ${bar.constant}`));
+// The bar's label: the quantity, then its time in a span of its own
+// (bar-when), which main.js keeps from shrinking while a run plays.
+function barLabel(bar) {
+  if (bar.name === undefined) return h("span", { class: "bar-label" }, bar.label);
+  return h("span", { class: "bar-label" }, bar.name, bar.when ? [" ", steadyText(bar.when, bar.whenSizer ?? "", "bar-when num")] : null);
+}
+
+// Whole run or this snapshot: the colour range of a run in time.
+function rangeSelect(bar, onRange) {
+  if (!bar.range || !onRange) return null;
+  return h(
+    "select",
+    {
+      class: "range-choice",
+      "aria-label": "Colour range",
+      title: "Whole run: one range for every snapshot, so a colour means the same value at every time. This snapshot: each snapshot's own smallest and largest value, so small values late in a run are seen.",
+      onchange: (event) => onRange(event.target.value),
+    },
+    h("option", { value: "run", selected: bar.range === "run" }, "range: whole run"),
+    h("option", { value: "snapshot", selected: bar.range === "snapshot" }, "range: this snapshot"),
+  );
+}
+
+function colorbar(bar, onLock, onRange) {
+  const label = barLabel(bar);
+  if (bar.constant !== undefined) return h("span", { class: "colorbar" }, label, h("span", { class: "num" }, `constant: ${bar.constant}`), rangeSelect(bar, onRange));
   const canvas = scaleBar(bar);
   if (!bar.quantity || !onLock) return h("span", { class: "colorbar" }, label, canvas);
   if (bar.locked) {
@@ -146,12 +181,12 @@ function colorbar(bar, onLock) {
     },
     "Lock range",
   );
-  return h("span", { class: "colorbar" }, label, canvas, lock);
+  return h("span", { class: "colorbar" }, label, canvas, rangeSelect(bar, onRange), lock);
 }
 
 // The legend's items. A region is a button: it selects the region (as a
 // click on its boundary does) and opens its condition (onRegion).
-export function legendNodes({ regions, bar, dirichlet, selectedRegion, note }, onLock, onRegion) {
+export function legendNodes({ regions, bar, dirichlet, selectedRegion, note }, onLock, onRegion, onRange) {
   const items = regions.map((name, i) =>
     onRegion
       ? h(
@@ -162,7 +197,7 @@ export function legendNodes({ regions, bar, dirichlet, selectedRegion, note }, o
         )
       : h("span", { class: "item" }, regionSwatch(i), name),
   );
-  if (bar) items.push(colorbar(bar, onLock));
+  if (bar) items.push(colorbar(bar, onLock, onRange));
   if (dirichlet) items.push(h("span", { class: "item" }, h("span", { class: "swatch node", "aria-hidden": "true" }), "Dirichlet node"));
   if (note) items.push(h("span", { class: "legend-note" }, note));
   return items;

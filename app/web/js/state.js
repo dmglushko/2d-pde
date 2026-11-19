@@ -50,7 +50,7 @@ export const store = {
   // holds the colour range the viewer fixed, per quantity ("field",
   // "gradient", "indicator"), kept until unlocked; tool is "pan" or "profile" (a drag
   // draws the line of the profile).
-  view: { colorBy: "none", isolines: false, difference: null, locked: { field: null, gradient: null, indicator: null }, tool: "pan" },
+  view: { colorBy: "none", isolines: false, difference: null, locked: { field: null, gradient: null, indicator: null }, tool: "pan", range: "run" },
   // The probes pinned on the picture: {slot (its colour), x, y}, at most
   // MAX_PROBES. The viewer's, not the case's.
   probes: [],
@@ -356,8 +356,8 @@ const VIEW_KEY = "pde2d-app-view";
 
 function keepView() {
   try {
-    const { colorBy, isolines, difference, locked } = store.view;
-    globalThis.sessionStorage?.setItem(VIEW_KEY, JSON.stringify({ colorBy, isolines, difference, locked, probes: store.probes, profile: store.profile }));
+    const { colorBy, isolines, difference, locked, range } = store.view;
+    globalThis.sessionStorage?.setItem(VIEW_KEY, JSON.stringify({ colorBy, isolines, difference, locked, range, probes: store.probes, profile: store.profile }));
   } catch {
     // Not kept: the picture starts plain after a reload.
   }
@@ -381,6 +381,7 @@ export function restoreView(kept) {
   const range = (r) => (r && Number.isFinite(r.low) && Number.isFinite(r.high) && r.low < r.high ? { low: r.low, high: r.high } : null);
   if (["none", "quality", "field", "gradient", "indicator"].includes(kept.colorBy)) store.view.colorBy = kept.colorBy;
   store.view.isolines = kept.isolines === true;
+  store.view.range = kept.range === "snapshot" ? "snapshot" : "run";
   store.view.difference = ["exact", "reference"].includes(kept.difference) ? kept.difference : null;
   store.view.locked = { field: range(kept.locked?.field), gradient: range(kept.locked?.gradient), indicator: range(kept.locked?.indicator) };
   if (Array.isArray(kept.probes))

@@ -4,8 +4,7 @@
 // expression changes.
 export default async ({ q, tab, panel, button, click, select, type, until, text, check }) => {
   tab("problem");
-  const presets = q('#panel-problem select[aria-label="Problem preset"]');
-  select(presets, [...presets.options].find((o) => /Laplace/.test(o.textContent)).value);
+  click(q('#problem-presets [data-preset="laplace"]'));
   // The status says "No errors" before the preset arrives: wait for it.
   await until(() => text(q("#toast")).includes("filled in"), "the preset");
   await until(() => /No errors/.test(text(q("#panel-problem .step-status"))), "the check");

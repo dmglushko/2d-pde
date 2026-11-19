@@ -2,13 +2,13 @@
 // and redo, and the picture.
 
 import { api, claimClientId, saveBlob } from "./api.js";
-import { caseChanged, reattachRun, runAll, runStage, runWithPrerequisites, scheduleProblemCheck, toast } from "./actions.js";
+import { applyPreset, caseChanged, reattachRun, runAll, runStage, runWithPrerequisites, scheduleProblemCheck, toast } from "./actions.js";
 import { wireCaseMenu } from "./case_menu.js";
 import { clearStudy } from "./refinement.js";
 import { watchServer } from "./server_status.js";
 import { setColorMaps } from "./view/tokens.js";
 import { recompareIfNeeded, retryDifference } from "./compare.js";
-import { currentDisplay, pictureMesh } from "./display.js";
+import { currentDisplay, drawnSolve, offersSnapshotRange, pictureMesh } from "./display.js";
 import { plainError } from "./pure/requests.js";
 import { fill, guardButtons, h, readFileText, revealFolded } from "./dom.js";
 import { assemblePanel } from "./panels/assemble.js";
@@ -21,9 +21,10 @@ import { problemPanel } from "./panels/problem.js";
 import { solvePanel } from "./panels/solve.js";
 import { forgetChartSize, profileDrawn, updateProbes } from "./probes.js";
 import { fileKind, normalizeCase } from "./pure/case_model.js";
-import { getDefaultDigits, pictureName } from "./pure/format.js";
-import { MAX_PROBES, clampPictureHeight, freeProbeSlot } from "./pure/prefs.js";
+import { formatNumber, getDefaultDigits, pictureName } from "./pure/format.js";
+import { MAX_PROBES, clampPictureHeight, clampSidebarWidth, freeProbeSlot } from "./pure/prefs.js";
 import { STEPS, stageInfo } from "./pure/stages.js";
+import { timeSizers } from "./timebar.js";
 import { onSettings, settings, wireSettings } from "./settings.js";
 import { retrySnapshots } from "./snapshots.js";
 import {
@@ -62,6 +63,7 @@ const panels = { geometry: geometryPanel, mesh: meshPanel, problem: problemPanel
 for (const step of STEPS) if (!panels[step]) throw new Error(`no panel for the step ${step}`);
 const STEP_KEY = "pde2d-app-step";
 const HEIGHT_KEY = "pde2d-app-picture-height";
+const SIDEBAR_KEY = "pde2d-app-sidebar-width";
 let viewer;
 
 function element(id) {
@@ -261,6 +263,9 @@ function updateViewer() {
     profile: meshFresh ? store.profile : null,
     selectedRegion: store.selectedRegion,
     legendNote: colouring ? display.difference.note : null,
+    rangeChoice: display.kind === "solution" && offersSnapshotRange(drawnSolve()?.data) ? store.view.range : null,
+    // The legend's time keeps the room of the run's widest one.
+    whenSizer: timeSizers(drawnSolve()?.data).when,
     layers: {
       geometry: element("layer-geometry").checked,
       mesh: element("layer-mesh").checked,
@@ -269,7 +274,7 @@ function updateViewer() {
       isolineCount: settings.isolineCount,
     },
   });
-  if (drawn) element("legend").replaceChildren(...viewer.legend());
+  if (drawn) showLegend();
   element("empty-view").hidden = Boolean(geometry || mesh);
   updateTimebar();
   const solution = timeSolution();
@@ -281,6 +286,10 @@ function updateViewer() {
     frame: display.frame,
     digits: getDefaultDigits() + 1,
   });
+}
+
+function showLegend() {
+  element("legend").replaceChildren(...viewer.legend());
 }
 
 // A click on the picture (or Enter) pins a probe there.
@@ -344,6 +353,82 @@ function wireHeightHandle() {
     if (!delta) return;
     event.preventDefault();
     apply(wrap.getBoundingClientRect().height + delta);
+  });
+}
+
+// On a wide screen the sidebar's width follows the handle on its right
+// edge (or its arrow keys; a double click gives the default back),
+// remembered in this browser. The picture follows through its resize
+// observer, once per animation frame of the drag.
+function wireSidebarHandle() {
+  const handle = element("sidebar-handle");
+  const sidebar = element("sidebar");
+  const root = document.documentElement;
+  const apply = (width, keep = true) => {
+    const clamped = clampSidebarWidth(width, window.innerWidth);
+    if (clamped === null) return;
+    root.style.setProperty("--sidebar-width", `${clamped}px`);
+    handle.setAttribute("aria-valuenow", String(clamped));
+    handle.setAttribute("aria-valuemax", String(clampSidebarWidth(Infinity, window.innerWidth)));
+    if (!keep) return;
+    try {
+      localStorage.setItem(SIDEBAR_KEY, String(clamped));
+    } catch {
+      // Not kept: the width holds for this visit.
+    }
+  };
+  try {
+    const stored = Number(localStorage.getItem(SIDEBAR_KEY));
+    if (stored > 0) apply(stored, false);
+  } catch {
+    // The default width.
+  }
+  let start = null;
+  let pending = null;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    start = { x: event.clientX, width: sidebar.getBoundingClientRect().width };
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // A synthetic pointer.
+    }
+    handle.classList.add("dragging");
+    document.body.classList.add("resizing-sidebar");
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!start) return;
+    const width = start.width + event.clientX - start.x;
+    if (pending === null) requestAnimationFrame(() => (apply(pending), (pending = null)));
+    pending = width;
+  });
+  const end = () => {
+    start = null;
+    handle.classList.remove("dragging");
+    document.body.classList.remove("resizing-sidebar");
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  handle.addEventListener("dblclick", () => {
+    root.style.removeProperty("--sidebar-width");
+    handle.removeAttribute("aria-valuenow");
+    try {
+      localStorage.removeItem(SIDEBAR_KEY);
+    } catch {
+      // Nothing kept.
+    }
+  });
+  handle.addEventListener("keydown", (event) => {
+    const delta = { ArrowLeft: -24, ArrowRight: 24 }[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    apply(sidebar.getBoundingClientRect().width + delta);
+  });
+  // A smaller window keeps the picture its room.
+  window.addEventListener("resize", () => {
+    const set = parseFloat(root.style.getPropertyValue("--sidebar-width"));
+    if (Number.isFinite(set)) apply(set, false);
   });
 }
 
@@ -658,6 +743,7 @@ async function start() {
     onPin: pinProbe,
     onProfile: profileDrawn,
     onLock: (quantity, range) => setLockedRange(quantity, range),
+    onRange: (range) => setViewOption("range", range),
     onRegion: selectRegion,
   });
   initEditor(viewer, element("canvas-wrap"));
@@ -686,7 +772,7 @@ async function start() {
       viewer.prepareField();
       viewer.prepareIsolines();
       viewer.draw();
-      element("legend").replaceChildren(...viewer.legend());
+      showLegend();
     } else if (key === "pixelRatioCap") viewer.resize();
     else if (key === "isolineCount") updateViewer();
     else if (key === "playbackSpeed") speedChanged();
@@ -695,12 +781,13 @@ async function start() {
       buildPanels();
       updateDots();
       viewer.draw();
-      element("legend").replaceChildren(...viewer.legend());
+      showLegend();
     }
   });
   element("color-by").addEventListener("change", (event) => setColorBy(event.target.value));
   element("layer-isolines").addEventListener("change", (event) => setViewOption("isolines", event.target.checked));
   element("fit-view").addEventListener("click", () => viewer.fit());
+  element("reset-view").addEventListener("click", () => viewer.fit());
   element("zoom-in").addEventListener("click", () => viewer.zoomBy(1.25));
   element("zoom-out").addEventListener("click", () => viewer.zoomBy(0.8));
   element("profile-tool").addEventListener("click", () => setViewOption("tool", store.view.tool === "profile" ? "pan" : "profile"));
@@ -739,11 +826,31 @@ async function start() {
         );
     })
     .catch(() => {});
+  // The problems the library's presets fill in on the current geometry:
+  // in the same menu as the examples, so every ready-made start is in one
+  // place (the equation's templates stay at the equation).
+  for (const preset of store.catalog.problem?.presets ?? [])
+    element("problem-presets").append(
+      h(
+        "button",
+        {
+          type: "button",
+          role: "menuitem",
+          dataset: { preset: preset.id },
+          title: preset.description ?? "",
+          onclick: async () => {
+            if (await applyPreset(preset)) openStep("problem");
+          },
+        },
+        preset.label,
+      ),
+    );
   wireCaseMenu(element("case-menu-button"), element("case-menu"));
   wireCollapse();
   wireDrop();
   wireHistory();
   wireHeightHandle();
+  wireSidebarHandle();
   setInterval(tick, 1000);
 
   subscribe(refresh);

@@ -751,6 +751,76 @@ void stops_after_max_steps() {
   }
 }
 
+// An observer sees every accepted step (with the snapshot it kept) and can
+// stop the run there; the stopped run continues with its anchor exactly as
+// one that was not stopped. Steps of 1/16 are exact in binary.
+void observes_and_stops_steps() {
+  for (const auto &problem : {heat_problem(), wave_problem()}) {
+    const auto m = meshed(problem);
+    const auto i = integrator(std::make_shared<ImplicitMidpoint>(), 1.0 / 16);
+    const auto whole = i.integrate(m, 0.0, 1.0, {.keep_step_history = true});
+    std::vector<StepProgress> seen;
+    std::vector<double> snapshot_times;
+    IntegrationOutput watched{.keep_step_history = true,
+                              .snapshot_times = {0.25, 0.5}};
+    watched.on_step = [&](const StepProgress &progress) {
+      seen.push_back(progress);
+      if (progress.snapshot)
+        snapshot_times.push_back(progress.snapshot->time);
+      check(progress.problem == m.get(), "the problem integrated");
+      return true;
+    };
+    const auto observed = i.integrate(m, 0.0, 1.0, watched);
+    check(!observed.stopped, "an observer that goes on does not stop");
+    check(seen.size() == 16, "every step is seen");
+    for (std::size_t k = 0; k < seen.size(); ++k)
+      check(seen[k].steps == k + 1 &&
+                seen[k].time == static_cast<double>(k + 1) / 16 &&
+                seen[k].dt == 1.0 / 16,
+            "each step's end, count and length");
+    check(snapshot_times == std::vector<double>{0.25, 0.5},
+          "the snapshots as they are kept");
+    check(observed.final.values == whole.final.values,
+          "observing does not change the run");
+
+    // Stop after the 5th step.
+    IntegrationOutput stopping{.keep_step_history = true,
+                               .snapshot_times = {0.25, 0.75},
+                               .keep_before_last_step = true};
+    stopping.on_step = [](const StepProgress &progress) {
+      return progress.steps < 5;
+    };
+    const auto part = i.integrate(m, 0.0, 1.0, stopping);
+    check(part.stopped, "stopped");
+    check(part.final.time == 5.0 / 16 && part.history.size() == 5,
+          "stopped after the 5th step");
+    check(part.snapshots.size() == 1 && part.snapshots[0].time == 0.25,
+          "the snapshots up to there");
+    check(part.before_last_step && part.before_last_step->time == 4.0 / 16,
+          "the state before the last step taken");
+    check(!part.report.messages.empty() &&
+              part.report.messages.back().find("stopped by the caller") !=
+                  std::string::npos,
+          "the report says so");
+    const auto rest =
+        i.integrate(m, part.final.time, 1.0, {.keep_step_history = true},
+                    &part.final, std::nullopt, &part.anchor);
+    check(rest.final.values == whole.final.values,
+          "continued with its anchor: the same final state, bit for bit");
+    for (std::size_t k = 0; k < rest.history.size(); ++k)
+      check(rest.history[k].t == whole.history[k + 5].t,
+            "the step times of one long run");
+
+    // Asking to stop at the last step is not a stop.
+    IntegrationOutput late{};
+    late.on_step = [](const StepProgress &) { return false; };
+    const auto one = integrator(std::make_shared<ImplicitEuler>(), 1.0)
+                         .integrate(m, 0.0, 1.0, late);
+    check(!one.stopped && one.final.time == 1.0,
+          "a run that reached t1 was not stopped");
+  }
+}
+
 void continues_runs() {
   // First order: bit for bit, when the long run lands on the split time.
   for (const auto &method : std::vector<std::shared_ptr<const TimeMethod>>{
@@ -995,6 +1065,8 @@ int main() {
   return pde2d::test::run({
       {"IntegrationResult and Solution keep their positional order",
        integration_result_keeps_its_order},
+      {"an observer sees every step and can stop the run",
+       observes_and_stops_steps},
       {"implicit Euler converges at first order in time",
        [] {
          time_rate(std::make_shared<ImplicitEuler>(), heat_problem(),

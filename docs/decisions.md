@@ -53,8 +53,11 @@ Started 2026-11-11.
 - **The graphical interface is delegated** (2026-11-14). It lives in
   `app/` as a separate program over the library's public headers;
   agents decide its design themselves and record it in
-  [app.md](app.md). The library's own design stays with the owner, and
-  the app may not change it. `pde2d::pde2d` links every module as one
+  [app.md](app.md). Since 2026-11-19 agents working on the app may also
+  change the library for what the app needs and decide that design
+  themselves (recorded here, marked "for the app, by an agent", and in
+  [library-requests.md](library-requests.md)); the rest of the library's
+  design stays with the owner. `pde2d::pde2d` links every module as one
   target; the modules stay separate libraries. *Why:* the owner wants a
   working interface to enter settings and see results without
   overseeing its details.
@@ -1219,6 +1222,21 @@ coarsening, moving nodes or enrichment for now.
   error-per-unit-step option (error proportional to the tolerance), a PI
   controller (fewer rejections on waves), and spreading the steps evenly
   before a landing (no short last step, fewer preparations).
+- **Observers for progress and Stop** (2026-11-19, for the app, by an
+  agent; library-requests.md item 2): `IntegrationOutput::on_step`, a
+  `std::function<bool(const StepProgress &)>` called after every accepted
+  step (time, accepted steps, dt, the snapshot kept, the problem), on the
+  calling thread and never during a solve; false ends the run there,
+  exactly as `max_steps` does (`IntegrationResult::stopped`), so a run
+  continued with its `anchor` equals one that was not stopped. The
+  `AdaptiveIntegrator` forwards it to its pieces (steps over the whole
+  run) and ends when a piece stops (`AdaptiveIntegrationResult::stopped`).
+  `AdaptiveStaticSolver::solve` takes a `CycleObserver` called after each
+  cycle's solve and estimate; false is `StopReason::stopped`. *Why:* the
+  app's adaptive runs were one call without progress or Stop, and a time
+  run's Stop waited for its chunk. A callback (not a cancellation token)
+  because the same call gives progress and the snapshots as they come;
+  `std::function` in public headers is no heavy dependency.
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks

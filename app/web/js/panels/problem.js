@@ -5,7 +5,7 @@
 // server at once; errors and what each coefficient depends on are shown
 // under the fields.
 
-import { applyPreset, scheduleProblemCheck, toast } from "../actions.js";
+import { scheduleProblemCheck, toast } from "../actions.js";
 import { isLine, renameParameter, visibleCoefficients } from "../pure/case_model.js";
 import { errorBox, fill, foldable, h, infoToggle, markLocal, numberInput, regionSwatch, revealFolded } from "../dom.js";
 import { settings } from "../settings.js";
@@ -219,22 +219,6 @@ function templateSelect(label, templates, apply) {
 // A complete problem for the current geometry, from the server's presets
 // (equation, conditions for every region, initial conditions, parameters
 // and the solve settings). The toast that follows can undo it.
-function presetSelect(presets) {
-  return h(
-    "select",
-    {
-      "aria-label": "Problem preset",
-      onchange: (event) => {
-        const preset = presets.find((p) => p.id === event.target.value);
-        event.target.value = "";
-        if (preset) applyPreset(preset);
-      },
-    },
-    h("option", { value: "" }, "Use a preset…"),
-    presets.map((p) => h("option", { value: p.id, title: p.description }, p.label)),
-  );
-}
-
 function equationSection(catalog, problem) {
   problem.equation ??= {};
   const line = isLine(problem.equation);
@@ -405,15 +389,17 @@ function checkStatus(check, fresh, error, lastDone) {
   return { status: "done", text: "No errors" };
 }
 
+// The problem's facts as four chips, always the same four (each says yes
+// or no), so the fields below do not move when an edit changes a fact.
 function summaryChips(check) {
   const required = check.required_initial;
   return h(
     "div",
-    { class: "row chips" },
+    { class: "row chips summary-chips" },
     h("span", { class: "chip" }, `Time order ${timeOrderWords(check.time_order)}`),
-    check.coefficients_depend_on_t ? h("span", { class: "chip" }, "coefficients depend on t") : null,
-    check.data_depends_on_t ? h("span", { class: "chip" }, "data depend on t") : null,
-    required.length ? h("span", { class: "chip" }, `needs initial ${required.join(" and ")}`) : null,
+    h("span", { class: "chip", "data-on": String(check.coefficients_depend_on_t) }, check.coefficients_depend_on_t ? "coefficients depend on t" : "coefficients constant in t"),
+    h("span", { class: "chip", "data-on": String(check.data_depends_on_t) }, check.data_depends_on_t ? "data depend on t" : "data constant in t"),
+    h("span", { class: "chip", "data-on": String(required.length > 0) }, required.length ? `needs initial ${required.join(" and ")}` : "no initial values"),
   );
 }
 
@@ -422,7 +408,7 @@ export const problemPanel = {
     panelElement = container;
     const catalog = store.catalog.problem;
     const problem = (store.caseData.problem ??= {});
-    const head = stepHead("problem", catalog.presets?.length ? presetSelect(catalog.presets) : null);
+    const head = stepHead("problem");
     fill(
       container,
       head,
@@ -497,7 +483,19 @@ export const problemPanel = {
     if (error) children.push(errorBox(error));
     if (old) children.push(errorBox(old, { outdated: true }));
     if (fresh && !error) {
-      children.push(summaryChips(check));
+      // An equation that cannot be read has no facts: those of the last
+      // one that could stay, muted, rather than "time order 0".
+      const unreadable = check.errors.some((e) => e.path === "problem.equation" || e.path.startsWith("problem.equation."));
+      if (!unreadable) summary.lastReadable = check;
+      const facts = unreadable ? summary.lastReadable : check;
+      if (facts) {
+        const chips = summaryChips(facts);
+        if (facts !== check) {
+          chips.classList.add("stale");
+          chips.title = "From the last equation that could be read";
+        }
+        children.push(chips);
+      }
       // Errors without a field of their own (the whole section).
       const unplaced = check.errors.filter((e) => !container.querySelector(`[data-path="${CSS.escape(e.path)}"]:not(input)`));
       for (const e of unplaced) children.push(h("div", { class: "alert" }, `${e.path}: ${e.message}`));

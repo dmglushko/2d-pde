@@ -34,6 +34,9 @@
             <div class="menu-separator" role="separator"></div>
             <div class="menu-heading" id="examples-heading">Examples</div>
             <div id="examples" role="group" aria-labelledby="examples-heading"></div>
+            <div class="menu-separator" role="separator"></div>
+            <div class="menu-heading" id="presets-heading" title="Fills in the problem and the solve settings; the geometry and the mesh stay">Problems on this geometry</div>
+            <div id="problem-presets" role="group" aria-labelledby="presets-heading"></div>
           </div>
         </div>
         <input id="open-case" type="file" accept=".json,application/json" tabindex="-1" hidden />
@@ -47,11 +50,21 @@
     <div id="case-notice"></div>
 
     <main class="layout">
-      <aside class="sidebar">
+      <aside class="sidebar" id="sidebar">
         <!-- The steps and their panels come from the stage registry
              (js/core.js, STAGES). -->
         <nav class="steps" role="tablist" aria-label="Steps"></nav>
         <div class="panels"></div>
+        <div
+          class="sidebar-handle"
+          id="sidebar-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-controls="sidebar"
+          aria-label="Sidebar width: drag, or use the arrow keys; double-click for the default"
+          aria-valuemin="300"
+          tabindex="0"
+        ></div>
       </aside>
 
       <section class="viewer" aria-label="Picture">
@@ -72,6 +85,7 @@
               </select>
             </label>
             <button id="profile-tool" class="small" type="button" aria-pressed="false" title="Drag across the picture to plot the shown field along a line"><span class="wide-only">Line profile</span><span class="phone-only">Profile</span></button>
+            <button id="reset-view" class="small wide-only" type="button" title="Centre the whole domain in the picture again (also: double-click, or 0)">Reset view</button>
             <button id="save-picture" class="small" type="button" title="Save the picture with its legend as PNG">Save<span class="wide-only"> picture</span></button>
             <button id="collapse-picture" class="icon phone-only" type="button" aria-expanded="true" aria-controls="canvas-wrap" aria-label="Hide the picture" title="Hide the picture">▴</button>
             <span class="status" id="view-status"></span>
@@ -89,7 +103,7 @@
             <div class="zoom-buttons" role="group" aria-label="Zoom">
               <button id="zoom-in" class="icon" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
               <button id="zoom-out" class="icon" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
-              <button id="fit-view" class="icon" type="button" aria-label="Fit the picture" title="Fit the picture (0)">⤢</button>
+              <button id="fit-view" class="icon" type="button" aria-label="Fit the picture" title="Fit the picture (0)">⌂</button>
             </div>
           </div>
           <div

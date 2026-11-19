@@ -165,37 +165,52 @@ input.expr {
   display: inline-flex;
 }
 
-/* A choice of a few options: radio buttons drawn as one segmented row. */
+/* A choice of a few options: radio buttons drawn as one segmented row of
+   equal cells (a long label wraps inside its cell, never the row), the
+   chosen one filled with the accent. */
+.row.segmented,
 .segmented {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 0;
   border: 1px solid var(--control-border);
   border-radius: var(--radius);
   overflow: hidden;
   width: fit-content;
   max-width: 100%;
+  /* In a row with its info button: it takes the room left beside it. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .segmented .choice {
-  /* Holds its hidden radio: without it the radio is placed against the
-     page, outside the scrolling panel, and lets the page scroll below the
-     interface. */
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.25;
+  min-height: 32px;
+  padding: 4px 10px;
   cursor: pointer;
   color: var(--ink-2);
-  border-right: 1px solid var(--control-border);
+  border-left: 1px solid var(--control-border);
 }
 
-.segmented .choice:last-child {
-  border-right: 0;
+.segmented .choice:first-child {
+  border-left: 0;
+}
+
+.segmented .choice:hover {
+  background: var(--surface-2);
+  color: var(--ink);
 }
 
 .segmented .choice:has(input:checked) {
-  background: var(--accent-wash);
-  color: var(--ink);
+  background: var(--accent-strong);
+  color: var(--accent-ink);
+  font-weight: 550;
 }
 
 .segmented .choice:has(input:focus-visible) {
@@ -1112,7 +1127,8 @@ dialog.settings h3 {
   min-width: 0;
 }
 
-.segmented.kinds {
+.row.segmented.kinds {
+  display: flex;
   flex-wrap: wrap;
 }
 
@@ -1166,6 +1182,11 @@ button.symbol {
   line-height: 1.4;
 }
 
+.summary-chips .chip[data-on="false"] {
+  color: var(--muted);
+}
+
+.chips.stale,
 .result.stale {
   opacity: 0.55;
 }

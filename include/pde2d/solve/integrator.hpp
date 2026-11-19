@@ -10,11 +10,34 @@
 
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
 
 namespace pde2d::solve {
+
+// Where a run stands after an accepted step, for an observer
+// (IntegrationOutput::on_step): progress, and the snapshot as it comes.
+struct StepProgress {
+  // The end of the accepted step: where the run stands.
+  double time = 0.0;
+  // The accepted steps of the call so far (of the whole run for the
+  // adaptive integrator).
+  std::size_t steps = 0;
+  // The step's length, as the method used it (StepRecord::dt).
+  double dt = 0.0;
+  // The snapshot this step kept (IntegrationOutput), or null; valid only
+  // during the call.
+  const Solution *snapshot = nullptr;
+  // The problem integrated (its mesh is the snapshot's); valid only
+  // during the call.
+  const fem::MeshedProblem *problem = nullptr;
+};
+
+// Called after every accepted step; returning false stops the run there
+// (IntegrationResult::stopped).
+using StepObserver = std::function<bool(const StepProgress &)>;
 
 // What an integrate() call keeps besides the final solution.
 struct IntegrationOutput {
@@ -32,6 +55,16 @@ struct IntegrationOutput {
   // difference quotient of the final state. No boundary data is evaluated
   // for it.
   bool keep_before_last_step = false;
+  // Called after every accepted step, on the calling thread, never during
+  // a solve (decided 2026-11-19, for the app, by an agent: progress and
+  // Stop inside a run). Returning false ends the run after that step, as
+  // max_steps would: `final`, `anchor` and before_last_step are those of
+  // that step, so a run continued from them with the anchor takes the
+  // same steps as one that was not stopped. Empty: not called. Its
+  // exceptions are passed on. (After the members above, so that
+  // positional initializations keep their meaning: new members go at the
+  // end.)
+  StepObserver on_step{};
 };
 
 // The integration state at one time in the free unknowns
@@ -154,6 +187,8 @@ struct IntegrationResult {
   // Where the steps stand at the end of the run, to continue the same
   // stretch of steps (integrate()'s `anchor`).
   StepAnchor anchor{};
+  // Whether IntegrationOutput::on_step stopped the run (before t1).
+  bool stopped = false;
 };
 
 // Integrates a MeshedProblem in time (docs/decisions.md, "Solvers and time

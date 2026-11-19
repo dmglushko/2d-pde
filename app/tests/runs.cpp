@@ -289,6 +289,77 @@ int main() {
              "was replaced by a newer solve");
          (void)wait(session, next);
        }},
+      {"Stop inside a chunk: Continue gives the snapshots of one run, bit for "
+       "bit",
+       [] {
+         const Json case_json = long_case();
+         const Values expected = single(case_json);
+         app::Session session({.background_runs = true});
+         Json progress = session.solve(case_json);
+         const auto job = progress["job"].get<std::uint64_t>();
+         const double first = progress["times"][1].get<double>();
+         // Into the second interval, which goes on in the background.
+         const auto until =
+             std::chrono::steady_clock::now() + std::chrono::seconds(20);
+         while (session.solve_progress(job)["t"].get<double>() < first + 0.2 &&
+                std::chrono::steady_clock::now() < until)
+           std::this_thread::sleep_for(std::chrono::milliseconds(2));
+         progress = session.stop_solve(job);
+         check(progress["state"] == "stopped", progress["state"].dump());
+         // The chunk stops at its next step and gives the session back.
+         while (!session.status()["busy"].is_null() &&
+                std::chrono::steady_clock::now() < until)
+           std::this_thread::sleep_for(std::chrono::milliseconds(2));
+         progress = session.solve_progress(job);
+         const double stood = progress["t"].get<double>();
+         check(stood > first && stood < 2.0,
+               "stopped inside the interval, at t = " + std::to_string(stood));
+         check(progress["values"]["snapshots"] == 2,
+               "the snapshots before it only");
+         (void)session.solve(case_json);
+         progress = wait(session, job);
+         check(progress["state"] == "done", "continued to the end");
+         check(session.solution_values(case_json) == expected,
+               "the same snapshots as one run");
+       }},
+      {"an adaptive run publishes its cycles as they come and stops after one",
+       [] {
+         Json case_json = app::Session::default_case();
+         case_json["solve"]["mode"] = "adaptive";
+         case_json["solve"]["adaptive"]["tolerance"] = {{"absolute", 1e-12},
+                                                        {"relative", nullptr}};
+         case_json["solve"]["adaptive"]["max_cycles"] = 30;
+         case_json["solve"]["adaptive"]["max_nodes"] = 200000;
+         app::Session session({.background_runs = true});
+         Json progress = session.solve(case_json);
+         const auto job = progress["job"].get<std::uint64_t>();
+         check(progress["state"] == "running",
+               "followed: " + progress["state"].dump());
+         const auto until =
+             std::chrono::steady_clock::now() + std::chrono::seconds(30);
+         while (session.solve_progress(job)["adaptive"]["cycles"].size() < 2 &&
+                std::chrono::steady_clock::now() < until)
+           std::this_thread::sleep_for(std::chrono::milliseconds(2));
+         progress = session.solve_progress(job);
+         check(progress["state"] == "running" &&
+                   progress["adaptive"]["cycles"].size() >= 2,
+               "two cycles while it runs");
+         progress = session.stop_solve(job);
+         check(progress["state"] == "running",
+               "it runs until the loop has stopped");
+         progress = wait(session, job);
+         check(progress["state"] == "stopped", progress["state"].dump());
+         check(progress["adaptive"]["stop_reason"] == "stopped",
+               progress["adaptive"]["stop_reason"].dump());
+         check(progress["adaptive"]["mesh"].is_object(),
+               "its last mesh is published");
+         check(progress["values"]["snapshots"] == 1, "its solution");
+         const auto again =
+             session.solve(case_json)["job"].get<std::uint64_t>();
+         check(again != job, "Solve starts a stopped adaptive run again");
+         (void)session.stop_solve(again);
+         (void)wait(session, again);
+       }},
       {"chunk sizes keep the fixed cost a small share, within the time cap",
        [] {
          const app::SessionOptions options;

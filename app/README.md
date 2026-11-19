@@ -151,8 +151,9 @@ field, Ctrl+Z undoes the whole edit of the field.
    (a_xx u_xx + … = f, what the library read from the line) and **As a
    line** back; there each form shows the
    coefficients in use and the right side, and **Show all coefficients**
-   reveals the others. **Preset…** fills in a whole problem for the current
-   geometry with matching solve settings (**Use a preset…** in the step's head): Poisson, Laplace with u = x,
+   reveals the others. A preset fills in a whole problem for the current
+   geometry with matching solve settings (the **Case** menu, under
+   **Problems on this geometry**, next to the examples): Poisson, Laplace with u = x,
    heat (a bump, a heated boundary, cooling), the wave equation with and
    without damping, steady convection-diffusion and reaction-diffusion;
    the message that follows has **Undo**. A preset is not applied when the
@@ -219,7 +220,8 @@ field, Ctrl+Z undoes the whole edit of the field.
    snapshots while it goes on: the status shows t reached, steps and
    snapshots with a progress bar, and the picture the newest snapshot,
    unless you moved the time bar. **Stop** (in place of Solve while it
-   runs) keeps what arrived; **Continue** goes on from there.
+   runs) stops at the next time step and keeps what arrived; **Continue**
+   goes on from there, as if it had not stopped.
    **Adaptive** solves statically at t, estimates the error of every
    triangle (residual, Kelly or gradient-recovery estimator), marks some
    (Dörfler, maximum, fixed fraction, equidistribution), refines them
@@ -232,8 +234,9 @@ field, Ctrl+Z undoes the whole edit of the field.
    observed rate (e ~ N^−rate), with a log–log chart and an N^(−1/2)
    slope; comparing with an exact solution adds each cycle's L2 error
    (and an N^(−1) slope). **Export adapted mesh** saves the last mesh as
-   `.pde2d`, which opens as a mesh file. An adaptive solve runs in one
-   piece: it has no progress and no Stop.
+   `.pde2d`, which opens as a mesh file. While it runs, the cycles appear
+   as they are solved; **Stop** ends it after the current cycle and keeps
+   what was solved (**Solve** then starts it again).
    **Adaptive in time** integrates like **In time** (its settings are
    shown first) and, every so much time or so many steps (**Adapt
    every**), estimates the error, refines the marked triangles and moves
@@ -245,15 +248,18 @@ field, Ctrl+Z undoes the whole edit of the field.
    Each snapshot is drawn on its own mesh as the time bar moves;
    **Adaptation times** lists each time with its nodes, estimate and what
    happened, with a chart of the nodes against t
-   (`app/examples/l_shape_heat_adaptive.json`). It runs in one piece too,
-   and exports as the VTK series (a file per snapshot) and the last mesh,
+   (`app/examples/l_shape_heat_adaptive.json`). While it runs, the status
+   shows the time reached; its snapshots and meshes come at its end
+   (**Stop** ends it after the current step and keeps them up to there).
+   It exports as the VTK series (a file per snapshot) and the last mesh,
    not as one CSV or VTK file.
    **Linear solver** offers the direct solvers sparse LU, simplicial LDLᵀ,
    supernodal Cholesky and multifrontal LU (the last two parallel, for
    large problems) and the iterative conjugate gradient and BiCGSTAB;
-   **Threads** (1: one thread, 0: every processor) is an option of each
-   solver that has one and of **Assembly** (folded under the linear
-   solver). Assembly and the iterative solvers give the same numbers for
+   The **Threads** card (1: one thread, 0: every processor) holds the
+   assembly's threads and the linear solver's when it has them; with a
+   solver that runs in one thread (sparse LU, simplicial LDLᵀ) it says so
+   and names the solvers that take threads. Assembly and the iterative solvers give the same numbers for
    every thread count; the parallel direct solvers may differ in the last
    digits.
    Changing the case stops a run. If the server is busy or does not
@@ -277,11 +283,10 @@ whether a run plays as it is computed (the playback speed is chosen on
 the time bar and kept too), the significant digits shown, the number of isolines, the
 colour maps (for values of one sign: blue, orange or green; for both
 signs: blue–red or blue–orange), and the picture quality (lower is faster to pan and draw, higher is sharper). Threads are
-not here: they belong to the case (the Solve step's linear solver and
-Assembly).
+not here: they belong to the case (the Solve step's Threads card).
 
 In the picture, drag to pan, use the wheel or pinch with two fingers to
-zoom, and double-click (or the **⤢** button) to fit; **+** and **−** at
+zoom, and double-click (or **Reset view** in the toolbar, or the **⌂** button) to fit; **+** and **−** at
 the picture's corner zoom too. With the picture focused (Tab), the arrow
 keys pan (Shift for bigger steps), + and - zoom, 0 fits and Enter pins a
 probe at the centre. The toolbar turns layers on and off (boundary, mesh
@@ -295,7 +300,10 @@ stamp. Click a boundary (or a region in the legend) to select it: its
 boundary condition opens in the Problem step (in the Geometry step, its
 row and its actions at the click). **Lock range** keeps the colour range for
 every snapshot and run until **Unlock** (its ends can be edited), so two
-runs can be compared by eye. **Line profile**: drag a line across the
+runs can be compared by eye. For a run in time the legend's
+**range** menu colours by the **whole run** (one range for every
+snapshot) or by **this snapshot** (its own min and max: small values late
+in a run stay visible). **Line profile**: drag a line across the
 picture to plot the shown field along it (it follows the time bar);
 **Remove line** drops it. Point at the picture to read the coordinates,
 the region, the triangle and the value there (for Dirichlet values and
@@ -322,7 +330,9 @@ step), the top bar says what it is busy with.
 The page has one, dark, theme. On a phone, the steps stay at the top and
 the picture with its time bar stays under them while the panel scrolls;
 drag the bar under the picture to make it taller or shorter, or fold the
-picture away with **▴** (the browser remembers both).
+picture away with **▴** (the browser remembers both). On a wider screen,
+drag the sidebar's right edge to make it wider or narrower (double-click
+it for the default; remembered too).
 
 ## Cases
 

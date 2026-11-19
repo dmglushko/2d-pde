@@ -6,10 +6,10 @@ by decision, is in [app-decisions.md](app-decisions.md).
 
 **The app's design is delegated** (the owner, 2026-11-14). Agents make
 the app's decisions themselves and record them in
-[app-decisions.md](app-decisions.md). The library's rules still hold: the
-app must not change the library's design, and anything the app needs from
-the library is a library change, raised with the owner
-([library-requests.md](library-requests.md)).
+[app-decisions.md](app-decisions.md). What the app needs from the library
+is made in the library by the agent working on the app (the owner,
+2026-11-19), following the library's conventions; the list of such needs
+and what became of them is [library-requests.md](library-requests.md).
 
 ## At a glance
 
@@ -861,7 +861,8 @@ last's;
   exactly the integrator's metrics). `prepares` counts one per chunk at
   least.
 - A solve of the same inputs reuses the client's run: a running or done
-  one is answered as it is, a stopped one continues, a failed one starts
+  one is answered as it is, a stopped one continues (a stopped adaptive
+  run starts again: its loop is one call), a failed one starts
   again. Other inputs replace it (the old one is dropped under the
   session mutex: it holds expressions); asking for the old one then
   answers `replaced`. The reference run is a second pointer that keeps a
@@ -875,14 +876,25 @@ last's;
   for error-controlled steps (`tests/runs.cpp`). An error-controlled run
   reserves two more states of the nodes for the method's earlier steps
   in the anchor, which a done run drops.
-- What a chunk cannot do: show progress or stop inside one snapshot
-  interval (library-requests.md, item 2).
+- **Inside a chunk** (`IntegrationOutput::on_step`): every step moves
+  the published `t` (the progress bar), and Stop (`request_stop`: a time
+  run is stopped at once) ends the chunk at its next step; what it kept
+  is published, and Continue goes on from where it stood
+  (`last->time`, with its anchor), so the snapshots are still those of
+  one call (`tests/runs.cpp`, "Stop inside a chunk"). A stopped chunk's
+  cost is not recorded.
 
 ### Adaptive runs
 
-`start_run` of an adaptive run calls `AdaptiveStaticSolver::solve` once,
-under the session mutex (the library has no progress or cancellation
-for the loop: library-requests.md, item 2), and publishes under the run
+An adaptive run is not solved by `start_run`: `solve` answers it as
+running, and the worker (`advance`, `run_adaptive`; without background
+runs `solve` calls it before it returns) calls
+`AdaptiveStaticSolver::solve` once, under the session mutex, with a
+`CycleObserver` that publishes each cycle's row (`adaptive.cycles`) as it
+comes and returns whether to go on. Stop (`request_stop`) sets
+`Published::stop_requested`: the run stays running until the loop has
+stopped after its current cycle (`StopReason::stopped`) and its result
+is published, then it is stopped. It then publishes under the run
 lock: the last cycle's solution as the run's one snapshot, the run's
 `meshed`, `mesh` and `mesh_id` replaced by the last problem, its mesh and
 `adapted_mesh_id` (an id the stage cache reserved when the run was made,
@@ -902,8 +914,9 @@ and reads the result.
 
 **An adaptive run in time** (`adaptive_time`) calls
 `AdaptiveIntegrator::integrate` once over the run's snapshot times
-(`solve_adaptive_time`; one call: no progress or Stop either, the same
-library request), with an `Integrator` of the time part's method, step
+(`solve_adaptive_time`, in the worker like an adaptive run; its
+`on_step` moves the published `t` at every step and Stop ends it after
+the current step: `stopped`, its snapshots and meshes up to there), with an `Integrator` of the time part's method, step
 controller and linear solver and one `MeshRefinement`, and publishes
 under the run lock (`publish_adaptive_time`):
 
@@ -995,7 +1008,11 @@ not counted.
 ## The page
 
 **The top bar**: the case menu (New case, Open case…, Save case, Restore
-previous case, Undo, Redo, the examples; the menu button pattern:
+previous case, Undo, Redo, the examples, and "Problems on this
+geometry": the presets, which fill in the problem and the solve settings
+and open the Problem step; every ready-made start is in this one menu,
+only the equation's and the conditions' templates stay at their fields;
+the menu button pattern:
 Enter, Space or ArrowDown opens it, the arrows, Home and End move,
 Escape closes it; the button names the case), an "unsaved" chip, the
 server's status, Run all and Settings. It is one row at phone width.
@@ -1038,7 +1055,11 @@ a parameter named u; a toast says why).
 Templates give lines. **Nothing above a field changes while a check
 runs**: the summary (time order, chips) and the step's status keep the
 last check's words, and only a check slower than 0.4 s says "Checking…"
-and greys the old facts.
+and greys the old facts. **Nor when an edit changes a fact**: the
+summary always has the same four chips (the time order; coefficients
+depend on t or are constant in t; the data the same; the initial values
+needed, or none), and an equation that cannot be read keeps the facts of
+the last one that could, greyed, instead of "time order 0".
 
 **Following a run** (`actions.js`, `followRun`): the page polls the
 progress every 250 ms and makes room for the new snapshots; the time bar
@@ -1096,6 +1117,11 @@ newest snapshot if it catches up; the bar says "playing at 0.38×: the
 run computes slower than 1×". When the run ends, the playback goes on at
 the speed to the end. The slider and Pause end playing a run as it comes;
 Play at the end starts again from t0.
+**Nothing moves while a run plays**: the time and the range of u (and
+the legend's time) are `steadyText` (`dom.js`): the text and a hidden
+copy of the widest text of the run (`timeSizers`, `widestText`) share one
+grid cell, so the slider and the colour bar keep their places. The page
+has no inline styles.
 
 **Probes.** A click on the picture (or Enter with the picture focused)
 pins a probe, up to four; each keeps its colour slot while others come
@@ -1180,10 +1206,13 @@ the nodes against t and the integrator's messages. Exports: the VTK
 series, provenance and the adapted (last) mesh; no CSV or single VTK
 file. No reference section or refinement study.
 
-**Threads** are case options in the Solve step: the linear solver's
-`threads` (its card) and **Assembly** (`solve.assembler.threads`, folded
-under the linear solver; `assemblerPart`). The Settings dialog has no
-computation group.
+**Threads** are case options in the Solve step, in one open card,
+**Threads** (`threadsPart`), for every mode: **Assembly**
+(`solve.assembler.threads`) and the linear solver's `threads` when the
+chosen solver has one (it is left out of the Linear solver card, so it
+is in one place); for a solver without one, the card says that it runs
+in one thread and names the solvers that have threads (from the
+catalog). The Settings dialog has no computation group.
 
 **Refinement study** (`refinement.js`, the Solve result, with an exact
 solution in the case): 3 to 5 levels of the mesh's max edge length (the
@@ -1257,6 +1286,22 @@ undo steps and leave the case saved or not as it was; reading a case
 case** (case menu, `store.previousCase`) brings back the case the last
 New, Open, example or file replaced, until the next replacement.
 
+**The layout**: the sidebar's width follows the handle on its right
+edge (drag, the arrow keys, a double click for the default 400 px;
+between 300 px and what leaves the picture 360 px, `clampSidebarWidth`),
+kept in this browser; at phone width there is no handle. The toolbar has
+**Reset view** (fit the domain; also a double click, 0, and ⌂ on the
+picture). The step switches, the solve mode and the other segmented
+choices are rows of equal cells, the chosen one filled with the accent.
+
+**Drawing cost** (`view/layers.js`): the mesh edges are drawn into a
+layer of their own, once per mesh, view and size (each edge once,
+`meshEdges`, in paths of 2048 edges: one path of every triangle's
+edges took about a second at 26k triangles), and copied onto the
+picture at the opacity it needs; a new snapshot, another step or a key
+typed redraws the picture in about 20 ms at that size. The boundary is
+one path per region.
+
 **The picture** (`view/`). The legend names the field shown (`u at t =
 …`, `u − exact at t = …`, `Dirichlet values at t = …`, `|∇u| at t = …`),
 the Colour menu's options name it too (`field: u`, `|∇| of u`), a field
@@ -1266,7 +1311,13 @@ on a range that spans it, as few digits as keep them apart; the exact
 ends are its tooltip and accessible name). Colour maps (Settings):
 sequential blue (default), orange or green, one hue from dark to light;
 diverging blue–red (default) or blue–orange with a grey middle
-(`COLOR_MAPS`). **Lock range** fixes the colour range per quantity (field
+(`COLOR_MAPS`). For a run in time the legend offers the colour range:
+**whole run** (one scale over every snapshot, the default) or **this
+snapshot** (the drawn snapshot's own min and max from `snapshot_min` and
+`snapshot_max`, in double; `store.view.range`, kept in the tab; the
+scale is kept per result and snapshot so it keeps its identity), so
+small values late in a run are seen; at phone width it is hidden.
+**Lock range** fixes the colour range per quantity (field
 or |∇|) in `store.view.locked` (`lockedScale`), kept until **Unlock** and
 editable at its ends. **|∇|** colours each triangle by the gradient of the
 shown P1 field (`gradientMagnitudes`, display only). **Line profile**:
@@ -1313,7 +1364,8 @@ catalog gives; every physical choice is in `presets.cpp`, written as lines
 (heat is `u_t - div(k*grad(u)) = 0`; cooling through the boundary,
 −k u_n = h (u − u_out) with k = 1, is `u_n + h*u = h*u_out`). Each preset runs on the default
 rectangle and on an annulus in `tests/runs.cpp`, and on the drawn
-cooling fin in `tests/drawing.cpp`.
+cooling fin in `tests/drawing.cpp`. The page offers them in the case
+menu ("Problems on this geometry"), not in the Problem step.
 
 ## Security
 

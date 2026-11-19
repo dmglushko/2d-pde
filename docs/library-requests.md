@@ -1,10 +1,10 @@
 # Library requests from the app
 
-Things the app (`app/`) would use but the library does not offer. Each
-is a library change, so each is the owner's decision (see
-[decisions.md](decisions.md)); nothing here is decided or started. The
-app works without them. Newest at the bottom; when one is decided, move
-it to decisions.md and note it here.
+Things the app (`app/`) would use but the library does not offer. Since
+2026-11-19 the agent working on the app makes these library changes
+itself (root AGENTS.md); each one done is recorded in
+[decisions.md](decisions.md) (marked "for the app, by an agent") and
+noted here as **Done**. Newest at the bottom.
 
 ## 1. Parallel assembly and parallel linear solves
 
@@ -70,6 +70,15 @@ cannot be stopped.
   indicators (one array per triangle per adaptation time, also when the
   tolerance was met); an option to keep only the totals would bound a
   long run's memory (2026-11-19, review).
+- **Done** (2026-11-19, for the app, by an agent): `IntegrationOutput::on_step`
+  (after every accepted step; false stops the run, which continues
+  exactly with its anchor), forwarded by the `AdaptiveIntegrator`, and
+  `AdaptiveStaticSolver::solve`'s `CycleObserver` (`StopReason::stopped`).
+  The app moves a time run's progress at every step and stops a chunk at
+  its next step; its adaptive runs run in the background worker, publish
+  their cycles (or time) as they come and stop after the current cycle
+  or step (docs/app.md, "Runs"). Still open: a time run is still chunked,
+  since one call would hold the session mutex for the whole run (item 3).
 - **What chunks cost** (2026-11-16): each `integrate` call prepares the
   linear solver and assembles at its start again, so the app sizes chunks
   by their measured cost to keep that fixed cost a small share
@@ -168,3 +177,10 @@ library's junction. A library function that splits a region at a point
 of a curve (loop, curve, parameter), or that gives the fraction of such
 a point, would keep those rules in one place; so would one that gives
 the nearest boundary point (curve and parameter) of a point.
+
+## 12. Where a run's time goes
+
+**Done** (2026-11-19, decisions.md, Solvers): the integrator's report
+has `assembly_seconds`, `prepare_seconds` and `solve_seconds`, which the
+Solve step shows as "Where the time went" (a 30 s run showed only its
+total).

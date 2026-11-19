@@ -11,9 +11,8 @@ export default async ({ example, q, tab, select, click, type, until, idle, text,
 
   // A preset asked for, then an edit before its answer.
   tab("problem");
-  const presets = q('#panel-problem select[aria-label="Problem preset"]');
-  const heat = [...presets.options].find((o) => /heat/i.test(o.textContent));
-  select(presets, heat.value);
+  const heat = q('#problem-presets [data-preset^="heat"]');
+  click(heat);
   const f = q('[data-path="problem.equation.text"] input');
   type(f, "-lap(u) = 42");
   await idle();

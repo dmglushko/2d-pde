@@ -52,6 +52,7 @@ all=(
   "adaptive_time 1440 900 solve"
   "equation_line 1280 800 problem"
   "reports 1280 560 solve"
+  "steady_layout 1440 900 problem"
 )
 
 chrome="${PDE2D_CHROME:-}"

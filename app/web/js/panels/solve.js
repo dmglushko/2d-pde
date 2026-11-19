@@ -6,7 +6,7 @@
 // last. The shown snapshot is the time bar's under the picture
 // (timebar.js).
 
-import { exportFile, followedRun, runWithPrerequisites, stopRun, toast } from "../actions.js";
+import { exportFile, followedRun, runWithPrerequisites, stopping, stopRun, toast } from "../actions.js";
 import { lineChart } from "../charts.js";
 import { LABELS, clearComparison, compare, compareWith, comparisonState, comparisons, currentComparison, forgetReference, keepReference } from "../compare.js";
 import { comparisonControls, currentDisplay } from "../display.js";
@@ -122,20 +122,34 @@ function setLabel(button, text) {
 // The status of the step: running (t reached, steps, snapshots, with a
 // progress bar), stopped at t, failed after t, or the usual words.
 function headStatus(result, fresh, running) {
+  // An adaptive run: its cycles as they come (the loop is one call: Stop
+  // takes effect after the current cycle).
+  if (running && result.mode === "adaptive") {
+    const cycles = result.adaptive?.cycles ?? [];
+    const last = cycles.at(-1);
+    return {
+      status: "busy",
+      text: stopping(result) ? "Stopping after this cycle…" : `Running: cycle ${cycles.length + 1}`,
+      detail: last ? `cycle ${last.cycle}: ${formatNumber(last.nodes)} nodes${Number.isFinite(last.estimate) ? `, estimate ${formatNumber(last.estimate, 3)}` : ""}` : "solving on the starting mesh",
+    };
+  }
   if (running) {
     const span = result.t1 - result.t0;
     const bar = h("progress", { max: "1", value: String(span > 0 ? Math.max(0, Math.min(1, (result.t - result.t0) / span)) : 0), "aria-label": "Run progress" });
     const steps = result.reports?.[0]?.metrics?.steps ?? 0;
     // A progress poll that is being tried again says so (actions.js).
     const notice = store.runNotice ? h("div", { class: "inline-failure", role: "status" }, store.runNotice) : null;
+    // An adaptive run in time shows its snapshots and meshes at its end.
+    const detail = result.mode === "adaptive_time" ? "the snapshots come when the run ends" : `${formatNumber(steps)} steps · ${result.values.length} of ${result.snapshots_total} snapshots`;
     return {
       status: "busy",
-      text: `Running: t = ${formatNumber(result.t, 5)} of ${formatNumber(result.t1)}`,
-      detail: `${formatNumber(steps)} steps · ${result.values.length} of ${result.snapshots_total} snapshots`,
+      text: stopping(result) ? `Stopping at t = ${formatNumber(result.t, 5)}…` : `Running: t = ${formatNumber(result.t, 5)} of ${formatNumber(result.t1)}`,
+      detail,
       extra: notice ? h("div", {}, bar, notice) : bar,
     };
   }
-  if (fresh && result.state === "stopped") return { status: "stopped", text: `Stopped at t = ${formatNumber(result.t, 5)}` };
+  if (fresh && result.state === "stopped")
+    return { status: "stopped", text: result.mode === "adaptive" ? `Stopped after cycle ${result.adaptive?.cycles?.length ?? 0}` : `Stopped at t = ${formatNumber(result.t, 5)}` };
   if (fresh && result.state === "failed") return { status: "failed", text: `Failed after t = ${formatNumber(result.t, 5)}` };
   if (fresh)
     return {
@@ -295,8 +309,10 @@ function updateCycles(container) {
   const result = freshResult("solve") ?? lastResult("solve");
   const compared = currentComparison("exact");
   const errors = compared && comparisonState("exact") === "current" ? (compared.summary?.cycles ?? null) : null;
-  const key = [result, errors];
-  if (slot.shown && slot.shown[0] === key[0] && slot.shown[1] === key[1]) return;
+  // A running adaptive run's result grows in place: its cycles' count is
+  // part of the key.
+  const key = [result, errors, result?.adaptive?.cycles?.length ?? 0, result?.state];
+  if (slot.shown && key.every((part, i) => slot.shown[i] === part)) return;
   slot.shown = key;
   if (result?.mode === "adaptive_time") return fill(slot, adaptationsSection(result));
   if (result?.mode !== "adaptive" || !result.adaptive?.cycles?.length) return fill(slot);
@@ -796,21 +812,46 @@ function settingsPart(section, solveCase, mode) {
     h("div", { id: "solve-size" }),
     others.map((other) => modePart(other, solveCase)),
     modePart(mode, solveCase),
-    // Its options are rarely changed: folded for a new viewer.
-    choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear, { folded: true }),
-    assemblerPart(section, solveCase),
+    threadsPart(section, solveCase),
+    // Its options are rarely changed: folded for a new viewer. Its
+    // threads are in the Threads card.
+    choiceCard(section.linear_solver, solveCase.linear_solver, "solve.linear_solver", pickLinear, { folded: true, hidden: [THREADS] }),
   );
 }
 
-// The assembly's options (threads), for every mode; folded like the
-// linear solver.
-function assemblerPart(section, solveCase) {
-  if (!section.assembler) return null;
-  const values = (solveCase.assembler ??= {});
-  return foldable(
-    { id: "solve.assembler", title: section.assembler.label, folded: true, attributes: { dataset: { path: "solve.assembler" } } },
-    optionsForm(section.assembler.options, values, "solve.assembler", () => editCase(() => {}, "edit", { sections: ["solve"] })),
-  );
+// The option every parallel component names its thread count with.
+const THREADS = "threads";
+
+// Threads, in one place for every mode: the assembly's (the assembler's
+// options) and the linear solver's when it has the option; when it has
+// not, which solvers do (from the catalog).
+function threadsPart(section, solveCase) {
+  const changed = () => editCase(() => {}, "edit", { sections: ["solve"] });
+  const rows = [];
+  if (section.assembler) {
+    const values = (solveCase.assembler ??= {});
+    const specs = section.assembler.options.map((o) => (o.name === THREADS ? { ...o, label: "Assembly" } : o));
+    rows.push(h("div", { dataset: { path: "solve.assembler" } }, optionsForm(specs, values, "solve.assembler", changed)));
+  }
+  const choice = solveCase.linear_solver;
+  const solvers = section.linear_solver.components;
+  const solver = solvers.find((c) => c.type === choice?.type);
+  const spec = solver?.options.find((o) => o.name === THREADS);
+  if (spec) {
+    choice.options ??= {};
+    rows.push(h("div", { dataset: { path: "solve.linear_solver.options" } }, optionsForm([{ ...spec, label: `Linear solver (${solver.label})` }], choice.options, "solve.linear_solver.options", changed)));
+  } else if (solver) {
+    const parallel = solvers.filter((c) => c.options.some((o) => o.name === THREADS)).map((c) => c.label);
+    rows.push(
+      h(
+        "div",
+        { class: "note threads-note" },
+        `The linear solver, ${solver.label}, runs in one thread.`,
+        parallel.length ? ` Solvers with threads (Linear solver card below): ${parallel.join("; ")}.` : "",
+      ),
+    );
+  }
+  return foldable({ id: "solve.threads", title: "Threads" }, rows);
 }
 
 export const solvePanel = {
@@ -850,14 +891,16 @@ export const solvePanel = {
     const fresh = freshResult("solve");
     const result = fresh ?? lastResult("solve");
     const busy = store.busy.has("solve");
-    // An adaptive run is one library call: it cannot be stopped.
-    const running = Boolean(followedRun()) && result?.state === "running" && result.mode !== "adaptive" && result.mode !== "adaptive_time";
+    const running = Boolean(followedRun()) && result?.state === "running";
     const state = result?.state;
+    // A stopped adaptive run is not continued: Solve starts it again.
+    const continues = fresh && state === "stopped" && result.mode !== "adaptive" && result.mode !== "adaptive_time";
     const reference = store.reference;
     container.stopButton.hidden = !running;
     container.solveButton.hidden = running;
-    setLabel(container.solveButton, fresh && state === "stopped" ? "Continue" : "Solve");
-    if (!container.solveButton.title.startsWith("Blocked: ")) container.solveButton.title = fresh && state === "stopped" ? "Goes on from where the run stopped" : "";
+    setLabel(container.solveButton, continues ? "Continue" : "Solve");
+    container.stopButton.disabled = running && stopping(result);
+    if (!container.solveButton.title.startsWith("Blocked: ")) container.solveButton.title = continues ? "Goes on from where the run stopped" : "";
     setStepStatus(container.head, "solve", result ? headStatus(result, fresh, running) : {});
     const shown = slot.shown;
     const same =
@@ -874,6 +917,7 @@ export const solvePanel = {
       // The same run, further on: its figures in place.
       const stats = slot.querySelector("#solve-stats");
       if (stats && running) fill(stats, resultStats(result));
+      updateCycles(container);
       updateComparisons(container);
       return;
     }

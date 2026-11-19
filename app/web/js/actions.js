@@ -151,7 +151,7 @@ async function ownMeshes(progress) {
     if (progress.adaptive.indicators) out.indicators = await patiently(() => api.indicators(progress.job, progress.adaptive.indicators));
   }
   const meshes = progress.adaptive_time?.meshes;
-  if (progress.state === "done" && meshes?.length > 0) {
+  if ((progress.state === "done" || progress.state === "stopped") && meshes?.length > 0) {
     out.meshes = [];
     for (const summary of meshes) out.meshes.push(await arrays(summary));
     out.mesh = out.meshes[out.meshes.length - 1];
@@ -273,12 +273,13 @@ async function followRun(run, data) {
     await wait(attempt === 0 ? POLL_MS : backoffDelay(attempt - 1));
     if (!live()) return null;
     let progress;
-    // An adaptive run found running (after a reload) is done in one piece:
-    // its meshes come with its end, before its values are shown on them.
+    // An adaptive run is done in one piece: its meshes come with its end
+    // (done, or stopped after a cycle), before its values are shown on
+    // them.
     let extra = {};
     try {
       progress = await api.solveProgress(run.job);
-      if (progress.state === "done" && !data.mesh && live()) extra = await ownMeshes(progress);
+      if ((progress.state === "done" || progress.state === "stopped") && !data.mesh && live()) extra = await ownMeshes(progress);
     } catch (error) {
       if (!live()) return null;
       if (isTransient(error)) {
@@ -355,11 +356,30 @@ function stopFollowing() {
 }
 
 // Stops the time run being followed; what arrived stays.
+// Whether the run `result` belongs to was asked to stop and goes on until
+// it can (an adaptive run stops after its current cycle or step).
+export function stopping(result) {
+  return Boolean(following?.stopping) && result?.job === following.job;
+}
+
 export async function stopRun() {
   const run = following;
   if (!run) return;
-  following = null;
   const data = store.results.solve?.data;
+  // An adaptive run is one library call on the server: it stops after its
+  // current cycle (or step), publishes what it has and is followed until
+  // then (followRun fetches its meshes).
+  if (data && data.job === run.job && (data.mode === "adaptive" || data.mode === "adaptive_time")) {
+    run.stopping = true;
+    notify("result");
+    try {
+      await api.solveStop(run.job);
+    } catch (error) {
+      toast(error.message);
+    }
+    return;
+  }
+  following = null;
   if (data && data.job === run.job) data.state = "stopped";
   store.busy.delete("solve");
   delete store.busySince.solve;

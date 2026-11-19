@@ -5,6 +5,7 @@
 // comparison or a snapshot the others do not.
 
 import { comparisonState, comparisons, currentComparison, differenceState } from "./compare.js";
+import { fieldScale } from "./pure/color.js";
 import { formatNumber } from "./pure/format.js";
 import { resolveDisplay } from "./pure/display.js";
 import { snapshotState } from "./snapshots.js";
@@ -50,6 +51,32 @@ function drawnField() {
   return { data: result.data, fresh: Boolean(fresh) };
 }
 
+// The colour scale of one snapshot of a run in time, from the server's
+// smallest and largest value of u there (in double), kept per result and
+// snapshot so that the scale keeps its identity (the picture is drawn
+// again only when it changes).
+const snapshotScales = new WeakMap();
+function snapshotScaleOf(data) {
+  return (index) => {
+    const min = data.snapshot_min?.[index];
+    const max = data.snapshot_max?.[index];
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    let scales = snapshotScales.get(data);
+    if (!scales) snapshotScales.set(data, (scales = new Map()));
+    const kept = scales.get(index);
+    if (kept && kept.min === min && kept.max === max) return kept;
+    const scale = fieldScale([min, max]);
+    scales.set(index, scale);
+    return scale;
+  };
+}
+
+// Whether the shown solution offers the "this snapshot" range: a run in
+// time with more than one snapshot.
+export function offersSnapshotRange(data) {
+  return Boolean(data?.snapshot_min) && data.times?.length > 1;
+}
+
 export function currentDisplay() {
   const drawn = drawnSolve();
   const kind = store.view.difference;
@@ -74,6 +101,7 @@ export function currentDisplay() {
     comparison,
     field: store.fieldSource === "field" || !solve ? drawnField() : null,
     format: (t) => formatNumber(t, 5),
+    snapshotScale: store.view.range === "snapshot" && drawn && offersSnapshotRange(drawn.data) ? snapshotScaleOf(drawn.data) : null,
   });
 }
 
