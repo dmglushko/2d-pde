@@ -35,7 +35,7 @@ const LARGE_SERVER_SHARE = 0.25;
 function sizeWarning() {
   const mesh = freshResult("mesh");
   const nodes = mesh?.stats?.nodes;
-  const server = serverRunBytes(store.caseData.solve, mesh?.memory);
+  const server = serverRunBytes(store.caseData.solve, mesh?.memory, freshResult("problem")?.time_order ?? null);
   const lines = [];
   if (server && server.share >= LARGE_SERVER_SHARE) {
     const share = `${Math.round(100 * server.share)}%`;
@@ -189,7 +189,9 @@ function exportsRow(result, fresh) {
 // stats say it); one stopped by a budget is.
 function warningReports(result) {
   if (result.mode !== "adaptive" || result.adaptive?.stop_reason !== "tolerance_met") return result.reports;
-  return result.reports.filter((r) => r.stage !== "adaptive_static_solver");
+  // Only the stop message goes: earlier cycles' warnings (prefixed "cycle
+  // k, ", runs.cpp) stay.
+  return result.reports.map((r) => (r.stage === "adaptive_static_solver" ? { ...r, messages: (r.messages ?? []).filter((m) => /^cycle \d+, /.test(m)) } : r));
 }
 
 const RATE_TITLE = "The observed rate: e ~ N^(−rate) between this cycle and the one before";
@@ -838,7 +840,7 @@ export const solvePanel = {
       fill(hint, orderHint(store.caseData.solve));
     }
     const size = container.querySelector("#solve-size");
-    const sizeKey = JSON.stringify([freshResult("mesh")?.stats?.nodes ?? null, store.caseData.solve?.mode, store.caseData.solve?.time?.snapshots, store.caseData.solve?.adaptive?.max_nodes, store.caseData.solve?.adaptive?.max_cycles, store.caseData.solve?.adaptive_time?.max_nodes, store.caseData.solve?.adaptive_time?.max_refinements]);
+    const sizeKey = JSON.stringify([freshResult("mesh")?.stats?.nodes ?? null, store.caseData.solve?.mode, store.caseData.solve?.time?.snapshots, store.caseData.solve?.adaptive?.max_nodes, store.caseData.solve?.adaptive?.max_cycles, store.caseData.solve?.adaptive_time?.max_nodes, store.caseData.solve?.adaptive_time?.max_refinements, freshResult("problem")?.time_order ?? null]);
     if (size.shown !== sizeKey) {
       size.shown = sizeKey;
       fill(size, sizeWarning());
@@ -848,7 +850,8 @@ export const solvePanel = {
     const fresh = freshResult("solve");
     const result = fresh ?? lastResult("solve");
     const busy = store.busy.has("solve");
-    const running = Boolean(followedRun()) && result?.state === "running";
+    // An adaptive run is one library call: it cannot be stopped.
+    const running = Boolean(followedRun()) && result?.state === "running" && result.mode !== "adaptive" && result.mode !== "adaptive_time";
     const state = result?.state;
     const reference = store.reference;
     container.stopButton.hidden = !running;

@@ -109,7 +109,7 @@ export function stepOfPath(path) {
 // answer (`memory`: {snapshot_bytes, budget}): {bytes, budget, share}
 // with share = bytes / budget, or null when it cannot be told. A time run
 // keeps snapshots + 1 snapshots, a static one 1.
-export function serverRunBytes(solveSection, memory) {
+export function serverRunBytes(solveSection, memory, timeOrder = null) {
   const perSnapshot = memory?.snapshot_bytes;
   const budget = memory?.budget;
   if (!Number.isFinite(perSnapshot) || !(budget > 0) || !solveSection) return null;
@@ -128,7 +128,10 @@ export function serverRunBytes(solveSection, memory) {
     const { max_nodes: nodes, max_refinements: refinements } = solveSection.adaptive_time ?? {};
     const snapshots = solveSection.time?.snapshots;
     if (!Number.isInteger(nodes) || nodes < 1 || !Number.isInteger(refinements) || refinements < 0 || !Number.isInteger(snapshots) || snapshots < 1) return null;
-    const bytes = (refinements + 1) * (nodes * 88 + 512) + (snapshots + 1) * (nodes * 8 + 128) + nodes * 8;
+    // Time order 2 (from the problem check; unknown: 1): the state holds
+    // u_t and u_tt too, and the library each snapshot's until it returns.
+    const second = timeOrder === 2;
+    const bytes = (refinements + 1) * (nodes * 88 + 512) + (snapshots + 1) * (nodes * (second ? 24 : 8) + 128) + nodes * (second ? 24 : 8);
     return { bytes, budget, share: bytes / budget };
   }
   let count = 1;

@@ -886,6 +886,8 @@ test("chart data as CSV, sizes in bytes", () => {
   const inTime = { mode: "adaptive_time", time: { snapshots: 4 }, adaptive_time: { max_nodes: 1000, max_refinements: 2 } };
   assert.equal(serverRunBytes(inTime, { snapshot_bytes: 100, budget: 1e9 }).bytes, 3 * (1000 * 88 + 512) + 5 * (1000 * 8 + 128) + 1000 * 8);
   assert.equal(serverRunBytes({ ...inTime, adaptive_time: { max_nodes: 1000 } }, { snapshot_bytes: 100, budget: 1e9 }), null);
+  // Time order 2: u_t and u_tt of every snapshot and of the state too.
+  assert.equal(serverRunBytes(inTime, { snapshot_bytes: 100, budget: 1e9 }, 2).bytes, 3 * (1000 * 88 + 512) + 5 * (1000 * 24 + 128) + 1000 * 24);
   assert.equal(serverRunBytes({ mode: "time", time: {} }, { snapshot_bytes: 1, budget: 1 }), null);
   assert.equal(serverRunBytes({ mode: "static" }, null), null);
 });

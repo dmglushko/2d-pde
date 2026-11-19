@@ -66,7 +66,7 @@ export async function runStudy(levels) {
       if (study.stopping) break;
       setBound({ ...original, [bound.key]: bound.value });
       ours = sectionRevision("mesh");
-      const ok = await runWithPrerequisites("solve");
+      const ok = await runWithPrerequisites("solve", undefined, { proceed: () => !userChanged() && !study.stopping });
       if (userChanged()) {
         restore = others().startsWith(`${study.caseId}|`) && sectionRevision("mesh") === ours;
         study.message = "Stopped: the case changed during the study.";

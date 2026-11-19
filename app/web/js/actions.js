@@ -369,7 +369,9 @@ export async function stopRun() {
     // It may have ended before the stop arrived.
     if (data && data.job === run.job && progress.state === "done") {
       const values = data.values;
-      Object.assign(data, progress, { values, layout: progress.values });
+      // An adaptive run's meshes come before its values are shown on them.
+      const extra = data.mesh ? {} : await ownMeshes(progress);
+      Object.assign(data, progress, { values, layout: progress.values }, extra);
       growSnapshots(data, progress.values.snapshots);
       data.times = progress.times.slice(0, values.length);
       solveScale(data);
@@ -419,9 +421,13 @@ function failed(stage) {
 // fresh, stopping at the first failure with a toast that opens the
 // failing step. `field` is the field of a "field" run. Returns true when
 // the stage ran and worked, false after a failure, null when superseded.
-export async function runWithPrerequisites(stage, field) {
+// `proceed()`, when given, is asked before each stage (a refinement study
+// stops when the case changed while a level was meshing): false ends the
+// sequence with null.
+export async function runWithPrerequisites(stage, field, { proceed = () => true } = {}) {
   if (refuseWhileInvalid()) return false;
   for (const id of stagesToRun(stage, isFresh)) {
+    if (!proceed()) return null;
     const ok = await run(id, id === stage ? field : undefined);
     if (ok === null) return null;
     if (!ok) {

@@ -1347,3 +1347,12 @@ steps). The owner asked the app to offer everything new.
   previous chunk's `StepAnchor`: without it each chunk would start again
   at `initial_dt`, and a chunked run would differ from one call. The
   run keeps the anchor beside its last state.
+- **After the re-check** (same day): the warning chip of an adaptive
+  solve that met its tolerance drops only the stop message, not the
+  earlier cycles' warnings; the page's memory estimate of a run in time
+  of order 2 counts u_t and u_tt as the server does (the order from the
+  problem check); a refinement study asks before each stage whether the
+  case changed, so a mode switched while a level meshes never starts a
+  solve; an adaptive run (one library call) shows no Stop, and a Stop
+  that meets a done run still fetches its meshes; an error-controlled
+  time run reserves the anchor's earlier steps, which a done run drops.

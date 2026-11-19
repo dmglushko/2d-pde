@@ -488,9 +488,10 @@ coordinates in double; on an edge the triangle with the largest smallest
 weight wins, and a point outside every triangle by more than 1e−10 in
 barycentric terms is outside. u is the P1 interpolant there. For an
 adaptive run in time each snapshot is interpolated on its own mesh (a
-grid per mesh); `inside` and `triangle` are the last mesh's, and a
-snapshot whose mesh misses the point (near a curved boundary that was
-refined) is `null`.
+grid per mesh); `inside` says whether any snapshot's mesh holds the
+point, `triangle` is the last mesh's (or `null`), and a snapshot whose
+mesh misses the point (near a curved boundary that was refined) is
+`null`.
 
 ## Exports
 
@@ -867,13 +868,12 @@ last's;
 - Kept snapshots do not keep their velocities (only the state a chunk
   ends with needs them), so a run of time order 2 holds the same bytes
   per snapshot as one of order 1.
-- **Exactness.** For implicit Euler and the implicit midpoint rule the
-  state is U (and U' for time order 2), which `final` carries, so the
-  snapshots of a chunked run are bit for bit those of one call
-  (`tests/runs.cpp`). Newmark's state also has the acceleration, which
-  `Solution` does not carry: each chunk's start computes it again from
-  the equation, so the snapshots differ from one call by rounding (below
-  1e-8 of the largest value in the test).
+- **Exactness.** The state is U (and U' for time order 2, and Newmark's
+  U''), which `final` carries, and the steps' anchor, so the snapshots of
+  a chunked run are bit for bit those of one call, for every method and
+  for error-controlled steps (`tests/runs.cpp`). An error-controlled run
+  reserves two more states of the nodes for the method's earlier steps
+  in the anchor, which a done run drops.
 - What a chunk cannot do: show progress or stop inside one snapshot
   interval (library-requests.md, item 2).
 

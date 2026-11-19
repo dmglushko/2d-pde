@@ -663,8 +663,11 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
       publish_snapshot(out, std::move(solution));
     out.t = run.last->time;
     ++out.chunks;
-    if (to == last_index)
+    if (to == last_index) {
       out.state = RunState::done;
+      // A done run is never continued: its steps' history goes.
+      run.anchor.reset();
+    }
   } catch (const StageError &error) {
     const std::scoped_lock lock(run_lock);
     run.published.state = RunState::failed;
@@ -747,6 +750,11 @@ std::shared_ptr<Run> make_run(StageCache &cache, const Json &case_json,
   made->bytes =
       run_bytes(made->mesh->nodes.size(), made->times.size(),
                 made->setup.mode == SolveMode::static_solve ? 0 : time_order);
+  // An error-controlled step keeps the method's earlier steps in the
+  // anchor between chunks (at most two states of the free unknowns).
+  if (made->setup.mode == SolveMode::time_integration &&
+      made->setup.step_controller->controls_error())
+    made->bytes += made->mesh->nodes.size() * 8 * 2;
   return made;
 }
 
