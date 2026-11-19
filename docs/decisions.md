@@ -1163,6 +1163,49 @@ coarsening, moving nodes or enrichment for now.
   factorization, the controller keeps dt when the proposal is only a small
   change (inside 0.9 to 1.5 times the current dt); a rejection always
   shrinks it.
+- **Details of slice 3 (adaptive time steps), accepted 2026-11-19:**
+  `StepController` gains `controls_error()` (default false) and
+  `judge(TakenStep) -> StepDecision{accept, next_dt, error_norm}`;
+  `next_step(t)` gives only the first dt of an error-controlled run.
+  Controllers are stateless: the next dt and the last accepted steps
+  travel at the end of `StepAnchor` (`next_dt`, `previous_steps`).
+  `TimeMethod` gains `error_estimate(order)` (order p, earlier steps read)
+  and `local_error(...)`, with `PreviousStep`. Only the error in u is
+  measured (not in the velocities). Implicit Euler without time terms
+  declares no estimate. Steps without an estimate yet (the first ones of a
+  run or after a transfer) are accepted at the current dt. The scale is
+  atol + rtol·max(|u before|, |u after|), atol > 0, rtol ≥ 0. Defaults:
+  atol 1e-6, rtol 1e-3, safety 0.9, factors 0.2 to 5, keep band 0.9 to
+  1.5, min_dt 0, max_dt ∞; `initial_dt` is required. A step shortened to
+  land on a snapshot does not shrink the following ones. A rejection
+  always shrinks (a NaN error is a rejection) and retries at least at
+  min_dt; a rejected step not longer than min_dt is a `std::runtime_error`,
+  a method without an estimate a `std::invalid_argument` before the run.
+  `steps` counts accepted steps, `prepares` and iterations every try;
+  `StepRecord::error_norm`; the adaptive loop reports `rejected_steps`.
+  `max_steps`, `snapshot_every`, `keep_before_last_step` and "every n
+  steps" count accepted steps. After a transfer the next piece starts with
+  the last proposed dt and no earlier steps. Damping steps use the same
+  controller (their method needs an estimate). `FixedStep` ignores the new
+  anchor fields. Estimates: Euler order 1 h(d₁ − d₀)/2, order 2
+  h/2·(V₁ − V₀); midpoint order 2 from the velocities, h³/12·u‴ with u‴
+  from the change of (V₁ − V₀)/h; Newmark dt²/12·(W₁ − W₀).
+  `PreviousStep` stores the velocities too (decided 2026-11-19), so no
+  estimate infers them from which method took a step.
+- **The midpoint estimate at time order 1 compares with a prediction**
+  (decided 2026-11-19, after a review finding: the u‴ estimate missed the
+  error of averaging the state, h³/8 times the problem's rate times u″,
+  and accepted a step 8 times over the tolerance): before the step an
+  explicit extrapolation from earlier states predicts u₁ (no solve); the
+  error is proportional to the computed u₁ minus the prediction (Milne's
+  device, as in Gresho and Sani's adaptive trapezoidal rule). The
+  prediction's own error depends only on u‴, so the difference sees both
+  parts.
+- **Follow-ups of the adaptive steps, as GitHub issues #41 to #43**
+  (2026-11-19): an
+  error-per-unit-step option (error proportional to the tolerance), a PI
+  controller (fewer rejections on waves), and spreading the steps evenly
+  before a landing (no short last step, fewer preparations).
 - **Details of the marking strategies, accepted 2026-11-17:** the
   interface is `MarkingStrategy`, with `MaximumMarking`, `DorflerMarking`,
   `FixedFractionMarking` and `EquidistributionMarking`; `mark()` checks
