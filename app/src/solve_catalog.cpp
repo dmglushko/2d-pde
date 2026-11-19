@@ -10,6 +10,7 @@
 #include "pde2d/adapt/maximum_marking.hpp"
 #include "pde2d/adapt/recovery_estimator.hpp"
 #include "pde2d/adapt/residual_estimator.hpp"
+#include "pde2d/solve/adaptive_step.hpp"
 #include "pde2d/solve/bicgstab.hpp"
 #include "pde2d/solve/conjugate_gradient.hpp"
 #include "pde2d/solve/fixed_step.hpp"
@@ -22,6 +23,7 @@
 #include "pde2d/solve/supernodal_cholesky.hpp"
 
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -277,6 +279,74 @@ SolveCatalog make_solve_catalog() {
              -> std::shared_ptr<const solve::StepController> {
            return std::make_shared<solve::FixedStep>(
                solve::FixedStepOptions{.dt = options.number("dt")});
+         }});
+  }
+  {
+    const solve::AdaptiveStepOptions defaults{};
+    const auto number = [](std::string name, std::string label,
+                           std::string description, double value) {
+      return plain_option(std::move(name), std::move(label),
+                          std::move(description), OptionKind::number, value);
+    };
+    OptionSpec max_dt = plain_option("max_dt", "Largest dt",
+                                     "No step is longer; empty: no bound.",
+                                     OptionKind::number, nullptr);
+    max_dt.optional = true;
+    catalog.step_controllers.push_back(
+        {.type = "adaptive_step",
+         .label = "Adaptive step (error control)",
+         .description =
+             "Chooses each dt from the time method's estimate of the step's "
+             "local error: a step whose error, divided by atol + rtol |u|, "
+             "has a root mean square above 1 is taken again with a smaller "
+             "dt; otherwise the next dt follows the error.",
+         .options =
+             {number("initial_dt", "First dt",
+                     "The first step, and the steps before the method can "
+                     "estimate its error; within [smallest, largest dt].",
+                     defaults.initial_dt),
+              number("atol", "Absolute tolerance atol",
+                     "The error allowed where u is small; positive.",
+                     defaults.atol),
+              number("rtol", "Relative tolerance rtol",
+                     "The error allowed per unit of |u|; at least 0.",
+                     defaults.rtol),
+              number("safety", "Safety factor",
+                     "The proposal dt safety (1/err)^(1/(p+1)); in (0, 1].",
+                     defaults.safety),
+              number("min_factor", "Smallest change",
+                     "A new dt is at least this times the last; in (0, 1).",
+                     defaults.min_factor),
+              number("max_factor", "Largest change",
+                     "A new dt is at most this times the last; above 1.",
+                     defaults.max_factor),
+              number("min_keep_factor", "Keep dt from",
+                     "A proposal from this to the next factor times dt keeps "
+                     "dt (a new dt prepares the linear solver again).",
+                     defaults.min_keep_factor),
+              number("max_keep_factor", "Keep dt up to",
+                     "The upper end of the band that keeps dt.",
+                     defaults.max_keep_factor),
+              number("min_dt", "Smallest dt",
+                     "A step that would need less fails; 0: no bound but "
+                     "the time's resolution.",
+                     defaults.min_dt),
+              std::move(max_dt)},
+         .make = [](const OptionReader &options)
+             -> std::shared_ptr<const solve::StepController> {
+           return std::make_shared<solve::AdaptiveStep>(
+               solve::AdaptiveStepOptions{
+                   .initial_dt = options.number("initial_dt"),
+                   .atol = options.number("atol"),
+                   .rtol = options.number("rtol"),
+                   .safety = options.number("safety"),
+                   .min_factor = options.number("min_factor"),
+                   .max_factor = options.number("max_factor"),
+                   .min_keep_factor = options.number("min_keep_factor"),
+                   .max_keep_factor = options.number("max_keep_factor"),
+                   .min_dt = options.number("min_dt"),
+                   .max_dt = options.optional_number("max_dt").value_or(
+                       std::numeric_limits<double>::infinity())});
          }});
   }
 

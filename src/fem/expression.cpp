@@ -3,6 +3,8 @@
 #include "symengine_expression.hpp"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -360,8 +362,39 @@ std::optional<std::string> unsupported(const Basic &form) {
   return std::nullopt;
 }
 
+namespace {
+
+// StrPrinter with floating numbers in full (it writes 15 digits).
+class ExactPrinter
+    : public SymEngine::BaseVisitor<ExactPrinter, SymEngine::StrPrinter> {
+public:
+  using SymEngine::StrPrinter::bvisit;
+  void bvisit(const SymEngine::RealDouble &x) {
+    // Not a number to read back: SymEngine's spelling, for messages.
+    if (!std::isfinite(x.i)) {
+      str_ = SymEngine::print_double(x.i);
+      return;
+    }
+    std::array<char, 64> buffer{};
+    const auto [end, error] =
+        std::to_chars(buffer.data(), buffer.data() + buffer.size(), x.i);
+    std::string text(buffer.data(), end);
+    // Still a floating number when read back: 2.0, not the integer 2.
+    if (text.find_first_of(".e") == std::string::npos)
+      text += ".0";
+    str_ = std::move(text);
+  }
+};
+
+} // namespace
+
+std::string form_text(const RCP<const Basic> &form) {
+  ExactPrinter printer;
+  return printer.apply(form);
+}
+
 Expression expression_from_form(RCP<const Basic> form) {
-  auto text = form->__str__();
+  auto text = form_text(form);
   return ExpressionAccess::make(make_impl(std::move(text), std::move(form)));
 }
 

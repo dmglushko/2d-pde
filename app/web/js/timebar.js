@@ -27,8 +27,6 @@ let shownResult = null;
 let playing = null;
 // The pace samples of each running result (pure/playback.js).
 const paces = new WeakMap();
-// How many snapshots ahead of the shown one must be loaded to play on.
-const LOADED_AHEAD = 1;
 
 // The time solution the bar walks through (the one the picture draws,
 // outdated or not), or null.
@@ -91,7 +89,9 @@ function step(now) {
     seconds: Math.min(seconds, 0.25),
     speed: settings.playbackSpeed,
     times: result.times,
-    upTo: loadedFrom(result, frameAt(result.times, playing.t)) + LOADED_AHEAD,
+    // Never onto a snapshot that is not loaded: the picture would still
+    // show the one before it under the next one's time.
+    upTo: loadedFrom(result, frameAt(result.times, playing.t)),
     running,
     pace: running ? measuredPace(paces.get(result) ?? []) : null,
   });

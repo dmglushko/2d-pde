@@ -8,6 +8,7 @@
 #include "pde2d/fem/expression.hpp"
 #include "pde2d/fem/meshed_problem.hpp"
 #include "pde2d/mesh/report.hpp"
+#include "pde2d/solve/integrator.hpp"
 #include "pde2d/solve/solution.hpp"
 
 #include <chrono>
@@ -159,6 +160,10 @@ struct Run {
   // The state at the end of the last chunk (with velocities for time
   // order 2), the start of the next one.
   std::optional<solve::Solution> last;
+  // Where its steps stand (the integrator's anchor), so that the next
+  // chunk continues the stretch: an error-controlled step goes on with
+  // its proposed dt and the method's earlier steps.
+  std::optional<solve::StepAnchor> anchor;
   std::size_t chunk = 1; // snapshot intervals in the next chunk
   std::vector<ChunkCost> costs;
 

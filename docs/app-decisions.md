@@ -1163,6 +1163,14 @@ time from its start.
   keeps the waits rare). A timer drives the clock (60 ticks a second,
   at most 0.25 s per tick), not animation frames, which do not run in a
   frame that is not painted.
+- **After the review (same day).** No form is offered while any field of
+  the equation or condition has an error (switching would drop the text
+  being typed); a coefficient form the library cannot print (a parameter
+  named u) has `text: null` and the library's `reason`, said in the
+  toast. The status keeps the last finished check's words also while the
+  next check is only queued. Playback never moves onto a snapshot that is
+  not loaded (the picture would show the previous one under the next
+  time), and the fetch ahead starts at the first missing snapshot.
 - **At phone width the snapshot's min and max are the time's tooltip**,
   so the time bar with the speed menu keeps one row (the picture stays
   in the top 60 % of the screen).
@@ -1331,3 +1339,11 @@ steps). The owner asked the app to offer everything new.
   library-requests.md, item 2), the app's own point location for probes
   (library-requests.md, item 8), and `mesh_stats_json`, which measures a
   mesh the library returned without `MeshProperties`.
+- **Error-controlled time steps** (`AdaptiveStep`, new in the library on
+  2026-11-18) are a second step controller of the catalog, with every
+  option of `AdaptiveStepOptions`; `max_dt`, infinite by default, is an
+  optional number (empty: no bound), a new flag of `OptionSpec`, since
+  JSON has no infinity. A chunk of a time run now continues from the
+  previous chunk's `StepAnchor`: without it each chunk would start again
+  at `initial_dt`, and a chunked run would differ from one call. The
+  run keeps the anchor beside its last state.

@@ -88,6 +88,17 @@ public:
     return false;
   }
 
+  // Whether an error was collected at `prefix` or below it.
+  bool failed_under(const std::string &prefix) const {
+    if (collected_ != nullptr)
+      for (const Json &item : *collected_) {
+        const std::string path = item["path"];
+        if (path == prefix || path.starts_with(prefix + "."))
+          return true;
+      }
+    return false;
+  }
+
   // Whether an error was collected at `path`.
   bool failed_at(const std::string &path) const {
     if (collected_ != nullptr)
@@ -375,15 +386,26 @@ Json check_problem(const Json &problem_section) {
   // (as written, or printed from the coefficients) and the coefficients
   // (as written, or read from the line), so the page can show either.
   Json forms = Json::object();
+  // No form for one with an error in any of its fields (the line or a
+  // coefficient): switching would drop what was being typed. A
+  // coefficient form the library cannot print as a line (a parameter
+  // named u) has the reason instead of the text.
   const auto add_form = [&](const std::string &where, const Json &object,
-                            const std::string &printed, Json coefficients) {
-    for (const auto &key : {std::string(where), where + ".text"})
-      if (errors.failed_at(key))
-        return;
+                            const auto &print, Json coefficients) {
+    if (errors.failed_under(where))
+      return;
     Json item = Json::object();
     const bool line = object.is_object() && !member(object, line_key).is_null();
     item["line"] = line;
-    item["text"] = line ? member(object, line_key) : Json(printed);
+    if (line)
+      item["text"] = member(object, line_key);
+    else
+      try {
+        item["text"] = print();
+      } catch (const std::invalid_argument &error) {
+        item["text"] = nullptr;
+        item["reason"] = error.what();
+      }
     item["coefficients"] = std::move(coefficients);
     forms[where] = std::move(item);
   };
@@ -404,8 +426,9 @@ Json check_problem(const Json &problem_section) {
       if (!expression.facts().zero)
         coefficients[std::string(field.name)] = expression.text();
     }
-    add_form(where, object, fem::equation_text(problem.equation),
-             std::move(coefficients));
+    add_form(
+        where, object, [&] { return fem::equation_text(problem.equation); },
+        std::move(coefficients));
   }
   Json conditions = Json::object();
   for (const auto &[region, condition] : problem.boundary_conditions) {
@@ -420,8 +443,9 @@ Json check_problem(const Json &problem_section) {
       if (!expression.facts().zero)
         coefficients[std::string(field.name)] = expression.text();
     }
-    add_form(where, object, fem::condition_text(condition),
-             std::move(coefficients));
+    add_form(
+        where, object, [&] { return fem::condition_text(condition); },
+        std::move(coefficients));
     errors.attempt(where, [&] {
       Json item = Json::object();
       item["kind"] = kind_name(fem::classify(condition));

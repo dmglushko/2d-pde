@@ -56,9 +56,10 @@ export async function loadAround(data, k) {
 // runs or failed (no waiting: the playback holds until they are there).
 export function prefetchSnapshots(data, k) {
   if (loading.has(data) || failures.has(data)) return;
-  const ahead = k + 4;
-  if (!snapshotPlan(data.values, ahead, { kept: keptSnapshots(data.layout?.nodes) }).fetch) return;
-  loadAround(data, ahead);
+  // The window around k (snapshotPlan: 2 behind, 8 ahead) starts at the
+  // first missing one, so the next snapshot is always fetched.
+  if (!snapshotPlan(data.values, k, { kept: keptSnapshots(data.layout?.nodes) }).fetch) return;
+  loadAround(data, k);
 }
 
 // Snapshot `k` if it is loaded; otherwise starts loading it and returns

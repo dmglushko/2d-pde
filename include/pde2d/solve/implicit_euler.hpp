@@ -49,6 +49,20 @@ public:
   bool velocity_quotient_is_acceleration(int time_order) const override {
     return time_order == 2;
   }
+  // The local error estimate, order p = 1, at time orders 1 and 2 (none at
+  // time order 0, which has no time error): the error of a step is
+  // dt^2 / 2 u'', with u'' from the change of u_t over the step
+  // (Hairer, Norsett and Wanner, Solving ODEs I, II.4; Gresho and Sani,
+  // Incompressible Flow and the FEM, 3.16.4). Time order 2:
+  // e = dt / 2 (V1 - V0), no earlier step. Time order 1: u_t is not in the
+  // state, so the quotients over this step and the previous one are used,
+  // d1 = (U1 - U0) / dt, d0 = (U0 - U_-1) / dt_-1, and
+  // e = dt^2 (d1 - d0) / (dt + dt_-1) (one earlier step).
+  std::optional<ErrorEstimateDeclaration>
+  error_estimate(int time_order) const override;
+  std::vector<double>
+  local_error(const TimeState &before, const TimeState &after, double dt,
+              std::span<const PreviousStep> previous) const override;
   // Called only for time order 0: the state at t0 is the static solution.
   void start(const fem::AssembledProblem &problem,
              const LinearSolver &linear_solver,

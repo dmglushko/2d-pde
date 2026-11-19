@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -43,6 +44,9 @@ struct OptionSpec {
   Json default_value;               // what a missing key means
   std::vector<std::string> choices; // for OptionKind::choice
   std::string unit;                 // shown after the field, may be empty
+  // A number that may be left empty (null: the library's "no bound"),
+  // read with optional_number; its default is null.
+  bool optional = false;
 };
 
 // "number", "integer", "choice", "length_bound", "tolerance" or
@@ -72,6 +76,8 @@ public:
                std::span<const OptionSpec> specs);
 
   double number(std::string_view name) const;
+  // An optional number option: nothing when it is null or missing.
+  std::optional<double> optional_number(std::string_view name) const;
   // A whole number; 3.0 counts as 3. Throws std::invalid_argument for a
   // fraction or a value outside long long.
   long long integer(std::string_view name) const;

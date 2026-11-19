@@ -40,6 +40,16 @@ public:
   }
   // The state carries W, and start() computes only W0.
   bool keeps_acceleration(int) const override { return true; }
+  // The local error estimate, order p = 2, from the change of the
+  // acceleration over the step (Zienkiewicz and Xie, "A simple error
+  // estimator and adaptive time stepping procedure for dynamic analysis",
+  // Earthquake Eng. Struct. Dyn. 20 (1991) 871-887):
+  // e = dt^2 (beta - 1/6) (W1 - W0) = dt^2 / 12 (W1 - W0), no earlier step.
+  std::optional<ErrorEstimateDeclaration>
+  error_estimate(int time_order) const override;
+  std::vector<double>
+  local_error(const TimeState &before, const TimeState &after, double dt,
+              std::span<const PreviousStep> previous) const override;
   void start(const fem::AssembledProblem &problem,
              const LinearSolver &linear_solver,
              TimeState &state) const override;

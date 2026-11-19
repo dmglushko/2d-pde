@@ -202,6 +202,25 @@ int main() {
                              single(wave_case(method)), method + ", order 2");
          }
        }},
+      {"error-controlled steps: chunks continue the step anchor, so the "
+       "snapshots are the same bit for bit",
+       [] {
+         for (const std::string method :
+              {"implicit_euler", "implicit_midpoint"}) {
+           Json case_json = heat_case(method);
+           case_json["solve"]["time"]["step"] = {
+               {"type", "adaptive_step"},
+               {"options", {{"initial_dt", 0.01}, {"rtol", 1e-3}}}};
+           check_identical(chunked(case_json), single(case_json),
+                           method + " with adaptive steps");
+         }
+         Json case_json = wave_case("newmark");
+         case_json["solve"]["time"]["step"] = {
+             {"type", "adaptive_step"},
+             {"options", {{"initial_dt", 0.01}, {"max_dt", 0.05}}}};
+         check_identical(chunked(case_json), single(case_json),
+                         "newmark with adaptive steps");
+       }},
       {"Newmark: chunks continue from the carried acceleration, so the "
        "snapshots are the same bit for bit",
        [] {

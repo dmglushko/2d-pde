@@ -428,15 +428,18 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   `AdaptiveIntegrator` integrates in pieces with `Integrator::integrate`
   (its `max_steps` and `keep_before_last_step`), never re-implementing
   the step times, and continues a piece on the same problem from its
-  `final` so that a run without refinement equals one integrate() call
-  landing on the adaptation times; an adaptation time near a snapshot
+  `final` and its `anchor` (every piece on the same problem; after a
+  transfer to a new mesh a new stretch starts), so that a run without
+  refinement equals one integrate() call landing on the interval's
+  adaptation times (the "every n steps" times are not landings: they are
+  those of the uninterrupted run); an adaptation time near a snapshot
   time is that time. `before_last_step` is a `FreeState` (free unknowns,
   no boundary data evaluated), requested only for a piece that can end
   in an adaptation; at the Dirichlet nodes u_tt is the boundary data's
   acceleration at t, never a quotient that needs the rate at t − dt.
   Where only the method changes (after damping steps, before the
   adaptation time) the next piece continues the damping piece's
-  `anchor`, so damping steps never change the step times.
+  `anchor` too, so damping steps never change the step times.
   The transfer moves accelerations like velocities. Damping steps after
   a transfer run only when `AdaptiveIntegratorOptions::damping_steps` asks
   for them, as their own piece with `Integrator::with_method`; never
@@ -449,8 +452,23 @@ test parallelism. Every test program prints `PASS/FAIL <case>`.
   method ahead of such a method is refused before the first step
   (`std::invalid_argument` naming both), never given a wrong
   acceleration.
+- **Error control decides from declarations.** A step controller says
+  whether it controls the error (`StepController::controls_error()`); a
+  time method declares its estimate per time order
+  (`TimeMethod::error_estimate`: order p, earlier steps read) and
+  computes it in `local_error` from states it has, never with an extra
+  solve. The Integrator refuses a method without one before the first
+  step (no fallback). A controller that does not control the error takes
+  the old loop exactly (FixedStep stays bit for bit as it was: no state
+  copies, `judge` never called). Controllers are stateless; what a run
+  remembers (next dt, the last accepted steps) is in the Integrator's
+  loop and travels in `StepAnchor` (`next_dt`, `previous_steps`), which
+  the AdaptiveIntegrator passes across pieces on one problem; after a
+  transfer only `next_dt`. A rejected step is recorded with `accepted =
+  false` and retaken from its start; `steps`, `max_steps`,
+  `snapshot_every` and `keep_before_last_step` count accepted steps.
 - **Not yet implemented, on purpose** (see "Deferred" in decisions.md):
-  adaptive time stepping, explicit time methods,
+  explicit time methods,
   handling pure Neumann problems, well-posedness
   checks, coarsening, L2 projection for the solution transfer,
   re-integrating a piece after refining, callables, anisotropic meshing,

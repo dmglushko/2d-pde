@@ -641,7 +641,8 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
       return solve::Integrator(run.setup.method, run.setup.step_controller,
                                run.setup.linear_solver, run.setup.assembler)
           .integrate(run.meshed, run.times[from], run.times[to], output,
-                     run.last ? &*run.last : nullptr);
+                     run.last ? &*run.last : nullptr, std::nullopt,
+                     run.anchor ? &*run.anchor : nullptr);
     });
     if (ready + result.snapshots.size() != to + 1)
       throw StageError("solve", "internal",
@@ -654,6 +655,7 @@ void advance(Run &run, const SessionOptions &options, std::mutex &run_lock) {
                         std::chrono::steady_clock::now() - started)
                         .count()});
     run.last = std::move(result.final);
+    run.anchor = std::move(result.anchor);
     const std::scoped_lock lock(run_lock);
     Run::Published &out = run.published;
     combine_report(out.integrator, result.report);

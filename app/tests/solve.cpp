@@ -145,8 +145,16 @@ int main() {
          };
          check_names(catalog.linear_solvers, Json(nullptr));
          check_names(catalog.time_methods, Json(nullptr));
-         // FixedStepOptions{}.dt = 0 is refused, so give one.
-         check_names(catalog.step_controllers, Json{{"dt", 0.1}});
+         // FixedStepOptions{}.dt = 0 and AdaptiveStepOptions{}.initial_dt
+         // = 0 are refused, so give them.
+         for (const auto &controller : catalog.step_controllers) {
+           const Json given = controller.type == "fixed_step"
+                                  ? Json{{"dt", 0.1}}
+                                  : Json{{"initial_dt", 0.1}};
+           const app::OptionReader options(given, "test", controller.options);
+           check(controller.make(options)->name() == controller.type,
+                 "name of " + controller.type);
+         }
          check_names(catalog.estimators, Json(nullptr));
          // EquidistributionMarkingOptions has no usable default tolerance.
          for (const auto &marking : catalog.markings) {

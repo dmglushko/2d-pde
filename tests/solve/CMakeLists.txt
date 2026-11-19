@@ -4,6 +4,8 @@ pde2d_add_test(NAME solve_static_solver SOURCE static_solver.cpp
                LIBS pde2d_solve)
 pde2d_add_test(NAME solve_time_integration SOURCE time_integration.cpp
                LIBS pde2d_solve)
+pde2d_add_test(NAME solve_adaptive_step SOURCE adaptive_step.cpp
+               LIBS pde2d_solve)
 pde2d_add_test(NAME solve_review_regressions SOURCE review_regressions.cpp
                LIBS pde2d_solve)
 pde2d_add_test(NAME solve_review_slice2 SOURCE review_slice2.cpp

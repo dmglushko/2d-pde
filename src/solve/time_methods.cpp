@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <format>
 #include <memory>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -27,7 +29,46 @@ bool TimeMethod::keeps_acceleration(int) const { return false; }
 
 bool TimeMethod::velocity_quotient_is_acceleration(int) const { return false; }
 
+std::optional<ErrorEstimateDeclaration> TimeMethod::error_estimate(int) const {
+  return std::nullopt;
+}
+
+std::vector<double>
+TimeMethod::local_error(const TimeState &, const TimeState &, double,
+                        std::span<const PreviousStep>) const {
+  throw std::logic_error(name() + " declares no local error estimate");
+}
+
 namespace {
+
+// Checks the earlier steps a local error estimate reads: as many as
+// declared, each with a value per free unknown and a positive length.
+void check_previous(const std::string &method,
+                    std::span<const PreviousStep> previous, std::size_t count,
+                    std::size_t size) {
+  if (previous.size() != count)
+    throw std::invalid_argument(
+        std::format("{}: the local error estimate reads {} earlier steps, "
+                    "given {}",
+                    method, count, previous.size()));
+  for (const PreviousStep &step : previous)
+    if (step.values.size() != size || !(step.dt > 0.0))
+      throw std::invalid_argument(std::format(
+          "{}: an earlier step has {} values for {} unknowns or a length "
+          "that is not positive",
+          method, step.values.size(), size));
+}
+
+// Entry by entry, Newton's divided difference U[s0, ..., sk] of the values
+// at the increasing points s (one vector per point).
+std::vector<double> divided_difference(std::vector<std::vector<double>> table,
+                                       const std::vector<double> &s) {
+  for (std::size_t level = 1; level < s.size(); ++level)
+    for (std::size_t j = 0; j + level < s.size(); ++j)
+      for (std::size_t i = 0; i < table[j].size(); ++i)
+        table[j][i] = (table[j + 1][i] - table[j][i]) / (s[j + level] - s[j]);
+  return std::move(table[0]);
+}
 
 StepSolveInfo info(const LinearSolveResult &solved) {
   return {.linear_iterations = solved.iterations,
@@ -89,6 +130,42 @@ StepSolveInfo ImplicitEuler::advance(const fem::AssembledProblem &problem,
   return info(solved);
 }
 
+std::optional<ErrorEstimateDeclaration>
+ImplicitEuler::error_estimate(int time_order) const {
+  // Time order 0 has no time error; time order 2 has u_t in the state,
+  // time order 1 needs the previous step's quotient.
+  if (time_order == 1)
+    return ErrorEstimateDeclaration{.order = 1, .previous_steps = 1};
+  if (time_order == 2)
+    return ErrorEstimateDeclaration{.order = 1, .previous_steps = 0};
+  return std::nullopt;
+}
+
+std::vector<double>
+ImplicitEuler::local_error(const TimeState &before, const TimeState &after,
+                           double dt,
+                           std::span<const PreviousStep> previous) const {
+  const std::size_t n = before.values.size();
+  std::vector<double> error(n);
+  if (!before.velocities.empty()) {
+    // Time order 2: dt^2 / 2 u'' with u'' = (V1 - V0) / dt.
+    check_previous(name(), previous, 0, n);
+    for (std::size_t i = 0; i < n; ++i)
+      error[i] = 0.5 * dt * (after.velocities[i] - before.velocities[i]);
+    return error;
+  }
+  // Time order 1: dt^2 / 2 u'' with u'' = 2 (d1 - d0) / (dt + dt_-1), the
+  // divided difference of the quotients at the middles of the two steps.
+  check_previous(name(), previous, 1, n);
+  const PreviousStep &last = previous[0];
+  for (std::size_t i = 0; i < n; ++i) {
+    const double d1 = (after.values[i] - before.values[i]) / dt;
+    const double d0 = (before.values[i] - last.values[i]) / last.dt;
+    error[i] = dt * dt * (d1 - d0) / (dt + last.dt);
+  }
+  return error;
+}
+
 // --- ImplicitMidpoint -------------------------------------------------------
 
 StepMatrixWeights ImplicitMidpoint::step_matrix_weights(double dt) const {
@@ -123,6 +200,32 @@ StepSolveInfo ImplicitMidpoint::advance(const fem::AssembledProblem &problem,
   }
   state.values = std::move(solved.values);
   return info(solved);
+}
+
+std::optional<ErrorEstimateDeclaration>
+ImplicitMidpoint::error_estimate(int time_order) const {
+  if (time_order == 1 || time_order == 2)
+    return ErrorEstimateDeclaration{.order = 2, .previous_steps = 2};
+  return std::nullopt;
+}
+
+std::vector<double>
+ImplicitMidpoint::local_error(const TimeState &before, const TimeState &after,
+                              double dt,
+                              std::span<const PreviousStep> previous) const {
+  // dt^3 / 12 u''' with u''' = 6 U[s0, s1, s2, s3], the points the ends of
+  // the two earlier steps and of this one, placed by the steps' lengths.
+  const std::size_t n = before.values.size();
+  check_previous(name(), previous, 2, n);
+  const double s1 = previous[0].dt;
+  const double s2 = s1 + previous[1].dt;
+  const double s3 = s2 + dt;
+  std::vector<double> error = divided_difference(
+      {previous[0].values, previous[1].values, before.values, after.values},
+      {0.0, s1, s2, s3});
+  for (double &e : error)
+    e *= 0.5 * dt * dt * dt;
+  return error;
 }
 
 // --- Newmark ----------------------------------------------------------------
@@ -215,6 +318,26 @@ StepSolveInfo Newmark::advance(const fem::AssembledProblem &problem, double dt,
   state.velocities = std::move(v1);
   state.accelerations = std::move(w1);
   return result;
+}
+
+std::optional<ErrorEstimateDeclaration>
+Newmark::error_estimate(int time_order) const {
+  if (time_order == 2)
+    return ErrorEstimateDeclaration{.order = 2, .previous_steps = 0};
+  return std::nullopt;
+}
+
+std::vector<double>
+Newmark::local_error(const TimeState &before, const TimeState &after, double dt,
+                     std::span<const PreviousStep> previous) const {
+  // Zienkiewicz and Xie (1991): dt^2 (beta - 1/6) (W1 - W0).
+  const std::size_t n = before.values.size();
+  check_previous(name(), previous, 0, n);
+  std::vector<double> error(n);
+  for (std::size_t i = 0; i < n; ++i)
+    error[i] = dt * dt * (beta - 1.0 / 6.0) *
+               (after.accelerations[i] - before.accelerations[i]);
+  return error;
 }
 
 } // namespace pde2d::solve

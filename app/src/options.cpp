@@ -63,6 +63,8 @@ Json to_json(const OptionSpec &spec) {
     out["choices"] = spec.choices;
   if (!spec.unit.empty())
     out["unit"] = spec.unit;
+  if (spec.optional)
+    out["optional"] = true;
   return out;
 }
 
@@ -128,6 +130,14 @@ std::string OptionReader::path(std::string_view name) const {
 
 double OptionReader::number(std::string_view name) const {
   return require_number(value(spec(name, OptionKind::number)), path(name));
+}
+
+std::optional<double>
+OptionReader::optional_number(std::string_view name) const {
+  const Json &json = value(spec(name, OptionKind::number));
+  if (json.is_null())
+    return std::nullopt;
+  return require_number(json, path(name));
 }
 
 long long OptionReader::integer(std::string_view name) const {
@@ -230,7 +240,10 @@ void OptionReader::check_kinds() const {
   for (const OptionSpec &option : specs_)
     switch (option.kind) {
     case OptionKind::number:
-      (void)number(option.name);
+      if (option.optional)
+        (void)optional_number(option.name);
+      else
+        (void)number(option.name);
       break;
     case OptionKind::integer:
       (void)integer(option.name);

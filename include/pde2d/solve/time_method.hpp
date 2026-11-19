@@ -4,6 +4,8 @@
 #include "pde2d/solve/linear_solver.hpp"
 
 #include <cstddef>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -72,6 +74,24 @@ struct StepSolveInfo {
   std::size_t linear_threads = 1;
 };
 
+// What a method declares about its estimate of a step's local error
+// (TimeMethod::error_estimate), for an error-controlling StepController.
+struct ErrorEstimateDeclaration {
+  // The method's order p: its local error behaves like dt^(p + 1).
+  int order = 1;
+  // How many accepted steps before the current one the estimate reads
+  // (TimeMethod::local_error's `previous`); a step with fewer has no
+  // estimate.
+  std::size_t previous_steps = 0;
+};
+
+// An accepted step before the current one: the values at its start, in
+// the free unknowns, and its length.
+struct PreviousStep {
+  std::vector<double> values{};
+  double dt = 0.0;
+};
+
 class TimeMethod {
 public:
   virtual ~TimeMethod() = default;
@@ -125,6 +145,26 @@ public:
   // that matrix's facts. The default does nothing.
   virtual void start(const fem::AssembledProblem &problem,
                      const LinearSolver &linear_solver, TimeState &state) const;
+
+  // Whether, at this time order (one the method supports), the method
+  // estimates the local error of a step's values from states it already
+  // has, with no extra solve (docs/decisions.md, "Adaptive time steps:
+  // each method estimates its own error"): its order and how many earlier
+  // steps the estimate reads; none when it does not. An error-controlling
+  // StepController refuses a method that declares none. The default is
+  // none.
+  virtual std::optional<ErrorEstimateDeclaration>
+  error_estimate(int time_order) const;
+
+  // The estimate of the local error of the step from `before` to `after`
+  // (advance() with length dt), one entry per free unknown, for a time
+  // order at which error_estimate() declares one. `previous` holds the
+  // accepted steps before it, oldest first, exactly as many as declared;
+  // the last one ends at `before`. Its sign does not matter (the norm
+  // takes absolute values). The default throws std::logic_error.
+  virtual std::vector<double>
+  local_error(const TimeState &before, const TimeState &after, double dt,
+              std::span<const PreviousStep> previous) const;
 
   // Advances `state` by one step of length dt. `problem` is assembled at
   // t + evaluation_fraction() * dt, and `solver` is prepared for the step

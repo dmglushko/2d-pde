@@ -1,4 +1,5 @@
 add_library(pde2d_solve
+  adaptive_step.cpp
   bicgstab.cpp
   conjugate_gradient.cpp
   factorization_threads.cpp

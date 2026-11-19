@@ -283,13 +283,17 @@ struct Summary {
   double max_residual = 0.0;
   std::size_t linear_threads = 0;
 
+  // Steps, min_dt and max_dt count accepted steps; the linear solves
+  // count every step taken, rejected ones too.
   void add(const StepRecord &record, std::size_t threads) {
     linear_threads = std::max(linear_threads, threads);
-    ++steps;
-    if (!record.accepted)
+    if (record.accepted) {
+      ++steps;
+      min_dt = std::min(min_dt, record.dt);
+      max_dt = std::max(max_dt, record.dt);
+    } else {
       ++rejected;
-    min_dt = std::min(min_dt, record.dt);
-    max_dt = std::max(max_dt, record.dt);
+    }
     linear_iterations += record.linear_iterations;
     max_linear_iterations =
         std::max(max_linear_iterations, record.linear_iterations);
@@ -372,6 +376,55 @@ IntegrationResult Integrator::integrate(
           written);
     throw std::invalid_argument("integrator: " + message);
   }
+  // An error-controlling step controller needs the method's estimate at
+  // this order (declared, never tested by type; no fallback).
+  const bool controls_error = step_controller_->controls_error();
+  std::optional<ErrorEstimateDeclaration> estimate;
+  if (controls_error) {
+    estimate = method_->error_estimate(time_order);
+    if (!estimate)
+      throw std::invalid_argument(std::format(
+          "{}: the time method {} declares no local error estimate at time "
+          "order {}, which this step controller needs to judge each step; "
+          "use a method that declares one (implicit_euler at time orders 1 "
+          "and 2, implicit_midpoint at 1 and 2, newmark at 2) or a fixed "
+          "step",
+          step_controller_->name(), method_->name(), time_order));
+    if (estimate->order < 1)
+      throw std::invalid_argument(
+          std::format("integrator: {} declares a local error estimate of "
+                      "order {} (at least 1)",
+                      method_->name(), estimate->order));
+  }
+  // What an error-controlling controller and the method's estimate
+  // remember: the next dt and the last accepted steps, from the anchor.
+  const std::size_t remembered = estimate ? estimate->previous_steps : 0;
+  std::vector<PreviousStep> previous;
+  double controller_dt = 0.0;
+  if (controls_error) {
+    if (anchor_in) {
+      const auto &given = anchor_in->previous_steps;
+      if (!std::isfinite(anchor_in->next_dt) || anchor_in->next_dt < 0.0)
+        throw std::invalid_argument(
+            "integrator: the step anchor's next_dt must be finite and at "
+            "least 0");
+      for (const PreviousStep &step : given)
+        if (step.values.size() != meshed.free_nodes().size() ||
+            !std::isfinite(step.dt) || !(step.dt > 0.0) ||
+            !detail::all_finite(step.values))
+          throw std::invalid_argument(std::format(
+              "integrator: a previous step of the step anchor has {} "
+              "values for {} free unknowns, or a length or value that is "
+              "not finite and positive",
+              step.values.size(), meshed.free_nodes().size()));
+      const std::size_t take = std::min(remembered, given.size());
+      previous.assign(given.end() - static_cast<std::ptrdiff_t>(take),
+                      given.end());
+      controller_dt = anchor_in->next_dt;
+    }
+    if (!(controller_dt > 0.0))
+      controller_dt = step_controller_->next_step(t0);
+  }
 
   // 2. The starting state. Time order 0 has no initial conditions: the
   // method's start computes the state at t0. The problem is assembled at
@@ -437,10 +490,14 @@ IntegrationResult Integrator::integrate(
 
   while (t < t1 && !(max_steps && summary.steps >= *max_steps)) {
     const auto step_start = Clock::now();
-    const double dt = step_controller_->next_step(t);
+    const double dt =
+        controls_error ? controller_dt : step_controller_->next_step(t);
     if (!std::isfinite(dt) || !(dt > 0.0))
       throw std::runtime_error("integrator: " + step_controller_->name() +
                                " gave a step that is not finite and positive");
+    // Restored when the step is rejected.
+    const double kept_anchor = anchor, kept_anchor_dt = anchor_dt;
+    const std::size_t kept_anchor_steps = anchor_steps;
     if (dt != anchor_dt) {
       anchor = t;
       anchor_steps = 0;
@@ -492,27 +549,85 @@ IntegrationResult Integrator::integrate(
       prepared_dt = h;
       ++prepares;
     }
-    // The last step of the run: it lands on t1, or it is the max_steps-th.
+    // The last step of the run, if accepted: it lands on t1, or it is the
+    // max_steps-th.
     const bool last =
         t_new == t1 || (max_steps && summary.steps + 1 == *max_steps);
-    if (last && output.keep_before_last_step)
+    // An error-controlled step may be rejected: its start is kept.
+    std::optional<TimeState> before;
+    if (controls_error)
+      before = state;
+    else if (last && output.keep_before_last_step)
       result.before_last_step = FreeState{.time = t,
                                           .values = state.values,
                                           .velocities = state.velocities,
                                           .dt = h};
     const StepSolveInfo solved =
         method_->advance(*current, h, *prepared, state);
-    t = t_new;
 
-    const StepRecord record{.t = t,
+    StepDecision decision{.accept = true};
+    if (controls_error) {
+      std::optional<std::vector<double>> error;
+      if (previous.size() == remembered)
+        error = method_->local_error(*before, state, h, previous);
+      if (error && error->size() != state.values.size())
+        throw std::runtime_error(std::format(
+            "integrator: {} gave a local error of {} entries for {} free "
+            "unknowns",
+            method_->name(), error->size(), state.values.size()));
+      TakenStep taken{.t = t,
+                      .dt = dt,
+                      .length = h,
+                      .order = estimate->order,
+                      .values_before = before->values,
+                      .values_after = state.values};
+      if (error)
+        taken.local_error = std::span<const double>(*error);
+      decision = step_controller_->judge(taken);
+      if (!std::isfinite(decision.next_dt) || !(decision.next_dt > 0.0))
+        throw std::runtime_error(
+            "integrator: " + step_controller_->name() +
+            " proposed a next step that is not finite and positive");
+      if (!decision.accept && !(decision.next_dt < h))
+        throw std::runtime_error(std::format(
+            "integrator: {} rejected the step of length {} at t = {} without "
+            "making it shorter (next dt {})",
+            step_controller_->name(), h, t, decision.next_dt));
+    }
+
+    const StepRecord record{.t = t_new,
                             .dt = h,
-                            .accepted = true,
+                            .accepted = decision.accept,
                             .linear_iterations = solved.linear_iterations,
                             .residual = solved.residual,
-                            .time = Clock::now() - step_start};
+                            .time = Clock::now() - step_start,
+                            .error_norm = decision.error_norm};
     summary.add(record, solved.linear_threads);
     if (output.keep_step_history)
       result.history.push_back(record);
+    if (!decision.accept) {
+      // The same step again from its start, with the smaller dt.
+      state = std::move(*before);
+      anchor = kept_anchor;
+      anchor_dt = kept_anchor_dt;
+      anchor_steps = kept_anchor_steps;
+      controller_dt = decision.next_dt;
+      continue;
+    }
+    if (controls_error) {
+      controller_dt = decision.next_dt;
+      if (last && output.keep_before_last_step)
+        result.before_last_step = FreeState{.time = t,
+                                            .values = before->values,
+                                            .velocities = before->velocities,
+                                            .dt = h};
+      if (remembered > 0) {
+        previous.push_back({.values = std::move(before->values), .dt = h});
+        if (previous.size() > remembered)
+          previous.erase(previous.begin());
+      }
+    }
+    t = t_new;
 
     bool take_snapshot = false;
     if (landed && next_snapshot < output.snapshot_times.size() &&
@@ -531,7 +646,11 @@ IntegrationResult Integrator::integrate(
   // t1 exactly otherwise).
   result.final =
       make_solution(meshed, state, time_order, keeps_acceleration, t);
-  result.anchor = {.time = anchor, .dt = anchor_dt, .steps = anchor_steps};
+  result.anchor = {.time = anchor,
+                   .dt = anchor_dt,
+                   .steps = anchor_steps,
+                   .next_dt = controller_dt,
+                   .previous_steps = std::move(previous)};
 
   auto &report = result.report;
   report.stage = "integrator";

@@ -269,7 +269,8 @@ export function optionField(spec, value, path, onChange) {
     input = numberInput({
       value: value ?? spec.default,
       label: spec.label,
-      placeholder: `default ${numberText(spec.default)}`,
+      // An optional number's default is null: no bound.
+      placeholder: spec.default === null ? "no bound" : `default ${numberText(spec.default)}`,
       path,
       onNumber: onChange,
       onEmpty: () => onChange(spec.default),

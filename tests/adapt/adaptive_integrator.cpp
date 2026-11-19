@@ -29,6 +29,7 @@
 #include "pde2d/mesh/newest_vertex_bisection.hpp"
 #include "pde2d/mesh/remesher.hpp"
 #include "pde2d/mesh/ruppert.hpp"
+#include "pde2d/solve/adaptive_step.hpp"
 #include "pde2d/solve/fixed_step.hpp"
 #include "pde2d/solve/implicit_euler.hpp"
 #include "pde2d/solve/implicit_midpoint.hpp"
@@ -546,11 +547,16 @@ void follows_schedules() {
       check(!r.pieces.back().adaptation, "no adaptation at t1");
 
       // The pieces continue the run exactly: one Integrator run landing on
-      // the same times (the adaptation times as snapshot times) gives the
-      // same values, bit for bit.
+      // the same times (the interval's adaptation times as snapshot
+      // times; those of the step rule are not landings, the pieces
+      // continue the stretch of steps there) gives the same values, bit
+      // for bit.
       std::vector<double> lands = c.snapshots;
-      for (const auto &call : recorder->calls)
-        lands.push_back(call.time);
+      for (std::size_t k = 0; k < c.times.size(); ++k) {
+        const std::size_t since = c.steps[k] - (k == 0 ? 0 : c.steps[k - 1]);
+        if (!(c.every.steps && since == *c.every.steps))
+          lands.push_back(recorder->calls[k].time);
+      }
       std::ranges::sort(lands);
       const auto whole =
           integrator(method, c.dt)
@@ -565,14 +571,14 @@ void follows_schedules() {
               "the same step times");
       for (std::size_t k = 0; k < c.times.size(); ++k) {
         const auto &call = recorder->calls[k];
-        // The state at the adaptation time is the long run's there; u_t is
-        // the difference quotient of its last step, from the long run's
-        // state one step before (its history and snapshots).
+        // The state at the adaptation time is the long run's there (its
+        // first c.steps[k] steps); u_t is the difference quotient of its
+        // last step, from the long run's state one step before.
         const auto at =
-            std::ranges::find_if(whole.snapshots, [&](const auto &s) {
-              return s.time == call.time;
-            });
-        check(at != whole.snapshots.end() && at->values == call.values,
+            integrator(method, c.dt)
+                .integrate(problem, 0.0, c.t1, {.snapshot_times = lands},
+                           nullptr, c.steps[k]);
+        check(at.final.time == call.time && at.final.values == call.values,
               "the state at the adaptation time");
         check(call.u_tt.empty(), "no u_tt for time order 1");
         check(call.u_t.size() == call.values.size(), "u_t at every node");
@@ -657,6 +663,47 @@ void never_refining_equals_plain_run() {
               r.snapshots[0].values == whole.snapshots[1].values,
           "the snapshot at 0.3");
     check(r.report.metrics.at("tolerance") == 1e300, "the tolerance");
+  }
+}
+
+// The anchor goes across every piece on the same problem: adapting every
+// 3 steps of 0.1 (not exact in binary) without refining takes exactly the
+// step times of one integrate() call that lands nowhere, (k + 1) * 0.1
+// from t0, also where a new stretch from the piece's start would round
+// differently (0.30000000000000004 + 0.1 != 0.4).
+void anchor_across_pieces() {
+  const auto problem = std::make_shared<const fem::MeshedProblem>(
+      test::unit_square(4), decay_problem());
+  for (const auto &method :
+       std::vector<std::shared_ptr<const solve::TimeMethod>>{
+           std::make_shared<solve::ImplicitEuler>(),
+           std::make_shared<solve::ImplicitMidpoint>()}) {
+    const auto whole =
+        integrator(method, 0.1)
+            .integrate(problem, 0.0, 2.0, {.keep_step_history = true});
+    const auto recorder = std::make_shared<Recorder>(true);
+    const auto r = AdaptiveIntegrator(integrator(method, 0.1), {recorder})
+                       .integrate(problem, 0.0, 2.0, {.every = {.steps = 3}},
+                                  {.keep_step_history = true});
+    check(recorder->calls.size() == 6 && r.pieces.size() == 7,
+          "adaptation times after 3, 6, ..., 18 steps");
+    check(r.history.size() == whole.history.size(), "as many steps");
+    bool differs = false;
+    for (std::size_t k = 0;
+         k < std::min(r.history.size(), whole.history.size()); ++k) {
+      check(r.history[k].t == whole.history[k].t &&
+                r.history[k].dt == whole.history[k].dt,
+            "the step times of one run");
+      if (k >= 3)
+        differs =
+            differs || whole.history[2].t + static_cast<double>(k - 2) * 0.1 !=
+                           whole.history[k].t;
+    }
+    check(differs, "a new stretch at each piece would give other times");
+    for (std::size_t k = 0; k < recorder->calls.size(); ++k)
+      check(recorder->calls[k].time == whole.history[3 * k + 2].t,
+            "the adaptation times are the uninterrupted run's");
+    check(r.final.values == whole.final.values, "bit for bit");
   }
 }
 
@@ -1406,6 +1453,146 @@ void derivatives_use_the_step_length() {
   }
 }
 
+// --- adaptive time steps ---------------------------------------------------
+
+solve::Integrator
+adaptive_steps(std::shared_ptr<const solve::TimeMethod> method,
+               solve::AdaptiveStepOptions options) {
+  return solve::Integrator(std::move(method),
+                           std::make_shared<solve::AdaptiveStep>(options),
+                           std::make_shared<solve::SparseLu>());
+}
+
+// With an error-controlled step, pieces on the same problem continue the
+// controller's dt and the earlier steps the estimate reads (the anchor):
+// adapting every 5 steps without refining takes the steps of one
+// integrate() call, rejections included, bit for bit.
+void adaptive_steps_across_pieces() {
+  const auto problem = std::make_shared<const fem::MeshedProblem>(
+      unit_square_mesh(0.2), bump_problem());
+  for (const auto &method :
+       std::vector<std::shared_ptr<const solve::TimeMethod>>{
+           std::make_shared<solve::ImplicitEuler>(),
+           std::make_shared<solve::ImplicitMidpoint>()}) {
+    const auto stepper = adaptive_steps(
+        method, {.initial_dt = 1e-3, .atol = 1e-6, .rtol = 1e-3});
+    const auto whole =
+        stepper.integrate(problem, 0.0, 0.5, {.keep_step_history = true});
+    const auto recorder = std::make_shared<Recorder>();
+    const auto r = AdaptiveIntegrator(stepper, {recorder})
+                       .integrate(problem, 0.0, 0.5, {.every = {.steps = 5}},
+                                  {.keep_step_history = true});
+    check(recorder->calls.size() >= 3, "several adaptation times");
+    check(r.history.size() == whole.history.size(), "as many steps");
+    for (std::size_t k = 0;
+         k < std::min(r.history.size(), whole.history.size()); ++k)
+      check(r.history[k].t == whole.history[k].t &&
+                r.history[k].dt == whole.history[k].dt &&
+                r.history[k].accepted == whole.history[k].accepted,
+            "the steps of one run");
+    check(r.final.values == whole.final.values, "bit for bit");
+    check(r.report.metrics.at("rejected_steps") ==
+              whole.report.metrics.at("rejected_steps"),
+          "the rejections reported");
+    std::cout << "INFO " << method->name() << ": "
+              << whole.report.metrics.at("steps") << " steps, "
+              << whole.report.metrics.at("rejected_steps") << " rejected\n";
+  }
+}
+
+// Mesh adaptivity with adaptive time steps on the moving bump: the run
+// reaches t1 about as accurate as with the fixed step 1/64, and the first
+// step after a transfer takes the dt the controller proposed before it,
+// not initial_dt.
+void mesh_and_time_adaptivity() {
+  const auto start = std::make_shared<const fem::MeshedProblem>(
+      unit_square_mesh(0.1), bump_problem());
+  const double initial_dt = 1e-4;
+  const AdaptiveIntegrator adaptive(
+      adaptive_steps(std::make_shared<solve::ImplicitEuler>(),
+                     {.initial_dt = initial_dt, .atol = 1e-4, .rtol = 1e-2}),
+      {refinement()});
+  const auto r = adaptive.integrate(
+      start, 0.0, 0.5, {.every = {.interval = 1.0 / 32}, .max_nodes = 6000},
+      {.keep_step_history = true});
+  check(r.final.time == 0.5, "reaches t1");
+  const double error = bump_error(r.final);
+  std::cout << "INFO mesh and time adaptivity: " << r.final.mesh->nodes.size()
+            << " nodes, error " << error << ", " << r.report.metrics.at("steps")
+            << " steps, " << r.report.metrics.at("rejected_steps")
+            << " rejected, " << r.report.metrics.at("refinements")
+            << " refinements\n";
+  check(r.report.metrics.at("refinements") >= 8.0, "refined");
+  check(error < 0.15, "about as accurate as with dt = 1/64 (0.088)");
+  std::size_t checked = 0;
+  for (std::size_t k = 1; k < r.pieces.size(); ++k) {
+    const auto &before = r.pieces[k - 1];
+    if (!before.adaptation ||
+        before.adaptation->outcome != AdaptationOutcome::refined)
+      continue;
+    const auto first =
+        std::ranges::find_if(r.history, [&](const solve::StepRecord &record) {
+          return std::abs(record.t - record.dt - r.pieces[k].t_start) < 1e-12;
+        });
+    check(first != r.history.end() && first->dt > 10.0 * initial_dt,
+          "after a transfer: the proposed dt, not initial_dt");
+    ++checked;
+  }
+  check(checked >= 8, "every transfer checked");
+}
+
+// A damping method without an error estimate is refused before the first
+// step when the step controller needs one.
+class NoEstimate final : public solve::TimeMethod {
+public:
+  std::string name() const override { return "no_estimate"; }
+  solve::TimeMethodCapabilities capabilities() const override {
+    return euler_.capabilities();
+  }
+  double evaluation_fraction() const override { return 1.0; }
+  solve::StepMatrixWeights step_matrix_weights(double dt) const override {
+    return euler_.step_matrix_weights(dt);
+  }
+  solve::StartNeeds start_needs(int order) const override {
+    return euler_.start_needs(order);
+  }
+  solve::StepSolveInfo advance(const fem::AssembledProblem &problem, double dt,
+                               const solve::PreparedLinearSolver &solver,
+                               solve::TimeState &state) const override {
+    return euler_.advance(problem, dt, solver, state);
+  }
+
+private:
+  solve::ImplicitEuler euler_;
+};
+
+void damping_method_needs_an_estimate() {
+  const auto problem = std::make_shared<const fem::MeshedProblem>(
+      test::unit_square(4), decay_problem());
+  const auto recorder = std::make_shared<Recorder>();
+  expect_throws<std::invalid_argument>(
+      [&] {
+        (void)AdaptiveIntegrator(
+            adaptive_steps(std::make_shared<solve::ImplicitMidpoint>(),
+                           {.initial_dt = 0.01}),
+            {recorder},
+            {.damping_steps = 2,
+             .damping_method = std::make_shared<NoEstimate>()})
+            .integrate(problem, 0.0, 1.0, {.every = {.steps = 2}});
+      },
+      "the damping method no_estimate declares no local error estimate");
+  check(recorder->calls.empty(), "before the first step");
+  // With a fixed step it is accepted.
+  check(AdaptiveIntegrator(
+            integrator(std::make_shared<solve::ImplicitMidpoint>(), 0.25),
+            {recorder},
+            {.damping_steps = 2,
+             .damping_method = std::make_shared<NoEstimate>()})
+                .integrate(problem, 0.0, 1.0, {.every = {.steps = 2}})
+                .final.time == 1.0,
+        "a fixed step needs no estimate");
+}
+
 } // namespace
 
 int main() {
@@ -1421,6 +1608,8 @@ int main() {
        snapshot_at_an_adaptation_time},
       {"a target that never refines equals one integrator run",
        never_refining_equals_plain_run},
+      {"the step anchor goes across every piece on the same problem",
+       anchor_across_pieces},
       {"a wave equation transfers its velocities", wave_transfers_velocities},
       {"a standing wave on adapted meshes (measured)", standing_wave},
       {"Newmark: pieces continue exactly", newmark_pieces_continue_exactly},
@@ -1438,5 +1627,10 @@ int main() {
       {"damping steps keep the step times", damping_keeps_the_step_times},
       {"the derivatives use the step's length",
        derivatives_use_the_step_length},
+      {"adaptive time steps: pieces continue one run",
+       adaptive_steps_across_pieces},
+      {"adaptive time steps with mesh adaptivity", mesh_and_time_adaptivity},
+      {"adaptive time steps: the damping method needs an estimate",
+       damping_method_needs_an_estimate},
   });
 }
